@@ -4,7 +4,7 @@ immich:
   api_key: ${SIDECAR_API_KEY}
 
 household:
-  name: "The Ellul household"
+  name: "The Smith household"
   public_url: https://photos.example.com   # must be reachable by peer households
 
 mirrors:

@@ -2,7 +2,7 @@
 import { chromium } from 'playwright';
 
 const SHARE_URL = process.argv[2];
-const B_PANEL = process.argv[3] || 'http://192.168.0.11:8301';
+const B_PANEL = process.argv[3] || 'http://localhost:8301';
 const OUT = process.argv[4] || './video';
 
 const browser = await chromium.launch({ args: ['--disable-features=HttpsUpgrades,HttpsFirstModeV2,HttpsFirstBalancedModeAutoEnable,LocalNetworkAccessChecks,PrivateNetworkAccessForNavigations,PrivateNetworkAccessChecks'] });

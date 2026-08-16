@@ -17,6 +17,24 @@ Albums are shared **by reference**: each photo stays on its owner's server ("pho
 
 ## Install (per household)
 
+**Easiest — guided script** (from a clone of this repo, next to your existing Immich):
+
+```bash
+git clone https://github.com/lukeet332/immich-shared-albums
+cd immich-shared-albums && bash deploy/install.sh
+```
+
+It asks for your Immich network, public URL, household name, and an admin API
+key, then builds, starts, health-checks the sidecar, and prints the two
+reverse-proxy lines you still add yourself.
+
+**Have an AI agent on the server?** Paste the prompt in
+[deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md) and it will discover your setup,
+install, and verify — asking you only for the public URL, a household name, and
+an API key.
+
+**Manual** — one container plus two proxy routes:
+
 ```yaml
 # docker-compose.override.yml
 services:

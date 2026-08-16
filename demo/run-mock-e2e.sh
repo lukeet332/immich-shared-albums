@@ -3,15 +3,22 @@
 # Rebuilds sidecar image, redeploys B+C, full-purges both, runs assertion suite.
 set -uo pipefail
 export PATH="$PATH:/Applications/Docker.app/Contents/Resources/bin"
-DIR=~/Documents/immich-shared-albums
-BKEY=$(cut -d= -f2- "$DIR/demo/.env")
-CKEY=$(cut -d= -f2- "$DIR/demo/household-c/.env")
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BKEY=$(grep -m1 B_API_KEY "$DIR/demo/.env" | cut -d= -f2-)
+CKEY=$(grep -m1 C_API_KEY "$DIR/demo/household-c/.env" | cut -d= -f2-)
 
 echo "== build image =="
 cd "$DIR" && docker build -q -t immich-shared-albums:demo . >/dev/null
 
-purge() { # base key : delete all albums, sidecar users, non-admin assets, reset sidecar state
-  local BASE=$1 KEY=$2
+purge() { # base key statefile : delete all albums, sidecar users, non-admin assets, reset sidecar state
+  local BASE=$1 KEY=$2 STATE=${3:-}
+  # mirror albums are owned by utility users — only their own keys (in state.json) can delete them
+  if [ -f "$STATE" ]; then
+    for CK in $(python3 -c "import json;print('\n'.join(c.get('key','') for c in json.load(open('$STATE')).get('contributors',{}).values() if c.get('key')))" 2>/dev/null); do
+      for AL in $(curl -s $BASE/api/albums -H "x-api-key: $CK" | python3 -c "import json,sys;[print(a['id']) for a in json.load(sys.stdin)]" 2>/dev/null); do
+        curl -s -X DELETE $BASE/api/albums/$AL -H "x-api-key: $CK" -o /dev/null; done
+    done
+  fi
   for AL in $(curl -s $BASE/api/albums -H "x-api-key: $KEY" | python3 -c "import json,sys;[print(a['id']) for a in json.load(sys.stdin)]" 2>/dev/null); do
     curl -s -X DELETE $BASE/api/albums/$AL -H "x-api-key: $KEY" -o /dev/null; done
   for U in $(curl -s $BASE/api/admin/users -H "x-api-key: $KEY" | python3 -c "import json,sys;[print(u['id']) for u in json.load(sys.stdin) if u['email'].endswith('@sidecar.local')]" 2>/dev/null); do
@@ -22,11 +29,11 @@ purge() { # base key : delete all albums, sidecar users, non-admin assets, reset
 
 echo "== redeploy + purge B =="
 cd "$DIR/demo" && docker compose up -d --force-recreate sidecar-b >/dev/null 2>&1
-purge http://localhost:2284 "$BKEY"; rm -f b-sidecar/state.json; docker compose restart sidecar-b >/dev/null 2>&1
+purge http://localhost:2284 "$BKEY" b-sidecar/state.json; rm -f b-sidecar/state.json; docker compose restart sidecar-b >/dev/null 2>&1
 
 echo "== redeploy + purge C =="
 cd "$DIR/demo/household-c" && docker compose up -d --force-recreate sidecar-c >/dev/null 2>&1
-purge http://localhost:2285 "$CKEY"; rm -f c-sidecar/state.json; docker compose restart sidecar-c >/dev/null 2>&1
+purge http://localhost:2285 "$CKEY" c-sidecar/state.json; rm -f c-sidecar/state.json; docker compose restart sidecar-c >/dev/null 2>&1
 sleep 4
 
 echo "== harden C like production (passwordLogin off) =="
@@ -37,5 +44,5 @@ echo "== E2E (C origin -> B joiner) =="
 cd "$DIR/demo/e2e"
 A_URL=http://localhost:2285 AKEY=$CKEY A_ALBUM=__CREATE__ \
 B_URL=http://localhost:2284 BKEY=$BKEY B_SIDECAR=http://localhost:8301 \
-ORIGIN_SIDECAR=http://192.168.0.11:8302 \
+ORIGIN_SIDECAR=${ORIGIN_SIDECAR:-http://host.docker.internal:8302} \
 node e2e-test.mjs

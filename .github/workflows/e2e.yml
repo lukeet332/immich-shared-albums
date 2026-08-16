@@ -1,0 +1,37 @@
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1' # weekly: catch breakage in immich-server:release before users do
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start mock Immich instances (B + C)
+        run: |
+          echo "B_API_KEY=placeholder" > demo/.env
+          echo "C_API_KEY=placeholder" > demo/household-c/.env
+          (cd demo && docker compose up -d immich-b db-b redis-b)
+          (cd demo/household-c && docker compose up -d immich-c db-c redis-c)
+
+      - name: Provision admins + API keys
+        run: |
+          chmod +x demo/ci/provision-mock.sh
+          echo "B_API_KEY=$(demo/ci/provision-mock.sh http://localhost:2284)" > demo/.env
+          echo "C_API_KEY=$(demo/ci/provision-mock.sh http://localhost:2285)" > demo/household-c/.env
+
+      - name: Run E2E suite
+        run: bash demo/run-mock-e2e.sh
+
+      - name: Dump sidecar logs on failure
+        if: failure()
+        run: |
+          (cd demo && docker compose logs sidecar-b --tail 200) || true
+          (cd demo/household-c && docker compose logs sidecar-c --tail 200) || true

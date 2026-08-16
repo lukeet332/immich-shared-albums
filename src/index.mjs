@@ -120,9 +120,10 @@ const signedFetch = (url, body) => fetch(url, {
 });
 
 // ---------- contributor utility users ----------
+const slugify = (s) => (s || 'peer').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'peer';
 async function ensureUtilityUser(displayName) {
   state.contributors = state.contributors || {};
-  const slug = (displayName || 'peer').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'peer';
+  const slug = slugify(displayName);
   let c = state.contributors[slug];
   if (c && c.key) return c;               // already fully provisioned
   const email = `shared-${slug}@sidecar.local`;
@@ -196,6 +197,40 @@ async function ensureContributor(displayName, albumId, adminKey, peerUrl, origin
 }
 
 // ---------- protocol handlers ----------
+// Manifest lists only human-owned photos: utility-owned assets are proxies we
+// materialised from a peer, and offering them back would echo photos to their origin.
+async function buildManifest(assets) {
+  let utility = new Set();
+  try { utility = new Set((await immichJson('/admin/users')).filter(u => u.email.endsWith('@sidecar.local')).map(u => u.id)); } catch {}
+  const manifest = [];
+  for (const a of assets.filter(x => x.type === 'IMAGE' && !utility.has(x.ownerId))) {
+    manifest.push({ originAsset: a.id, checksum: a.checksum, kind: 'image',
+      takenAt: a.exifInfo?.dateTimeOriginal || a.fileCreatedAt,
+      exif: a.exifInfo ? { latitude: a.exifInfo.latitude, longitude: a.exifInfo.longitude,
+        description: a.exifInfo.description, rating: a.exifInfo.rating } : undefined,
+      contributor: { displayName: a.owner?.name || await ownerName(a.ownerId) || CFG.name, originUserId: a.ownerId } });
+  }
+  return manifest;
+}
+
+// Fetch a ref's preview from the peer and create the local proxy copy. Returns
+// false (without marking seen) on failure so reconciliation can retry later.
+async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
+  if (seenHas(mapping.id, ref.checksum)) return true;
+  const pr = await fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/preview`,
+    { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(ref.originAsset) } });
+  if (!pr.ok) { log(`preview fetch failed for ${ref.originAsset}: ${pr.status}`); return false; }
+  const bytes = Buffer.from(await pr.arrayBuffer());
+  const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
+  const c = await ensureContributor(ref.contributor?.displayName || fallbackName, mapping.albumId, adminKey, peerUrl, ref.contributor?.originUserId);
+  const up = await uploadAsset(bytes, `shared-${ref.checksum.slice(0, 12)}.jpg`, c.key, ref.takenAt);
+  await addToAlbum(mapping.albumId, [up.id], c.key);
+  await applyRefMetadata(up.id, ref, c.key);
+  seenAdd(mapping.id, ref.checksum, up.id);
+  log(`materialised ref from "${ref.contributor?.displayName || fallbackName}" into "${mapping.albumName}"`);
+  return true;
+}
+
 async function handleRedeem(req, body) {
   const { shareKey, household } = JSON.parse(body);
   const link = await getSharedLinkByKey(shareKey);
@@ -210,14 +245,7 @@ async function handleRedeem(req, body) {
     peer: household.publicKey, permissions: link.allowUpload ? 'contribute' : 'view' });
   save();
   log(`peer joined: "${household.name}" -> album "${album.albumName}"`);
-  const manifest = [];
-  for (const a of album.assets.filter(x => x.type === 'IMAGE')) {
-    manifest.push({ originAsset: a.id, checksum: a.checksum, kind: 'image',
-      takenAt: a.exifInfo?.dateTimeOriginal || a.fileCreatedAt,
-      exif: a.exifInfo ? { latitude: a.exifInfo.latitude, longitude: a.exifInfo.longitude,
-        description: a.exifInfo.description, rating: a.exifInfo.rating } : undefined,
-      contributor: { displayName: a.owner?.name || await ownerName(a.ownerId) || CFG.name, originUserId: a.ownerId } });
-  }
+  const manifest = await buildManifest(album.assets);
   // v3 album responses carry no ownerId — majority asset owner is the sharing person
   const ownerCounts = {};
   for (const a of album.assets) ownerCounts[a.ownerId] = (ownerCounts[a.ownerId] || 0) + 1;
@@ -239,23 +267,21 @@ async function handleRefs(req, body, albumMappingId) {
   const { add = [] } = JSON.parse(body);
   const failed = [];
   for (const ref of add) {
-    try {
-      if (seenHas(mapping.id, ref.checksum)) continue;
-      const pr = await fetch(`${peer.url}/sidecar/api/v1/assets/${ref.originAsset}/preview`,
-        { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(ref.originAsset) } });
-      if (!pr.ok) { log(`preview fetch failed for ${ref.originAsset}: ${pr.status}`); failed.push(ref.checksum); continue; }
-      const bytes = Buffer.from(await pr.arrayBuffer());
-      const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
-      const c = await ensureContributor(ref.contributor?.displayName || peer.name, mapping.albumId, adminKey, peer.url, ref.contributor?.originUserId);
-      const up = await uploadAsset(bytes, `shared-${ref.checksum.slice(0, 12)}.jpg`, c.key, ref.takenAt);
-      await addToAlbum(mapping.albumId, [up.id], c.key);
-      await applyRefMetadata(up.id, ref, c.key);
-      seenAdd(mapping.id, ref.checksum, up.id);
-      log(`materialised ref from "${ref.contributor?.displayName}" into "${mapping.albumName}"`);
-    } catch (e) { log(`ref materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); failed.push(ref.checksum); }
+    try { if (!(await materialiseRef(mapping, peer.url, peer.name, ref))) failed.push(ref.checksum); }
+    catch (e) { log(`ref materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); failed.push(ref.checksum); }
   }
   // partial success: sender re-offers only the failed refs next cycle
   return [200, { ok: failed.length === 0, failed }];
+}
+
+// Members re-pull this to heal refs missed at join time (e.g. preview not yet generated).
+async function handleManifest(req, albumMappingId) {
+  const peerKey = req.headers['x-isa-key'];
+  const peer = state.peers.find(p => p.pub === peerKey);
+  if (!peer || !verify(albumMappingId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown or unverified peer' }];
+  const mapping = state.mappings.find(m => m.role === 'owner' && (m.id === albumMappingId || m.albumId === albumMappingId));
+  if (!mapping) return [404, { error: 'unknown album mapping' }];
+  return [200, { manifest: await buildManifest(await getAlbumAssets(mapping.albumId)) }];
 }
 
 // ---------- comment / activity sync ----------
@@ -305,31 +331,39 @@ async function join(shareUrl, forUserId) {
   }
   const host = await ensureUtilityUser(res.albumOwner?.displayName || res.household.name);
   await syncAvatar(host, res.household.url, res.albumOwner?.originUserId);
+  const addMembers = async (albumId) => {
+    let members = (await immichJson('/admin/users')).filter(u => !u.email.endsWith('@sidecar.local'));
+    if (forUserId) members = members.filter(u => u.id === forUserId); // per-user join: only the receiving user
+    const alb = await immichJson(`/albums/${albumId}`, {}, host.key);
+    const already = new Set((alb.albumUsers || []).map(au => au.user?.id));
+    members = members.filter(u => !already.has(u.id));
+    if (members.length) await immichJson(`/albums/${albumId}/users`,
+      { ...jsonBody({ albumUsers: members.map(u => ({ userId: u.id, role: 'editor' })) }), method: 'PUT' }, host.key);
+    return members.length;
+  };
+  // same remote album already mirrored here -> just add this user to the existing mirror
+  const existing = state.mappings.find(mp => mp.role === 'member' && mp.peer === res.household.publicKey
+    && mp.remoteAlbumId === res.album.id && !mp.dead);
+  if (existing) {
+    const n = await addMembers(existing.albumId);
+    log(`re-join: added ${n} member(s) to existing mirror "${existing.albumName}"`);
+    return { album: existing.albumName, albumId: existing.albumId, photos: res.manifest.length, from: res.household.name };
+  }
   const mirror = await immichJson('/albums', jsonBody({ albumName: CFG.template.replace('{name}', res.album.name) }), host.key);
   try {
-    let members = (await immichJson('/admin/users')).filter(u => !u.email.endsWith('@sidecar.local'));
-    if (forUserId) members = members.filter(u => u.id === forUserId); // private join: only the receiving user
-    if (members.length) await immichJson(`/albums/${mirror.id}/users`,
-      { ...jsonBody({ albumUsers: members.map(u => ({ userId: u.id, role: 'editor' })) }), method: 'PUT' }, host.key);
-    log(`mirror shared with ${forUserId ? 'one user (private join)' : members.length + ' household member(s)'}`);
+    const n = await addMembers(mirror.id);
+    log(`mirror shared with ${forUserId ? 'one user (per-user join)' : n + ' household member(s)'}`);
   } catch (e) { log(`could not add local members to mirror: ${e.message}`); }
   const mappingId = crypto.randomUUID();
   state.mappings.push({ id: mappingId, role: 'member', albumId: mirror.id, albumName: mirror.albumName,
     peer: res.household.publicKey, remoteAlbumId: res.album.id, remoteMappingId: res.mappingId,
-    permissions: res.album.permissions, adminSlug: (res.household.name || 'peer').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') });
+    permissions: res.album.permissions, adminSlug: slugify(res.albumOwner?.displayName || res.household.name) });
   save();
   log(`joined "${res.album.name}" from "${res.household.name}" (${res.manifest.length} photos)`);
+  const newMapping = state.mappings.find(mp => mp.id === mappingId);
   for (const ref of res.manifest) {
-    if (seenHas(mappingId, ref.checksum)) continue;
-    const pr = await fetch(`${res.household.url}/sidecar/api/v1/assets/${ref.originAsset}/preview`,
-      { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(ref.originAsset) } });
-    if (!pr.ok) { log(`preview fetch failed: ${pr.status}`); continue; }
-    const bytes = Buffer.from(await pr.arrayBuffer());
-    const c = await ensureContributor(ref.contributor?.displayName || res.household.name, mirror.id, host.key, res.household.url, ref.contributor?.originUserId);
-    const up = await uploadAsset(bytes, `shared-${ref.checksum.slice(0, 12)}.jpg`, c.key, ref.takenAt);
-    await addToAlbum(mirror.id, [up.id], c.key);
-    await applyRefMetadata(up.id, ref, c.key);
-    seenAdd(mappingId, ref.checksum, up.id);
+    try { await materialiseRef(newMapping, res.household.url, res.household.name, ref); }
+    catch (e) { log(`join materialise failed (${ref.checksum?.slice(0,10)}): ${e.message} — reconciliation will retry`); }
   }
   return { album: mirror.albumName, albumId: mirror.id, photos: res.manifest.length, from: res.household.name };
 }
@@ -374,7 +408,29 @@ async function watchOnce() {
       } else log(`watcher error on "${mapping.albumName}": ${e.message}`);
     }
   }
+  await reconcileOnce();
   await syncComments();
+}
+
+// Heal member mirrors: re-pull the origin manifest and materialise anything we
+// missed (e.g. previews not yet generated at join time). Cheap no-op when in sync.
+async function reconcileOnce() {
+  for (const mapping of state.mappings.filter(mp => mp.role === 'member' && !mp.dead)) {
+    try {
+      const peer = state.peers.find(p => p.pub === mapping.peer);
+      if (!peer) continue;
+      const target = mapping.remoteMappingId || mapping.remoteAlbumId;
+      const r = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/manifest`,
+        { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(target) } });
+      if (!r.ok) continue;
+      const { manifest = [] } = await r.json();
+      const missing = manifest.filter(ref => !seenHas(mapping.id, ref.checksum));
+      for (const ref of missing) {
+        try { if (await materialiseRef(mapping, peer.url, peer.name, ref)) log(`reconciled missed ref into "${mapping.albumName}"`); }
+        catch (e) { log(`reconcile materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); }
+      }
+    } catch (e) { log(`reconcile error on "${mapping.albumName}": ${e.message}`); }
+  }
 }
 
 // push locally-authored comments (not ones we materialised) to the peer
@@ -431,18 +487,25 @@ const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="viewport" 
 const ACCEPT_PAGE = () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Join shared album — ${CFG.name}</title>
 <style>
- body{margin:0;font-family:Inter,-apple-system,sans-serif;background:#101216;color:#e5e7eb;display:grid;place-items:center;min-height:100vh}
- .card{width:min(440px,90vw);background:#1f2229;border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:26px;text-align:center}
- .logo{width:52px;height:52px;border-radius:15px;margin:0 auto 14px;display:grid;place-items:center;background:linear-gradient(135deg,#4250af,#7c3aed);font-size:24px}
- h1{font-size:18px;margin:0 0 6px;letter-spacing:-.01em} p{color:#9ca3af;font-size:13.5px;line-height:1.5;margin:6px 0 18px}
- button{font:inherit;font-size:15px;font-weight:650;padding:12px 34px;border:0;border-radius:12px;background:#22c55e;color:#06130a;cursor:pointer}
- button:hover{filter:brightness(1.08)} #out{margin-top:14px;font-size:13px;color:#8b9cf9;min-height:20px}
+ body{margin:0;font-family:Overpass,Inter,Roboto,-apple-system,sans-serif;background:#f8f9fa;color:#202124;display:grid;place-items:center;min-height:100vh}
+ .card{width:min(440px,calc(100vw - 32px));box-sizing:border-box;background:#fff;border:1px solid rgba(0,0,0,.06);border-radius:28px;padding:30px 26px 26px;text-align:center;box-shadow:0 1px 3px rgba(60,64,67,.15),0 8px 28px rgba(60,64,67,.15)}
+ .logo{width:56px;height:56px;border-radius:50%;margin:0 auto 16px;display:grid;place-items:center;background:linear-gradient(135deg,#4250af,#7c3aed);font-size:26px;box-shadow:0 2px 10px rgba(66,80,175,.35)}
+ h1{font-size:19px;font-weight:600;margin:0 0 6px;letter-spacing:-.01em} p{color:#5f6368;font-size:13.5px;line-height:1.55;margin:6px 0 18px}
+ button{font:inherit;font-size:15px;font-weight:600;padding:12px 36px;border:0;border-radius:999px;background:#4250af;color:#fff;cursor:pointer;transition:filter .15s,box-shadow .15s}
+ button:hover{filter:brightness(1.08);box-shadow:0 2px 10px rgba(66,80,175,.4)} button:disabled{opacity:.4;cursor:default;box-shadow:none}
+ #who{font-size:12.5px;color:#4250af;margin:-6px 0 16px;line-height:1.5} #who a{color:#4250af}
+ #out{margin-top:16px;font-size:13px;color:#4250af;min-height:20px;line-height:1.5}
+ @media (prefers-color-scheme:dark){
+  body{background:#101216;color:#e8eaed}
+  .card{background:#1b1f26;border-color:rgba(255,255,255,.08);box-shadow:0 1px 3px rgba(0,0,0,.4),0 10px 32px rgba(0,0,0,.5)}
+  p{color:#9aa0a6} #who,#who a,#out{color:#a8c7fa}
+  button{background:#a8c7fa;color:#0d1b3d}
+ }
 </style>
 <div class="card"><div class="logo">🔗</div><h1 id="t">Join shared album?</h1>
-<p id="d">This will add the album to <b>${CFG.name}</b> — it will appear in your family's Immich apps. Photos stay on their owners' servers.</p>
-<div id="who" style="font-size:12.5px;color:#8b9cf9;margin:-6px 0 12px"></div>
-<label style="display:block;font-size:13px;color:#9ca3af;margin-bottom:16px"><input type="checkbox" id="all"> Also share with everyone in my household</label>
-<button id="go">Accept &amp; join</button><div id="out"></div></div>
+<p id="d">This will add the album to your account on <b>${CFG.name}</b>. Photos stay on their owners' servers.</p>
+<div id="who"></div>
+<button id="go" disabled>Accept &amp; join</button><div id="out"></div></div>
 <script>
 const frag=(()=>{
  try{ if(location.hash.length>1) return JSON.parse(decodeURIComponent(location.hash.slice(1))); }catch{}
@@ -451,22 +514,24 @@ const frag=(()=>{
    history.replaceState({},'',location.pathname); return f; }
  return null;})();
 if(!frag||!frag.host||!frag.key){document.getElementById('t').textContent='Invalid or expired invite';document.getElementById('go').style.display='none';}
-let ME=null;
-fetch('/api/users/me',{credentials:'include'}).then(r=>r.ok?r.json():null).then(u=>{
- if(u&&u.id){ME=u;document.getElementById('who').textContent='Joining as '+u.name+' — only you will see this album unless you tick below.';}
- else{document.getElementById('who').textContent='Not signed in here — the album will be added for your whole household.';document.getElementById('all').checked=true;}
-}).catch(()=>{});
+let ME=null,POLL=null;
+function whoami(){return fetch('/api/users/me',{credentials:'include'}).then(r=>r.ok?r.json():null).then(u=>{
+ if(u&&u.id){ME=u;clearInterval(POLL);document.getElementById('go').disabled=false;
+   document.getElementById('who').textContent='Joining as '+u.name+' — the album is added only to your account.';}
+ else if(!ME){document.getElementById('who').innerHTML='<a href="/auth/login" target="_blank">Sign in to your Immich</a> to join — this page will notice once you are signed in.';}
+ return u;}).catch(()=>null);}
+whoami().then(u=>{if(!u)POLL=setInterval(whoami,2500);});
 document.getElementById('go').onclick=async()=>{
+ if(!ME)return;
  const out=document.getElementById('out');out.textContent='Joining…';
  const scheme=frag.scheme||'https';
- const forUserId=(ME&&!document.getElementById('all').checked)?ME.id:undefined;
- const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:scheme+'://'+frag.host+'/share/'+frag.key,forUserId})});
+ const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:scheme+'://'+frag.host+'/share/'+frag.key,forUserId:ME.id})});
  const d=await r.json().catch(()=>({error:'failed'}));
  if(r.ok){
    var deep='intent://my.immich.app/albums/'+d.albumId+'#Intent;scheme=https;package=app.alextran.immich;S.browser_fallback_url='+encodeURIComponent('https://my.immich.app/albums/'+d.albumId)+';end';
    out.innerHTML='Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing.<br><br>'+
-     '<a href="'+deep+'" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:650;padding:12px 26px;border-radius:12px">Open in Immich app</a>'+
-     '<div style="margin-top:10px;font-size:12px;color:#9ca3af">If the album looks empty at first, give it a moment — the app is still syncing it.</div>';
+     '<a href="'+deep+'" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:600;padding:12px 30px;border-radius:999px">Open in Immich app</a>'+
+     '<div style="margin-top:12px;font-size:12px;color:#9aa0a6">If the album looks empty at first, give it a moment — the app is still syncing it.</div>';
    document.getElementById('go').style.display='none';
  } else { out.textContent='Error: '+(d.error||r.status); }
 };
@@ -535,6 +600,9 @@ const server = http.createServer(async (req, res) => {
     }
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/refs$/)) && req.method === 'POST') {
       const [code, obj] = await handleRefs(req, body, m[1]); return send(code, obj);
+    }
+    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/manifest$/)) && req.method === 'GET') {
+      const [code, obj] = await handleManifest(req, m[1]); return send(code, obj);
     }
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/preview$/))) {
       const out = await handlePreview(req, m[1]);

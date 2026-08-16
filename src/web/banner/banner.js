@@ -19,66 +19,77 @@
         :host { all: initial; }
         .card {
           position: fixed; z-index: 2147483000;
-          right: 20px; bottom: 20px;
-          width: 380px; max-width: calc(100vw - 40px);
+          right: 24px; bottom: 24px;
+          width: 400px; max-width: calc(100vw - 32px);
           box-sizing: border-box;
-          font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          background: #ffffff; color: #1f2937;
-          border: 1px solid rgba(0,0,0,.08);
-          border-radius: 20px;
-          box-shadow: 0 12px 40px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.08);
-          padding: 18px 18px 16px;
+          font-family: 'Overpass', 'Inter', Roboto, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          background: #ffffff; color: #202124;
+          border: 1px solid rgba(0,0,0,.06);
+          border-radius: 28px;
+          box-shadow: 0 1px 3px rgba(60,64,67,.15), 0 8px 28px rgba(60,64,67,.22);
+          padding: 22px 22px 18px;
           animation: isa-in .35s cubic-bezier(.21,1.02,.73,1) both;
         }
         @media (max-width: 560px) {
           .card {
-            right: 0; bottom: 0; left: 0; width: 100%; max-width: 100%;
-            border-radius: 20px 20px 0 0;
-            padding-bottom: max(16px, env(safe-area-inset-bottom));
+            right: 0; bottom: 0; left: 0; width: auto; max-width: none;
+            border-radius: 28px 28px 0 0;
+            padding-bottom: max(18px, env(safe-area-inset-bottom));
             animation-name: isa-in-sheet;
           }
         }
         @media (prefers-color-scheme: dark) {
-          .card { background: #1f2229; color: #e5e7eb; border-color: rgba(255,255,255,.09); }
-          .sub { color: #9ca3af !important; }
-          input { background: #15171c !important; color: #e5e7eb !important; border-color: rgba(255,255,255,.12) !important; }
-          .dismiss { color: #6b7280 !important; }
+          .card { background: #1b1f26; color: #e8eaed; border-color: rgba(255,255,255,.08); box-shadow: 0 1px 3px rgba(0,0,0,.4), 0 10px 32px rgba(0,0,0,.5); }
+          .sub { color: #9aa0a6 !important; }
+          input { background: #262b33 !important; color: #e8eaed !important; }
+          input::placeholder { color: #7d8590; }
+          input:focus { background: #2a3038 !important; }
+          .dismiss { color: #9aa0a6 !important; }
+          .dismiss:hover { background: rgba(255,255,255,.08) !important; }
+          .hint { color: #7d8590 !important; }
+          .hint a { color: #a8c7fa !important; }
+          button.join { background: #a8c7fa !important; color: #0d1b3d !important; }
         }
         @keyframes isa-in { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
         @keyframes isa-in-sheet { from { transform: translateY(100%); } to { transform: none; } }
         @media (prefers-reduced-motion: reduce) { .card { animation: none; } }
-        .row { display: flex; align-items: flex-start; gap: 12px; }
+        .row { display: flex; align-items: flex-start; gap: 14px; padding-right: 26px; }
         .logo {
-          flex: none; width: 38px; height: 38px; border-radius: 11px;
+          flex: none; width: 42px; height: 42px; border-radius: 50%;
           display: grid; place-items: center;
           background: linear-gradient(135deg, #4250af, #7c3aed);
+          box-shadow: 0 2px 8px rgba(66,80,175,.35);
         }
         .logo svg { width: 22px; height: 22px; }
-        h2 { margin: 1px 0 3px; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
-        .sub { margin: 0; font-size: 12.5px; line-height: 1.45; color: #6b7280; }
-        form { display: flex; gap: 8px; margin-top: 13px; }
+        h2 { margin: 2px 0 5px; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+        .sub { margin: 0; font-size: 13px; line-height: 1.5; color: #5f6368; }
+        form { display: flex; gap: 10px; margin-top: 16px; }
         input {
           flex: 1; min-width: 0; box-sizing: border-box;
-          font: inherit; font-size: 13.5px;
-          padding: 9px 12px; border-radius: 11px;
-          border: 1px solid rgba(0,0,0,.14); background: #f9fafb; color: inherit;
-          outline: none; transition: border-color .15s, box-shadow .15s;
+          font: inherit; font-size: 14px;
+          padding: 11px 18px; border-radius: 999px;
+          border: 1px solid transparent; background: #f1f3f4; color: inherit;
+          outline: none; transition: background .15s, border-color .15s, box-shadow .15s;
         }
-        input:focus { border-color: #4250af; box-shadow: 0 0 0 3px rgba(66,80,175,.18); }
+        input:focus { background: #fff; border-color: #4250af; box-shadow: 0 0 0 3px rgba(66,80,175,.15); }
         button.join {
-          flex: none; font: inherit; font-size: 13.5px; font-weight: 600;
-          padding: 9px 16px; border: 0; border-radius: 11px; cursor: pointer;
-          background: #4250af; color: #fff; transition: filter .15s, transform .05s;
+          flex: none; font: inherit; font-size: 14px; font-weight: 600;
+          padding: 11px 22px; border: 0; border-radius: 999px; cursor: pointer;
+          background: #4250af; color: #fff; transition: filter .15s, box-shadow .15s, transform .05s;
         }
-        button.join:hover { filter: brightness(1.1); }
+        button.join:hover { filter: brightness(1.08); box-shadow: 0 2px 10px rgba(66,80,175,.4); }
         button.join:active { transform: scale(.97); }
         .dismiss {
-          position: absolute; top: 10px; right: 12px;
-          border: 0; background: none; cursor: pointer;
-          font-size: 18px; line-height: 1; color: #9ca3af; padding: 4px;
+          position: absolute; top: 14px; right: 14px;
+          width: 32px; height: 32px; box-sizing: border-box;
+          border: 0; border-radius: 50%; background: none; cursor: pointer;
+          font-size: 18px; line-height: 1; color: #5f6368; padding: 0;
+          display: grid; place-items: center; transition: background .15s;
         }
-        .hint { margin: 9px 0 0; font-size: 11.5px; color: #9ca3af; }
-        .hint a { color: inherit; }
+        .dismiss:hover { background: rgba(0,0,0,.06); }
+        .hint { margin: 14px 0 0; font-size: 12px; line-height: 1.55; color: #80868b; }
+        .hint a { color: #4250af; text-decoration: none; }
+        .hint a:hover { text-decoration: underline; }
         .card { position: fixed; } /* re-assert after :host reset */
       </style>
       <div class="card" role="dialog" aria-label="Join this album with your own Immich server">
@@ -91,8 +102,8 @@
             </svg>
           </div>
           <div>
-            <h2>Join shared album</h2>
-            <p class="sub">Have an Immich server with the shared-albums add-on? Join this album with your household — it appears in your family's app, and photos stay on their owners' servers.</p>
+            <h2>Join shared album with your server?</h2>
+            <p class="sub">Have an Immich server of your own with the shared-albums addon?<br>If so pop your server address down below to begin sharing photos across servers!</p>
           </div>
         </div>
         <form>

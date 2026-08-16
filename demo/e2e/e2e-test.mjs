@@ -1,10 +1,10 @@
 // Full-cycle E2E assertion harness: reseed A, reset B, join, contribute, verify.
 // Usage: node e2e-test.mjs  (env: AKEY, BKEY, A_URL, B_URL, B_SIDECAR)
-const A = process.env.A_URL || 'https://ellul-immich.duckdns.org';
+const A = process.env.A_URL || 'http://localhost:2285';
 const B = process.env.B_URL || 'http://localhost:2284';
 const BS = process.env.B_SIDECAR || 'http://localhost:8301';
 const AKEY = process.env.AKEY, BKEY = process.env.BKEY;
-const ALBUM = process.env.A_ALBUM || 'fe971232-c7c0-4e6f-9174-741bbb692b0d';
+const ALBUM = process.env.A_ALBUM || '__CREATE__';
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); console.log(`${ok ? '  ✅' : '  ❌'} ${name}${detail ? ' — ' + detail : ''}`); };
@@ -117,9 +117,9 @@ if (aAfter) {
   const aUsers = await api(A, AKEY, '/admin/users');
   const nanUser = aUsers.find(u => u.name === 'Demo Nan (via shared albums)');
   check('Demo Nan (via shared albums) exists on A', !!nanUser);
-  const lukeId = (await api(A, AKEY, '/users/me')).id;
+  const ownerId_A = (await api(A, AKEY, '/users/me')).id;
   const contributed = aAfter.filter(a => !aIds.includes(a.id));
-  check('contributions NOT owned by Luke (timeline clean)', contributed.every(a => a.ownerId !== lukeId),
+  check('contributions NOT owned by origin admin (timeline clean)', contributed.every(a => a.ownerId !== ownerId_A),
         contributed.map(a => a.ownerId.slice(0, 8)).join(','));
   check('contributions owned by Demo Nan (via shared albums)', nanUser && contributed.every(a => a.ownerId === nanUser.id));
   const credited = contributed.every(a => (a.exifInfo?.description || '').includes('Shared by'));
@@ -130,10 +130,10 @@ if (aAfter) {
 
 console.log('— stage: A personal timeline must NOT contain B-contributed photos');
 if (aAfter) {
-  const lukeId = (await api(A, AKEY, '/users/me')).id;
+  const ownerId_A = (await api(A, AKEY, '/users/me')).id;
   // The mobile Photos tab shows the logged-in user's own assets. Query exactly that.
   const myTimeline = (await api(A, AKEY, '/search/metadata', j({ size: 500 }))).assets.items
-    .filter(a => a.ownerId === lukeId);
+    .filter(a => a.ownerId === ownerId_A);
   const contributedChecksums = new Set(aAfter.filter(a => !aIds.includes(a.id)).map(a => a.checksum));
   const leaked = myTimeline.filter(a => contributedChecksums.has(a.checksum));
   check('B contributions absent from A owner timeline', leaked.length === 0,
@@ -202,6 +202,35 @@ if (aAfter) {
   const m2detail = await api(B, BKEY, `/albums/${mirror2.id}`);
   const m2humans = (m2detail.albumUsers || []).filter(u => !(u.user?.email || '').endsWith('@sidecar.local')).map(u => u.user?.id);
   check('private join: only the receiving user among human members', m2humans.length === 1 && m2humans[0] === nanId, `${m2humans.length} human member(s)`);
+
+  console.log('— stage: re-join by a second user attaches to the existing mirror');
+  let second = (await api(B, BKEY, '/admin/users')).find(u => u.email === 'second-e2e@demo.local');
+  if (!second) second = await api(B, BKEY, '/admin/users', j({ email: 'second-e2e@demo.local', name: 'Second Human', password: 'e2e-pass-123' }));
+  const join2b = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share2}`, forUserId: second.id }))).json();
+  check('re-join returns the existing mirror (no duplicate album)', join2b.albumId === mirror2.id, JSON.stringify(join2b).slice(0, 100));
+  const dupCount = (await api(B, BKEY, '/albums')).filter(a => a.albumName === 'second album').length;
+  check('only one "second album" mirror exists', dupCount === 1, `${dupCount} album(s)`);
+  const m2after = await api(B, BKEY, `/albums/${mirror2.id}`);
+  const m2h2 = (m2after.albumUsers || []).filter(u => !(u.user?.email || '').endsWith('@sidecar.local')).map(u => u.user?.id);
+  check('re-join added the second user as member', m2h2.length === 2 && m2h2.includes(second.id), `${m2h2.length} human member(s)`);
+}
+
+console.log('— stage: instant join (no preview wait) heals via reconciliation');
+{
+  const alb3 = (await api(A, AKEY, '/albums', j({ albumName: 'instant album' }))).id;
+  const fresh = await upload(A, AKEY, 'instant-e2e.jpg', `inst${Date.now() % 100000}`, '2026-08-15T09:00:00.000Z');
+  await api(A, AKEY, `/albums/${alb3}/assets`, { ...j({ ids: [fresh] }), method: 'PUT' });
+  const share3 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb3, allowUpload: true }))).key;
+  const meB = (await api(B, BKEY, '/users/me')).id;
+  const join3 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share3}`, forUserId: meB }))).json();
+  check('instant join accepted', !!join3.albumId, JSON.stringify(join3).slice(0, 100));
+  const m3 = await until(async () => {
+    const mirror3 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'instant album');
+    if (!mirror3) return null;
+    const x = await albumAssets(B, BKEY, mirror3.id);
+    return x.length === 1 ? x : null;
+  }, 90000);
+  check('photo uploaded seconds before join eventually lands (reconciliation)', !!m3, m3 ? 'landed' : 'timed out');
 }
 
 console.log('— stage: loop prevention (2 idle watcher cycles)');
