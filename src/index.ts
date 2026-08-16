@@ -777,6 +777,9 @@ const server = http.createServer(async (req, res) => {
       // Transparent proxy to Immich for everything that isn't ours (share pages, their
       // /_app bundles, /api calls). In production Caddy usually routes around us; when the
       // sidecar fronts Immich directly (demo/simple setups) this keeps the SPA fully working.
+      // Websocket upgrades can't ride a fetch()-based proxy — refuse cleanly instead of
+      // erroring per retry; live web updates need the Immich port (or a real reverse proxy).
+      if (req.headers.upgrade) { res.writeHead(426, { 'Content-Type': 'text/plain' }); return res.end('websockets are not proxied here — connect to Immich directly'); }
       const headers: Record<string, string> = {};
       for (const [k, v] of Object.entries(req.headers)) {
         if (typeof v === 'string') headers[k] = v; else if (Array.isArray(v)) headers[k] = v.join(', ');
