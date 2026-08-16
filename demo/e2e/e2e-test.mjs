@@ -179,9 +179,10 @@ if (aAfter) {
 }
 
 console.log('— stage: two-way comment sync');
+let joinerComment = '';
 if (aAfter && mirror) {
   const originComment = `origin says hi ${Date.now()}`;
-  const joinerComment = `joiner replies ${Date.now()}`;
+  joinerComment = `joiner replies ${Date.now()}`;
   await api(A, AKEY, '/activities', j({ albumId: ALBUM_ID, type: 'comment', comment: originComment }));
   await api(B, BKEY, '/activities', j({ albumId: mirror.id, type: 'comment', comment: joinerComment }));
   const onJoiner = await until(async () => {
@@ -273,6 +274,38 @@ console.log('— stage: instant join (no preview wait) heals via reconciliation'
   check('photo uploaded seconds before join eventually lands (reconciliation)', !!m3, m3 ? 'landed' : 'timed out');
 }
 
+console.log('— stage: share link created before any photos (empty album) still names the sharer');
+{
+  const alb5 = (await api(A, AKEY, '/albums', j({ albumName: 'born empty' }))).id;
+  const share5 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb5, allowUpload: true }))).key;
+  const meB5 = (await api(B, BKEY, '/users/me')).id;
+  const join5 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share5}`, forUserId: meB5 }))).json();
+  check('empty-album join succeeds', !!join5.albumId, JSON.stringify(join5).slice(0, 100));
+  const bu5 = (await api(B, BKEY, '/admin/users')).filter(u => u.email.endsWith('@sidecar.local'));
+  check('empty-album mirror owner named after the sharer, not the household',
+        !bu5.some(u => u.name.startsWith('Mock household')), bu5.map(u => u.name).join(', '));
+}
+
+console.log('— stage: view-only share link (allowUpload off) rejects cross-server uploads');
+{
+  const alb6 = (await api(A, AKEY, '/albums', j({ albumName: 'view only album' }))).id;
+  const voId = await upload(A, AKEY, 'viewonly-e2e.jpg', `vo${Date.now() % 1000}`, '2026-05-01T09:00:00.000Z');
+  await ensurePreviews(A, AKEY, [voId]);
+  await api(A, AKEY, `/albums/${alb6}/assets`, { ...j({ ids: [voId] }), method: 'PUT' });
+  const share6 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb6, allowUpload: false }))).key;
+  const meB6 = (await api(B, BKEY, '/users/me')).id;
+  const join6 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share6}`, forUserId: meB6 }))).json();
+  const mirror6 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'view only album');
+  const m6 = await until(async () => { const x = await albumAssets(B, BKEY, mirror6.id); return x.length === 1 ? x : null; }, 60000);
+  check('view-only album still syncs for viewing', !!m6, m6 ? '' : 'timed out');
+  const rogue = await upload(B, BKEY, 'rogue-e2e.jpg', `rg${Date.now() % 1000}`, '2026-05-02T09:00:00.000Z');
+  await ensurePreviews(B, BKEY, [rogue]);
+  await api(B, BKEY, `/albums/${mirror6.id}/assets`, { ...j({ ids: [rogue] }), method: 'PUT' });
+  await sleep(25000); // two push cycles
+  check('view-only album rejects cross-server uploads', (await albumAssets(A, AKEY, alb6)).length === 1,
+        `origin at ${(await albumAssets(A, AKEY, alb6)).length}`);
+}
+
 console.log('— stage: third household D joins — member contributions relay through the origin');
 const D = process.env.D_URL || 'http://localhost:2286';
 const DS = process.env.D_SIDECAR || 'http://localhost:8303';
@@ -295,6 +328,14 @@ if (DKEY) {
     check('relayed original chains D -> origin -> B on demand (byte-identical)', !!(viaChain && sha1(viaChain) === sha1(bOrig)),
           viaChain ? `${viaChain.byteLength}B via chain vs ${bOrig.byteLength}B at B` : 'no proxy found for 2026-07-01');
   }
+  // comments relay: the origin is the canonical message store, so a late joiner
+  // backfills earlier comments — including ones authored by another member household
+  const relayedComment = joinerComment && await until(async () => {
+    const acts = await api(D, DKEY, `/activities?albumId=${dMirror.id}&type=comment`);
+    return acts.find(a => a.comment === joinerComment) || null;
+  }, 60000, 4000);
+  check('member comment relays to a later-joining household (canonical backfill)', !!relayedComment,
+        relayedComment ? `author: ${relayedComment.user?.name}` : 'timed out');
   const dPhoto = await upload(D, DKEY, 'dave-e2e.jpg', `dv${Date.now() % 1000}`, '2026-06-01T09:00:00.000Z');
   await ensurePreviews(D, DKEY, [dPhoto]);
   await api(D, DKEY, `/albums/${dMirror.id}/assets`, { ...j({ ids: [dPhoto] }), method: 'PUT' });

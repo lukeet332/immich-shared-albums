@@ -2,7 +2,7 @@
 
 Fully API-driven cross-household test — **no phone, no emulator, no real server**.
 Runs three throwaway mock Immich stacks (C origin, B and D joiners) and asserts
-the whole flow, 46 checks, exits non-zero on any fail.
+the whole flow, 51 checks, exits non-zero on any fail.
 
 ```bash
 ./demo/run-mock-e2e.sh
@@ -22,7 +22,7 @@ utility-user ownership (no human owns mirror assets); videos as playable
 renditions; origin-timeline and joiner-timeline cleanliness; per-person
 contributor attribution + avatar sync + uploader credit + stale-name healing;
 capture-date and GPS preservation (album ordering); album People/owners
-documented in settings; two-way comment sync with echo prevention; owner
+documented in settings; canonical comments (two-way sync, echo prevention, relay/backfill to a later-joining household); view-only links enforced (sync yes, uploads rejected); empty-album joins named after the sharer; owner
 post-join additions; the same photo re-shared into a second album; instant join
 with no preview wait (healed by reconciliation); member→member relay through the
 origin (third household D receives B's contributions and vice versa, correctly

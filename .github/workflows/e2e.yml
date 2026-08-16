@@ -41,3 +41,5 @@ jobs:
           (cd demo && docker compose logs sidecar-b --tail 200) || true
           (cd demo/household-c && docker compose logs sidecar-c --tail 200) || true
           (cd demo/household-d && docker compose logs sidecar-d --tail 200) || true
+          (cd demo && docker compose logs immich-b --tail 150) || true
+          (cd demo/household-c && docker compose logs immich-c --tail 150) || true

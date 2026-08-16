@@ -35,7 +35,13 @@ if (!state.keys) {
     priv: privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64url'),
   };
 }
-const save = () => fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 1));
+// atomic: write-then-rename, so a crash mid-save can never truncate the state file
+// (losing it would forget the household keypair and break every cross-server link)
+const save = () => {
+  const tmp = `${STATE_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 1));
+  fs.renameSync(tmp, STATE_FILE);
+};
 save();
 const seenHas = (mappingId, checksum) => state.seen.some(s => s.m === mappingId && s.c === checksum);
 const seenAdd = (mappingId, checksum, localAssetId, originAsset) => {
@@ -293,10 +299,11 @@ async function handleRedeem(req, body) {
   save();
   log(`peer joined: "${household.name}" -> album "${album.albumName}"`);
   const manifest = await buildManifest(album.assets, mappingId);
-  // v3 album responses carry no ownerId — majority asset owner is the sharing person
+  // v3 album responses carry no ownerId — the share link records its creator, which is
+  // exactly "the person who shared this"; majority asset owner is the empty-proof fallback
   const ownerCounts = {};
   for (const a of album.assets) ownerCounts[a.ownerId] = (ownerCounts[a.ownerId] || 0) + 1;
-  const albumOwnerId = album.ownerId || Object.keys(ownerCounts).sort((x, y) => ownerCounts[y] - ownerCounts[x])[0];
+  const albumOwnerId = link.userId || album.ownerId || Object.keys(ownerCounts).sort((x, y) => ownerCounts[y] - ownerCounts[x])[0];
   const albumOwner = { displayName: await ownerName(albumOwnerId) || CFG.name, originUserId: albumOwnerId };
   return [200, {
     household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name },
@@ -311,6 +318,8 @@ async function handleRefs(req, body, albumMappingId) {
   if (!peer || !verify(body, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown or unverified peer' }];
   const mapping = state.mappings.find(m => m.id === albumMappingId || m.albumId === albumMappingId || m.remoteAlbumId === albumMappingId);
   if (!mapping) return [404, { error: 'unknown album mapping' }];
+  // the share link's "allow public user to upload" switch, honoured cross-server
+  if (mapping.permissions === 'view') return [403, { error: 'view-only album — uploads not allowed' }];
   const { add = [] } = JSON.parse(body);
   const failed = [];
   for (const ref of add) {
@@ -329,7 +338,8 @@ async function handleVersion(req, albumMappingId) {
   if (!peer || !verify(albumMappingId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown or unverified peer' }];
   const mapping = state.mappings.find(m => m.role === 'owner' && (m.id === albumMappingId || m.albumId === albumMappingId));
   if (!mapping) return [404, { error: 'unknown album mapping' }];
-  return [200, { version: (await getAlbum(mapping.albumId)).updatedAt }];
+  const stats = await immichJson(`/activities/statistics?albumId=${mapping.albumId}`).catch(() => null);
+  return [200, { version: (await getAlbum(mapping.albumId)).updatedAt, comments: stats?.comments ?? null }];
 }
 
 // Members re-pull this to heal refs missed at join time (e.g. preview not yet generated).
@@ -348,6 +358,31 @@ const postComment = (albumId, comment, key) => immichJson('/activities', jsonBod
 const seenActHas = (id) => (state.seenActivity || []).includes(id);
 const seenActAdd = (id) => { state.seenActivity = state.seenActivity || []; state.seenActivity.push(id); save(); };
 
+// Materialise foreign comments locally via the author's utility user. Skips ids already
+// seen AND (author, text) pairs already present locally — the latter guards legacy comments
+// synced before canonical ids existed.
+async function materialiseComments(mapping, peerUrl, peerName, comments) {
+  const users = await usersById();
+  const local = await getComments(mapping.albumId);
+  const localPairs = new Set(local.map(a => {
+    const n = (users[a.user?.id]?.name || a.user?.name || '').replace(UTILITY_SUFFIX, '');
+    return `${n}\u0000${a.comment}`;
+  }));
+  const ids = {};
+  for (const cm of comments) {
+    const tag = `remote:${cm.id}`;
+    if (seenActHas(tag)) continue;
+    if (localPairs.has(`${cm.author}\u0000${cm.comment}`)) { seenActAdd(tag); continue; }
+    const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
+    const c = await ensureContributor(cm.author || peerName, mapping.albumId, adminKey, peerUrl, cm.authorUserId);
+    const posted = await postComment(mapping.albumId, cm.comment, c.key);
+    ids[cm.id] = posted.id;
+    seenActAdd(tag); seenActAdd(`local:${posted.id}`); // don't echo it back
+    log(`synced comment from "${cm.author}" into "${mapping.albumName}"`);
+  }
+  return ids;
+}
+
 async function handleActivity(req, body, albumMappingId) {
   const peerKey = req.headers['x-isa-key'];
   const peer = state.peers.find(p => p.pub === peerKey);
@@ -355,16 +390,25 @@ async function handleActivity(req, body, albumMappingId) {
   const mapping = state.mappings.find(m => m.id === albumMappingId || m.albumId === albumMappingId || m.remoteAlbumId === albumMappingId);
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const { comments = [] } = JSON.parse(body);
-  for (const cm of comments) {
-    const tag = `remote:${cm.id}`;
-    if (seenActHas(tag)) continue;
-    const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
-    const c = await ensureContributor(cm.author || peer.name, mapping.albumId, adminKey, peer.url, cm.authorUserId);
-    const posted = await postComment(mapping.albumId, cm.comment, c.key);
-    seenActAdd(tag); seenActAdd(`local:${posted.id}`); // don't echo it back
-    log(`synced comment from "${cm.author}" into "${mapping.albumName}"`);
-  }
-  return [200, { ok: true }];
+  const ids = await materialiseComments(mapping, peer.url, peer.name, comments);
+  return [200, { ok: true, ids }];
+}
+
+// Canonical comment list for an album — the origin is the source of truth for messages.
+// Utility-authored entries resolve back to the true contributor's name.
+async function handleComments(req, albumMappingId) {
+  const peerKey = req.headers['x-isa-key'];
+  const peer = state.peers.find(p => p.pub === peerKey);
+  if (!peer || !verify(albumMappingId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown or unverified peer' }];
+  const mapping = state.mappings.find(m => m.role === 'owner' && (m.id === albumMappingId || m.albumId === albumMappingId));
+  if (!mapping) return [404, { error: 'unknown album mapping' }];
+  const users = await usersById();
+  const comments = (await getComments(mapping.albumId)).filter(a => a.comment).map(a => ({
+    id: a.id, comment: a.comment, createdAt: a.createdAt,
+    author: (users[a.user?.id]?.name || a.user?.name || CFG.name).replace(UTILITY_SUFFIX, ''),
+    authorUserId: a.user?.id,
+  }));
+  return [200, { comments }];
 }
 
 async function handlePreview(req, assetId) {
@@ -437,13 +481,18 @@ async function join(shareUrl, forUserId) {
   if (existing) {
     const n = await addMembers(existing.albumId);
     log(`re-join: added ${n} member(s) to existing mirror "${existing.albumName}"`);
-    return { album: existing.albumName, albumId: existing.albumId, photos: res.manifest.length, from: res.household.name };
+    return { album: existing.albumName, albumId: existing.albumId, photos: res.manifest.length, from: res.household.name, permissions: res.album.permissions };
   }
-  // a freshly-minted utility user/key can 500 on its first write for a moment — retry
+  // a freshly-minted utility user/key can 500 its first writes on cold instances — retry
+  // with backoff and log each attempt so failures are diagnosable from CI logs
   let mirror;
   for (let attempt = 1; ; attempt++) {
     try { mirror = await immichJson('/albums', jsonBody({ albumName: CFG.template.replace('{name}', res.album.name) }), host.key); break; }
-    catch (e) { if (attempt >= 4) throw e; await new Promise(r => setTimeout(r, 1500)); }
+    catch (e) {
+      log(`mirror album create attempt ${attempt} failed: ${e.message}`);
+      if (attempt >= 6) throw e;
+      await new Promise(r => setTimeout(r, attempt * 2000));
+    }
   }
   try {
     const n = await addMembers(mirror.id);
@@ -460,13 +509,14 @@ async function join(shareUrl, forUserId) {
     try { await materialiseRef(newMapping, res.household.url, res.household.name, ref); }
     catch (e) { log(`join materialise failed (${ref.checksum?.slice(0,10)}): ${e.message} — reconciliation will retry`); }
   }
-  return { album: mirror.albumName, albumId: mirror.id, photos: res.manifest.length, from: res.household.name };
+  return { album: mirror.albumName, albumId: mirror.id, photos: res.manifest.length, from: res.household.name, permissions: res.album.permissions };
 }
 
 // ---------- watcher: local additions -> push refs to peer ----------
 async function watchOnce() {
   for (const mapping of state.mappings) {
     if (mapping.dead) continue;
+    if (mapping.role === 'member' && mapping.permissions === 'view') continue; // view-only: nothing to push
     try {
       // handshake: skip untouched albums entirely (updatedAt bumps on any album change).
       // localVersion is only stored after a CLEAN cycle so deferred refs keep re-offering.
@@ -498,7 +548,6 @@ async function watchOnce() {
     }
   }
   await reconcileOnce();
-  await syncComments();
 }
 
 // Heal member mirrors: re-pull the origin manifest and materialise anything we
@@ -532,25 +581,64 @@ async function reconcileOnce() {
   }
 }
 
-// push locally-authored comments (not ones we materialised) to the peer
+// push locally-authored comments (not ones we materialised) to the peer.
+// Runs on its own fast cadence; the cheap activity-count statistic gates the real work,
+// so cross-server comments land in seconds without heavy polling.
+let COMMENTS_RUNNING = false;
 async function syncComments() {
+  if (COMMENTS_RUNNING) return;
+  COMMENTS_RUNNING = true;
+  try { await syncCommentsOnce(); } finally { COMMENTS_RUNNING = false; }
+}
+async function syncCommentsOnce() {
   for (const mapping of state.mappings) {
     if (mapping.dead) continue;
     try {
       const peer = state.peers.find(p => p.pub === mapping.peer);
       if (!peer) continue;
+      if (mapping.role === 'member') await pullCanonicalComments(mapping, peer);
+      const stats = await immichJson(`/activities/statistics?albumId=${mapping.albumId}`).catch(() => null);
+      if (stats && stats.comments === mapping.commentCount) continue;
       const utilityIds = new Set(Object.values(state.contributors || {}).map(c => c.userId));
       const comments = (await getComments(mapping.albumId))
         .filter(a => a.comment && !seenActHas(`local:${a.id}`) && !seenActHas(`remote:${a.id}`) && !utilityIds.has(a.user?.id));
-      if (!comments.length) continue;
+      if (!comments.length) { if (stats) { mapping.commentCount = stats.comments; save(); } continue; }
       const targetMapping = mapping.role === 'member' ? (mapping.remoteMappingId || mapping.remoteAlbumId) : mapping.albumId;
       const payload = comments.map(a => ({ id: a.id, comment: a.comment, author: a.user?.name || CFG.name, authorUserId: a.user?.id }));
       const r = await signedFetch(`${peer.url}/sidecar/api/v1/albums/${targetMapping}/activity`, JSON.stringify({ comments: payload }));
-      if (r.ok) { comments.forEach(a => seenActAdd(`local:${a.id}`)); log(`pushed ${comments.length} comment(s) to "${peer.name}"`); }
+      if (r.ok) {
+        comments.forEach(a => seenActAdd(`local:${a.id}`));
+        // the origin answers with canonical ids for our comments — remember them so the
+        // canonical pull can never hand us our own comments back
+        const { ids = {} } = await r.json().catch(() => ({}));
+        for (const originId of Object.values(ids)) seenActAdd(`remote:${originId}`);
+        if (stats) { mapping.commentCount = stats.comments; save(); }
+        log(`pushed ${comments.length} comment(s) to "${peer.name}"`);
+      }
     } catch (e) { log(`comment sync error on "${mapping.albumName}": ${e.message}`); }
   }
 }
+
+// The origin is the source of truth for messages: members pull its canonical comment set
+// (gated by the comment count in the version handshake) and materialise what's missing.
+// This is also what relays member comments onward to other member households.
+async function pullCanonicalComments(mapping, peer) {
+  const target = mapping.remoteMappingId || mapping.remoteAlbumId;
+  const sig = { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(target) } };
+  const vr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/version`, sig);
+  if (!vr.ok) return;
+  const v = await vr.json().catch(() => ({}));
+  if (v.comments == null || v.comments === mapping.remoteCommentCount) return;
+  const cr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/comments`, sig);
+  if (!cr.ok) return;
+  const { comments = [] } = await cr.json().catch(() => ({}));
+  await materialiseComments(mapping, peer.url, peer.name, comments);
+  mapping.remoteCommentCount = v.comments; save();
+}
 setInterval(() => watchOnce().catch(e => log('watch loop:', e.message)), CFG.pollMs);
+// comments ride a fast lane: the count statistic is one indexed query, so seconds-level
+// cadence stays cheap even on low-power hosts; the full activity fetch only runs on change
+setInterval(() => syncComments().catch(e => log('comment loop:', e.message)), Number(process.env.COMMENT_POLL_MS || 5000));
 
 // ---------- panel ----------
 const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -628,7 +716,7 @@ document.getElementById('go').onclick=async()=>{
  const d=await r.json().catch(()=>({error:'failed'}));
  if(r.ok){
    var deep='intent://my.immich.app/albums/'+d.albumId+'#Intent;scheme=https;package=app.alextran.immich;S.browser_fallback_url='+encodeURIComponent('https://my.immich.app/albums/'+d.albumId)+';end';
-   out.innerHTML='Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing.<br><br>'+
+   out.innerHTML='Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing.'+(d.permissions==='view'?'<br><span style="font-size:12px">View-only album: you can look and comment, but photos you add stay on your server.</span>':'')+'<br><br>'+
      '<a href="'+deep+'" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:600;padding:12px 30px;border-radius:999px">Open in Immich app</a>'+
      '<div style="margin-top:12px;font-size:12px;color:#9aa0a6">If the album looks empty at first, give it a moment — the app is still syncing it.</div>';
    document.getElementById('go').style.display='none';
@@ -728,6 +816,9 @@ const server = http.createServer(async (req, res) => {
     }
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/manifest$/)) && req.method === 'GET') {
       const [code, obj] = await handleManifest(req, m[1]); return send(code, obj);
+    }
+    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/comments$/)) && req.method === 'GET') {
+      const [code, obj] = await handleComments(req, m[1]); return send(code, obj);
     }
     const streamOut = (out) => { // stream byte responses through — never buffer originals (Pi-friendly)
       if (Array.isArray(out)) return send(out[0], out[1]);
