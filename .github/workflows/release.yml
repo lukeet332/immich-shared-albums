@@ -1,0 +1,62 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # the full E2E suite gates every release
+      - name: Start mock Immich instances (B + C + D)
+        run: |
+          echo "B_API_KEY=placeholder" > demo/.env
+          echo "C_API_KEY=placeholder" > demo/household-c/.env
+          echo "D_API_KEY=placeholder" > demo/household-d/.env
+          for i in 1 2 3 4 5; do docker pull valkey/valkey:8 && break || sleep 45; done
+          (cd demo && docker compose up -d immich-b db-b redis-b)
+          (cd demo/household-c && docker compose up -d immich-c db-c redis-c)
+          (cd demo/household-d && docker compose up -d immich-d db-d redis-d)
+      - name: Provision admins + API keys
+        run: |
+          chmod +x demo/ci/provision-mock.sh
+          echo "B_API_KEY=$(demo/ci/provision-mock.sh http://localhost:2284 'Demo Nan')" > demo/.env
+          echo "C_API_KEY=$(demo/ci/provision-mock.sh http://localhost:2285 'Grandpa Joe')" > demo/household-c/.env
+          echo "D_API_KEY=$(demo/ci/provision-mock.sh http://localhost:2286 'Demo Dave')" > demo/household-d/.env
+      - name: Run E2E suite
+        run: bash demo/run-mock-e2e.sh
+
+      - name: Log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build + push multi-arch image (amd64 + arm64 — Pi-friendly)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:latest
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes "$(sed -n "/^## ${{ github.ref_name }}/,/^## v/p" CHANGELOG.md | sed '$d')" \
+            || gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes

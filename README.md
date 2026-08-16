@@ -80,6 +80,15 @@ photos.example.com {
 }
 ```
 
+## Versioning
+
+Releases follow semver with a **sync-contract policy**: a **MAJOR** bump means a peer
+on the previous version can no longer sync with you or the upgrade needs operator
+action; **MINOR** adds features old peers tolerate; **PATCH** fixes. Watch the repo's
+releases to hear about breaking changes — details in [CHANGELOG.md](./CHANGELOG.md).
+Tagged releases publish a multi-arch image (amd64/arm64) to
+`ghcr.io/lukeet332/immich-shared-albums`.
+
 ## Trust model, in one paragraph
 
 Servers must be mutually and explicitly introduced — by share link, once per household pair — before a single byte flows; the introduction *is* the act of sharing an album, not a separate ritual. The first redemption pins the joining household's public key (anchored on the share key, which only invitees held); every subsequent request is signed, so URLs are mutable hints and a DDNS rename breaks nothing. All moderation is post-hoc and owner-side: remove a household, revoke a link, or forget a key. Default-closed: uninvited servers cannot so much as introduce themselves.
