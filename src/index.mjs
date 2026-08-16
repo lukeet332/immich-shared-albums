@@ -52,16 +52,19 @@ const immich = async (p, init = {}, key = CFG.apiKey) => {
 const immichJson = async (p, init, key) => (await immich(p, init, key)).json();
 const jsonBody = (obj) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
 
-let USER_NAMES = {}; let USER_NAMES_AT = 0;
-async function ownerName(ownerId) {
-  if (Date.now() - USER_NAMES_AT > 60000) {
+const UTILITY_SUFFIX = ' (via shared albums)';
+let USERS = {}; let USERS_AT = 0;
+async function usersById(maxAgeMs = 60000) {
+  if (Date.now() - USERS_AT > maxAgeMs) {
     try {
-      USER_NAMES = Object.fromEntries((await immichJson('/admin/users')).filter(u => !u.email.endsWith('@sidecar.local')).map(u => [u.id, u.name]));
-      USER_NAMES_AT = Date.now();
+      USERS = Object.fromEntries((await immichJson('/admin/users'))
+        .map(u => [u.id, { name: u.name, utility: u.email.endsWith('@sidecar.local') }]));
+      USERS_AT = Date.now();
     } catch { /* keep stale map */ }
   }
-  return USER_NAMES[ownerId] || null;
+  return USERS;
 }
+async function ownerName(ownerId) { const u = (await usersById())[ownerId]; return u && !u.utility ? u.name : null; }
 const getSharedLinkByKey = async (key) => (await immichJson('/shared-links')).find(l => l.key === key);
 const getAlbum = (id) => immichJson(`/albums/${id}?withoutAssets=true`);
 // Immich v3 removed embedded assets from the album endpoint; search/metadata is the stable enumerator.
@@ -77,6 +80,37 @@ const getAlbumAssets = async (albumId) => {
 const createAlbum = (albumName) => immichJson('/albums', jsonBody({ albumName }));
 const addToAlbum = (albumId, ids, key) => immichJson(`/albums/${albumId}/assets`, { ...jsonBody({ ids }), method: 'PUT' }, key);
 const previewStream = (assetId) => immich(`/assets/${assetId}/thumbnail?size=preview`);
+const originalStream = (assetId) => immich(`/assets/${assetId}/original`);
+
+// A shared photo, described for a peer. For utility-owned proxies (relayed photos)
+// the true contributor is recovered from the utility user's name; the credit line we
+// append locally is stripped so downstream hops don't stack "Shared by" twice.
+async function assetToRef(a) {
+  const u = (await usersById())[a.ownerId];
+  const displayName = u?.utility ? u.name.replace(UTILITY_SUFFIX, '')
+                                 : (a.owner?.name || u?.name || CFG.name);
+  const description = (a.exifInfo?.description || '').replace(/(?:\n\n)?Shared by [^\n]*$/, '') || undefined;
+  return { originAsset: a.id, checksum: a.checksum, kind: a.type === 'VIDEO' ? 'video' : 'image',
+    fileName: a.originalFileName,
+    takenAt: a.exifInfo?.dateTimeOriginal || a.fileCreatedAt,
+    exif: a.exifInfo ? { latitude: a.exifInfo.latitude, longitude: a.exifInfo.longitude,
+      description, rating: a.exifInfo.rating } : undefined,
+    contributor: { displayName, originUserId: a.ownerId } };
+}
+
+// What may be offered to the peer behind `mappingId`: photos/videos they haven't seen,
+// excluding utility-owned proxies of UNKNOWN provenance (pre-originals preview copies —
+// their file checksum differs from the source photo's, so echo-safety can't be proven).
+// Originals-era proxies keep the source checksum; the per-mapping seen-ledger then
+// guarantees a household never receives its own photo back, which is what enables
+// relaying member contributions onward to other member households.
+const provenanceKnown = (checksum) => state.seen.some(s => s.c === checksum);
+async function shareableAssets(assets, mappingId) {
+  const users = await usersById();
+  return assets.filter(a => (a.type === 'IMAGE' || a.type === 'VIDEO')
+    && !seenHas(mappingId, a.checksum)
+    && (!users[a.ownerId]?.utility || provenanceKnown(a.checksum)));
+}
 async function uploadAsset(bytes, filename, key = CFG.apiKey, takenAt) {
   const fd = new FormData();
   const stamp = takenAt || new Date().toISOString();
@@ -125,7 +159,18 @@ async function ensureUtilityUser(displayName) {
   state.contributors = state.contributors || {};
   const slug = slugify(displayName);
   let c = state.contributors[slug];
-  if (c && c.key) return c;               // already fully provisioned
+  const wantedName = `${displayName}${UTILITY_SUFFIX}`;
+  if (c && c.key) {                       // already fully provisioned — heal a stale display name
+    const current = (await usersById(10000))[c.userId]?.name;
+    if (current && current !== wantedName) {
+      try {
+        await immichJson(`/admin/users/${c.userId}`, { ...jsonBody({ name: wantedName }), method: 'PUT' });
+        if (USERS[c.userId]) USERS[c.userId].name = wantedName;
+        log(`healed utility user name: "${current}" -> "${wantedName}"`);
+      } catch { /* cosmetic — retry next time */ }
+    }
+    return c;
+  }
   const email = `shared-${slug}@sidecar.local`;
   // reuse a persisted password if we have one (survives partial-provision retries), else fresh
   const password = c?.password || crypto.randomBytes(18).toString('base64url');
@@ -138,7 +183,7 @@ async function ensureUtilityUser(displayName) {
     if (!user) throw new Error(`cannot create or find contributor user ${email}`);
     if (user.deletedAt) { await immichJson(`/admin/users/${user.id}/restore`, { method: 'POST' }); log(`restored soft-deleted utility user ${email}`); }
     // admin reset: also clear shouldChangePassword so programmatic login works
-    await immichJson(`/admin/users/${user.id}`, { ...jsonBody({ password, shouldChangePassword: false }), method: 'PUT' });
+    await immichJson(`/admin/users/${user.id}`, { ...jsonBody({ password, shouldChangePassword: false, name: wantedName }), method: 'PUT' });
   }
   // Instances with OAuth-only login (passwordLogin disabled) need a brief toggle to mint the key.
   let restorePasswordLoginOff = false;
@@ -168,7 +213,7 @@ async function ensureUtilityUser(displayName) {
     { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.accessToken}` },
       body: JSON.stringify({ name: 'sidecar', permissions: ['all'] }) })).json();
   if (!keyRes.secret) throw new Error(`api-key mint failed for ${email} (${JSON.stringify(keyRes).slice(0,120)}) — will retry`);
-  c = { ...(c || {}), userId: user.id, key: keyRes.secret, password };
+  c = { ...(c || {}), userId: user.id, key: keyRes.secret, password, namedAs: wantedName };
   state.contributors[slug] = c; save();
   log(`provisioned utility user "${displayName} (via shared albums)"`);
   return c;
@@ -197,33 +242,30 @@ async function ensureContributor(displayName, albumId, adminKey, peerUrl, origin
 }
 
 // ---------- protocol handlers ----------
-// Manifest lists only human-owned photos: utility-owned assets are proxies we
-// materialised from a peer, and offering them back would echo photos to their origin.
-async function buildManifest(assets) {
-  let utility = new Set();
-  try { utility = new Set((await immichJson('/admin/users')).filter(u => u.email.endsWith('@sidecar.local')).map(u => u.id)); } catch {}
-  const manifest = [];
-  for (const a of assets.filter(x => x.type === 'IMAGE' && !utility.has(x.ownerId))) {
-    manifest.push({ originAsset: a.id, checksum: a.checksum, kind: 'image',
-      takenAt: a.exifInfo?.dateTimeOriginal || a.fileCreatedAt,
-      exif: a.exifInfo ? { latitude: a.exifInfo.latitude, longitude: a.exifInfo.longitude,
-        description: a.exifInfo.description, rating: a.exifInfo.rating } : undefined,
-      contributor: { displayName: a.owner?.name || await ownerName(a.ownerId) || CFG.name, originUserId: a.ownerId } });
-  }
-  return manifest;
+// Everything shareable with the peer behind mappingId (see shareableAssets for the rules).
+async function buildManifest(assets, mappingId) {
+  const out = [];
+  for (const a of await shareableAssets(assets, mappingId)) out.push(await assetToRef(a));
+  return out;
 }
 
 // Fetch a ref's preview from the peer and create the local proxy copy. Returns
 // false (without marking seen) on failure so reconciliation can retry later.
 async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   if (seenHas(mapping.id, ref.checksum)) return true;
-  const pr = await fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/preview`,
-    { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(ref.originAsset) } });
-  if (!pr.ok) { log(`preview fetch failed for ${ref.originAsset}: ${pr.status}`); return false; }
+  const sigHeaders = (v) => ({ headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(v) } });
+  // full original first (keeps quality AND the source checksum — provenance for relay);
+  // preview as a last resort for images only
+  let pr = await fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/original`, sigHeaders(ref.originAsset));
+  if (!pr.ok) {
+    if (ref.kind === 'video') { log(`original fetch failed for video ${ref.originAsset}: ${pr.status}`); return false; }
+    pr = await fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/preview`, sigHeaders(ref.originAsset));
+    if (!pr.ok) { log(`original+preview fetch failed for ${ref.originAsset}: ${pr.status}`); return false; }
+  }
   const bytes = Buffer.from(await pr.arrayBuffer());
   const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
   const c = await ensureContributor(ref.contributor?.displayName || fallbackName, mapping.albumId, adminKey, peerUrl, ref.contributor?.originUserId);
-  const up = await uploadAsset(bytes, `shared-${ref.checksum.slice(0, 12)}.jpg`, c.key, ref.takenAt);
+  const up = await uploadAsset(bytes, ref.fileName || `shared-${ref.checksum.slice(0, 12)}.jpg`, c.key, ref.takenAt);
   await addToAlbum(mapping.albumId, [up.id], c.key);
   await applyRefMetadata(up.id, ref, c.key);
   seenAdd(mapping.id, ref.checksum, up.id);
@@ -245,7 +287,7 @@ async function handleRedeem(req, body) {
     peer: household.publicKey, permissions: link.allowUpload ? 'contribute' : 'view' });
   save();
   log(`peer joined: "${household.name}" -> album "${album.albumName}"`);
-  const manifest = await buildManifest(album.assets);
+  const manifest = await buildManifest(album.assets, mappingId);
   // v3 album responses carry no ownerId — majority asset owner is the sharing person
   const ownerCounts = {};
   for (const a of album.assets) ownerCounts[a.ownerId] = (ownerCounts[a.ownerId] || 0) + 1;
@@ -274,6 +316,17 @@ async function handleRefs(req, body, albumMappingId) {
   return [200, { ok: failed.length === 0, failed }];
 }
 
+// Version handshake: one cheap album read instead of a full manifest scan. Members
+// compare this against their stored version and only pull the manifest on mismatch.
+async function handleVersion(req, albumMappingId) {
+  const peerKey = req.headers['x-isa-key'];
+  const peer = state.peers.find(p => p.pub === peerKey);
+  if (!peer || !verify(albumMappingId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown or unverified peer' }];
+  const mapping = state.mappings.find(m => m.role === 'owner' && (m.id === albumMappingId || m.albumId === albumMappingId));
+  if (!mapping) return [404, { error: 'unknown album mapping' }];
+  return [200, { version: (await getAlbum(mapping.albumId)).updatedAt }];
+}
+
 // Members re-pull this to heal refs missed at join time (e.g. preview not yet generated).
 async function handleManifest(req, albumMappingId) {
   const peerKey = req.headers['x-isa-key'];
@@ -281,7 +334,7 @@ async function handleManifest(req, albumMappingId) {
   if (!peer || !verify(albumMappingId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown or unverified peer' }];
   const mapping = state.mappings.find(m => m.role === 'owner' && (m.id === albumMappingId || m.albumId === albumMappingId));
   if (!mapping) return [404, { error: 'unknown album mapping' }];
-  return [200, { manifest: await buildManifest(await getAlbumAssets(mapping.albumId)) }];
+  return [200, { manifest: await buildManifest(await getAlbumAssets(mapping.albumId), mapping.id) }];
 }
 
 // ---------- comment / activity sync ----------
@@ -314,6 +367,13 @@ async function handlePreview(req, assetId) {
   const peer = state.peers.find(p => p.pub === peerKey);
   if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
   return previewStream(assetId); // Response — streamed through below
+}
+
+async function handleOriginal(req, assetId) {
+  const peerKey = req.headers['x-isa-key'];
+  const peer = state.peers.find(p => p.pub === peerKey);
+  if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
+  return originalStream(assetId);
 }
 
 // ---------- join (member side) ----------
@@ -373,31 +433,25 @@ async function watchOnce() {
   for (const mapping of state.mappings) {
     if (mapping.dead) continue;
     try {
+      // handshake: skip untouched albums entirely (updatedAt bumps on any album change).
+      // localVersion is only stored after a CLEAN cycle so deferred refs keep re-offering.
+      const album = await getAlbum(mapping.albumId);
+      if (album.updatedAt && album.updatedAt === mapping.localVersion) continue;
       const assets = await getAlbumAssets(mapping.albumId);
       mapping.failCount = 0;
-      // fresh = not yet pushed IN THIS MAPPING, and not owned by a utility user
-      // (utility-owned assets are proxies we materialised; a real photo shared in one
-      //  album must still be shareable in another — dedup is per-mapping by checksum)
-      const utilityIds = new Set(Object.values(state.contributors || {}).map(c => c.userId));
-      const fresh = assets.filter(a => a.type === 'IMAGE' && !seenHas(mapping.id, a.checksum)
-        && !utilityIds.has(a.ownerId));
-      if (!fresh.length) continue;
+      const fresh = await shareableAssets(assets, mapping.id);
+      if (!fresh.length) { mapping.localVersion = album.updatedAt; save(); continue; }
       const peer = state.peers.find(p => p.pub === mapping.peer);
       const targetMapping = mapping.role === 'member' ? (mapping.remoteMappingId || mapping.remoteAlbumId) : mapping.albumId;
       const add = [];
-      for (const a of fresh) {
-        add.push({ originAsset: a.id, checksum: a.checksum, kind: 'image',
-          takenAt: a.exifInfo?.dateTimeOriginal || a.fileCreatedAt,
-          exif: a.exifInfo ? { latitude: a.exifInfo.latitude, longitude: a.exifInfo.longitude,
-            description: a.exifInfo.description, rating: a.exifInfo.rating } : undefined,
-          contributor: { displayName: a.owner?.name || await ownerName(a.ownerId) || CFG.name, originUserId: a.ownerId } });
-      }
+      for (const a of fresh) add.push(await assetToRef(a));
       const body = JSON.stringify({ add });
       const r = await signedFetch(`${peer.url}/sidecar/api/v1/albums/${targetMapping}/refs`, body);
       if (r.ok) {
         const failed = new Set((await r.json().catch(() => ({}))).failed || []);
         const landed = fresh.filter(a => !failed.has(a.checksum));
         landed.forEach(a => seenAdd(mapping.id, a.checksum, a.id));
+        if (!failed.size) { mapping.localVersion = album.updatedAt; save(); }
         log(`pushed ${landed.length}/${fresh.length} ref(s) to "${peer.name}"${failed.size ? ` (${failed.size} deferred)` : ''}`);
       } else log(`ref push failed: ${r.status}`);
     } catch (e) {
@@ -420,15 +474,25 @@ async function reconcileOnce() {
       const peer = state.peers.find(p => p.pub === mapping.peer);
       if (!peer) continue;
       const target = mapping.remoteMappingId || mapping.remoteAlbumId;
-      const r = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/manifest`,
-        { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(target) } });
+      const sig = { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(target) } };
+      // handshake first: only pull the full manifest when the origin's version moved.
+      // remoteVersion is only stored after a CLEAN pass so failures keep retrying.
+      let version = null;
+      const vr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/version`, sig);
+      if (vr.ok) {
+        version = (await vr.json().catch(() => ({}))).version || null;
+        if (version && version === mapping.remoteVersion) continue;
+      }
+      const r = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/manifest`, sig);
       if (!r.ok) continue;
       const { manifest = [] } = await r.json();
       const missing = manifest.filter(ref => !seenHas(mapping.id, ref.checksum));
+      let allOk = true;
       for (const ref of missing) {
-        try { if (await materialiseRef(mapping, peer.url, peer.name, ref)) log(`reconciled missed ref into "${mapping.albumName}"`); }
-        catch (e) { log(`reconcile materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); }
+        try { if (await materialiseRef(mapping, peer.url, peer.name, ref)) log(`reconciled missed ref into "${mapping.albumName}"`); else allOk = false; }
+        catch (e) { allOk = false; log(`reconcile materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); }
       }
+      if (allOk && version) { mapping.remoteVersion = version; save(); }
     } catch (e) { log(`reconcile error on "${mapping.albumName}": ${e.message}`); }
   }
 }
@@ -601,8 +665,17 @@ const server = http.createServer(async (req, res) => {
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/refs$/)) && req.method === 'POST') {
       const [code, obj] = await handleRefs(req, body, m[1]); return send(code, obj);
     }
+    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/version$/)) && req.method === 'GET') {
+      const [code, obj] = await handleVersion(req, m[1]); return send(code, obj);
+    }
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/manifest$/)) && req.method === 'GET') {
       const [code, obj] = await handleManifest(req, m[1]); return send(code, obj);
+    }
+    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/original$/))) {
+      const out = await handleOriginal(req, m[1]);
+      if (Array.isArray(out)) return send(out[0], out[1]);
+      res.writeHead(200, { 'Content-Type': out.headers.get('content-type') || 'application/octet-stream' });
+      return res.end(Buffer.from(await out.arrayBuffer()));
     }
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/preview$/))) {
       const out = await handlePreview(req, m[1]);

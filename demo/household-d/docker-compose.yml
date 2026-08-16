@@ -1,0 +1,46 @@
+# Household D — third throwaway mock, exists to prove member→member relay
+# (B's photos reaching D through the origin, and vice versa).
+name: household-d
+services:
+  immich-d:
+    image: ghcr.io/immich-app/immich-server:release
+    environment:
+      DB_HOSTNAME: db-d
+      DB_USERNAME: postgres
+      DB_PASSWORD: demo
+      DB_DATABASE_NAME: immich
+      REDIS_HOSTNAME: redis-d
+      IMMICH_MACHINE_LEARNING_ENABLED: "false"
+    volumes:
+      - ./d-library:/data
+    ports:
+      - 2286:2283
+    depends_on: [db-d, redis-d]
+    restart: unless-stopped
+  db-d:
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: immich
+    volumes:
+      - ./d-pg:/var/lib/postgresql/data
+    restart: unless-stopped
+  redis-d:
+    image: valkey/valkey:8
+    restart: unless-stopped
+  sidecar-d:
+    image: immich-shared-albums:demo
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    environment:
+      IMMICH_URL: http://immich-d:2283
+      IMMICH_API_KEY: ${D_API_KEY}
+      PUBLIC_URL: ${D_PUBLIC_URL:-http://host.docker.internal:8303}
+      HOUSEHOLD_NAME: "Mock household (D)"
+      POLL_MS: "8000"
+    volumes:
+      - ./d-sidecar:/data
+    ports:
+      - 8303:8300
+    restart: unless-stopped

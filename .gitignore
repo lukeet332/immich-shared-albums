@@ -11,3 +11,8 @@ demo/e2e/video*/
 demo/e2e/node_modules/
 sidecar-data/
 *.apk
+CLAUDE.local.md
+demo/household-d/d-library/
+demo/household-d/d-pg/
+demo/household-d/d-sidecar/
+demo/household-d/.env

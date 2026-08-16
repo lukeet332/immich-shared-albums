@@ -99,6 +99,9 @@ if (mAssets) {
         withGps ? `lat=${withGps.exifInfo.latitude}` : 'no GPS on any mirror asset');
   const ownerUtility = bUtility.find(u => u.name === `${originOwnerName} (via shared albums)`);
   check('origin avatar synced onto utility user', !!(ownerUtility && ownerUtility.profileImagePath), ownerUtility?.profileImagePath ? 'has avatar' : 'no avatar');
+  const originSums = new Set((await albumAssets(A, AKEY, ALBUM_ID)).map(a => a.checksum));
+  check('mirrored assets are full originals (checksums match origin)', mAssets.every(a => originSums.has(a.checksum)),
+        mAssets.map(a => a.checksum.slice(0, 8)).join(','));
 }
 
 const bAdminUtility = `${(await api(B, BKEY, '/users/me')).name} (via shared albums)`;
@@ -127,6 +130,18 @@ if (aAfter) {
   check('uploader credited in photo description', credited, contributed.map(a => a.exifInfo?.description).join(' | ').slice(0,80));
   const cDates = contributed.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
   check('contribution capture dates preserved', JSON.stringify(cDates) === JSON.stringify(['2026-07-01','2026-07-02']), cDates.join(','));
+
+  console.log('— stage: stale utility-user display name heals on next sync');
+  await api(A, AKEY, `/admin/users/${nanUser.id}`, { ...j({ name: 'Shared · Legacy Name' }), method: 'PUT' });
+  const healId = await upload(B, BKEY, 'heal-e2e.jpg', `hl${Date.now() % 1000}`, '2026-07-03T09:00:00.000Z');
+  await ensurePreviews(B, BKEY, [healId]);
+  await api(B, BKEY, `/albums/${mirror.id}/assets`, { ...j({ ids: [healId] }), method: 'PUT' });
+  const healed = await until(async () => {
+    const u = (await api(A, AKEY, '/admin/users')).find(x => x.id === nanUser.id);
+    return u && u.name === bAdminUtility ? u : null;
+  }, 60000);
+  check('stale utility-user name healed (regression: old "Shared ·" naming)', !!healed,
+        healed ? healed.name : 'still stale');
 }
 
 console.log('— stage: A personal timeline must NOT contain B-contributed photos');
@@ -185,8 +200,8 @@ if (aAfter && mirror) {
   for (let i = 1; i <= 2; i++) lateIds.push(await upload(A, AKEY, `late-owner-${i}.jpg`, `lo${i}${Date.now() % 10000}`, `2026-06-0${i}T08:00:00.000Z`));
   await ensurePreviews(A, AKEY, lateIds);
   await api(A, AKEY, `/albums/${ALBUM_ID}/assets`, { ...j({ ids: lateIds }), method: 'PUT' });
-  const grew = await until(async () => { const x = await albumAssets(B, BKEY, mirror.id); return x.length === 8 ? x : null; });
-  check('owner post-join additions reach member mirror (6->8)', !!grew, grew ? '' : `mirror at ${(await albumAssets(B, BKEY, mirror.id)).length}`);
+  const grew = await until(async () => { const x = await albumAssets(B, BKEY, mirror.id); return x.length === 9 ? x : null; });
+  check('owner post-join additions reach member mirror (7->9)', !!grew, grew ? '' : `mirror at ${(await albumAssets(B, BKEY, mirror.id)).length}`);
 }
 
 console.log('— stage: same photo shareable into a second album (cross-album dedup bug)');
@@ -214,6 +229,20 @@ if (aAfter) {
   const m2after = await api(B, BKEY, `/albums/${mirror2.id}`);
   const m2h2 = (m2after.albumUsers || []).filter(u => !(u.user?.email || '').endsWith('@sidecar.local')).map(u => u.user?.id);
   check('re-join added the second user as member', m2h2.length === 2 && m2h2.includes(second.id), `${m2h2.length} human member(s)`);
+
+  console.log('— stage: video syncs cross-server as a full original');
+  const vidBytes = Buffer.concat([fs.readFileSync(new URL('./fixtures/clip.mp4', import.meta.url)), crypto.randomBytes(8)]);
+  const vfd = new FormData();
+  vfd.set('deviceAssetId', `e2e-vid-${Date.now() % 100000}`); vfd.set('deviceId', 'e2e-test');
+  vfd.set('fileCreatedAt', '2026-08-10T10:00:00.000Z'); vfd.set('fileModifiedAt', '2026-08-10T10:00:00.000Z');
+  vfd.set('assetData', new Blob([vidBytes], { type: 'video/mp4' }), 'clip-e2e.mp4');
+  const vres = await (await fetch(`${A}/api/assets`, { method: 'POST', headers: { 'x-api-key': AKEY }, body: vfd })).json();
+  check('video uploaded to origin', !!vres.id, JSON.stringify(vres).slice(0, 80));
+  await api(A, AKEY, `/albums/${alb2}/assets`, { ...j({ ids: [vres.id] }), method: 'PUT' });
+  const vArrived = await until(async () => (await albumAssets(B, BKEY, mirror2.id)).find(a => a.type === 'VIDEO') || null, 120000);
+  check('video contribution syncs cross-server', !!vArrived, vArrived ? '' : 'timed out');
+  const vOrigin = (await albumAssets(A, AKEY, alb2)).find(a => a.type === 'VIDEO');
+  check('video arrives as the full original (checksum match)', !!(vArrived && vOrigin && vArrived.checksum === vOrigin.checksum));
 }
 
 console.log('— stage: instant join (no preview wait) heals via reconciliation');
@@ -234,10 +263,38 @@ console.log('— stage: instant join (no preview wait) heals via reconciliation'
   check('photo uploaded seconds before join eventually lands (reconciliation)', !!m3, m3 ? 'landed' : 'timed out');
 }
 
+console.log('— stage: third household D joins — member contributions relay through the origin');
+const D = process.env.D_URL || 'http://localhost:2286';
+const DS = process.env.D_SIDECAR || 'http://localhost:8303';
+const DKEY = process.env.DKEY;
+let dMirror = null;
+if (DKEY) {
+  const joinD = await (await fetch(`${DS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${shareKey}` }))).json();
+  check('D join succeeded', !!joinD.albumId, JSON.stringify(joinD).slice(0, 100));
+  dMirror = (await api(D, DKEY, '/albums')).find(a => a.albumName === joinD.album);
+  const dAssets = await until(async () => { const x = await albumAssets(D, DKEY, dMirror.id); return x.length === 9 ? x : null; }, 150000);
+  check('D mirror receives all 9 photos incl. B contributions (relay)', !!dAssets,
+        dAssets ? '' : `at ${(await albumAssets(D, DKEY, dMirror.id)).length}`);
+  const dUtility = (await api(D, DKEY, '/admin/users')).filter(u => u.email.endsWith('@sidecar.local'));
+  check('relayed photos attributed to the original contributor on D', dUtility.some(u => u.name === bAdminUtility),
+        dUtility.map(u => u.name).join(', '));
+  if (dAssets) {
+    const originSums = new Set((await albumAssets(A, AKEY, ALBUM_ID)).map(a => a.checksum));
+    check('relayed assets are full originals (checksums match origin)', dAssets.every(a => originSums.has(a.checksum)));
+  }
+  const dPhoto = await upload(D, DKEY, 'dave-e2e.jpg', `dv${Date.now() % 1000}`, '2026-06-01T09:00:00.000Z');
+  await ensurePreviews(D, DKEY, [dPhoto]);
+  await api(D, DKEY, `/albums/${dMirror.id}/assets`, { ...j({ ids: [dPhoto] }), method: 'PUT' });
+  check('D contribution reaches the origin', !!(await until(async () => (await albumAssets(A, AKEY, ALBUM_ID)).length === 10 ? true : null, 90000)));
+  check('D contribution relays onward to B', !!(await until(async () => (await albumAssets(B, BKEY, mirror.id)).length === 10 ? true : null, 150000)));
+} else console.log('  (skipped: no DKEY)');
+
 console.log('— stage: loop prevention (2 idle watcher cycles)');
 await sleep(35000);
-check('no ping-pong on A', (await albumAssets(A, AKEY, ALBUM_ID)).length === 8, `A=${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
-check('no ping-pong on B', (await albumAssets(B, BKEY, mirror.id)).length === 8, `B=${(await albumAssets(B, BKEY, mirror.id)).length}`);
+const EXPECT = DKEY ? 10 : 9;
+check('no ping-pong on A', (await albumAssets(A, AKEY, ALBUM_ID)).length === EXPECT, `A=${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
+check('no ping-pong on B', (await albumAssets(B, BKEY, mirror.id)).length === EXPECT, `B=${(await albumAssets(B, BKEY, mirror.id)).length}`);
+if (DKEY && dMirror) check('no ping-pong on D', (await albumAssets(D, DKEY, dMirror.id)).length === EXPECT, `D=${(await albumAssets(D, DKEY, dMirror.id)).length}`);
 
 const fails = results.filter(r => !r.ok);
 console.log(`\n${fails.length === 0 ? '🎉 ALL PASS' : `💥 ${fails.length} FAILURES`} (${results.length} checks)`);

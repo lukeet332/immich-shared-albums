@@ -1,8 +1,8 @@
 # Headless E2E
 
 Fully API-driven cross-household test — **no phone, no emulator, no real server**.
-Runs two throwaway mock Immich stacks (B joiner, C origin) and asserts the whole
-flow, 33 checks, exits non-zero on any fail.
+Runs three throwaway mock Immich stacks (C origin, B and D joiners) and asserts
+the whole flow, 45 checks, exits non-zero on any fail.
 
 ```bash
 ./demo/run-mock-e2e.sh
@@ -15,14 +15,17 @@ First time only: put admin API keys in `demo/.env` (`B_API_KEY=...`) and
 weekly against `immich-server:release`.
 
 Covers: join + manifest; per-user (private) joins and idempotent re-joins (second
-user attaches to the existing mirror, no duplicates); mirror creation with
-utility-user ownership (no human owns mirror assets); origin-timeline and
-joiner-timeline cleanliness; per-person contributor attribution + avatar sync +
-uploader credit; capture-date and GPS preservation (album ordering); album
-People/owners documented in settings; two-way comment sync with echo prevention;
-owner post-join additions; the same photo re-shared into a second album;
-instant join with no preview wait (healed by reconciliation); and loop
-prevention across idle watcher cycles.
+user attaches to the existing mirror, no duplicates); full-original mirroring
+(checksums equal the origin's) with utility-user ownership (no human owns mirror
+assets); video sync; origin-timeline and joiner-timeline cleanliness; per-person
+contributor attribution + avatar sync + uploader credit + stale-name healing;
+capture-date and GPS preservation (album ordering); album People/owners
+documented in settings; two-way comment sync with echo prevention; owner
+post-join additions; the same photo re-shared into a second album; instant join
+with no preview wait (healed by reconciliation); member→member relay through the
+origin (third household D receives B's contributions and vice versa, correctly
+attributed); and loop prevention across idle watcher cycles — which also proves
+the version handshake never wedges convergence.
 
 The origin mock runs with password login disabled to mirror OAuth-only
 production setups. Photo fixtures are 12 visually distinct JPEGs — identical

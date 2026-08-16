@@ -1,9 +1,10 @@
 #!/bin/bash
 # Provision a fresh mock Immich for CI: wait for boot, admin sign-up, login,
 # mint an all-permissions API key. Prints the key on stdout (nothing else).
-# Usage: provision-mock.sh <base-url>
+# Usage: provision-mock.sh <base-url> [admin-name]
 set -euo pipefail
 BASE=$1
+NAME=${2:-E2E Admin}
 EMAIL=admin@e2e.local
 PASS=e2e-admin-pass-1
 
@@ -15,7 +16,7 @@ curl -sf "$BASE/api/server/ping" >/dev/null || { echo "immich at $BASE never cam
 
 # idempotent: sign-up 400s if an admin already exists
 curl -s -X POST "$BASE/api/auth/admin-sign-up" -H 'Content-Type: application/json' \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\",\"name\":\"E2E Admin\"}" -o /dev/null
+  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\",\"name\":\"$NAME\"}" -o /dev/null
 
 TOKEN=$(curl -sf -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' \
   -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" \

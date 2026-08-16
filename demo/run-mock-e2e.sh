@@ -7,8 +7,12 @@ DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BKEY=$(grep -m1 B_API_KEY "$DIR/demo/.env" | cut -d= -f2-)
 CKEY=$(grep -m1 C_API_KEY "$DIR/demo/household-c/.env" | cut -d= -f2-)
 
-echo "== build image =="
-cd "$DIR" && docker build -q -t immich-shared-albums:demo . >/dev/null
+if [ -z "${SKIP_BUILD:-}" ]; then
+  echo "== build image =="
+  cd "$DIR" && docker build -q -t immich-shared-albums:demo . >/dev/null
+else
+  echo "== SKIP_BUILD set: testing against the existing image =="
+fi
 
 purge() { # base key statefile : delete all albums, sidecar users, non-admin assets, reset sidecar state
   local BASE=$1 KEY=$2 STATE=${3:-}
@@ -34,6 +38,16 @@ purge http://localhost:2284 "$BKEY" b-sidecar/state.json; rm -f b-sidecar/state.
 echo "== redeploy + purge C =="
 cd "$DIR/demo/household-c" && docker compose up -d --force-recreate sidecar-c >/dev/null 2>&1
 purge http://localhost:2285 "$CKEY" c-sidecar/state.json; rm -f c-sidecar/state.json; docker compose restart sidecar-c >/dev/null 2>&1
+
+echo "== redeploy + purge D (third household — relay coverage) =="
+cd "$DIR/demo/household-d"
+if [ ! -f .env ]; then
+  docker compose up -d immich-d db-d redis-d >/dev/null 2>&1
+  echo "D_API_KEY=$("$DIR/demo/ci/provision-mock.sh" http://localhost:2286 "Demo Dave")" > .env
+fi
+DKEY=$(grep -m1 D_API_KEY .env | cut -d= -f2-)
+docker compose up -d --force-recreate sidecar-d >/dev/null 2>&1
+purge http://localhost:2286 "$DKEY" d-sidecar/state.json; rm -f d-sidecar/state.json; docker compose restart sidecar-d >/dev/null 2>&1
 sleep 4
 
 echo "== harden C like production (passwordLogin off) =="
@@ -44,5 +58,6 @@ echo "== E2E (C origin -> B joiner) =="
 cd "$DIR/demo/e2e"
 A_URL=http://localhost:2285 AKEY=$CKEY A_ALBUM=__CREATE__ \
 B_URL=http://localhost:2284 BKEY=$BKEY B_SIDECAR=http://localhost:8301 \
+D_URL=http://localhost:2286 DKEY=$DKEY D_SIDECAR=http://localhost:8303 \
 ORIGIN_SIDECAR=${ORIGIN_SIDECAR:-http://host.docker.internal:8302} \
 node e2e-test.mjs

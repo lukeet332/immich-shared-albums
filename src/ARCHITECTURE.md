@@ -24,17 +24,20 @@ the stock Immich app rendering ordinary data we planted, or a web page we serve.
 
 ## Components
 
-- **watcher** — polls mapped albums via the Immich API; pushes fresh
-  human-owned additions to peers as refs (partial-success protocol: failed
-  refs are re-offered next cycle). Records everything in `seen`, keyed per
-  album mapping, so polls are idempotent; utility-owned proxies are never
-  pushed, so loops are impossible.
-- **reconciler** — each cycle, members re-pull the origin's manifest
-  (`GET /sidecar/api/v1/albums/:mapping/manifest`, signed) and materialise
-  anything missing — heals refs missed at join time (e.g. previews not yet
-  generated). Manifests list only human-owned photos, so reconciliation can't
-  echo a household's own photos back to it. No webhooks by design: eventual
-  consistency measured in minutes is correct for family albums.
+- **watcher** — polls mapped albums via the Immich API, but first does a
+  version handshake against the album's `updatedAt` and skips untouched
+  albums entirely (an idle album costs one row read per cycle). Fresh
+  additions are pushed to peers as refs (partial-success protocol: failed
+  refs are re-offered next cycle). Everything is recorded in `seen`, keyed
+  per album mapping — and because copies are full originals, a proxy keeps
+  its source photo's checksum, so the ledger doubles as provenance: the
+  origin relays member contributions onward to the other member households,
+  and provably never offers a household its own photos back.
+- **reconciler** — members ask the origin for the album's version
+  (`GET .../version`, one cheap read) and only pull the full manifest
+  (`GET .../manifest`) on mismatch, materialising anything missing — heals
+  refs missed at join time. No webhooks by design: eventual consistency
+  measured in seconds-to-minutes is correct for family albums.
 - **comment sync** — two-way; locally-authored comments are pushed, peer
   comments are posted via the author's utility user, and a seen-ledger keyed
   both directions prevents echo loops.
@@ -44,8 +47,10 @@ the stock Immich app rendering ordinary data we planted, or a web page we serve.
 - **materialiser** — makes shared state look like ordinary Immich data:
   mirror albums owned by a utility user named after the origin's album owner
   ("Jane (via shared albums)"), one utility user per contributor (with their
-  real avatar synced across), previews ingested as proxy assets with capture
-  date, GPS, and an uploader credit in the description.
+  real avatar synced across), full originals ingested as owned copies —
+  images and videos, real filenames, capture date, GPS, and an uploader
+  credit in the description. Preview is the fallback only when an image's
+  original can't be fetched.
 - **membership = visibility** — mirrors are owned by utility users, so only
   album members see them. Joins are per-user: the accept page reads the
   visitor's own Immich session and adds exactly that account; a second user
@@ -54,9 +59,13 @@ the stock Immich app rendering ordinary data we planted, or a web page we serve.
   the accept page, and a transparent proxy for share-page SPA assets when the
   sidecar fronts Immich directly. All fail open.
 
-Planned, not yet in v0: save-to-library original swap, originals proxy
-(full-quality in-app viewing), video refs, ref removal propagation,
-member→member relay in three-plus-household albums.
+Planned, not yet in v0: preview-only storage mode for disk-constrained
+households (SYNC_QUALITY knob), ref removal propagation, change-nudge
+webhooks (origin pings members on change; polling remains the fallback).
+
+Migration note: proxies materialised before the originals era carry preview
+checksums (unknown provenance) — they stay preview quality and are excluded
+from relay; only newly synced photos participate.
 
 ## Iron rules
 
@@ -65,6 +74,6 @@ member→member relay in three-plus-household albums.
 2. Every injected surface fails open — Immich must work perfectly with the
    sidecar dead.
 3. The app only ever touches its own server's ordinary data.
-4. Originals leave their origin only for save-to-library or the originals
-   proxy — never stored on another household's disk without a user's save.
+4. Originals flow only to households explicitly invited to the album —
+   sharing the album IS the consent; no uninvited party can fetch a byte.
 5. Default-closed: no uninvited server can reach anything.

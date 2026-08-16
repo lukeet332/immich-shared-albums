@@ -23,7 +23,7 @@ export type AssetRef = {
     displayName: string;
     originUserId: string;
   };
-  kind: 'image';            // v0: images only
+  kind: 'image' | 'video';
   takenAt?: string;
   exif?: {                  // re-applied to the materialised proxy
     latitude?: number;
@@ -50,6 +50,11 @@ export type RedeemResponse = {
 export type RefsUpdate = { add: AssetRef[] };
 /** Partial success: the sender re-offers only the failed checksums next cycle. */
 export type RefsResult = { ok: boolean; failed: string[] };
+
+/** GET /sidecar/api/v1/albums/:mappingId/version — cheap change handshake.
+ *  Returns the album's updatedAt; members only pull the manifest on mismatch,
+ *  so an idle album costs one tiny request per cycle instead of a full scan. */
+export type VersionResponse = { version: string };
 
 /** GET /sidecar/api/v1/albums/:mappingId/manifest — reconciliation sweep.
  *  Members re-pull this each poll and materialise anything missing (heals

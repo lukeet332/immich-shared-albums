@@ -8,7 +8,7 @@ Cross-household shared albums for [Immich](https://github.com/immich-app/immich)
 
 ## How it works (four sentences)
 
-Albums are shared **by reference**: each photo stays on its owner's server ("photos live in the house that took them"), and every participating household's sidecar maintains a local **mirror album** filled with preview-grade proxy assets, so the stock app renders shared albums natively — right owner names and avatars in People, capture dates, GPS, comments synced both ways. Joining is **per person**: opening a share link shows a join banner, you type your own server's address once, sign in, and the album is added to *your* account only — nobody else on your server sees it. Contributing is just "add photos to the album" in the stock app; they appear on the origin server credited to you. Sidecars talk over a small signed protocol; the share link *is* the introduction — its first redemption pins the joining household's key, and the owner can eject anyone.
+Albums are shared **by reference**: the album lives on its owner's server, and every participating household's sidecar maintains a local **mirror album** filled with full-quality copies owned by per-contributor utility users, so the stock app renders shared albums natively — right owner names and avatars in People, capture dates, GPS, full-resolution zoom and download, comments synced both ways. Joining is **per person**: opening a share link shows a join banner, you type your own server's address once, sign in, and the album is added to *your* account only — nobody else on your server sees it. Contributing is just "add photos to the album" in the stock app; they appear on the origin server credited to you. Sidecars talk over a small signed protocol; the share link *is* the introduction — its first redemption pins the joining household's key, and the owner can eject anyone.
 
 ## What each person experiences
 
@@ -82,14 +82,12 @@ Servers must be mutually and explicitly introduced — by share link, once per h
 
 ## Honest limitations
 
-- **Contributing requires your server to be publicly reachable** (custody means answering the door) — peers fetch your photos' previews from you.
-- In-app viewing is preview quality (~1440px); a full-quality originals module is planned.
-- Videos don't sync in v0 — images only for now.
-- **Two households per album pair for now**: photos contributed by household B into A's album don't yet relay onward to a third household C. Everyone sees the origin's photos; the origin sees everyone's.
+- **Contributing requires your server to be publicly reachable** (the origin fetches your photos from you at contribution time). View-only households need no public reachability.
+- **Shared albums are stored as full copies** on every member server — that's what makes every household survive every other household's server dying, but budget disk for big albums (a preview-only storage mode is planned for constrained servers).
 - Joining privately requires being signed in to your own Immich **web** UI in that browser once; the accept page walks you through it.
 - On OAuth-only servers, provisioning the sidecar's utility users briefly toggles password login on and back off. If that bothers you, keep an eye on the issue tracker — an alternative is being considered.
 - The share-page banner injects at the reverse proxy and **fails open**: if the sidecar dies or an Immich update changes internals, share pages keep working and only the cross-server convenience vanishes until patched.
 
 ## Status
 
-Working v0, exercised daily across real households. Every push runs a 33-check headless end-to-end suite ([demo/e2e](./demo/e2e)) against two throwaway Immich instances in CI, plus a weekly run against `immich-server:release` to catch upstream breakage early. Covered: joins (per-user + re-join), mirroring with attribution/avatars/dates/GPS, contribution + uploader credit, timeline cleanliness both ways, two-way comment sync with echo prevention, cross-album re-sharing, self-healing reconciliation, and loop prevention. Architecture and protocol: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md).
+Working v0, exercised daily across real households. Every push runs a 45-check headless end-to-end suite ([demo/e2e](./demo/e2e)) against three throwaway Immich instances in CI, plus a weekly run against `immich-server:release` to catch upstream breakage early. Covered: joins (per-user + re-join), full-original mirroring (checksum-verified) with attribution/avatars/dates/GPS, videos, contribution + uploader credit, member→member relay through the origin across three households, timeline cleanliness both ways, two-way comment sync with echo prevention, cross-album re-sharing, self-healing reconciliation with a cheap version handshake, and loop prevention. Architecture and protocol: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md).
