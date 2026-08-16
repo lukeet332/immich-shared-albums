@@ -122,6 +122,8 @@ if (aAfter) {
   check('contributions NOT owned by Luke (timeline clean)', contributed.every(a => a.ownerId !== lukeId),
         contributed.map(a => a.ownerId.slice(0, 8)).join(','));
   check('contributions owned by Demo Nan (via shared albums)', nanUser && contributed.every(a => a.ownerId === nanUser.id));
+  const credited = contributed.every(a => (a.exifInfo?.description || '').includes('Shared by'));
+  check('uploader credited in photo description', credited, contributed.map(a => a.exifInfo?.description).join(' | ').slice(0,80));
   const cDates = contributed.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
   check('contribution capture dates preserved', JSON.stringify(cDates) === JSON.stringify(['2026-07-01','2026-07-02']), cDates.join(','));
 }
@@ -191,11 +193,15 @@ if (aAfter) {
   const alb2 = (await api(A, AKEY, '/albums', j({ albumName: 'second album' }))).id;
   await api(A, AKEY, `/albums/${alb2}/assets`, { ...j({ ids: [aIds[0]] }), method: 'PUT' });
   const share2 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb2, allowUpload: true }))).key;
-  const join2 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share2}` }))).json();
+  const nanId = (await api(B, BKEY, '/users/me')).id;
+  const join2 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share2}`, forUserId: nanId }))).json();
   check('second album join ok', join2.photos === 1, JSON.stringify(join2));
   const mirror2 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'second album');
   const m2assets = await until(async () => { const x = await albumAssets(B, BKEY, mirror2.id); return x.length === 1 ? x : null; }, 40000);
   check('previously-shared photo synced into second album', !!m2assets);
+  const m2detail = await api(B, BKEY, `/albums/${mirror2.id}`);
+  const m2humans = (m2detail.albumUsers || []).filter(u => !(u.user?.email || '').endsWith('@sidecar.local')).map(u => u.user?.id);
+  check('private join: only the receiving user among human members', m2humans.length === 1 && m2humans[0] === nanId, `${m2humans.length} human member(s)`);
 }
 
 console.log('— stage: loop prevention (2 idle watcher cycles)');

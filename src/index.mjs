@@ -93,7 +93,9 @@ async function uploadAsset(bytes, filename, key = CFG.apiKey, takenAt) {
 async function applyRefMetadata(assetId, ref, key) {
   const meta = {};
   if (ref.exif?.latitude != null && ref.exif?.longitude != null) { meta.latitude = ref.exif.latitude; meta.longitude = ref.exif.longitude; }
-  if (ref.exif?.description) meta.description = ref.exif.description;
+  const credit = ref.contributor?.displayName ? `Shared by ${ref.contributor.displayName}` : '';
+  meta.description = [ref.exif?.description, credit].filter(Boolean).join('\n\n') || undefined;
+  if (!meta.description) delete meta.description;
   if (ref.exif?.rating) meta.rating = ref.exif.rating;
   if (ref.takenAt) meta.dateTimeOriginal = ref.takenAt;
   if (Object.keys(meta).length) {
@@ -289,7 +291,7 @@ async function handlePreview(req, assetId) {
 }
 
 // ---------- join (member side) ----------
-async function join(shareUrl) {
+async function join(shareUrl, forUserId) {
   const m = shareUrl.trim().match(/^(https?:\/\/[^/]+)\/share\/([A-Za-z0-9_-]+)/);
   if (!m) throw new Error('that does not look like an Immich share link');
   const [, origin, shareKey] = m;
@@ -305,9 +307,11 @@ async function join(shareUrl) {
   await syncAvatar(host, res.household.url, res.albumOwner?.originUserId);
   const mirror = await immichJson('/albums', jsonBody({ albumName: CFG.template.replace('{name}', res.album.name) }), host.key);
   try {
-    const everyone = (await immichJson('/admin/users')).filter(u => !u.email.endsWith('@sidecar.local'));
-    if (everyone.length) await immichJson(`/albums/${mirror.id}/users`,
-      { ...jsonBody({ albumUsers: everyone.map(u => ({ userId: u.id, role: 'editor' })) }), method: 'PUT' }, host.key);
+    let members = (await immichJson('/admin/users')).filter(u => !u.email.endsWith('@sidecar.local'));
+    if (forUserId) members = members.filter(u => u.id === forUserId); // private join: only the receiving user
+    if (members.length) await immichJson(`/albums/${mirror.id}/users`,
+      { ...jsonBody({ albumUsers: members.map(u => ({ userId: u.id, role: 'editor' })) }), method: 'PUT' }, host.key);
+    log(`mirror shared with ${forUserId ? 'one user (private join)' : members.length + ' household member(s)'}`);
   } catch (e) { log(`could not add local members to mirror: ${e.message}`); }
   const mappingId = crypto.randomUUID();
   state.mappings.push({ id: mappingId, role: 'member', albumId: mirror.id, albumName: mirror.albumName,
@@ -436,6 +440,8 @@ const ACCEPT_PAGE = () => `<!doctype html><meta charset="utf-8"><meta name="view
 </style>
 <div class="card"><div class="logo">🔗</div><h1 id="t">Join shared album?</h1>
 <p id="d">This will add the album to <b>${CFG.name}</b> — it will appear in your family's Immich apps. Photos stay on their owners' servers.</p>
+<div id="who" style="font-size:12.5px;color:#8b9cf9;margin:-6px 0 12px"></div>
+<label style="display:block;font-size:13px;color:#9ca3af;margin-bottom:16px"><input type="checkbox" id="all"> Also share with everyone in my household</label>
 <button id="go">Accept &amp; join</button><div id="out"></div></div>
 <script>
 const frag=(()=>{
@@ -445,10 +451,16 @@ const frag=(()=>{
    history.replaceState({},'',location.pathname); return f; }
  return null;})();
 if(!frag||!frag.host||!frag.key){document.getElementById('t').textContent='Invalid or expired invite';document.getElementById('go').style.display='none';}
+let ME=null;
+fetch('/api/users/me',{credentials:'include'}).then(r=>r.ok?r.json():null).then(u=>{
+ if(u&&u.id){ME=u;document.getElementById('who').textContent='Joining as '+u.name+' — only you will see this album unless you tick below.';}
+ else{document.getElementById('who').textContent='Not signed in here — the album will be added for your whole household.';document.getElementById('all').checked=true;}
+}).catch(()=>{});
 document.getElementById('go').onclick=async()=>{
  const out=document.getElementById('out');out.textContent='Joining…';
  const scheme=frag.scheme||'https';
- const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:scheme+'://'+frag.host+'/share/'+frag.key})});
+ const forUserId=(ME&&!document.getElementById('all').checked)?ME.id:undefined;
+ const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:scheme+'://'+frag.host+'/share/'+frag.key,forUserId})});
  const d=await r.json().catch(()=>({error:'failed'}));
  if(r.ok){
    var deep='intent://my.immich.app/albums/'+d.albumId+'#Intent;scheme=https;package=app.alextran.immich;S.browser_fallback_url='+encodeURIComponent('https://my.immich.app/albums/'+d.albumId)+';end';
@@ -512,7 +524,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(PANEL());
     }
     if (u.pathname === '/sidecar/join' && req.method === 'POST') {
-      try { return send(200, await join(JSON.parse(body).url)); }
+      try { const b = JSON.parse(body); return send(200, await join(b.url, b.forUserId)); }
       catch (e) { return send(400, { error: e.message }); }
     }
     if (u.pathname === '/sidecar/api/v1/invites/redeem' && req.method === 'POST') {
