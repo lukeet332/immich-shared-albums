@@ -11,8 +11,16 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # push/PR runs pin the known-good Immich; the weekly cron chases :release as a canary
+      IMMICH_TAG: ${{ github.event_name == 'schedule' && 'release' || 'v3.1.0' }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Typecheck (contract enforcement)
+        run: |
+          npm install --silent
+          npx tsc --noEmit
 
       - name: Start mock Immich instances (B + C + D)
         run: |

@@ -1,0 +1,12 @@
+{
+  "name": "immich-shared-albums",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^24.0.0"
+  }
+}

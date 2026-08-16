@@ -1,7 +1,7 @@
-FROM node:22-alpine
+FROM node:24-alpine
 WORKDIR /app
-COPY src/index.mjs .
+COPY src/index.ts src/store.ts src/types.ts ./
 COPY src/web/banner/banner.js .
 VOLUME /data
 EXPOSE 8300
-CMD ["node", "index.mjs"]
+CMD ["node", "index.ts"]

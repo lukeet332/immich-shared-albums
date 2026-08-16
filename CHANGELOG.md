@@ -5,6 +5,18 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## v0.2.0 — unreleased
+
+- TypeScript throughout, run natively by Node's type stripping — still no build step
+  and zero runtime dependencies; `npm run typecheck` gates CI so protocol/contract
+  drift fails before the E2E suite.
+- State moved from state.json to SQLite (built-in node:sqlite): crash-safe WAL,
+  indexed seen-ledger lookups (scales past ~10k shared photos on low-power hosts),
+  no more whole-file rewrites per synced photo. Legacy state.json migrates
+  automatically on first boot (kept as state.json.migrated).
+- Base image bumped to node:24-alpine. No operator action needed: same env vars,
+  same volumes, same routes.
+
 ## v0.1.0 — 2026-08-16
 
 First pinnable release. Working v0 validated by a 51-check end-to-end suite across

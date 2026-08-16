@@ -1,14 +1,15 @@
 /**
- * immich-shared-albums — demo-grade v0 core.
- * One process: HTTP server (protocol + panel) + watcher loop.
- * State: JSON file (SQLite arrives with the real implementation).
- * Node >= 20, zero dependencies.
+ * immich-shared-albums — v0 core.
+ * One process: HTTP server (protocol + panel + proxies) + sync loops.
+ * State: SQLite via node:sqlite (see store.ts). TypeScript run natively by Node's
+ * type stripping — no build step. Node >= 23.6, zero dependencies.
  */
 import http from 'node:http';
 import { Readable } from 'node:stream';
 import fs from 'node:fs';
-import path from 'node:path';
 import crypto from 'node:crypto';
+import { Store } from './store.ts';
+import type { AssetRef, Household, RedeemResponse } from './types.ts';
 
 const CFG = {
   immichUrl: process.env.IMMICH_URL || 'http://immich-server:2283',
@@ -22,12 +23,10 @@ const CFG = {
 };
 if (!CFG.apiKey) { console.error('IMMICH_API_KEY required'); process.exit(1); }
 
-// ---------- state ----------
-const STATE_FILE = path.join(CFG.dataDir, 'state.json');
+// ---------- state (SQLite, crash-safe; see store.ts) ----------
 fs.mkdirSync(CFG.dataDir, { recursive: true });
-const state = fs.existsSync(STATE_FILE)
-  ? JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))
-  : { keys: null, peers: [], mappings: [], seen: [] };
+const store = new Store(CFG.dataDir);
+const state = store.state;
 if (!state.keys) {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   state.keys = {
@@ -35,34 +34,27 @@ if (!state.keys) {
     priv: privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64url'),
   };
 }
-// atomic: write-then-rename, so a crash mid-save can never truncate the state file
-// (losing it would forget the household keypair and break every cross-server link)
-const save = () => {
-  const tmp = `${STATE_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 1));
-  fs.renameSync(tmp, STATE_FILE);
-};
+const save = () => store.save();
 save();
-const seenHas = (mappingId, checksum) => state.seen.some(s => s.m === mappingId && s.c === checksum);
-const seenAdd = (mappingId, checksum, localAssetId, originAsset) => {
-  state.seen.push({ m: mappingId, c: checksum, l: localAssetId, ...(originAsset ? { o: originAsset } : {}) }); save();
-};
+const seenHas = (mappingId: string, checksum: string) => store.seenHas(mappingId, checksum);
+const seenAdd = (mappingId: string, checksum: string, localAssetId: string, originAsset?: string) =>
+  store.seenAdd(mappingId, checksum, localAssetId, originAsset);
 // materialised proxies keep their SOURCE photo's checksum in the ledger — that identity,
 // not the local file's checksum (a re-encoded preview), is what travels on the wire.
-const ledgerByAsset = (assetId) => state.seen.find(s => s.l === assetId);
-const wireChecksum = (a) => ledgerByAsset(a.id)?.c || a.checksum;
+const ledgerByAsset = (assetId: string) => store.ledgerByAsset(assetId);
+const wireChecksum = (a: { id: string; checksum: string }) => ledgerByAsset(a.id)?.c || a.checksum;
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 let BANNER_JS = ''; try { BANNER_JS = fs.readFileSync(new URL('./banner.js', import.meta.url), 'utf8'); } catch { log('banner.js not bundled — share pages will be served un-injected'); }
 
 // ---------- immich client ----------
-const immich = async (p, init = {}, key = CFG.apiKey) => {
+const immich = async (p: string, init: RequestInit = {}, key: string = CFG.apiKey) => {
   const r = await fetch(`${CFG.immichUrl}/api${p}`, {
     ...init, headers: { 'x-api-key': key, Accept: 'application/json', ...(init.headers || {}) },
   });
   if (!r.ok) throw new Error(`immich ${p} -> ${r.status} ${await r.text().catch(() => '')}`);
   return r;
 };
-const immichJson = async (p, init, key) => (await immich(p, init, key)).json();
+const immichJson = async (p: string, init?: RequestInit, key?: string) => (await immich(p, init, key)).json();
 const jsonBody = (obj) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
 
 const UTILITY_SUFFIX = ' (via shared albums)';
@@ -135,8 +127,8 @@ async function uploadAsset(bytes, filename, key = CFG.apiKey, takenAt) {
   return r.json(); // { id, status }
 }
 
-async function applyRefMetadata(assetId, ref, key) {
-  const meta = {};
+async function applyRefMetadata(assetId: string, ref: AssetRef, key: string) {
+  const meta: { latitude?: number; longitude?: number; description?: string; rating?: number; dateTimeOriginal?: string } = {};
   if (ref.exif?.latitude != null && ref.exif?.longitude != null) { meta.latitude = ref.exif.latitude; meta.longitude = ref.exif.longitude; }
   const credit = ref.contributor?.displayName ? `Shared by ${ref.contributor.displayName}` : '';
   meta.description = [ref.exif?.description, credit].filter(Boolean).join('\n\n') || undefined;
@@ -224,7 +216,7 @@ async function ensureUtilityUser(displayName) {
     { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.accessToken}` },
       body: JSON.stringify({ name: 'sidecar', permissions: ['all'] }) })).json();
   if (!keyRes.secret) throw new Error(`api-key mint failed for ${email} (${JSON.stringify(keyRes).slice(0,120)}) — will retry`);
-  c = { ...(c || {}), userId: user.id, key: keyRes.secret, password, namedAs: wantedName };
+  c = { ...(c || {}), userId: user.id, key: keyRes.secret, password };
   state.contributors[slug] = c; save();
   log(`provisioned utility user "${displayName} (via shared albums)"`);
   return c;
@@ -355,8 +347,8 @@ async function handleManifest(req, albumMappingId) {
 // ---------- comment / activity sync ----------
 const getComments = (albumId) => immichJson(`/activities?albumId=${albumId}&type=comment`);
 const postComment = (albumId, comment, key) => immichJson('/activities', jsonBody({ albumId, type: 'comment', comment }), key);
-const seenActHas = (id) => (state.seenActivity || []).includes(id);
-const seenActAdd = (id) => { state.seenActivity = state.seenActivity || []; state.seenActivity.push(id); save(); };
+const seenActHas = (id: string) => store.seenActHas(id);
+const seenActAdd = (id: string) => store.seenActAdd(id);
 
 // Materialise foreign comments locally via the author's utility user. Skips ids already
 // seen AND (author, text) pairs already present locally — the latter guards legacy comments
@@ -422,7 +414,7 @@ async function handlePreview(req, assetId) {
 // materialised proxy (ledger entry with `o`), chain the fetch to the owner's server —
 // this is how a relayed photo's original streams D <- origin <- contributor.
 async function fetchTrueOriginal(assetId) {
-  const entry = state.seen.find(s => s.l === assetId && s.o);
+  const entry = store.ledgerWithOrigin(assetId);
   if (entry) {
     const mapping = state.mappings.find(mp => mp.id === entry.m);
     const peer = mapping && state.peers.find(p => p.pub === mapping.peer);
@@ -752,7 +744,7 @@ const server = http.createServer(async (req, res) => {
     // materialised proxy asset the true bytes stream live from the owner's server; for
     // everything else (and on any failure) it falls through to Immich untouched.
     if ((m = u.pathname.match(/^\/api\/assets\/([^/]+)\/original$/)) && req.method === 'GET') {
-      const entry = state.seen.find(s => s.l === m[1] && s.o);
+      const entry = store.ledgerWithOrigin(m[1]);
       if (entry) {
         // authorise with the caller's OWN credentials: they must be able to see the asset
         const authHeaders = {};
@@ -775,7 +767,11 @@ const server = http.createServer(async (req, res) => {
       // Transparent proxy to Immich for everything that isn't ours (share pages, their
       // /_app bundles, /api calls). In production Caddy usually routes around us; when the
       // sidecar fronts Immich directly (demo/simple setups) this keeps the SPA fully working.
-      const headers = { ...req.headers }; delete headers.host; delete headers['content-length'];
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (typeof v === 'string') headers[k] = v; else if (Array.isArray(v)) headers[k] = v.join(', ');
+      }
+      delete headers.host; delete headers['content-length'];
       const up = await fetch(`${CFG.immichUrl}${req.url}`, {
         method: req.method, headers,
         body: ['GET', 'HEAD'].includes(req.method) ? undefined : Buffer.concat(chunks),

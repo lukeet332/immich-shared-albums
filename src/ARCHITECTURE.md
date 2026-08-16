@@ -1,8 +1,11 @@
 # Architecture
 
-One zero-dependency Node process, three loops (watcher, reconciler, comment
-sync), one JSON state file (SQLite planned). Everything user-facing is either
-the stock Immich app rendering ordinary data we planted, or a web page we serve.
+One zero-dependency Node process — TypeScript run natively by Node's type
+stripping (no build step), state in SQLite via the built-in node:sqlite (WAL,
+crash-safe, indexed ledgers; a legacy state.json migrates automatically on
+boot). Three loops: watcher, reconciler, comment sync. Everything user-facing
+is either the stock Immich app rendering ordinary data we planted, or a web
+page we serve.
 
 ```
             ┌─────────────────────────────────────────────┐
@@ -14,8 +17,8 @@ the stock Immich app rendering ordinary data we planted, or a web page we serve.
             │  materialiser ◄── inbound refs ── server    │◄──────────────
             │     │                                       │
             │     ▼                                       │
-            │  state.json: keys, peers, mappings,         │
-            │              seen-sums, contributors        │
+            │  state.db (SQLite): keys, peers, mappings,  │
+            │        seen ledger, activity, contributors  │
             │                                             │
             │  web: panel (/sidecar/) · banner (/share/*) │
             │       accept page (/sidecar/accept)         │

@@ -1,5 +1,6 @@
 /**
- * Sidecar-to-sidecar protocol types (documentation — the v0 runtime is plain JS).
+ * Sidecar-to-sidecar protocol types — imported by the runtime and enforced by
+ * `npm run typecheck` in CI, so contract drift fails the build before the E2E suite.
  * All POST bodies are signed with the sender's household ed25519 key
  * (headers x-isa-key / x-isa-sig); signed GETs sign the path parameter.
  */
