@@ -2,7 +2,7 @@
 name: household-c
 services:
   immich-c:
-    image: ghcr.io/immich-app/immich-server:${IMMICH_TAG:-release}
+    image: ghcr.io/immich-app/immich-server${IMMICH_REF:-:release}
     environment:
       DB_HOSTNAME: db-c
       DB_USERNAME: postgres

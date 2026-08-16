@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      IMMICH_TAG: v3.1.0
+      IMMICH_REF: '@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb'
     steps:
       - uses: actions/checkout@v4
 
