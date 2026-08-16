@@ -2,7 +2,7 @@
 
 Fully API-driven cross-household test — **no phone, no emulator, no real server**.
 Runs three throwaway mock Immich stacks (C origin, B and D joiners) and asserts
-the whole flow, 51 checks, exits non-zero on any fail.
+the whole flow, 54 checks, exits non-zero on any fail.
 
 ```bash
 ./demo/run-mock-e2e.sh

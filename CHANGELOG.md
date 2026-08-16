@@ -5,6 +5,14 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## v0.2.1 — 2026-08-17
+
+- Fix: a photo shared into multiple albums could echo back to its owner as a duplicate —
+  deduped proxies carry ledger rows from several albums/eras, and the wire-identity
+  lookup could pick a stale row; materialisation rows (true origin identity) now always
+  win. New reverse-direction regression stage in the suite (54 checks).
+- Fix: proxy filenames no longer break on base64 checksum characters (/ and +).
+
 ## v0.2.0 — 2026-08-17
 
 - TypeScript throughout, run natively by Node's type stripping — still no build step

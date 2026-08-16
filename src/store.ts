@@ -109,13 +109,19 @@ export class Store {
     this.db.prepare('INSERT OR IGNORE INTO seen (m, c, l, o) VALUES (?, ?, ?, ?)')
       .run(mappingId, checksum, localAssetId, originAsset ?? null);
   }
-  /** Any ledger entry for this local asset (proxy identity). */
+  /** The authoritative ledger entry for a local asset. A deduped proxy can carry rows
+   *  from several mappings/eras; materialisation rows (with an origin asset) hold the
+   *  TRUE wire identity, so they always win over watcher-push bookkeeping rows. */
   ledgerByAsset(assetId: string): SeenEntry | undefined {
-    return this.db.prepare('SELECT m, c, l, o FROM seen WHERE l = ? LIMIT 1').get(assetId) as SeenEntry | undefined;
+    return this.db.prepare(
+      'SELECT m, c, l, o FROM seen WHERE l = ? ORDER BY (o IS NOT NULL) DESC, rowid DESC LIMIT 1'
+    ).get(assetId) as SeenEntry | undefined;
   }
   /** Ledger entry that can chain to the owner (has an origin asset id). */
   ledgerWithOrigin(assetId: string): SeenEntry | undefined {
-    return this.db.prepare('SELECT m, c, l, o FROM seen WHERE l = ? AND o IS NOT NULL LIMIT 1').get(assetId) as SeenEntry | undefined;
+    return this.db.prepare(
+      'SELECT m, c, l, o FROM seen WHERE l = ? AND o IS NOT NULL ORDER BY rowid DESC LIMIT 1'
+    ).get(assetId) as SeenEntry | undefined;
   }
   seenRemoveMapping(mappingId: string) {
     this.db.prepare('DELETE FROM seen WHERE m = ?').run(mappingId);

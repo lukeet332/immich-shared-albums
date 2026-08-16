@@ -306,6 +306,27 @@ console.log('— stage: view-only share link (allowUpload off) rejects cross-ser
         `origin at ${(await albumAssets(A, AKEY, alb6)).length}`);
 }
 
+console.log('— stage: reverse-direction share — member-owned album with an already-shared photo must not echo');
+{
+  // regression: a deduped proxy carries ledger rows from several albums/eras; the wire
+  // identity must come from the authoritative (materialisation) row or the origin gets
+  // its own photo back as a duplicate
+  const CS = process.env.C_SIDECAR || 'http://localhost:8302';
+  const REV = process.env.REVERSE_ORIGIN || 'http://host.docker.internal:8301';
+  const albR = (await api(B, BKEY, '/albums', j({ albumName: 'reverse album' }))).id;
+  await api(B, BKEY, `/albums/${albR}/assets`, { ...j({ ids: [nIds[0]] }), method: 'PUT' });
+  const shareR = (await api(B, BKEY, '/shared-links', j({ type: 'ALBUM', albumId: albR, allowUpload: true }))).key;
+  const meC = (await api(A, AKEY, '/users/me')).id;
+  const joinR = await (await fetch(`${CS}/sidecar/join`, j({ url: `${REV}/share/${shareR}`, forUserId: meC }))).json();
+  check('reverse join: C joins a B-owned album', !!joinR.albumId, JSON.stringify(joinR).slice(0, 100));
+  const mirrorR = (await api(A, AKEY, '/albums')).find(a => a.albumName === 'reverse album');
+  const mR = mirrorR && await until(async () => { const x = await albumAssets(A, AKEY, mirrorR.id); return x.length === 1 ? x : null; }, 60000);
+  check('reverse mirror syncs (dedup reuses the existing proxy)', !!mR, mR ? '' : 'timed out');
+  await sleep(25000);
+  check('already-shared photo does NOT echo back to its owner (regression)',
+        (await albumAssets(B, BKEY, albR)).length === 1, `B album at ${(await albumAssets(B, BKEY, albR)).length}`);
+}
+
 console.log('— stage: third household D joins — member contributions relay through the origin');
 const D = process.env.D_URL || 'http://localhost:2286';
 const DS = process.env.D_SIDECAR || 'http://localhost:8303';

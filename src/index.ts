@@ -268,7 +268,9 @@ async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
   const c = await ensureContributor(ref.contributor?.displayName || fallbackName, mapping.albumId, adminKey, peerUrl, ref.contributor?.originUserId);
   const ext = ref.kind === 'video' ? 'mp4' : 'jpg';
-  const up = await uploadAsset(bytes, `shared-${ref.checksum.slice(0, 12)}.${ext}`, c.key, ref.takenAt);
+  // base64 checksums contain / and + — never let them into filenames
+  const slug = ref.checksum.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+  const up = await uploadAsset(bytes, `shared-${slug}.${ext}`, c.key, ref.takenAt);
   await addToAlbum(mapping.albumId, [up.id], c.key);
   await applyRefMetadata(up.id, ref, c.key);
   seenAdd(mapping.id, ref.checksum, up.id, ref.originAsset);
