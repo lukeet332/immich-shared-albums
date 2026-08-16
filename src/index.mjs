@@ -441,19 +441,29 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/sidecar/accept') {
       res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(ACCEPT_PAGE());
     }
-    if (u.pathname.startsWith('/share/') && req.method === 'GET') {
-      const up = await fetch(`${CFG.immichUrl}${req.url}`, { headers: { accept: req.headers.accept || '*/*' }, redirect: 'manual' });
+    if (!u.pathname.startsWith('/sidecar')) {
+      // Transparent proxy to Immich for everything that isn't ours (share pages, their
+      // /_app bundles, /api calls). In production Caddy usually routes around us; when the
+      // sidecar fronts Immich directly (demo/simple setups) this keeps the SPA fully working.
+      const headers = { ...req.headers }; delete headers.host; delete headers['content-length'];
+      const up = await fetch(`${CFG.immichUrl}${req.url}`, {
+        method: req.method, headers,
+        body: ['GET', 'HEAD'].includes(req.method) ? undefined : Buffer.concat(chunks),
+        redirect: 'manual',
+      });
+      const outHeaders = {};
+      for (const [k, v] of up.headers) if (!['content-encoding', 'transfer-encoding', 'content-length'].includes(k)) outHeaders[k] = v;
+      const setCookie = up.headers.getSetCookie?.() || [];
+      if (setCookie.length) outHeaders['set-cookie'] = setCookie;
       const ct = up.headers.get('content-type') || '';
-      const loc = up.headers.get('location');
-      if (loc) { res.writeHead(up.status, { location: loc }); return res.end(); }
       const buf = Buffer.from(await up.arrayBuffer());
-      if (ct.includes('text/html') && BANNER_JS) {
+      if (req.method === 'GET' && u.pathname.startsWith('/share/') && ct.includes('text/html') && BANNER_JS) {
         let html = buf.toString();
         html = html.includes('</body>') ? html.replace('</body>', '<script src="/sidecar/banner.js" defer></script></body>')
                                         : html + '<script src="/sidecar/banner.js" defer></script>';
-        res.writeHead(up.status, { 'Content-Type': ct }); return res.end(html);
+        res.writeHead(up.status, outHeaders); return res.end(html);
       }
-      res.writeHead(up.status, { 'Content-Type': ct || 'application/octet-stream' }); return res.end(buf);
+      res.writeHead(up.status, outHeaders); return res.end(buf);
     }
     if (u.pathname === '/sidecar/' || u.pathname === '/sidecar') {
       res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(PANEL());
