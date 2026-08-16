@@ -1,0 +1,11 @@
+services:
+  immich-shared:
+    image: ghcr.io/lukeet332/immich-shared-albums:latest
+    restart: always
+    environment:
+      IMMICH_URL: http://immich-server:2283
+      IMMICH_API_KEY: ${SIDECAR_API_KEY}
+      PUBLIC_URL: https://photos.example.com
+      HOUSEHOLD_NAME: "The Example household"
+    volumes:
+      - ./sidecar-data:/data

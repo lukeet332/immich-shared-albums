@@ -1,0 +1,43 @@
+# Household C — second throwaway mock so E2E runs mock↔mock, never touching production A.
+name: household-c
+services:
+  immich-c:
+    image: ghcr.io/immich-app/immich-server:release
+    environment:
+      DB_HOSTNAME: db-c
+      DB_USERNAME: postgres
+      DB_PASSWORD: demo
+      DB_DATABASE_NAME: immich
+      REDIS_HOSTNAME: redis-c
+      IMMICH_MACHINE_LEARNING_ENABLED: "false"
+    volumes:
+      - ./c-library:/data
+    ports:
+      - 2285:2283
+    depends_on: [db-c, redis-c]
+    restart: unless-stopped
+  db-c:
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: immich
+    volumes:
+      - ./c-pg:/var/lib/postgresql/data
+    restart: unless-stopped
+  redis-c:
+    image: valkey/valkey:8
+    restart: unless-stopped
+  sidecar-c:
+    image: immich-shared-albums:demo
+    environment:
+      IMMICH_URL: http://immich-c:2283
+      IMMICH_API_KEY: ${C_API_KEY}
+      PUBLIC_URL: http://192.168.0.11:8302
+      HOUSEHOLD_NAME: "Mock household (C)"
+      POLL_MS: "8000"
+    volumes:
+      - ./c-sidecar:/data
+    ports:
+      - 8302:8300
+    restart: unless-stopped

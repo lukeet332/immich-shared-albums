@@ -1,0 +1,46 @@
+# Household B — a complete mock household for the demo: mini Immich + sidecar.
+name: household-b
+services:
+  immich-b:
+    image: ghcr.io/immich-app/immich-server:release
+    environment:
+      DB_HOSTNAME: db-b
+      DB_USERNAME: postgres
+      DB_PASSWORD: demo
+      DB_DATABASE_NAME: immich
+      REDIS_HOSTNAME: redis-b
+      IMMICH_MACHINE_LEARNING_ENABLED: "false"
+    volumes:
+      - ./b-library:/data
+    ports:
+      - 2284:2283
+    depends_on: [db-b, redis-b]
+    restart: unless-stopped
+
+  db-b:
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: immich
+    volumes:
+      - ./b-pg:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis-b:
+    image: valkey/valkey:8
+    restart: unless-stopped
+
+  sidecar-b:
+    build: ..
+    environment:
+      IMMICH_URL: http://immich-b:2283
+      IMMICH_API_KEY: ${B_API_KEY}
+      PUBLIC_URL: http://192.168.0.11:8301   # this Mac's LAN address
+      HOUSEHOLD_NAME: "Demo household (B)"
+      POLL_MS: "15000"
+    volumes:
+      - ./b-sidecar:/data
+    ports:
+      - 8301:8300
+    restart: unless-stopped

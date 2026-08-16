@@ -1,0 +1,13 @@
+node_modules/
+demo/b-library/
+demo/b-pg/
+demo/b-sidecar/
+demo/.env
+demo/household-c/c-library/
+demo/household-c/c-pg/
+demo/household-c/c-sidecar/
+demo/household-c/.env
+demo/e2e/video*/
+demo/e2e/node_modules/
+sidecar-data/
+*.apk

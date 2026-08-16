@@ -1,0 +1,13 @@
+# Add inside your existing site block. Order matters: sidecar routes first.
+handle /sidecar/* {
+	reverse_proxy immich-shared:8300
+}
+# optional: join banner on share pages (fails open if sidecar is down? no —
+# use lb_try_duration + fallback if you want belt-and-braces; simplest form:)
+handle /share/* {
+	reverse_proxy immich-shared:8300
+}
+# optional: full-quality originals for shared photos
+handle_path /api/assets/*/original {
+	reverse_proxy immich-shared:8300
+}
