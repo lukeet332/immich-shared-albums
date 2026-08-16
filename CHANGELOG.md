@@ -5,7 +5,7 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
-## v0.2.0 — unreleased
+## v0.2.0 — 2026-08-17
 
 - TypeScript throughout, run natively by Node's type stripping — still no build step
   and zero runtime dependencies; `npm run typecheck` gates CI so protocol/contract
@@ -16,6 +16,11 @@ Watch this repo's releases to be notified when an update breaks contract.
   automatically on first boot (kept as state.json.migrated).
 - Base image bumped to node:24-alpine. No operator action needed: same env vars,
   same volumes, same routes.
+- CI hardening: mock Immich pinned by digest (upstream mutated even version tags),
+  retry-wrapped registry pulls, Immich containers recycled post-migration (cold-stack
+  DB pools born mid-migration mis-serialize enum arrays), weekly canary against
+  :release. First published release — v0.1.0 was tagged but its release run predated
+  these fixes and never published.
 
 ## v0.1.0 — 2026-08-16
 

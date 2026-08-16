@@ -96,7 +96,7 @@ Servers must be mutually and explicitly introduced — by share link, once per h
 ## Honest limitations
 
 - **Contributing requires your server to be publicly reachable** (the origin fetches your photos from you at contribution time). View-only households need no public reachability.
-- Mirrors are preview-grade (~1440px; videos as playable transcodes) — full quality streams on demand **while the owner's server is online**. If a household's server dies permanently, others keep the previews; explicitly saving a photo to your own library (planned) is the opt-in that stores a true original.
+- Mirrors are preview-grade (~1440px; videos as playable transcodes), stored as **real local copies on each member's server** — not links. If a household's server goes offline (or dies for good), everyone's albums keep rendering from their local copies; nothing ever goes blank. What's lost while the owner is unreachable is only full-quality download/zoom, which degrades to the stored preview. Explicitly saving a photo to your own library (planned) is the opt-in that stores a true original.
 - Joining privately requires being signed in to your own Immich **web** UI in that browser once; the accept page walks you through it.
 - On OAuth-only servers, provisioning the sidecar's utility users briefly toggles password login on and back off. If that bothers you, keep an eye on the issue tracker — an alternative is being considered.
 - The share-page banner injects at the reverse proxy and **fails open**: if the sidecar dies or an Immich update changes internals, share pages keep working and only the cross-server convenience vanishes until patched.
