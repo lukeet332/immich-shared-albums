@@ -56,12 +56,11 @@ let USER_NAMES = {}; let USER_NAMES_AT = 0;
 async function ownerName(ownerId) {
   if (Date.now() - USER_NAMES_AT > 60000) {
     try {
-      USER_NAMES = Object.fromEntries((await immichJson('/admin/users')).map(u => [u.id, u.name]));
+      USER_NAMES = Object.fromEntries((await immichJson('/admin/users')).filter(u => !u.email.endsWith('@sidecar.local')).map(u => [u.id, u.name]));
       USER_NAMES_AT = Date.now();
     } catch { /* keep stale map */ }
   }
-  const n = USER_NAMES[ownerId];
-  return (n && !n.startsWith('Shared ·')) ? n : null;
+  return USER_NAMES[ownerId] || null;
 }
 const getSharedLinkByKey = async (key) => (await immichJson('/shared-links')).find(l => l.key === key);
 const getAlbum = (id) => immichJson(`/albums/${id}?withoutAssets=true`);
@@ -69,7 +68,7 @@ const getAlbum = (id) => immichJson(`/albums/${id}?withoutAssets=true`);
 const getAlbumAssets = async (albumId) => {
   const out = []; let page = 1;
   while (page) {
-    const res = await immichJson('/search/metadata', jsonBody({ albumIds: [albumId], page, size: 500 }));
+    const res = await immichJson('/search/metadata', jsonBody({ albumIds: [albumId], page, size: 500, withExif: true }));
     out.push(...(res.assets?.items || []));
     page = res.assets?.nextPage ? Number(res.assets.nextPage) : 0;
   }
@@ -89,6 +88,18 @@ async function uploadAsset(bytes, filename, key = CFG.apiKey, takenAt) {
   const r = await fetch(`${CFG.immichUrl}/api/assets`, { method: 'POST', headers: { 'x-api-key': key }, body: fd });
   if (!r.ok) throw new Error(`upload -> ${r.status} ${await r.text().catch(() => '')}`);
   return r.json(); // { id, status }
+}
+
+async function applyRefMetadata(assetId, ref, key) {
+  const meta = {};
+  if (ref.exif?.latitude != null && ref.exif?.longitude != null) { meta.latitude = ref.exif.latitude; meta.longitude = ref.exif.longitude; }
+  if (ref.exif?.description) meta.description = ref.exif.description;
+  if (ref.exif?.rating) meta.rating = ref.exif.rating;
+  if (ref.takenAt) meta.dateTimeOriginal = ref.takenAt;
+  if (Object.keys(meta).length) {
+    try { await immichJson(`/assets/${assetId}`, { ...jsonBody(meta), method: 'PUT' }, key); }
+    catch (e) { log(`metadata apply failed for ${assetId}: ${e.message}`); }
+  }
 }
 
 // ---------- signing (demo: sign outbound, verify inbound when key known) ----------
@@ -117,7 +128,7 @@ async function ensureUtilityUser(displayName) {
   const password = c?.password || crypto.randomBytes(18).toString('base64url');
   let user;
   try {
-    user = await immichJson('/admin/users', jsonBody({ email, name: `Shared · ${displayName}`, password }));
+    user = await immichJson('/admin/users', jsonBody({ email, name: `${displayName} (via shared albums)`, password }));
   } catch {
     const all = await immichJson('/admin/users?withDeleted=true');
     user = all.find(u => u.email === email);
@@ -156,7 +167,7 @@ async function ensureUtilityUser(displayName) {
   if (!keyRes.secret) throw new Error(`api-key mint failed for ${email} (${JSON.stringify(keyRes).slice(0,120)}) — will retry`);
   c = { ...(c || {}), userId: user.id, key: keyRes.secret, password };
   state.contributors[slug] = c; save();
-  log(`provisioned utility user "Shared · ${displayName}"`);
+  log(`provisioned utility user "${displayName} (via shared albums)"`);
   return c;
 }
 async function syncAvatar(c, peerUrl, originUserId) {
@@ -167,9 +178,9 @@ async function syncAvatar(c, peerUrl, originUserId) {
     if (av.ok) {
       const fd = new FormData();
       fd.set('file', new Blob([Buffer.from(await av.arrayBuffer())], { type: av.headers.get('content-type') || 'image/jpeg' }), 'avatar.jpg');
-      await fetch(`${CFG.immichUrl}/api/users/profile-image`, { method: 'POST', headers: { 'x-api-key': c.key }, body: fd });
+      const put = await fetch(`${CFG.immichUrl}/api/users/profile-image`, { method: 'POST', headers: { 'x-api-key': c.key }, body: fd });
+      if (put.ok) { c.avatarDone = true; save(); }  // only stop retrying once an avatar actually landed
     }
-    c.avatarDone = true; save();
   } catch { /* avatars are garnish */ }
 }
 async function ensureContributor(displayName, albumId, adminKey, peerUrl, originUserId) {
@@ -199,7 +210,10 @@ async function handleRedeem(req, body) {
   log(`peer joined: "${household.name}" -> album "${album.albumName}"`);
   const manifest = [];
   for (const a of album.assets.filter(x => x.type === 'IMAGE')) {
-    manifest.push({ originAsset: a.id, checksum: a.checksum, kind: 'image', takenAt: a.fileCreatedAt,
+    manifest.push({ originAsset: a.id, checksum: a.checksum, kind: 'image',
+      takenAt: a.exifInfo?.dateTimeOriginal || a.fileCreatedAt,
+      exif: a.exifInfo ? { latitude: a.exifInfo.latitude, longitude: a.exifInfo.longitude,
+        description: a.exifInfo.description, rating: a.exifInfo.rating } : undefined,
       contributor: { displayName: a.owner?.name || await ownerName(a.ownerId) || CFG.name, originUserId: a.ownerId } });
   }
   // v3 album responses carry no ownerId — majority asset owner is the sharing person
@@ -233,6 +247,7 @@ async function handleRefs(req, body, albumMappingId) {
       const c = await ensureContributor(ref.contributor?.displayName || peer.name, mapping.albumId, adminKey, peer.url, ref.contributor?.originUserId);
       const up = await uploadAsset(bytes, `shared-${ref.checksum.slice(0, 12)}.jpg`, c.key, ref.takenAt);
       await addToAlbum(mapping.albumId, [up.id], c.key);
+      await applyRefMetadata(up.id, ref, c.key);
       seenAdd(mapping.id, ref.checksum, up.id);
       log(`materialised ref from "${ref.contributor?.displayName}" into "${mapping.albumName}"`);
     } catch (e) { log(`ref materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); failed.push(ref.checksum); }
@@ -309,6 +324,7 @@ async function join(shareUrl) {
     const c = await ensureContributor(ref.contributor?.displayName || res.household.name, mirror.id, host.key, res.household.url, ref.contributor?.originUserId);
     const up = await uploadAsset(bytes, `shared-${ref.checksum.slice(0, 12)}.jpg`, c.key, ref.takenAt);
     await addToAlbum(mirror.id, [up.id], c.key);
+    await applyRefMetadata(up.id, ref, c.key);
     seenAdd(mappingId, ref.checksum, up.id);
   }
   return { album: mirror.albumName, albumId: mirror.id, photos: res.manifest.length, from: res.household.name };
@@ -332,7 +348,10 @@ async function watchOnce() {
       const targetMapping = mapping.role === 'member' ? (mapping.remoteMappingId || mapping.remoteAlbumId) : mapping.albumId;
       const add = [];
       for (const a of fresh) {
-        add.push({ originAsset: a.id, checksum: a.checksum, kind: 'image', takenAt: a.fileCreatedAt,
+        add.push({ originAsset: a.id, checksum: a.checksum, kind: 'image',
+          takenAt: a.exifInfo?.dateTimeOriginal || a.fileCreatedAt,
+          exif: a.exifInfo ? { latitude: a.exifInfo.latitude, longitude: a.exifInfo.longitude,
+            description: a.exifInfo.description, rating: a.exifInfo.rating } : undefined,
           contributor: { displayName: a.owner?.name || await ownerName(a.ownerId) || CFG.name, originUserId: a.ownerId } });
       }
       const body = JSON.stringify({ add });

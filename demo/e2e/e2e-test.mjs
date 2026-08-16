@@ -15,7 +15,7 @@ const api = async (base, key, path, init = {}) => {
 };
 const j = (o) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
 const albumAssets = async (base, key, albumId) =>
-  (await api(base, key, '/search/metadata', j({ albumIds: [albumId], size: 100 }))).assets.items;
+  (await api(base, key, '/search/metadata', j({ albumIds: [albumId], size: 100, withExif: true }))).assets.items;
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 // visually-unique local fixtures: distinct pixels => distinct previews (no dedup collapse)
@@ -61,6 +61,12 @@ for (let i = 1; i <= 4; i++) {
   aIds.push(await upload(A, AKEY, `origin-e2e-${i}.jpg`, `og${i}${Date.now() % 10000}`, takenAt));
 }
 await ensurePreviews(A, AKEY, aIds);
+await api(A, AKEY, `/assets/${aIds[0]}`, { ...j({ latitude: 51.5074, longitude: -0.1278 }), method: 'PUT' });
+{ // give the origin admin a profile picture so avatar-sync has a source
+  const fd = new FormData();
+  fd.set('file', new Blob([fs.readFileSync(new URL('./fixtures/fx11.jpg', import.meta.url))], { type: 'image/jpeg' }), 'avatar.jpg');
+  await fetch(`${A}/api/users/profile-image`, { method: 'POST', headers: { 'x-api-key': AKEY }, body: fd });
+}
 await api(A, AKEY, `/albums/${ALBUM_ID}/assets`, { ...j({ ids: aIds }), method: 'PUT' });
 check('origin album seeded', (await albumAssets(A, AKEY, ALBUM_ID)).length === 4);
 
@@ -80,7 +86,7 @@ check('mirror exists', !!mirror);
 const bUsers = await api(B, BKEY, '/admin/users');
 const bUtility = bUsers.filter(u => u.email.endsWith('@sidecar.local'));
 const originOwnerName = (await api(A, AKEY, '/users/me')).name;
-check(`mirror owner is Shared · ${originOwnerName}`, bUtility.some(u => u.name === `Shared · ${originOwnerName}`), bUtility.map(u => u.name).join(', '));
+check(`mirror owner is ${originOwnerName} (via shared albums)`, bUtility.some(u => u.name === `${originOwnerName} (via shared albums)`), bUtility.map(u => u.name).join(', '));
 const mAssets = await until(async () => { const x = await albumAssets(B, BKEY, mirror.id); return x.length === 4 ? x : null; });
 check('mirror has 4 assets', !!mAssets, mAssets ? '' : 'timed out');
 if (mAssets) {
@@ -88,6 +94,11 @@ if (mAssets) {
   check('no mirror asset owned by a human on B', mAssets.every(a => !humanIds.includes(a.ownerId)));
   const dates = mAssets.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
   check('capture dates preserved (order fix)', JSON.stringify(dates) === JSON.stringify(['2026-08-11','2026-08-12','2026-08-13','2026-08-14']), dates.join(','));
+  const withGps = mAssets.find(a => a.exifInfo?.latitude);
+  check('GPS location preserved on mirrored photo', !!withGps && Math.abs(withGps.exifInfo.latitude - 51.5074) < 0.001,
+        withGps ? `lat=${withGps.exifInfo.latitude}` : 'no GPS on any mirror asset');
+  const ownerUtility = bUtility.find(u => u.name === `${originOwnerName} (via shared albums)`);
+  check('origin avatar synced onto utility user', !!(ownerUtility && ownerUtility.profileImagePath), ownerUtility?.profileImagePath ? 'has avatar' : 'no avatar');
 }
 
 console.log('— stage: Demo Nan contributes 2 photos (old capture dates)');
@@ -104,13 +115,13 @@ const aAfter = await until(async () => { const x = await albumAssets(A, AKEY, AL
 check('A album has 6 assets after contribution', !!aAfter, aAfter ? '' : `still ${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
 if (aAfter) {
   const aUsers = await api(A, AKEY, '/admin/users');
-  const nanUser = aUsers.find(u => u.name === 'Shared · Demo Nan');
-  check('Shared · Demo Nan exists on A', !!nanUser);
+  const nanUser = aUsers.find(u => u.name === 'Demo Nan (via shared albums)');
+  check('Demo Nan (via shared albums) exists on A', !!nanUser);
   const lukeId = (await api(A, AKEY, '/users/me')).id;
   const contributed = aAfter.filter(a => !aIds.includes(a.id));
   check('contributions NOT owned by Luke (timeline clean)', contributed.every(a => a.ownerId !== lukeId),
         contributed.map(a => a.ownerId.slice(0, 8)).join(','));
-  check('contributions owned by Shared · Demo Nan', nanUser && contributed.every(a => a.ownerId === nanUser.id));
+  check('contributions owned by Demo Nan (via shared albums)', nanUser && contributed.every(a => a.ownerId === nanUser.id));
   const cDates = contributed.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
   check('contribution capture dates preserved', JSON.stringify(cDates) === JSON.stringify(['2026-07-01','2026-07-02']), cDates.join(','));
 }
@@ -132,7 +143,7 @@ if (aAfter) {
   // albumUsers is what the app renders under album Options → People
   const albumDetail = await api(A, AKEY, `/albums/${ALBUM_ID}`);
   const memberNames = (albumDetail.albumUsers || []).map(u => u.user?.name).filter(Boolean);
-  check('Shared · Demo Nan listed as album member on A', memberNames.includes('Shared · Demo Nan'), memberNames.join(', ') || '(none)');
+  check('Demo Nan (via shared albums) listed as album member on A', memberNames.includes('Demo Nan (via shared albums)'), memberNames.join(', ') || '(none)');
 }
 
 console.log('— stage: photo ordering matches capture date (newest-first)');
