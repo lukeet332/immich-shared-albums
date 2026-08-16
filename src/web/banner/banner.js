@@ -95,9 +95,10 @@
             <p class="sub">Join this album with your household — it appears in your family's app, and photos stay on their owners' servers.</p>
           </div>
         </div>
+        <a class="primary" href="#" style="display:block;text-align:center;margin-top:13px;background:#4250af;color:#fff;text-decoration:none;font-weight:600;font-size:13.5px;padding:10px 16px;border-radius:11px">Continue with my Immich →</a>
         <form>
           <input type="text" inputmode="url" autocomplete="off" spellcheck="false"
-                 placeholder="your-server.example.com" aria-label="Your server address">
+                 placeholder="or type your server address" aria-label="Your server address">
           <button class="join" type="submit">Join</button>
         </form>
         <p class="hint">Nothing to install for viewing — this is only for households running their own server. <a href="/sidecar/about" target="_blank" rel="noopener">What's this?</a></p>
@@ -109,6 +110,8 @@
       host.remove();
     });
 
+    const q = `h=${encodeURIComponent(location.host)}&s=${location.protocol.replace(':','')}&k=${encodeURIComponent(SHARE_KEY)}`;
+    root.querySelector('a.primary').href = `https://my.immich.app/sidecar/accept?${q}`;
     root.querySelector('form').addEventListener('submit', (e) => {
       e.preventDefault();
       let raw = root.querySelector('input').value.trim();

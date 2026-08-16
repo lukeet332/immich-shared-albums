@@ -125,8 +125,29 @@ async function ensureUtilityUser(displayName) {
     // admin reset: also clear shouldChangePassword so programmatic login works
     await immichJson(`/admin/users/${user.id}`, { ...jsonBody({ password, shouldChangePassword: false }), method: 'PUT' });
   }
-  const login = await (await fetch(`${CFG.immichUrl}/api/auth/login`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) })).json();
+  // Instances with OAuth-only login (passwordLogin disabled) need a brief toggle to mint the key.
+  let restorePasswordLoginOff = false;
+  try {
+    const sysCfg = await immichJson('/system-config');
+    if (sysCfg.passwordLogin && sysCfg.passwordLogin.enabled === false) {
+      sysCfg.passwordLogin.enabled = true;
+      await immichJson('/system-config', { ...jsonBody(sysCfg), method: 'PUT' });
+      restorePasswordLoginOff = true;
+    }
+  } catch { /* config not readable — proceed and let login speak */ }
+  let login;
+  try {
+    login = await (await fetch(`${CFG.immichUrl}/api/auth/login`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) })).json();
+  } finally {
+    if (restorePasswordLoginOff) {
+      try {
+        const sysCfg = await immichJson('/system-config');
+        sysCfg.passwordLogin.enabled = false;
+        await immichJson('/system-config', { ...jsonBody(sysCfg), method: 'PUT' });
+      } catch (e) { log(`WARNING: could not restore passwordLogin=disabled: ${e.message}`); }
+    }
+  }
   if (!login.accessToken) throw new Error(`login failed for ${email} — will retry`);
   const keyRes = await (await fetch(`${CFG.immichUrl}/api/api-keys`,
     { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.accessToken}` },
@@ -285,7 +306,7 @@ async function join(shareUrl) {
     await addToAlbum(mirror.id, [up.id], c.key);
     seenAdd(mappingId, ref.checksum, up.id);
   }
-  return { album: mirror.albumName, photos: res.manifest.length, from: res.household.name };
+  return { album: mirror.albumName, albumId: mirror.id, photos: res.manifest.length, from: res.household.name };
 }
 
 // ---------- watcher: local additions -> push refs to peer ----------
@@ -376,14 +397,23 @@ const ACCEPT_PAGE = () => `<!doctype html><meta charset="utf-8"><meta name="view
 <p id="d">This will add the album to <b>${CFG.name}</b> — it will appear in your family's Immich apps. Photos stay on their owners' servers.</p>
 <button id="go">Accept &amp; join</button><div id="out"></div></div>
 <script>
-const frag=(()=>{try{return JSON.parse(decodeURIComponent(location.hash.slice(1)))}catch{return null}})();
+const frag=(()=>{
+ try{ if(location.hash.length>1) return JSON.parse(decodeURIComponent(location.hash.slice(1))); }catch{}
+ const qp=new URLSearchParams(location.search);
+ if(qp.get('h')&&qp.get('k')){ const f={v:1,host:qp.get('h'),scheme:qp.get('s')||'https',key:qp.get('k')};
+   history.replaceState({},'',location.pathname); return f; }
+ return null;})();
 if(!frag||!frag.host||!frag.key){document.getElementById('t').textContent='Invalid or expired invite';document.getElementById('go').style.display='none';}
 document.getElementById('go').onclick=async()=>{
  const out=document.getElementById('out');out.textContent='Joining…';
  const scheme=frag.scheme||'https';
  const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:scheme+'://'+frag.host+'/share/'+frag.key})});
  const d=await r.json().catch(()=>({error:'failed'}));
- out.textContent=r.ok?('Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing. Open your Immich app!'):('Error: '+(d.error||r.status));
+ if(r.ok){
+   out.innerHTML='Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing.<br><br>'+
+     '<a href="https://my.immich.app/albums/'+d.albumId+'" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:650;padding:12px 26px;border-radius:12px">Open in Immich app</a>';
+   document.getElementById('go').style.display='none';
+ } else { out.textContent='Error: '+(d.error||r.status); }
 };
 </script>`;
 
