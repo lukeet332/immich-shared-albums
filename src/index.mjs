@@ -439,7 +439,12 @@ async function join(shareUrl, forUserId) {
     log(`re-join: added ${n} member(s) to existing mirror "${existing.albumName}"`);
     return { album: existing.albumName, albumId: existing.albumId, photos: res.manifest.length, from: res.household.name };
   }
-  const mirror = await immichJson('/albums', jsonBody({ albumName: CFG.template.replace('{name}', res.album.name) }), host.key);
+  // a freshly-minted utility user/key can 500 on its first write for a moment — retry
+  let mirror;
+  for (let attempt = 1; ; attempt++) {
+    try { mirror = await immichJson('/albums', jsonBody({ albumName: CFG.template.replace('{name}', res.album.name) }), host.key); break; }
+    catch (e) { if (attempt >= 4) throw e; await new Promise(r => setTimeout(r, 1500)); }
+  }
   try {
     const n = await addMembers(mirror.id);
     log(`mirror shared with ${forUserId ? 'one user (per-user join)' : n + ' household member(s)'}`);
