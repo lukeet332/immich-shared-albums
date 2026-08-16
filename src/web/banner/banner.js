@@ -91,8 +91,8 @@
             </svg>
           </div>
           <div>
-            <h2>Have your own Immich?</h2>
-            <p class="sub">Join this album with your household — it appears in your family's app, and photos stay on their owners' servers.</p>
+            <h2>Join shared album</h2>
+            <p class="sub">Have an Immich server with the shared-albums add-on? Join this album with your household — it appears in your family's app, and photos stay on their owners' servers.</p>
           </div>
         </div>
         <form>
@@ -100,7 +100,7 @@
                  placeholder="your-server.example.com" aria-label="Your server address">
           <button class="join" type="submit">Join</button>
         </form>
-        <p class="hint">Type your server address once — it's remembered for next time. Nothing to install for viewing. <a href="/sidecar/about" target="_blank" rel="noopener">What's this?</a></p>
+        <p class="hint">Type your server address once — it's remembered for next time. Nothing to install for viewing.<br>Want this for your own server? <a href="https://github.com/lukeet332/immich-shared-albums" target="_blank" rel="noopener">github.com/lukeet332/immich-shared-albums</a></p>
       </div>
     `;
 
