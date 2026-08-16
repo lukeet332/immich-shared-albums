@@ -220,20 +220,24 @@ async function handleRefs(req, body, albumMappingId) {
   const mapping = state.mappings.find(m => m.id === albumMappingId || m.albumId === albumMappingId || m.remoteAlbumId === albumMappingId);
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const { add = [] } = JSON.parse(body);
+  const failed = [];
   for (const ref of add) {
-    if (seenHas(mapping.id, ref.checksum)) continue;
-    const pr = await fetch(`${peer.url}/sidecar/api/v1/assets/${ref.originAsset}/preview`,
-      { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(ref.originAsset) } });
-    if (!pr.ok) { log(`preview fetch failed for ${ref.originAsset}: ${pr.status}`); continue; }
-    const bytes = Buffer.from(await pr.arrayBuffer());
-    const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
-    const c = await ensureContributor(ref.contributor?.displayName || peer.name, mapping.albumId, adminKey, peer.url, ref.contributor?.originUserId);
-    const up = await uploadAsset(bytes, `shared-${ref.checksum.slice(0, 12)}.jpg`, c.key, ref.takenAt);
-    await addToAlbum(mapping.albumId, [up.id], c.key);
-    seenAdd(mapping.id, ref.checksum, up.id);
-    log(`materialised ref from "${ref.contributor?.displayName}" into "${mapping.albumName}"`);
+    try {
+      if (seenHas(mapping.id, ref.checksum)) continue;
+      const pr = await fetch(`${peer.url}/sidecar/api/v1/assets/${ref.originAsset}/preview`,
+        { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(ref.originAsset) } });
+      if (!pr.ok) { log(`preview fetch failed for ${ref.originAsset}: ${pr.status}`); failed.push(ref.checksum); continue; }
+      const bytes = Buffer.from(await pr.arrayBuffer());
+      const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
+      const c = await ensureContributor(ref.contributor?.displayName || peer.name, mapping.albumId, adminKey, peer.url, ref.contributor?.originUserId);
+      const up = await uploadAsset(bytes, `shared-${ref.checksum.slice(0, 12)}.jpg`, c.key, ref.takenAt);
+      await addToAlbum(mapping.albumId, [up.id], c.key);
+      seenAdd(mapping.id, ref.checksum, up.id);
+      log(`materialised ref from "${ref.contributor?.displayName}" into "${mapping.albumName}"`);
+    } catch (e) { log(`ref materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); failed.push(ref.checksum); }
   }
-  return [200, { ok: true }];
+  // partial success: sender re-offers only the failed refs next cycle
+  return [200, { ok: failed.length === 0, failed }];
 }
 
 // ---------- comment / activity sync ----------
@@ -312,8 +316,10 @@ async function join(shareUrl) {
 // ---------- watcher: local additions -> push refs to peer ----------
 async function watchOnce() {
   for (const mapping of state.mappings) {
+    if (mapping.dead) continue;
     try {
       const assets = await getAlbumAssets(mapping.albumId);
+      mapping.failCount = 0;
       const fresh = assets.filter(a => a.type === 'IMAGE' && !seenHas(mapping.id, a.checksum)
         && !state.seen.some(s => s.l === a.id));
       if (!fresh.length) continue;
@@ -326,9 +332,19 @@ async function watchOnce() {
       }
       const body = JSON.stringify({ add });
       const r = await signedFetch(`${peer.url}/sidecar/api/v1/albums/${targetMapping}/refs`, body);
-      if (r.ok) { fresh.forEach(a => seenAdd(mapping.id, a.checksum, a.id)); log(`pushed ${fresh.length} ref(s) to "${peer.name}"`); }
-      else log(`ref push failed: ${r.status}`);
-    } catch (e) { log(`watcher error on "${mapping.albumName}": ${e.message}`); }
+      if (r.ok) {
+        const failed = new Set((await r.json().catch(() => ({}))).failed || []);
+        const landed = fresh.filter(a => !failed.has(a.checksum));
+        landed.forEach(a => seenAdd(mapping.id, a.checksum, a.id));
+        log(`pushed ${landed.length}/${fresh.length} ref(s) to "${peer.name}"${failed.size ? ` (${failed.size} deferred)` : ''}`);
+      } else log(`ref push failed: ${r.status}`);
+    } catch (e) {
+      mapping.failCount = (mapping.failCount || 0) + 1;
+      if (/album.read access|Not found/i.test(e.message) && mapping.failCount >= 5) {
+        mapping.dead = true; save();
+        log(`mapping "${mapping.albumName}" marked dead after ${mapping.failCount} failures (album deleted?) — no longer polled`);
+      } else log(`watcher error on "${mapping.albumName}": ${e.message}`);
+    }
   }
   await syncComments();
 }
@@ -336,6 +352,7 @@ async function watchOnce() {
 // push locally-authored comments (not ones we materialised) to the peer
 async function syncComments() {
   for (const mapping of state.mappings) {
+    if (mapping.dead) continue;
     try {
       const peer = state.peers.find(p => p.pub === mapping.peer);
       if (!peer) continue;
@@ -411,7 +428,7 @@ document.getElementById('go').onclick=async()=>{
  const d=await r.json().catch(()=>({error:'failed'}));
  if(r.ok){
    out.innerHTML='Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing.<br><br>'+
-     '<a href="https://my.immich.app/albums/'+d.albumId+'" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:650;padding:12px 26px;border-radius:12px">Open in Immich app</a>';
+     '<a href="https://my.immich.app/albums" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:650;padding:12px 26px;border-radius:12px">Open in Immich app</a>';
    document.getElementById('go').style.display='none';
  } else { out.textContent='Error: '+(d.error||r.status); }
 };
