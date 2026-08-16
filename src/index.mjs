@@ -119,9 +119,10 @@ async function ensureUtilityUser(displayName) {
   try {
     user = await immichJson('/admin/users', jsonBody({ email, name: `Shared · ${displayName}`, password }));
   } catch {
-    const all = await immichJson('/admin/users');
+    const all = await immichJson('/admin/users?withDeleted=true');
     user = all.find(u => u.email === email);
     if (!user) throw new Error(`cannot create or find contributor user ${email}`);
+    if (user.deletedAt) { await immichJson(`/admin/users/${user.id}/restore`, { method: 'POST' }); log(`restored soft-deleted utility user ${email}`); }
     // admin reset: also clear shouldChangePassword so programmatic login works
     await immichJson(`/admin/users/${user.id}`, { ...jsonBody({ password, shouldChangePassword: false }), method: 'PUT' });
   }
@@ -320,8 +321,12 @@ async function watchOnce() {
     try {
       const assets = await getAlbumAssets(mapping.albumId);
       mapping.failCount = 0;
+      // fresh = not yet pushed IN THIS MAPPING, and not owned by a utility user
+      // (utility-owned assets are proxies we materialised; a real photo shared in one
+      //  album must still be shareable in another — dedup is per-mapping by checksum)
+      const utilityIds = new Set(Object.values(state.contributors || {}).map(c => c.userId));
       const fresh = assets.filter(a => a.type === 'IMAGE' && !seenHas(mapping.id, a.checksum)
-        && !state.seen.some(s => s.l === a.id));
+        && !utilityIds.has(a.ownerId));
       if (!fresh.length) continue;
       const peer = state.peers.find(p => p.pub === mapping.peer);
       const targetMapping = mapping.role === 'member' ? (mapping.remoteMappingId || mapping.remoteAlbumId) : mapping.albumId;

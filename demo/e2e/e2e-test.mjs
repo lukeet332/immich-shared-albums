@@ -16,16 +16,31 @@ const api = async (base, key, path, init = {}) => {
 const j = (o) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
 const albumAssets = async (base, key, albumId) =>
   (await api(base, key, '/search/metadata', j({ albumIds: [albumId], size: 100 }))).assets.items;
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+// visually-unique local fixtures: distinct pixels => distinct previews (no dedup collapse)
+let FX = 0;
 const upload = async (base, key, name, seed, takenAt) => {
-  const img = await fetch(`https://picsum.photos/seed/${seed}/1200/800`);
+  const bytes = Buffer.concat([fs.readFileSync(new URL(`./fixtures/fx${FX++ % 12}.jpg`, import.meta.url)), crypto.randomBytes(8)]);
   const fd = new FormData();
   fd.set('deviceAssetId', `e2e-${seed}`); fd.set('deviceId', 'e2e-test');
   fd.set('fileCreatedAt', takenAt); fd.set('fileModifiedAt', takenAt);
-  fd.set('assetData', new Blob([Buffer.from(await img.arrayBuffer())], { type: 'image/jpeg' }), name);
+  fd.set('assetData', new Blob([bytes], { type: 'image/jpeg' }), name);
   const r = await fetch(`${base}/api/assets`, { method: 'POST', headers: { 'x-api-key': key }, body: fd });
-  return (await r.json()).id;
+  const out = await r.json();
+  if (!out.id) throw new Error(`upload failed: ${JSON.stringify(out).slice(0,120)}`);
+  return out.id;
 };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const ensurePreviews = async (base, key, ids) => {
+  for (const id of ids) {
+    for (let i = 0; i < 30; i++) {
+      const r = await fetch(`${base}/api/assets/${id}/thumbnail?size=preview`, { headers: { 'x-api-key': key } });
+      if (r.ok) break;
+      await sleep(2000);
+    }
+  }
+};
 const until = async (fn, timeoutMs = 90000, everyMs = 5000) => {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) { const v = await fn(); if (v) return v; await sleep(everyMs); }
@@ -45,6 +60,7 @@ for (let i = 1; i <= 4; i++) {
   const takenAt = `2026-08-1${i}T10:00:00.000Z`;
   aIds.push(await upload(A, AKEY, `origin-e2e-${i}.jpg`, `og${i}${Date.now() % 10000}`, takenAt));
 }
+await ensurePreviews(A, AKEY, aIds);
 await api(A, AKEY, `/albums/${ALBUM_ID}/assets`, { ...j({ ids: aIds }), method: 'PUT' });
 check('origin album seeded', (await albumAssets(A, AKEY, ALBUM_ID)).length === 4);
 
@@ -80,6 +96,7 @@ for (let i = 1; i <= 2; i++) {
   const takenAt = `2026-07-0${i}T09:00:00.000Z`;
   nIds.push(await upload(B, BKEY, `nan-e2e-${i}.jpg`, `nn${i}${Date.now() % 1000}`, takenAt));
 }
+await ensurePreviews(B, BKEY, nIds);
 await api(B, BKEY, `/albums/${mirror.id}/assets`, { ...j({ ids: nIds }), method: 'PUT' });
 
 console.log('— stage: verify arrival + attribution on A');
@@ -148,10 +165,32 @@ if (aAfter && mirror) {
         `${finalOrigin.filter(c => c.comment === originComment).length} copies of origin comment`);
 }
 
+console.log('— stage: OWNER adds photos post-join -> member receives (owner-perspective sync)');
+if (aAfter && mirror) {
+  const lateIds = [];
+  for (let i = 1; i <= 2; i++) lateIds.push(await upload(A, AKEY, `late-owner-${i}.jpg`, `lo${i}${Date.now() % 10000}`, `2026-06-0${i}T08:00:00.000Z`));
+  await ensurePreviews(A, AKEY, lateIds);
+  await api(A, AKEY, `/albums/${ALBUM_ID}/assets`, { ...j({ ids: lateIds }), method: 'PUT' });
+  const grew = await until(async () => { const x = await albumAssets(B, BKEY, mirror.id); return x.length === 8 ? x : null; });
+  check('owner post-join additions reach member mirror (6->8)', !!grew, grew ? '' : `mirror at ${(await albumAssets(B, BKEY, mirror.id)).length}`);
+}
+
+console.log('— stage: same photo shareable into a second album (cross-album dedup bug)');
+if (aAfter) {
+  const alb2 = (await api(A, AKEY, '/albums', j({ albumName: 'second album' }))).id;
+  await api(A, AKEY, `/albums/${alb2}/assets`, { ...j({ ids: [aIds[0]] }), method: 'PUT' });
+  const share2 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb2, allowUpload: true }))).key;
+  const join2 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share2}` }))).json();
+  check('second album join ok', join2.photos === 1, JSON.stringify(join2));
+  const mirror2 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'second album');
+  const m2assets = await until(async () => { const x = await albumAssets(B, BKEY, mirror2.id); return x.length === 1 ? x : null; }, 40000);
+  check('previously-shared photo synced into second album', !!m2assets);
+}
+
 console.log('— stage: loop prevention (2 idle watcher cycles)');
 await sleep(35000);
-check('no ping-pong on A', (await albumAssets(A, AKEY, ALBUM_ID)).length === 6);
-check('no ping-pong on B', (await albumAssets(B, BKEY, mirror.id)).length === 6);
+check('no ping-pong on A', (await albumAssets(A, AKEY, ALBUM_ID)).length === 8, `A=${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
+check('no ping-pong on B', (await albumAssets(B, BKEY, mirror.id)).length === 8, `B=${(await albumAssets(B, BKEY, mirror.id)).length}`);
 
 const fails = results.filter(r => !r.ok);
 console.log(`\n${fails.length === 0 ? '🎉 ALL PASS' : `💥 ${fails.length} FAILURES`} (${results.length} checks)`);
