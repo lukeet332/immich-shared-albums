@@ -95,13 +95,12 @@
             <p class="sub">Join this album with your household — it appears in your family's app, and photos stay on their owners' servers.</p>
           </div>
         </div>
-        <a class="primary" href="#" style="display:block;text-align:center;margin-top:13px;background:#4250af;color:#fff;text-decoration:none;font-weight:600;font-size:13.5px;padding:10px 16px;border-radius:11px">Join via my.immich.app →</a>
         <form>
           <input type="text" inputmode="url" autocomplete="off" spellcheck="false"
-                 placeholder="or type your server address" aria-label="Your server address">
+                 placeholder="your-server.example.com" aria-label="Your server address">
           <button class="join" type="submit">Join</button>
         </form>
-        <p class="hint">First time? my.immich.app asks for your server address once, then future joins are automatic. Nothing to install for viewing. <a href="/sidecar/about" target="_blank" rel="noopener">What's this?</a></p>
+        <p class="hint">Type your server address once — it's remembered for next time. Nothing to install for viewing. <a href="/sidecar/about" target="_blank" rel="noopener">What's this?</a></p>
       </div>
     `;
 
@@ -110,12 +109,13 @@
       host.remove();
     });
 
-    const q = `h=${encodeURIComponent(location.host)}&s=${location.protocol.replace(':','')}&k=${encodeURIComponent(SHARE_KEY)}`;
-    root.querySelector('a.primary').href = `https://my.immich.app/sidecar/accept?${q}`;
+    const remembered = localStorage.getItem('isa-my-server');
+    if (remembered) root.querySelector('input').value = remembered;
     root.querySelector('form').addEventListener('submit', (e) => {
       e.preventDefault();
       let raw = root.querySelector('input').value.trim();
       if (!raw) return;
+      localStorage.setItem('isa-my-server', raw);
       const scheme = raw.startsWith('http://') ? 'http' : 'https';
       const domain = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
       // Invite payload rides the fragment: never appears in any server's logs.
