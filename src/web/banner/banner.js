@@ -111,6 +111,7 @@
                  placeholder="your-server.example.com" aria-label="Your server address">
           <button class="join" type="submit">Join</button>
         </form>
+        <p class="err" style="display:none;margin:10px 0 0;font-size:12.5px;color:#d93025"></p>
         <p class="hint">Type your server address once — it's remembered for next time. Nothing to install for viewing.<br>Want this for your own server? <a href="https://github.com/lukeet332/immich-shared-albums" target="_blank" rel="noopener">github.com/lukeet332/immich-shared-albums</a></p>
       </div>
     `;
@@ -122,13 +123,29 @@
 
     const remembered = localStorage.getItem('isa-my-server');
     if (remembered) root.querySelector('input').value = remembered;
-    root.querySelector('form').addEventListener('submit', (e) => {
+    root.querySelector('form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      let raw = root.querySelector('input').value.trim();
+      const raw = root.querySelector('input').value.trim();
       if (!raw) return;
-      localStorage.setItem('isa-my-server', raw);
       const scheme = raw.startsWith('http://') ? 'http' : 'https';
       const domain = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      const btn = root.querySelector('button.join');
+      const err = root.querySelector('.err');
+      err.style.display = 'none';
+      btn.textContent = 'Checking…'; btn.disabled = true;
+      // pre-flight: don't strand people on a 404 if the addon isn't at that address
+      let ok = false;
+      try {
+        const r = await fetch(`${scheme}://${domain}/sidecar/health`, { signal: AbortSignal.timeout(6000) });
+        ok = r.ok && (await r.json()).ok === true;
+      } catch (_) { /* unreachable or no addon */ }
+      btn.textContent = 'Join'; btn.disabled = false;
+      if (!ok) {
+        err.textContent = `Couldn't find the shared-albums addon at ${domain} — use the address your Immich is served on (with the sidecar routes). Direct setups without a reverse proxy need the sidecar port, not the Immich one.`;
+        err.style.display = 'block';
+        return;
+      }
+      localStorage.setItem('isa-my-server', raw);
       // Invite payload rides the fragment: never appears in any server's logs.
       const payload = encodeURIComponent(JSON.stringify({ v: 1, host: location.host, scheme: location.protocol.replace(':',''), key: SHARE_KEY }));
       location.href = `${scheme}://${domain}/sidecar/accept#${payload}`;

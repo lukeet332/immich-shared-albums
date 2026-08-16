@@ -837,7 +837,10 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': out.headers.get('content-type') || 'image/jpeg' });
       return res.end(Buffer.from(await out.arrayBuffer()));
     }
-    if (u.pathname === '/sidecar/health') return send(200, { ok: true, household: CFG.name, peers: state.peers.length });
+    if (u.pathname === '/sidecar/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      return res.end(JSON.stringify({ ok: true, household: CFG.name, peers: state.peers.length }));
+    }
     send(404, { error: 'not found' });
   } catch (e) { log('http error:', e.message); send(500, { error: e.message }); }
 });
