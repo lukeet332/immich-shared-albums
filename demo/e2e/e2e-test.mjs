@@ -101,7 +101,8 @@ if (mAssets) {
   check('origin avatar synced onto utility user', !!(ownerUtility && ownerUtility.profileImagePath), ownerUtility?.profileImagePath ? 'has avatar' : 'no avatar');
 }
 
-console.log('— stage: Demo Nan contributes 2 photos (old capture dates)');
+const bAdminUtility = `${(await api(B, BKEY, '/users/me')).name} (via shared albums)`;
+console.log(`— stage: B admin contributes 2 photos (old capture dates)`);
 const nIds = [];
 for (let i = 1; i <= 2; i++) {
   const takenAt = `2026-07-0${i}T09:00:00.000Z`;
@@ -115,13 +116,13 @@ const aAfter = await until(async () => { const x = await albumAssets(A, AKEY, AL
 check('A album has 6 assets after contribution', !!aAfter, aAfter ? '' : `still ${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
 if (aAfter) {
   const aUsers = await api(A, AKEY, '/admin/users');
-  const nanUser = aUsers.find(u => u.name === 'Demo Nan (via shared albums)');
-  check('Demo Nan (via shared albums) exists on A', !!nanUser);
+  const nanUser = aUsers.find(u => u.name === bAdminUtility);
+  check('contributor utility user exists on A', !!nanUser, bAdminUtility);
   const ownerId_A = (await api(A, AKEY, '/users/me')).id;
   const contributed = aAfter.filter(a => !aIds.includes(a.id));
   check('contributions NOT owned by origin admin (timeline clean)', contributed.every(a => a.ownerId !== ownerId_A),
         contributed.map(a => a.ownerId.slice(0, 8)).join(','));
-  check('contributions owned by Demo Nan (via shared albums)', nanUser && contributed.every(a => a.ownerId === nanUser.id));
+  check('contributions owned by the contributor utility user', nanUser && contributed.every(a => a.ownerId === nanUser.id));
   const credited = contributed.every(a => (a.exifInfo?.description || '').includes('Shared by'));
   check('uploader credited in photo description', credited, contributed.map(a => a.exifInfo?.description).join(' | ').slice(0,80));
   const cDates = contributed.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
@@ -145,7 +146,7 @@ if (aAfter) {
   // albumUsers is what the app renders under album Options → People
   const albumDetail = await api(A, AKEY, `/albums/${ALBUM_ID}`);
   const memberNames = (albumDetail.albumUsers || []).map(u => u.user?.name).filter(Boolean);
-  check('Demo Nan (via shared albums) listed as album member on A', memberNames.includes('Demo Nan (via shared albums)'), memberNames.join(', ') || '(none)');
+  check('contributor utility user listed as album member on A', memberNames.includes(bAdminUtility), memberNames.join(', ') || '(none)');
 }
 
 console.log('— stage: photo ordering matches capture date (newest-first)');
