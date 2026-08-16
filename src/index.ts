@@ -674,6 +674,9 @@ const ACCEPT_PAGE = () => `<!doctype html><meta charset="utf-8"><meta name="view
  h1{font-size:19px;font-weight:600;margin:0 0 6px;letter-spacing:-.01em} p{color:#5f6368;font-size:13.5px;line-height:1.55;margin:6px 0 18px}
  button{font:inherit;font-size:15px;font-weight:600;padding:12px 36px;border:0;border-radius:999px;background:#4250af;color:#fff;cursor:pointer;transition:filter .15s,box-shadow .15s}
  button:hover{filter:brightness(1.08);box-shadow:0 2px 10px rgba(66,80,175,.4)} button:disabled{opacity:.4;cursor:default;box-shadow:none}
+ button.busy{opacity:.85}
+ .spin{display:inline-block;width:14px;height:14px;margin-right:9px;vertical-align:-2px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:isa-spin .8s linear infinite}
+ @keyframes isa-spin{to{transform:rotate(360deg)}}
  #who{font-size:12.5px;color:#4250af;margin:-6px 0 16px;line-height:1.5} #who a{color:#4250af}
  #out{margin-top:16px;font-size:13px;color:#4250af;min-height:20px;line-height:1.5}
  @media (prefers-color-scheme:dark){
@@ -704,7 +707,10 @@ function whoami(){return fetch('/api/users/me',{credentials:'include'}).then(r=>
 whoami().then(u=>{if(!u)POLL=setInterval(whoami,2500);});
 document.getElementById('go').onclick=async()=>{
  if(!ME)return;
- const out=document.getElementById('out');out.textContent='Joining…';
+ const go=document.getElementById('go');
+ go.disabled=true;go.classList.add('busy');
+ go.innerHTML='<span class="spin"></span>Joining — syncing photos…';
+ const out=document.getElementById('out');out.textContent='';
  const scheme=frag.scheme||'https';
  const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:scheme+'://'+frag.host+'/share/'+frag.key,forUserId:ME.id})});
  const d=await r.json().catch(()=>({error:'failed'}));
@@ -716,7 +722,7 @@ document.getElementById('go').onclick=async()=>{
      '<a href="'+deep+'" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:600;padding:12px 30px;border-radius:999px">Open in Immich app</a>'+
      '<div style="margin-top:12px;font-size:12px;color:#9aa0a6">If the album looks empty at first, give it a moment — the app is still syncing it.</div>';
    document.getElementById('go').style.display='none';
- } else { out.textContent='Error: '+(d.error||r.status); }
+ } else { out.textContent='Error: '+(d.error||r.status); go.disabled=false; go.classList.remove('busy'); go.textContent='Accept & join'; }
 };
 </script>`;
 
