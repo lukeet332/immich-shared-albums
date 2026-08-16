@@ -9,6 +9,7 @@ import { Readable } from 'node:stream';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { Store } from './store.ts';
+import type { Mapping, Peer } from './store.ts';
 import type { AssetRef, Household, RedeemResponse } from './types.ts';
 
 const CFG = {
@@ -320,6 +321,7 @@ async function handleRefs(req, body, albumMappingId) {
     try { if (!(await materialiseRef(mapping, peer.url, peer.name, ref))) failed.push(ref.checksum); }
     catch (e) { log(`ref materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); failed.push(ref.checksum); }
   }
+  if (add.length > failed.length) nudgePeers(mapping.albumId, peerKey); // relay moved — tell the others
   // partial success: sender re-offers only the failed refs next cycle
   return [200, { ok: failed.length === 0, failed }];
 }
@@ -334,6 +336,37 @@ async function handleVersion(req, albumMappingId) {
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const stats = await immichJson(`/activities/statistics?albumId=${mapping.albumId}`).catch(() => null);
   return [200, { version: (await getAlbum(mapping.albumId)).updatedAt, comments: stats?.comments ?? null }];
+}
+
+// Nudge: tell every OTHER household mapped to this album that it moved, so they pull
+// now instead of at their next tick. Fire-and-forget — a lost nudge costs nothing,
+// the scheduled handshake still catches everything (fail-open by design).
+function nudgePeers(albumId: string, exceptPeerPub?: string) {
+  for (const mp of state.mappings) {
+    if (mp.albumId !== albumId || mp.dead || mp.role !== 'owner' || mp.peer === exceptPeerPub) continue;
+    const peer = state.peers.find(p => p.pub === mp.peer);
+    if (!peer) continue;
+    signedFetch(`${peer.url}/sidecar/api/v1/albums/${albumId}/nudge`, JSON.stringify({ album: albumId }))
+      .catch(() => { /* fail-open */ });
+  }
+}
+
+async function handleNudge(req, body, albumMappingId) {
+  const peerKey = req.headers['x-isa-key'];
+  const peer = state.peers.find(p => p.pub === peerKey);
+  if (!peer || !verify(body, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown or unverified peer' }];
+  const mapping = state.mappings.find(m => m.id === albumMappingId || m.albumId === albumMappingId || m.remoteAlbumId === albumMappingId);
+  if (!mapping || mapping.dead) return [404, { error: 'unknown album mapping' }];
+  // answer fast; do the pull in the background
+  (async () => {
+    try {
+      if (mapping.role === 'member') {
+        await reconcileMapping(mapping, peer);
+        await pullCanonicalComments(mapping, peer);
+      }
+    } catch (e) { log(`nudge pull error on "${mapping.albumName}": ${e.message}`); }
+  })();
+  return [200, { ok: true }];
 }
 
 // Members re-pull this to heal refs missed at join time (e.g. preview not yet generated).
@@ -385,6 +418,7 @@ async function handleActivity(req, body, albumMappingId) {
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const { comments = [] } = JSON.parse(body);
   const ids = await materialiseComments(mapping, peer.url, peer.name, comments);
+  if (Object.keys(ids).length) nudgePeers(mapping.albumId, peerKey); // new messages — tell the others
   return [200, { ok: true, ids }];
 }
 
@@ -551,6 +585,13 @@ async function reconcileOnce() {
     try {
       const peer = state.peers.find(p => p.pub === mapping.peer);
       if (!peer) continue;
+      await reconcileMapping(mapping, peer);
+    } catch (e) { log(`reconcile error on "${mapping.albumName}": ${e.message}`); }
+  }
+}
+
+async function reconcileMapping(mapping: Mapping, peer: Peer) {
+  {
       const target = mapping.remoteMappingId || mapping.remoteAlbumId;
       const sig = { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(target) } };
       // handshake first: only pull the full manifest when the origin's version moved.
@@ -559,10 +600,10 @@ async function reconcileOnce() {
       const vr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/version`, sig);
       if (vr.ok) {
         version = (await vr.json().catch(() => ({}))).version || null;
-        if (version && version === mapping.remoteVersion) continue;
+        if (version && version === mapping.remoteVersion) return;
       }
       const r = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/manifest`, sig);
-      if (!r.ok) continue;
+      if (!r.ok) return;
       const { manifest = [] } = await r.json();
       const missing = manifest.filter(ref => !seenHas(mapping.id, ref.checksum));
       let allOk = true;
@@ -571,7 +612,6 @@ async function reconcileOnce() {
         catch (e) { allOk = false; log(`reconcile materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); }
       }
       if (allOk && version) { mapping.remoteVersion = version; save(); }
-    } catch (e) { log(`reconcile error on "${mapping.albumName}": ${e.message}`); }
   }
 }
 
@@ -828,6 +868,9 @@ const server = http.createServer(async (req, res) => {
     }
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/comments$/)) && req.method === 'GET') {
       const [code, obj] = await handleComments(req, m[1]); return send(code, obj);
+    }
+    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/nudge$/)) && req.method === 'POST') {
+      const [code, obj] = await handleNudge(req, body, m[1]); return send(code, obj);
     }
     const streamOut = (out) => { // stream byte responses through — never buffer originals (Pi-friendly)
       if (Array.isArray(out)) return send(out[0], out[1]);

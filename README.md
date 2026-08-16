@@ -2,9 +2,20 @@
 
 [![e2e](https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml/badge.svg)](https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml)
 
-Cross-household shared albums for [Immich](https://github.com/immich-app/immich) — a sidecar that lets families on **different Immich servers** share albums, contribute photos, and see each other's photos with full attribution, **using only the stock Immich apps**. No Immich source changes, no custom mobile app, no central service.
+**Share albums across Immich servers — Google-Photos-easy sharing, except every family keeps their own server, their own photos, their own rules.**
 
-> Design discussion: [immich-app/immich#30794](https://github.com/immich-app/immich/discussions/30794)
+Your household runs Immich. So do the grandparents, and your sister across town. Until now those were islands: sharing meant public links or giving family accounts on *your* server (and your disk, and your responsibility). This sidecar joins the islands — share an album with a link, and it appears **natively in everyone's own Immich app**, photos landing in seconds, credited to whoever took them, comments flowing both ways.
+
+- 📱 **Stock apps only** — nothing to install on any phone; albums, People, avatars, comments all render natively
+- ⚡ **Fast** — photos and messages cross servers in seconds (verified end-to-end, nudged sync + cheap handshakes)
+- 🖼️ **Full quality on demand** — light previews at rest; tap download and the true original streams straight from its owner's server
+- 🔒 **Private by person, not by server** — joining adds the album to *your* account only; housemates can't even see it exists unless invited
+- 🏠 **Photos live in the house that took them** — no central service, no cloud, no other family's terabytes on your disk
+- 🎬 **Videos too** — playable renditions sync, originals on demand
+- 🛡️ **Built to fail soft** — if a sidecar dies, Immich keeps working untouched; sync self-heals when it returns; albums never go blank, even if another family's server is gone for good
+- 🍓 **Tiny** — one zero-dependency container (TypeScript on Node, SQLite state), happy on a Raspberry Pi
+
+> Born from this design discussion: [immich-app/immich#30794](https://github.com/immich-app/immich/discussions/30794). No Immich source changes — everything rides the public API and your reverse proxy.
 
 ## How it works (four sentences)
 
@@ -93,14 +104,22 @@ Tagged releases publish a multi-arch image (amd64/arm64) to
 
 Servers must be mutually and explicitly introduced — by share link, once per household pair — before a single byte flows; the introduction *is* the act of sharing an album, not a separate ritual. The first redemption pins the joining household's public key (anchored on the share key, which only invitees held); every subsequent request is signed, so URLs are mutable hints and a DDNS rename breaks nothing. All moderation is post-hoc and owner-side: remove a household, revoke a link, or forget a key. Default-closed: uninvited servers cannot so much as introduce themselves.
 
-## Honest limitations
+## Good to know
 
-- **Contributing requires your server to be publicly reachable** (the origin fetches your photos from you at contribution time). View-only households need no public reachability.
-- Mirrors are preview-grade (~1440px; videos as playable transcodes), stored as **real local copies on each member's server** — not links. If a household's server goes offline (or dies for good), everyone's albums keep rendering from their local copies; nothing ever goes blank. What's lost while the owner is unreachable is only full-quality download/zoom, which degrades to the stored preview. Explicitly saving a photo to your own library (planned) is the opt-in that stores a true original.
-- Joining privately requires being signed in to your own Immich **web** UI in that browser once; the accept page walks you through it.
-- On OAuth-only servers, provisioning the sidecar's utility users briefly toggles password login on and back off. If that bothers you, keep an eye on the issue tracker — an alternative is being considered.
-- The share-page banner injects at the reverse proxy and **fails open**: if the sidecar dies or an Immich update changes internals, share pages keep working and only the cross-server convenience vanishes until patched.
+- **Contributing photos needs your server to be publicly reachable** (others fetch your photos from you — that's the point). Viewing-only households can stay fully private/tailnet-only.
+- **Full-quality zoom/download needs the photo owner's server online**; while it isn't, you get the stored preview. Albums themselves always render — everyone holds real local copies.
+- **Joining privately means signing in to your own Immich web UI once** in that browser; the accept page walks you through it and remembers you after.
+- **New photos show in the mobile app on its next sync** — usually seconds while the app is open, or on reopen. That's the stock Immich app's sync cadence (identical for same-server shared albums); the photos are on your server long before the app repaints.
 
 ## Status
 
-Working v0, exercised daily across real households. TypeScript run natively by Node (no build step), zero runtime dependencies, SQLite state via the built-in `node:sqlite` — light enough for a Raspberry Pi. Every push runs a 54-check headless end-to-end suite ([demo/e2e](./demo/e2e)) against three throwaway Immich instances in CI, plus a weekly run against `immich-server:release` to catch upstream breakage early. Covered: joins (per-user + re-join), preview-grade mirroring with attribution/avatars/dates/GPS, on-demand originals streamed byte-identical from the owner (including chained through the origin for relayed photos), videos as playable renditions, contribution + uploader credit, member→member relay across three households, timeline cleanliness both ways, canonical comments owned by the origin (two-way sync, echo prevention, relay + backfill to late joiners), cross-album re-sharing, self-healing reconciliation with a cheap version handshake, and loop prevention. Architecture and protocol: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md).
+**In daily use across real households.** TypeScript run natively by Node (no build step), zero runtime dependencies, SQLite state via the built-in `node:sqlite` — light enough for a Raspberry Pi. Every push runs a 54-check headless end-to-end suite ([demo/e2e](./demo/e2e)) against three throwaway Immich instances in CI, plus a weekly run against `immich-server:release` to catch upstream breakage early. Covered: joins (per-user + re-join), preview-grade mirroring with attribution/avatars/dates/GPS, on-demand originals streamed byte-identical from the owner (including chained through the origin for relayed photos), videos as playable renditions, contribution + uploader credit, member→member relay across three households, timeline cleanliness both ways, canonical comments owned by the origin (two-way sync, echo prevention, relay + backfill to late joiners), cross-album re-sharing, self-healing reconciliation with a cheap version handshake, and loop prevention. Architecture and protocol: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md).
+
+## Support the project
+
+If cross-server albums saved your family from the cloud, you can say thanks here:
+
+[![Sponsor](https://img.shields.io/badge/❤-Sponsor_this_project-ea4aaa?style=for-the-badge)](https://github.com/sponsors/lukeet332)
+
+Every contribution goes toward testing against new Immich releases and keeping the
+weekly compatibility canary green.

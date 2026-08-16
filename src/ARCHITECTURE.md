@@ -68,10 +68,13 @@ page we serve.
   the accept page, and a transparent proxy for share-page SPA assets when the
   sidecar fronts Immich directly. All fail open.
 
+- **nudge webhooks** — when the origin materialises a member's contribution or
+  comment, it pings the other member households (signed POST, no payload beyond
+  the album id) so they pull immediately; the scheduled handshake remains the
+  fail-open safety net.
+
 Planned, not yet in v0: save-to-library (the explicit per-photo opt-in that
-stores a true original owned by the saving user), ref removal propagation,
-change-nudge webhooks (origin pings members on change; polling remains the
-fallback).
+stores a true original owned by the saving user), ref removal propagation.
 
 Migration note: proxies materialised before the provenance ledger have no
 origin link — they stay as-is and are excluded from relay and on-demand

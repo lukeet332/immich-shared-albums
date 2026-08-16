@@ -68,6 +68,11 @@ export type ActivityUpdate = {
   comments: { id: string; comment: string; author: string; authorUserId: string }[];
 };
 
+/** POST /sidecar/api/v1/albums/:albumId/nudge — "this album moved, pull now".
+ *  A latency hint, not a data channel: receivers run their normal handshake+pull
+ *  immediately instead of at the next tick. Lost nudges cost nothing (fail-open). */
+export type NudgeRequest = { album: string };
+
 /**
  * Byte endpoints (signed GETs — signature over the path parameter):
  *  /sidecar/api/v1/assets/:id/preview   — ~1440px preview of an origin asset

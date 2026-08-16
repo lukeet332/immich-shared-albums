@@ -5,6 +5,18 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## v0.3.0 — 2026-08-17
+
+- Nudge webhooks: when a contribution or comment lands on the origin, it pings the other
+  member households to pull immediately — cross-server relay latency drops from
+  poll-cycle seconds to ~1s. Pure hint, signed, fail-open: lost nudges are covered by
+  the scheduled handshake. Old peers ignore it (additive, MINOR).
+- Transparent proxy refuses websocket upgrades cleanly (426) instead of erroring per
+  retry; banner pre-flight validates the typed server address (health probe with CORS),
+  parses schemes case-insensitively, and no longer autocapitalises; accept page shows a
+  join spinner; post-join deeplink targets the albums list (album-specific deeplinks
+  race the app's sync and hang on splash).
+
 ## v0.2.1 — 2026-08-17
 
 - Fix: a photo shared into multiple albums could echo back to its owner as a duplicate —
