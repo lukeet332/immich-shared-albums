@@ -1,19 +1,22 @@
 # immich-shared-albums
 
-Cross-household shared albums for [Immich](https://github.com/immich-app/immich) — a sidecar that lets families on **different Immich servers** share albums, contribute photos, and save each other's originals, **using only the stock Immich apps**. No Immich source changes, no custom mobile app, no central service.
+[![e2e](https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml/badge.svg)](https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml)
+
+Cross-household shared albums for [Immich](https://github.com/immich-app/immich) — a sidecar that lets families on **different Immich servers** share albums, contribute photos, and see each other's photos with full attribution, **using only the stock Immich apps**. No Immich source changes, no custom mobile app, no central service.
 
 > Design discussion: [immich-app/immich#30794](https://github.com/immich-app/immich/discussions/30794)
 
-## How it works (three sentences)
+## How it works (four sentences)
 
-Albums are shared **by reference**: each photo stays on its owner's server ("photos live in the house that took them"), and every participating household's sidecar maintains a local **mirror album** filled with preview-grade proxy assets, so the stock app renders shared albums natively. Contributing is "add photos to the 🔗 album"; saving is "add their photo to one of my albums" (the sidecar swaps in the full original, owned by you) or just tapping download. Sidecars talk to each other over a small signed protocol; households are introduced by an ordinary Immich share link — possession of the link is the authorisation, the first contribution pins the household's key, and the owner can eject anyone from the panel.
+Albums are shared **by reference**: each photo stays on its owner's server ("photos live in the house that took them"), and every participating household's sidecar maintains a local **mirror album** filled with preview-grade proxy assets, so the stock app renders shared albums natively — right owner names and avatars in People, capture dates, GPS, comments synced both ways. Joining is **per person**: opening a share link shows a join banner, you type your own server's address once, sign in, and the album is added to *your* account only — nobody else on your server sees it. Contributing is just "add photos to the album" in the stock app; they appear on the origin server credited to you. Sidecars talk over a small signed protocol; the share link *is* the introduction — its first redemption pins the joining household's key, and the owner can eject anyone.
 
 ## What each person experiences
 
 | Person | Setup | Daily use |
 |---|---|---|
-| Household admin | 15 min, once: container + 3 Caddy lines + API key | Mint share links in the stock app; rare moderation in the panel |
-| Everyone else in any household | **Nothing** | Stock app only: view, add, save, download |
+| Household admin | 15 min, once: container + 2 proxy routes + API key | Mint share links in the stock app; rare moderation in the panel |
+| Someone joining an album | One-time per album: open link → type own server → sign in → Accept | Stock app only: view, add, comment, download |
+| Everyone else on any server | **Nothing** — they can't even see the album unless invited | — |
 
 ## Install (per household)
 
@@ -33,19 +36,25 @@ reverse-proxy lines you still add yourself.
 install, and verify — asking you only for the public URL, a household name, and
 an API key.
 
-**Manual** — one container plus two proxy routes:
+**Manual** — build the image from this repo, then add one container plus two proxy routes:
+
+```bash
+git clone https://github.com/lukeet332/immich-shared-albums && cd immich-shared-albums
+docker build -t immich-shared-albums:live .
+```
 
 ```yaml
-# docker-compose.override.yml
+# docker-compose.override.yml (next to your Immich compose file)
 services:
   immich-shared:
-    image: ghcr.io/lukeet332/immich-shared-albums:latest
+    image: immich-shared-albums:live
     restart: always
     environment:
       IMMICH_URL: http://immich-server:2283
-      IMMICH_API_KEY: ${SIDECAR_API_KEY}
+      IMMICH_API_KEY: ${SIDECAR_API_KEY}   # admin API key, all permissions — keep it in .env
       PUBLIC_URL: https://photos.example.com
       HOUSEHOLD_NAME: "The Example household"
+      # optional: PORT (8300), DATA_DIR (/data), POLL_MS (20000), ALBUM_TEMPLATE ("{name}")
     volumes:
       - ./sidecar-data:/data
 ```
@@ -61,10 +70,6 @@ photos.example.com {
     handle /share/* {
         reverse_proxy immich-shared:8300
     }
-    # optional module: full-quality originals for shared photos
-    handle_path /api/assets/*/original {
-        reverse_proxy immich-shared:8300
-    }
     handle {
         reverse_proxy immich-server:2283
     }
@@ -77,11 +82,14 @@ Servers must be mutually and explicitly introduced — by share link, once per h
 
 ## Honest limitations
 
-- **Contributing by reference requires your server to be publicly reachable** (custody means answering the door). Private/tailnet-only households can join, view, and save — and contribute by uploading copies instead.
-- In-app viewing tops out at preview quality (~1440px) unless the optional originals module is routed; save/download always fetch true originals.
-- Videos sync as previews/posters in v0; full video streaming is planned.
-- The share-page banner and originals module inject/intercept at the reverse proxy and **fail open**: if an Immich update changes internals, share pages keep working and only the convenience vanishes until we patch.
+- **Contributing requires your server to be publicly reachable** (custody means answering the door) — peers fetch your photos' previews from you.
+- In-app viewing is preview quality (~1440px); a full-quality originals module is planned.
+- Videos don't sync in v0 — images only for now.
+- **Two households per album pair for now**: photos contributed by household B into A's album don't yet relay onward to a third household C. Everyone sees the origin's photos; the origin sees everyone's.
+- Joining privately requires being signed in to your own Immich **web** UI in that browser once; the accept page walks you through it.
+- On OAuth-only servers, provisioning the sidecar's utility users briefly toggles password login on and back off. If that bothers you, keep an eye on the issue tracker — an alternative is being considered.
+- The share-page banner injects at the reverse proxy and **fails open**: if the sidecar dies or an Immich update changes internals, share pages keep working and only the cross-server convenience vanishes until patched.
 
 ## Status
 
-Early scaffold. Protocol and design are settled (see README-DESIGN.md); implementation is in progress. Not yet ready for use.
+Working v0, exercised daily across real households. Every push runs a 33-check headless end-to-end suite ([demo/e2e](./demo/e2e)) against two throwaway Immich instances in CI, plus a weekly run against `immich-server:release` to catch upstream breakage early. Covered: joins (per-user + re-join), mirroring with attribution/avatars/dates/GPS, contribution + uploader credit, timeline cleanliness both ways, two-way comment sync with echo prevention, cross-album re-sharing, self-healing reconciliation, and loop prevention. Architecture and protocol: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md).

@@ -1,7 +1,7 @@
 /**
- * Sidecar-to-sidecar protocol types.
- * All requests between sidecars are JSON bodies signed with the sender's
- * household key (detached ed25519 signature over method|path|body|timestamp).
+ * Sidecar-to-sidecar protocol types (documentation — the v0 runtime is plain JS).
+ * All POST bodies are signed with the sender's household ed25519 key
+ * (headers x-isa-key / x-isa-sig); signed GETs sign the path parameter.
  */
 
 export const PROTOCOL_VERSION = 1;
@@ -23,41 +23,47 @@ export type AssetRef = {
     displayName: string;
     originUserId: string;
   };
-  kind: 'image' | 'video';
-  /** live/motion photos are two files; both halves or neither */
-  motionPartChecksum?: string;
+  kind: 'image';            // v0: images only
   takenAt?: string;
-  exifStripped: boolean;    // origin's share-link privacy setting, honoured downstream
+  exif?: {                  // re-applied to the materialised proxy
+    latitude?: number;
+    longitude?: number;
+    description?: string;
+    rating?: number;
+  };
 };
 
 /** POST /sidecar/api/v1/invites/redeem — consume a share link as a household. */
 export type RedeemRequest = {
-  v: typeof PROTOCOL_VERSION;
   shareKey: string;         // the Immich share-link key IS the capability
   household: Household;     // joiner introduces itself; key pinned on success
 };
 export type RedeemResponse = {
-  v: typeof PROTOCOL_VERSION;
   household: Household;     // owner's identity, pinned by the joiner
   album: { id: string; name: string; permissions: 'view' | 'contribute' };
-  manifest: AssetRef[];     // current state; previews fetched separately
+  albumOwner: { displayName: string; originUserId: string };
+  manifest: AssetRef[];     // current human-owned photos; previews fetched separately
+  mappingId: string;        // quote this in refs/activity/manifest calls
 };
 
-/** POST /sidecar/api/v1/albums/:id/refs — register/remove references. */
-export type RefsUpdate = {
-  v: typeof PROTOCOL_VERSION;
-  add: AssetRef[];
-  remove: string[];         // origin asset ids
-};
+/** POST /sidecar/api/v1/albums/:mappingId/refs — offer new refs to a peer. */
+export type RefsUpdate = { add: AssetRef[] };
+/** Partial success: the sender re-offers only the failed checksums next cycle. */
+export type RefsResult = { ok: boolean; failed: string[] };
 
-/** GET /sidecar/api/v1/albums/:id/manifest — reconciliation sweep. */
-export type ManifestResponse = {
-  v: typeof PROTOCOL_VERSION;
-  refs: AssetRef[];
+/** GET /sidecar/api/v1/albums/:mappingId/manifest — reconciliation sweep.
+ *  Members re-pull this each poll and materialise anything missing (heals
+ *  refs missed at join time). Human-owned photos only — proxies are excluded
+ *  so reconciliation can never echo a household's own photos back. */
+export type ManifestResponse = { manifest: AssetRef[] };
+
+/** POST /sidecar/api/v1/albums/:mappingId/activity — two-way comment sync. */
+export type ActivityUpdate = {
+  comments: { id: string; comment: string; author: string; authorUserId: string }[];
 };
 
 /**
- * Byte endpoints (signed GETs):
- *  /sidecar/api/v1/assets/:checksum/preview   — ~1440px, always available
- *  /sidecar/api/v1/assets/:checksum/original  — true bytes, for save-to-library
+ * Byte endpoints (signed GETs — signature over the path parameter):
+ *  /sidecar/api/v1/assets/:id/preview   — ~1440px preview of an origin asset
+ *  /sidecar/api/v1/users/:id/avatar     — contributor profile image
  */

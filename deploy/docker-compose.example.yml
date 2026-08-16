@@ -1,11 +1,16 @@
+# Build the image first, from a clone of this repo:
+#   docker build -t immich-shared-albums:live .
+# Put the API key in a .env file next to this compose file (chmod 600):
+#   SIDECAR_API_KEY=<immich admin api key, all permissions>
 services:
   immich-shared:
-    image: ghcr.io/lukeet332/immich-shared-albums:latest
+    image: immich-shared-albums:live
     restart: always
     environment:
       IMMICH_URL: http://immich-server:2283
       IMMICH_API_KEY: ${SIDECAR_API_KEY}
       PUBLIC_URL: https://photos.example.com
       HOUSEHOLD_NAME: "The Example household"
+      # optional: PORT (8300), DATA_DIR (/data), POLL_MS (20000), ALBUM_TEMPLATE ("{name}")
     volumes:
       - ./sidecar-data:/data
