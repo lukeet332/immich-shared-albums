@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
 
   sidecar-b:
-    build: ..
+    image: immich-shared-albums:demo
     environment:
       IMMICH_URL: http://immich-b:2283
       IMMICH_API_KEY: ${B_API_KEY}

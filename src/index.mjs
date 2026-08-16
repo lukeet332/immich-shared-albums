@@ -320,10 +320,10 @@ async function syncComments() {
       if (!peer) continue;
       const utilityIds = new Set(Object.values(state.contributors || {}).map(c => c.userId));
       const comments = (await getComments(mapping.albumId))
-        .filter(a => a.comment && !seenActHas(`local:${a.id}`) && !seenActHas(`remote:${a.id}`) && !utilityIds.has(a.userId));
+        .filter(a => a.comment && !seenActHas(`local:${a.id}`) && !seenActHas(`remote:${a.id}`) && !utilityIds.has(a.user?.id));
       if (!comments.length) continue;
       const targetMapping = mapping.role === 'member' ? (mapping.remoteMappingId || mapping.remoteAlbumId) : mapping.albumId;
-      const payload = comments.map(a => ({ id: a.id, comment: a.comment, author: a.user?.name || CFG.name, authorUserId: a.userId }));
+      const payload = comments.map(a => ({ id: a.id, comment: a.comment, author: a.user?.name || CFG.name, authorUserId: a.user?.id }));
       const r = await signedFetch(`${peer.url}/sidecar/api/v1/albums/${targetMapping}/activity`, JSON.stringify({ comments: payload }));
       if (r.ok) { comments.forEach(a => seenActAdd(`local:${a.id}`)); log(`pushed ${comments.length} comment(s) to "${peer.name}"`); }
     } catch (e) { log(`comment sync error on "${mapping.albumName}": ${e.message}`); }
