@@ -45,6 +45,15 @@ jobs:
           echo "C_API_KEY=$(demo/ci/provision-mock.sh http://localhost:2285 'Grandpa Joe')" > demo/household-c/.env
           echo "D_API_KEY=$(demo/ci/provision-mock.sh http://localhost:2286 'Demo Dave')" > demo/household-d/.env
 
+      - name: Recycle Immich (DB pools born mid-migration serialize enums wrongly on slow stacks)
+        run: |
+          (cd demo && docker compose restart immich-b)
+          (cd demo/household-c && docker compose restart immich-c)
+          (cd demo/household-d && docker compose restart immich-d)
+          for p in 2284 2285 2286; do
+            for i in $(seq 1 60); do curl -sf http://localhost:$p/api/server/ping >/dev/null && break; sleep 2; done
+          done
+
       - name: Run E2E suite
         run: bash demo/run-mock-e2e.sh
 
