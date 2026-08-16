@@ -427,8 +427,10 @@ document.getElementById('go').onclick=async()=>{
  const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:scheme+'://'+frag.host+'/share/'+frag.key})});
  const d=await r.json().catch(()=>({error:'failed'}));
  if(r.ok){
+   var deep='intent://my.immich.app/albums/'+d.albumId+'#Intent;scheme=https;package=app.alextran.immich;S.browser_fallback_url='+encodeURIComponent('https://my.immich.app/albums/'+d.albumId)+';end';
    out.innerHTML='Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing.<br><br>'+
-     '<a href="https://my.immich.app/albums" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:650;padding:12px 26px;border-radius:12px">Open in Immich app</a>';
+     '<a href="'+deep+'" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:650;padding:12px 26px;border-radius:12px">Open in Immich app</a>'+
+     '<div style="margin-top:10px;font-size:12px;color:#9ca3af">If the album looks empty at first, give it a moment — the app is still syncing it.</div>';
    document.getElementById('go').style.display='none';
  } else { out.textContent='Error: '+(d.error||r.status); }
 };
