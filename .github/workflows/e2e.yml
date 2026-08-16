@@ -18,6 +18,8 @@ jobs:
         run: |
           echo "B_API_KEY=placeholder" > demo/.env
           echo "C_API_KEY=placeholder" > demo/household-c/.env
+          # runners share Docker Hub's anonymous pull quota — retry through toomanyrequests
+          for i in 1 2 3 4 5; do docker pull valkey/valkey:8 && break || sleep 45; done
           (cd demo && docker compose up -d immich-b db-b redis-b)
           (cd demo/household-c && docker compose up -d immich-c db-c redis-c)
 
