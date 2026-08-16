@@ -709,7 +709,9 @@ document.getElementById('go').onclick=async()=>{
  const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:scheme+'://'+frag.host+'/share/'+frag.key,forUserId:ME.id})});
  const d=await r.json().catch(()=>({error:'failed'}));
  if(r.ok){
-   var deep='intent://my.immich.app/albums/'+d.albumId+'#Intent;scheme=https;package=app.alextran.immich;S.browser_fallback_url='+encodeURIComponent('https://my.immich.app/albums/'+d.albumId)+';end';
+   // deeplink to the albums LIST, not the new album — the app hangs on splash when
+   // pointed at an album it has not synced yet (the one-tap list never races)
+   var deep='intent://my.immich.app/albums#Intent;scheme=https;package=app.alextran.immich;S.browser_fallback_url='+encodeURIComponent('https://my.immich.app/albums')+';end';
    out.innerHTML='Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing.'+(d.permissions==='view'?'<br><span style="font-size:12px">View-only album: you can look and comment, but photos you add stay on your server.</span>':'')+'<br><br>'+
      '<a href="'+deep+'" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:600;padding:12px 30px;border-radius:999px">Open in Immich app</a>'+
      '<div style="margin-top:12px;font-size:12px;color:#9aa0a6">If the album looks empty at first, give it a moment — the app is still syncing it.</div>';
