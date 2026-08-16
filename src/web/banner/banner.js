@@ -107,7 +107,7 @@
           </div>
         </div>
         <form>
-          <input type="text" inputmode="url" autocomplete="off" spellcheck="false"
+          <input type="text" inputmode="url" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
                  placeholder="your-server.example.com" aria-label="Your server address">
           <button class="join" type="submit">Join</button>
         </form>
@@ -127,8 +127,9 @@
       e.preventDefault();
       const raw = root.querySelector('input').value.trim();
       if (!raw) return;
-      const scheme = raw.startsWith('http://') ? 'http' : 'https';
-      const domain = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      // mobile keyboards auto-capitalise ("Http://") — parse case-insensitively
+      const scheme = /^http:\/\//i.test(raw) ? 'http' : 'https';
+      const domain = raw.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
       const btn = root.querySelector('button.join');
       const err = root.querySelector('.err');
       err.style.display = 'none';
