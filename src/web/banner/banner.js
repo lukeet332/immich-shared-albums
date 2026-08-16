@@ -133,12 +133,17 @@
       const err = root.querySelector('.err');
       err.style.display = 'none';
       btn.textContent = 'Checking…'; btn.disabled = true;
-      // pre-flight: don't strand people on a 404 if the addon isn't at that address
-      let ok = false;
-      try {
-        const r = await fetch(`${scheme}://${domain}/sidecar/health`, { signal: AbortSignal.timeout(6000) });
-        ok = r.ok && (await r.json()).ok === true;
-      } catch (_) { /* unreachable or no addon */ }
+      // pre-flight: don't strand people on a 404 if the addon isn't at that address.
+      // Browsers forbid https pages fetching http targets (mixed content), so an http
+      // destination can't be probed from an https share page — redirect blind instead.
+      const probeable = !(location.protocol === 'https:' && scheme === 'http');
+      let ok = !probeable;
+      if (probeable) {
+        try {
+          const r = await fetch(`${scheme}://${domain}/sidecar/health`, { signal: AbortSignal.timeout(6000) });
+          ok = r.ok && (await r.json()).ok === true;
+        } catch (_) { /* unreachable or no addon */ }
+      }
       btn.textContent = 'Join'; btn.disabled = false;
       if (!ok) {
         err.textContent = `Couldn't find the shared-albums addon at ${domain} — use the address your Immich is served on (with the sidecar routes). Direct setups without a reverse proxy need the sidecar port, not the Immich one.`;
