@@ -11,7 +11,7 @@ you, adapted to *your* setup, asking you only for the things it can't discover.
 ```text
 Install the immich-shared-albums sidecar (https://github.com/lukeet332/immich-shared-albums)
 next to my existing Immich server. It adds cross-server shared albums: one extra
-container plus two reverse-proxy routes. Follow this plan:
+container plus three reverse-proxy routes. Follow this plan:
 
 DISCOVER (do this yourself, don't ask me):
 1. Find my Immich deployment: locate its docker-compose file, the docker network
@@ -36,10 +36,11 @@ INSTALL:
    Immich docker network with env IMMICH_URL, IMMICH_API_KEY (in a chmod-600
    .env file, never in the yml), PUBLIC_URL, HOUSEHOLD_NAME, and a ./data
    volume for /data. Start it with docker compose up -d.
-3. Add these two routes to my reverse proxy BEFORE the catch-all Immich route,
+3. Add these three routes to my reverse proxy BEFORE the catch-all Immich route,
    then reload the proxy:
-     /sidecar/*  -> sidecar :8300
-     /share/*    -> sidecar :8300
+     /sidecar/*                -> sidecar :8300
+     /share/*                  -> sidecar :8300
+     /api/assets/*/original    -> sidecar :8300   (on-demand full-quality downloads)
    Show me the exact diff before applying it.
 
 VERIFY (all three, report results):

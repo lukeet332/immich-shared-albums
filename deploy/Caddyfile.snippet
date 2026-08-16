@@ -9,3 +9,7 @@ handle /share/* {
 		lb_policy first
 	}
 }
+# originals-proxy: full-quality downloads stream live from the photo's owner
+handle /api/assets/*/original {
+	reverse_proxy immich-shared:8300
+}

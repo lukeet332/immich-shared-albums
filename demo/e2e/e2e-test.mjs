@@ -41,6 +41,8 @@ const ensurePreviews = async (base, key, ids) => {
     }
   }
 };
+const sha1 = (buf) => crypto.createHash('sha1').update(Buffer.from(buf)).digest('hex');
+const fetchBytes = async (url, key) => (await fetch(url, { headers: { 'x-api-key': key } })).arrayBuffer();
 const until = async (fn, timeoutMs = 90000, everyMs = 5000) => {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) { const v = await fn(); if (v) return v; await sleep(everyMs); }
@@ -100,8 +102,12 @@ if (mAssets) {
   const ownerUtility = bUtility.find(u => u.name === `${originOwnerName} (via shared albums)`);
   check('origin avatar synced onto utility user', !!(ownerUtility && ownerUtility.profileImagePath), ownerUtility?.profileImagePath ? 'has avatar' : 'no avatar');
   const originSums = new Set((await albumAssets(A, AKEY, ALBUM_ID)).map(a => a.checksum));
-  check('mirrored assets are full originals (checksums match origin)', mAssets.every(a => originSums.has(a.checksum)),
-        mAssets.map(a => a.checksum.slice(0, 8)).join(','));
+  check('mirrors are light renditions, not byte copies (reference model)', mAssets.every(a => !originSums.has(a.checksum)));
+  const gpsProxy = withGps || mAssets[0];
+  const viaProxy = await fetchBytes(`${BS}/api/assets/${gpsProxy.id}/original`, BKEY);
+  const originOrig = await fetchBytes(`${A}/api/assets/${aIds[0]}/original`, AKEY);
+  check('on-demand original streams byte-identical from the owner server', sha1(viaProxy) === sha1(originOrig),
+        `${viaProxy.byteLength}B via proxy vs ${originOrig.byteLength}B at origin`);
 }
 
 const bAdminUtility = `${(await api(B, BKEY, '/users/me')).name} (via shared albums)`;
@@ -240,9 +246,13 @@ if (aAfter) {
   check('video uploaded to origin', !!vres.id, JSON.stringify(vres).slice(0, 80));
   await api(A, AKEY, `/albums/${alb2}/assets`, { ...j({ ids: [vres.id] }), method: 'PUT' });
   const vArrived = await until(async () => (await albumAssets(B, BKEY, mirror2.id)).find(a => a.type === 'VIDEO') || null, 120000);
-  check('video contribution syncs cross-server', !!vArrived, vArrived ? '' : 'timed out');
-  const vOrigin = (await albumAssets(A, AKEY, alb2)).find(a => a.type === 'VIDEO');
-  check('video arrives as the full original (checksum match)', !!(vArrived && vOrigin && vArrived.checksum === vOrigin.checksum));
+  check('video contribution syncs cross-server as a playable rendition', !!vArrived, vArrived ? '' : 'timed out');
+  if (vArrived) {
+    const vViaProxy = await fetchBytes(`${BS}/api/assets/${vArrived.id}/original`, BKEY);
+    const vOrig = await fetchBytes(`${A}/api/assets/${vres.id}/original`, AKEY);
+    check('video original streams on demand from the owner', sha1(vViaProxy) === sha1(vOrig),
+          `${vViaProxy.byteLength}B via proxy vs ${vOrig.byteLength}B at origin`);
+  }
 }
 
 console.log('— stage: instant join (no preview wait) heals via reconciliation');
@@ -279,8 +289,11 @@ if (DKEY) {
   check('relayed photos attributed to the original contributor on D', dUtility.some(u => u.name === bAdminUtility),
         dUtility.map(u => u.name).join(', '));
   if (dAssets) {
-    const originSums = new Set((await albumAssets(A, AKEY, ALBUM_ID)).map(a => a.checksum));
-    check('relayed assets are full originals (checksums match origin)', dAssets.every(a => originSums.has(a.checksum)));
+    const nanProxy = dAssets.find(a => (a.fileCreatedAt || '').startsWith('2026-07-01'));
+    const viaChain = nanProxy && await fetchBytes(`${DS}/api/assets/${nanProxy.id}/original`, DKEY);
+    const bOrig = await fetchBytes(`${B}/api/assets/${nIds[0]}/original`, BKEY);
+    check('relayed original chains D -> origin -> B on demand (byte-identical)', !!(viaChain && sha1(viaChain) === sha1(bOrig)),
+          viaChain ? `${viaChain.byteLength}B via chain vs ${bOrig.byteLength}B at B` : 'no proxy found for 2026-07-01');
   }
   const dPhoto = await upload(D, DKEY, 'dave-e2e.jpg', `dv${Date.now() % 1000}`, '2026-06-01T09:00:00.000Z');
   await ensurePreviews(D, DKEY, [dPhoto]);

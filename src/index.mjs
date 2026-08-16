@@ -5,6 +5,7 @@
  * Node >= 20, zero dependencies.
  */
 import http from 'node:http';
+import { Readable } from 'node:stream';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -37,7 +38,13 @@ if (!state.keys) {
 const save = () => fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 1));
 save();
 const seenHas = (mappingId, checksum) => state.seen.some(s => s.m === mappingId && s.c === checksum);
-const seenAdd = (mappingId, checksum, localAssetId) => { state.seen.push({ m: mappingId, c: checksum, l: localAssetId }); save(); };
+const seenAdd = (mappingId, checksum, localAssetId, originAsset) => {
+  state.seen.push({ m: mappingId, c: checksum, l: localAssetId, ...(originAsset ? { o: originAsset } : {}) }); save();
+};
+// materialised proxies keep their SOURCE photo's checksum in the ledger — that identity,
+// not the local file's checksum (a re-encoded preview), is what travels on the wire.
+const ledgerByAsset = (assetId) => state.seen.find(s => s.l === assetId);
+const wireChecksum = (a) => ledgerByAsset(a.id)?.c || a.checksum;
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 let BANNER_JS = ''; try { BANNER_JS = fs.readFileSync(new URL('./banner.js', import.meta.url), 'utf8'); } catch { log('banner.js not bundled — share pages will be served un-injected'); }
 
@@ -90,7 +97,7 @@ async function assetToRef(a) {
   const displayName = u?.utility ? u.name.replace(UTILITY_SUFFIX, '')
                                  : (a.owner?.name || u?.name || CFG.name);
   const description = (a.exifInfo?.description || '').replace(/(?:\n\n)?Shared by [^\n]*$/, '') || undefined;
-  return { originAsset: a.id, checksum: a.checksum, kind: a.type === 'VIDEO' ? 'video' : 'image',
+  return { originAsset: a.id, checksum: wireChecksum(a), kind: a.type === 'VIDEO' ? 'video' : 'image',
     fileName: a.originalFileName,
     takenAt: a.exifInfo?.dateTimeOriginal || a.fileCreatedAt,
     exif: a.exifInfo ? { latitude: a.exifInfo.latitude, longitude: a.exifInfo.longitude,
@@ -99,17 +106,15 @@ async function assetToRef(a) {
 }
 
 // What may be offered to the peer behind `mappingId`: photos/videos they haven't seen,
-// excluding utility-owned proxies of UNKNOWN provenance (pre-originals preview copies —
-// their file checksum differs from the source photo's, so echo-safety can't be proven).
-// Originals-era proxies keep the source checksum; the per-mapping seen-ledger then
-// guarantees a household never receives its own photo back, which is what enables
+// excluding utility-owned proxies with no ledger entry (unknown provenance). Proxies with
+// a ledger entry carry their SOURCE checksum on the wire, so the per-mapping seen-ledger
+// guarantees a household never receives its own photo back — which is what enables
 // relaying member contributions onward to other member households.
-const provenanceKnown = (checksum) => state.seen.some(s => s.c === checksum);
 async function shareableAssets(assets, mappingId) {
   const users = await usersById();
   return assets.filter(a => (a.type === 'IMAGE' || a.type === 'VIDEO')
-    && !seenHas(mappingId, a.checksum)
-    && (!users[a.ownerId]?.utility || provenanceKnown(a.checksum)));
+    && !seenHas(mappingId, wireChecksum(a))
+    && (!users[a.ownerId]?.utility || !!ledgerByAsset(a.id)));
 }
 async function uploadAsset(bytes, filename, key = CFG.apiKey, takenAt) {
   const fd = new FormData();
@@ -254,21 +259,21 @@ async function buildManifest(assets, mappingId) {
 async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   if (seenHas(mapping.id, ref.checksum)) return true;
   const sigHeaders = (v) => ({ headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(v) } });
-  // full original first (keeps quality AND the source checksum — provenance for relay);
-  // preview as a last resort for images only
-  let pr = await fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/original`, sigHeaders(ref.originAsset));
-  if (!pr.ok) {
-    if (ref.kind === 'video') { log(`original fetch failed for video ${ref.originAsset}: ${pr.status}`); return false; }
-    pr = await fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/preview`, sigHeaders(ref.originAsset));
-    if (!pr.ok) { log(`original+preview fetch failed for ${ref.originAsset}: ${pr.status}`); return false; }
-  }
+  const fetchKind = (kind) => fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/${kind}`, sigHeaders(ref.originAsset));
+  // Iron rule: only light renditions are STORED here (preview / playable transcode);
+  // originals stay at their owner's and stream on demand. A not-yet-generated rendition
+  // defers to the retry/reconcile machinery — never silently store a full copy.
+  const kind = ref.kind === 'video' ? 'playback' : 'preview';
+  const pr = await fetchKind(kind);
+  if (!pr.ok) { log(`${kind} fetch failed for ${ref.originAsset}: ${pr.status}`); return false; }
   const bytes = Buffer.from(await pr.arrayBuffer());
   const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
   const c = await ensureContributor(ref.contributor?.displayName || fallbackName, mapping.albumId, adminKey, peerUrl, ref.contributor?.originUserId);
-  const up = await uploadAsset(bytes, ref.fileName || `shared-${ref.checksum.slice(0, 12)}.jpg`, c.key, ref.takenAt);
+  const ext = ref.kind === 'video' ? 'mp4' : 'jpg';
+  const up = await uploadAsset(bytes, `shared-${ref.checksum.slice(0, 12)}.${ext}`, c.key, ref.takenAt);
   await addToAlbum(mapping.albumId, [up.id], c.key);
   await applyRefMetadata(up.id, ref, c.key);
-  seenAdd(mapping.id, ref.checksum, up.id);
+  seenAdd(mapping.id, ref.checksum, up.id, ref.originAsset);
   log(`materialised ref from "${ref.contributor?.displayName || fallbackName}" into "${mapping.albumName}"`);
   return true;
 }
@@ -369,11 +374,36 @@ async function handlePreview(req, assetId) {
   return previewStream(assetId); // Response — streamed through below
 }
 
+// Resolve the true original for any local asset: local file for our own photos; for a
+// materialised proxy (ledger entry with `o`), chain the fetch to the owner's server —
+// this is how a relayed photo's original streams D <- origin <- contributor.
+async function fetchTrueOriginal(assetId) {
+  const entry = state.seen.find(s => s.l === assetId && s.o);
+  if (entry) {
+    const mapping = state.mappings.find(mp => mp.id === entry.m);
+    const peer = mapping && state.peers.find(p => p.pub === mapping.peer);
+    if (peer) {
+      const up = await fetch(`${peer.url}/sidecar/api/v1/assets/${entry.o}/original`,
+        { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) } });
+      if (up.ok) return up;
+      log(`chained original fetch failed (${up.status}) — serving local rendition`);
+    }
+  }
+  return originalStream(assetId);
+}
+
 async function handleOriginal(req, assetId) {
   const peerKey = req.headers['x-isa-key'];
   const peer = state.peers.find(p => p.pub === peerKey);
   if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
-  return originalStream(assetId);
+  return fetchTrueOriginal(assetId);
+}
+
+async function handlePlayback(req, assetId) {
+  const peerKey = req.headers['x-isa-key'];
+  const peer = state.peers.find(p => p.pub === peerKey);
+  if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
+  return immich(`/assets/${assetId}/video/playback`);
 }
 
 // ---------- join (member side) ----------
@@ -449,8 +479,8 @@ async function watchOnce() {
       const r = await signedFetch(`${peer.url}/sidecar/api/v1/albums/${targetMapping}/refs`, body);
       if (r.ok) {
         const failed = new Set((await r.json().catch(() => ({}))).failed || []);
-        const landed = fresh.filter(a => !failed.has(a.checksum));
-        landed.forEach(a => seenAdd(mapping.id, a.checksum, a.id));
+        const landed = fresh.filter(a => !failed.has(wireChecksum(a)));
+        landed.forEach(a => seenAdd(mapping.id, wireChecksum(a), a.id));
         if (!failed.size) { mapping.localVersion = album.updatedAt; save(); }
         log(`pushed ${landed.length}/${fresh.length} ref(s) to "${peer.name}"${failed.size ? ` (${failed.size} deferred)` : ''}`);
       } else log(`ref push failed: ${r.status}`);
@@ -625,6 +655,29 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/sidecar/accept') {
       res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(ACCEPT_PAGE());
     }
+    // Originals-proxy module: the app's own original-download URL, intercepted. For a
+    // materialised proxy asset the true bytes stream live from the owner's server; for
+    // everything else (and on any failure) it falls through to Immich untouched.
+    if ((m = u.pathname.match(/^\/api\/assets\/([^/]+)\/original$/)) && req.method === 'GET') {
+      const entry = state.seen.find(s => s.l === m[1] && s.o);
+      if (entry) {
+        // authorise with the caller's OWN credentials: they must be able to see the asset
+        const authHeaders = {};
+        for (const h of ['cookie', 'x-api-key', 'authorization']) if (req.headers[h]) authHeaders[h] = req.headers[h];
+        const probe = await fetch(`${CFG.immichUrl}/api/assets/${m[1]}`, { headers: authHeaders });
+        if (!probe.ok) { res.writeHead(probe.status); return res.end(); }
+        try {
+          const out = await fetchTrueOriginal(m[1]);
+          if (!Array.isArray(out)) {
+            const headers = { 'Content-Type': out.headers.get('content-type') || 'application/octet-stream' };
+            const len = out.headers.get('content-length'); if (len) headers['Content-Length'] = len;
+            res.writeHead(200, headers);
+            return Readable.fromWeb(out.body).pipe(res);
+          }
+        } catch (e) { log(`originals proxy fell through: ${e.message}`); }
+      }
+      // not a proxy asset / peer unreachable -> Immich serves what it has
+    }
     if (!u.pathname.startsWith('/sidecar')) {
       // Transparent proxy to Immich for everything that isn't ours (share pages, their
       // /_app bundles, /api calls). In production Caddy usually routes around us; when the
@@ -671,11 +724,18 @@ const server = http.createServer(async (req, res) => {
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/manifest$/)) && req.method === 'GET') {
       const [code, obj] = await handleManifest(req, m[1]); return send(code, obj);
     }
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/original$/))) {
-      const out = await handleOriginal(req, m[1]);
+    const streamOut = (out) => { // stream byte responses through — never buffer originals (Pi-friendly)
       if (Array.isArray(out)) return send(out[0], out[1]);
-      res.writeHead(200, { 'Content-Type': out.headers.get('content-type') || 'application/octet-stream' });
-      return res.end(Buffer.from(await out.arrayBuffer()));
+      const headers = { 'Content-Type': out.headers.get('content-type') || 'application/octet-stream' };
+      const len = out.headers.get('content-length'); if (len) headers['Content-Length'] = len;
+      res.writeHead(200, headers);
+      Readable.fromWeb(out.body).pipe(res);
+    };
+    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/original$/))) {
+      return streamOut(await handleOriginal(req, m[1]));
+    }
+    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/playback$/))) {
+      return streamOut(await handlePlayback(req, m[1]));
     }
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/preview$/))) {
       const out = await handlePreview(req, m[1]);

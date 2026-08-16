@@ -74,17 +74,19 @@ else
   echo "health check failed — logs:"; (cd "$INSTALL_DIR" && docker compose logs immich-shared --tail 30); exit 1
 fi
 
-say "Last step (manual): route two paths through your reverse proxy"
+say "Last step (manual): route three paths through your reverse proxy"
 cat <<EOF
 Add to your existing site config, BEFORE the catch-all Immich route:
 
   Caddy:
-    handle /sidecar/* { reverse_proxy immich-shared:8300 }
-    handle /share/*   { reverse_proxy immich-shared:8300 }
+    handle /sidecar/*                { reverse_proxy immich-shared:8300 }
+    handle /share/*                  { reverse_proxy immich-shared:8300 }
+    handle /api/assets/*/original    { reverse_proxy immich-shared:8300 }
 
   nginx:
-    location /sidecar/ { proxy_pass http://127.0.0.1:$HOST_PORT; }
-    location /share/   { proxy_pass http://127.0.0.1:$HOST_PORT; }
+    location /sidecar/                     { proxy_pass http://127.0.0.1:$HOST_PORT; }
+    location /share/                       { proxy_pass http://127.0.0.1:$HOST_PORT; }
+    location ~ ^/api/assets/[^/]+/original { proxy_pass http://127.0.0.1:$HOST_PORT; }
 
 Then reload the proxy and open any Immich share link — you should see the
 "Join shared album with your server?" banner. Verify the panel at:

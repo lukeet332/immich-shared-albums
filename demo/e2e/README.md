@@ -2,7 +2,7 @@
 
 Fully API-driven cross-household test — **no phone, no emulator, no real server**.
 Runs three throwaway mock Immich stacks (C origin, B and D joiners) and asserts
-the whole flow, 45 checks, exits non-zero on any fail.
+the whole flow, 46 checks, exits non-zero on any fail.
 
 ```bash
 ./demo/run-mock-e2e.sh
@@ -15,9 +15,11 @@ First time only: put admin API keys in `demo/.env` (`B_API_KEY=...`) and
 weekly against `immich-server:release`.
 
 Covers: join + manifest; per-user (private) joins and idempotent re-joins (second
-user attaches to the existing mirror, no duplicates); full-original mirroring
-(checksums equal the origin's) with utility-user ownership (no human owns mirror
-assets); video sync; origin-timeline and joiner-timeline cleanliness; per-person
+user attaches to the existing mirror, no duplicates); preview-grade mirroring
+(explicitly NOT byte copies) with on-demand originals streamed byte-identical
+from the owner — including chained through the origin for relayed photos — and
+utility-user ownership (no human owns mirror assets); videos as playable
+renditions; origin-timeline and joiner-timeline cleanliness; per-person
 contributor attribution + avatar sync + uploader credit + stale-name healing;
 capture-date and GPS preservation (album ordering); album People/owners
 documented in settings; two-way comment sync with echo prevention; owner
