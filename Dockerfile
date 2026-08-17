@@ -1,7 +1,8 @@
 FROM node:24-alpine
 WORKDIR /app
-COPY src/index.ts src/store.ts src/types.ts ./
-COPY src/web/banner/banner.js .
+# copy the whole source tree (preserves the module folders); TypeScript runs natively
+# via Node's type stripping, no build step. index.ts is the entry (see its header).
+COPY src/ ./
 VOLUME /data
 EXPOSE 8300
 CMD ["node", "index.ts"]

@@ -5,9 +5,11 @@
 One zero-dependency Node process — TypeScript run natively by Node's type
 stripping (no build step), state in SQLite via the built-in node:sqlite (WAL,
 crash-safe, indexed ledgers; a legacy state.json migrates automatically on
-boot). Three loops: watcher, reconciler, comment sync. Everything user-facing
-is either the stock Immich app rendering ordinary data we planted, or a web
-page we serve.
+boot). Sync is **nudge-driven with a timed backstop**: a signed HTTP nudge makes
+the common case near-instant, and three timed loops (watcher, reconciler,
+comment sync) are the fail-open safety net — no websockets, no dependency on any
+push channel staying up. Everything user-facing is either the stock Immich app
+rendering ordinary data we planted, or a web page we serve.
 
 ```
             ┌─────────────────────────────────────────────┐
@@ -29,9 +31,9 @@ page we serve.
 
 ## Components
 
-- **watcher** — polls mapped albums via the Immich API, but first does a
-  version handshake against the album's `updatedAt` and skips untouched
-  albums entirely (an idle album costs one row read per cycle). Fresh
+- **watcher** — runs on a timed loop over mapped albums, but gates real work
+  behind a version handshake against the album's `updatedAt` and skips
+  untouched albums entirely (an idle album costs one row read per cycle). Fresh
   additions are pushed to peers as refs (partial-success protocol: failed
   refs are re-offered next cycle). Everything is recorded in `seen`, keyed
   per album mapping, and each proxy's ledger entry records the SOURCE photo's
@@ -41,8 +43,9 @@ page we serve.
 - **reconciler** — members ask the origin for the album's version
   (`GET .../version`, one cheap read) and only pull the full manifest
   (`GET .../manifest`) on mismatch, materialising anything missing — heals
-  refs missed at join time. No webhooks by design: eventual consistency
-  measured in seconds-to-minutes is correct for family albums.
+  refs missed at join time. The timed loop is the fail-open backstop; a nudge
+  (below) makes the common case near-instant, so eventual consistency lands in
+  seconds for family albums.
 - **comment sync** — two-way; locally-authored comments are pushed, peer
   comments are posted via the author's utility user, and a seen-ledger keyed
   both directions prevents echo loops.
@@ -77,10 +80,11 @@ page we serve.
   the accept page, and a transparent proxy for share-page SPA assets when the
   sidecar fronts Immich directly. All fail open.
 
-- **nudge webhooks** — when the origin materialises a member's contribution or
-  comment, it pings the other member households (signed POST, no payload beyond
-  the album id) so they pull immediately; the scheduled handshake remains the
-  fail-open safety net.
+- **nudges** — when the origin materialises a member's contribution or comment,
+  it pings the other member households (a signed POST to `.../nudge`, no payload
+  beyond the album id — an ordinary HTTP request, not a websocket) so they pull
+  immediately; the timed handshake remains the fail-open safety net, so a lost
+  nudge only delays a change to the next tick, never loses it.
 
 Planned, not yet in v0: save-to-library (the explicit per-photo opt-in that
 stores a true original owned by the saving user), ref removal propagation.
@@ -88,6 +92,40 @@ stores a true original owned by the saving user), ref removal propagation.
 Migration note: proxies materialised before the provenance ledger have no
 origin link — they stay as-is and are excluded from relay and on-demand
 originals; only newly synced photos participate.
+
+## Code layout
+
+The process is composed from small modules grouped by concern. `index.ts` is the
+composition root (start the server + the loops); everything else is a helper.
+
+```
+src/
+  index.ts          entry / composition root
+  config.ts         settings (CFG), the logger, string constants
+  state.ts          SQLite store, the household keypair, seen-ledger accessors
+  peers.ts          P2P transport: sign / verify / signed POST / nudge
+  store.ts          the raw SQLite layer
+  types.ts          shared types
+  immich/           the local Immich API layer   → local-immich-api.md
+  p2p/              the cross-server wire protocol → wire-protocol.md
+  sync/             the reconciliation + comment loops → sync-loops.md
+  media/            the hotlink byte path + LRU cache → hotlink-bytes.md
+  web/              HTML pages + the HTTP router → http-router.md
+```
+
+Conventions for this tree:
+
+1. **One doc per helper folder.** Every folder under `src/` carries a single
+   Markdown file explaining what lives there and why. Name it for its contents
+   (e.g. `wire-protocol.md`), not `README.md` — the descriptive name reads better
+   in the file tree and when linked.
+2. **Nest when a concern grows.** A concern starts as one file at `src/` root
+   (like `peers.ts`); when it needs several files it graduates to a folder with
+   its own doc. Sub-folders are fine — each new folder gets its own doc.
+3. **Dependencies point downward.** Core (`config`/`state`/`peers`) depends on
+   nothing else here; feature folders depend on core and, at most, on layers
+   below them. `p2p` and `sync` reference each other only through runtime calls
+   (join → reconcile, watcher → nudge), never at module-load time.
 
 ## Iron rules
 
