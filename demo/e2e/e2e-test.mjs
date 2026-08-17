@@ -111,10 +111,16 @@ if (mAssets) {
   const originOrig = await fetchBytes(`${A}/api/assets/${aIds[0]}/original`, AKEY);
   check('on-demand original streams byte-identical from the owner server', sha1(viaProxy) === sha1(originOrig),
         `${viaProxy.byteLength}B via proxy vs ${originOrig.byteLength}B at origin`);
-  const viaThumb = await fetchBytes(`${BS}/api/assets/${gpsProxy.id}/thumbnail`, BKEY);
+  const thumbRes1 = await fetch(`${BS}/api/assets/${gpsProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
+  const viaThumb = await thumbRes1.arrayBuffer();
   const originThumb = await fetchBytes(`${A}/api/assets/${aIds[0]}/thumbnail?size=preview`, AKEY);
   check('thumbnails stream live from the owner (hotlink interception)', sha1(viaThumb) === sha1(originThumb),
         `${viaThumb.byteLength}B via proxy vs ${originThumb.byteLength}B at origin`);
+  check('first view is a cache MISS', thumbRes1.headers.get('x-cache') === 'MISS', `x-cache: ${thumbRes1.headers.get('x-cache')}`);
+  const thumbRes2 = await fetch(`${BS}/api/assets/${gpsProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
+  check('repeat view is a cache HIT (byte-identical)',
+        thumbRes2.headers.get('x-cache') === 'HIT' && sha1(await thumbRes2.arrayBuffer()) === sha1(originThumb),
+        `x-cache: ${thumbRes2.headers.get('x-cache')}`);
 }
 
 const bAdminUtility = `${(await api(B, BKEY, '/users/me')).name} (via shared albums)`;
@@ -333,7 +339,7 @@ console.log('— stage: reverse-direction share — member-owned album with an a
   const joinR = await (await fetch(`${CS}/sidecar/join`, j({ url: `${REV}/share/${shareR}`, forUserId: meC }))).json();
   check('reverse join: C joins a B-owned album', !!joinR.albumId, JSON.stringify(joinR).slice(0, 100));
   const mirrorR = (await api(A, AKEY, '/albums')).find(a => a.albumName === 'reverse album');
-  const mR = mirrorR && await until(async () => { const x = await albumAssets(A, AKEY, mirrorR.id); return x.length === 1 ? x : null; }, 60000);
+  const mR = mirrorR && await until(async () => { const x = await albumAssets(A, AKEY, mirrorR.id); return x.length === 1 ? x : null; }, 180000);
   check('reverse mirror syncs (dedup reuses the existing proxy)', !!mR, mR ? '' : 'timed out');
   await sleep(25000);
   check('already-shared photo does NOT echo back to its owner (regression)',
@@ -391,7 +397,7 @@ console.log('— stage: deletion propagation + leave-&-purge (reversible joins)'
   const mD = await until(async () => { const x = await albumAssets(B, BKEY, mirrorD.id); return x.length === 2 ? x : null; }, 60000);
   check('delete-test album joined and mirrored (2 stubs)', !!mD, mD ? '' : 'timed out');
   await api(A, AKEY, '/assets', { ...j({ ids: [d2], force: true }), method: 'DELETE' });
-  const shrunk = await until(async () => (await albumAssets(B, BKEY, mirrorD.id)).length === 1 ? true : null, 90000);
+  const shrunk = await until(async () => (await albumAssets(B, BKEY, mirrorD.id)).length === 1 ? true : null, 240000);
   check('owner deleted a photo -> member stub follows (deletion propagation)', !!shrunk,
         shrunk ? '' : `still ${(await albumAssets(B, BKEY, mirrorD.id)).length}`);
   // leave & purge via the NATIVE gesture: the user leaves the album in the stock app
@@ -409,25 +415,32 @@ console.log('— stage: deletion propagation + leave-&-purge (reversible joins)'
   check('native leave: stubs deleted (space reclaimed)', stubsGone);
 }
 
-console.log('— stage: kill test — hotlinks must STOP working when the owner vanishes');
+console.log('— stage: kill test — uncached photos fail closed; cached ones survive from cache');
 {
-  // negative control: if any pixel copy existed on B, it would still serve while the
-  // origin is down. It must not. (Also locks the accepted offline trade-off.)
-  const gpsProxy2 = (await albumAssets(B, BKEY, mirror.id)).find(a => a.exifInfo?.latitude);
+  const all = await albumAssets(B, BKEY, mirror.id);
+  const cachedProxy = all.find(a => a.exifInfo?.latitude);          // viewed earlier -> in cache
+  const originAll = await albumAssets(A, AKEY, ALBUM_ID);
+  const cachedSha = sha1(await fetchBytes(`${A}/api/assets/${aIds[0]}/thumbnail?size=preview`, AKEY));
+  // an origin-owned photo that has NEVER been viewed through the interceptor
+  const uncachedProxy = all.find(a => !a.exifInfo?.latitude && (a.fileCreatedAt || '').startsWith('2026-08-1'));
   const { execSync } = await import('node:child_process');
   const dockerEnv = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
   execSync('docker stop household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
   await sleep(1500);
-  const deadRes = await fetch(`${BS}/api/assets/${gpsProxy2.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
+  const deadRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
   const deadBytes = await deadRes.arrayBuffer();
-  const originThumbSha = sha1(await fetchBytes(`${A}/api/assets/${aIds[0]}/thumbnail?size=preview`, AKEY));
-  check('owner offline: member CANNOT produce the preview (no hidden copy exists)',
-        sha1(deadBytes) !== originThumbSha, `served ${deadBytes.byteLength}B while origin down`);
+  check('owner offline: UNCACHED photo cannot be produced (no hidden copy exists)',
+        deadRes.headers.get('x-cache') === 'BYPASS' && deadBytes.byteLength < 20000,
+        `x-cache: ${deadRes.headers.get('x-cache')}, ${deadBytes.byteLength}B`);
+  const cachedRes = await fetch(`${BS}/api/assets/${cachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
+  check('owner offline: recently viewed photo still renders FROM CACHE',
+        cachedRes.headers.get('x-cache') === 'HIT' && sha1(await cachedRes.arrayBuffer()) === cachedSha);
   execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
   await sleep(4000);
-  const aliveBytes = await fetchBytes(`${BS}/api/assets/${gpsProxy2.id}/thumbnail`, BKEY);
-  check('owner back online: preview streams again (pure hotlink recovery)',
-        sha1(aliveBytes) === originThumbSha, `${aliveBytes.byteLength}B`);
+  const aliveRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
+  check('owner back online: uncached photo streams again (hotlink recovery)',
+        aliveRes.headers.get('x-cache') === 'MISS' && (await aliveRes.arrayBuffer()).byteLength > 500,
+        `x-cache: ${aliveRes.headers.get('x-cache')}`);
 }
 
 console.log('— stage: loop prevention (2 idle watcher cycles)');

@@ -48,6 +48,10 @@ export class Store {
       CREATE INDEX IF NOT EXISTS seen_l ON seen (l);
       CREATE TABLE IF NOT EXISTS seen_activity (tag TEXT PRIMARY KEY);
     `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, size INTEGER NOT NULL, lastUsed INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS cache_lru ON cache (lastUsed);
+    `);
     this.migrateLegacyJson(dataDir);
     this.state = {
       keys: this.kvGet('keys'),
@@ -138,5 +142,23 @@ export class Store {
   }
   seenActAdd(tag: string) {
     this.db.prepare('INSERT OR IGNORE INTO seen_activity (tag) VALUES (?)').run(tag);
+  }
+
+  // ---- bounded LRU byte-cache accounting (files live in <dataDir>/cache) ----
+  cacheTouch(key: string): boolean {
+    const hit = this.db.prepare('SELECT 1 FROM cache WHERE key = ?').get(key);
+    if (hit) this.db.prepare('UPDATE cache SET lastUsed = ? WHERE key = ?').run(Date.now(), key);
+    return !!hit;
+  }
+  cachePut(key: string, size: number) {
+    this.db.prepare('INSERT OR REPLACE INTO cache (key, size, lastUsed) VALUES (?, ?, ?)').run(key, size, Date.now());
+  }
+  cacheTotal(): number {
+    return (this.db.prepare('SELECT COALESCE(SUM(size),0) AS n FROM cache').get() as { n: number }).n;
+  }
+  cacheEvictOldest(): { key: string; size: number } | undefined {
+    const row = this.db.prepare('SELECT key, size FROM cache ORDER BY lastUsed ASC LIMIT 1').get() as { key: string; size: number } | undefined;
+    if (row) this.db.prepare('DELETE FROM cache WHERE key = ?').run(row.key);
+    return row;
   }
 }

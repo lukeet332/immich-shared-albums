@@ -5,6 +5,29 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## v0.4.1 — 2026-08-17
+
+**Sync-reliability release: five root causes of the "mirror stops updating" flake.**
+
+- **Manifests now advertise the album's full offer set.** They previously reused the
+  push-queue filter, which excludes already-synced photos — so after first sync a
+  manifest came back empty and deletion propagation had nothing to diff against
+  (the consistency gate refused to act on the mismatch, so nothing was ever
+  wrongly deleted — but owner deletions never reached members either).
+- **Duplicate stubs fixed**: the join-time sync and the background loop could
+  materialise the same photos concurrently; a per-album lock now prevents it.
+- **A hung connection can no longer kill the sync loops**: every loop-critical
+  fetch has a bounded timeout (a blackholed socket during a peer restart used to
+  wedge the loops permanently and silently).
+- **Asset deletes report success correctly** (Immich answers 204 No Content; the
+  empty body was mis-read as a failure, which would have retried forever), and
+  stub deletion is idempotent.
+- **Bounded LRU byte-cache** for streamed previews (`CACHE_MAX_MB`, default 512):
+  repeat views serve from the member's own disk; only peer-origin bytes are ever
+  cached, and a photo you viewed recently still renders while its owner is offline.
+- Version cursors only advance after deletion propagation succeeds, so failures
+  retry instead of wedging. `RECONCILE_DEBUG=1` traces every reconcile decision.
+
 ## v0.4.0 — 2026-08-17
 
 **The hotlink release — joining an album now costs kilobytes, not gigabytes.**

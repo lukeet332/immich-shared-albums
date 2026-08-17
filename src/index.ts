@@ -12,7 +12,7 @@ import { Store } from './store.ts';
 import type { Mapping, Peer } from './store.ts';
 import type { AssetRef, Household, RedeemResponse } from './types.ts';
 
-const SIDECAR_VERSION = '0.4.0';
+const SIDECAR_VERSION = '0.4.1';
 const CFG = {
   immichUrl: process.env.IMMICH_URL || 'http://immich-server:2283',
   apiKey: process.env.IMMICH_API_KEY,
@@ -22,6 +22,9 @@ const CFG = {
   dataDir: process.env.DATA_DIR || '/data',
   pollMs: Number(process.env.POLL_MS || 20000),
   template: process.env.ALBUM_TEMPLATE || '{name}',
+  // bounded LRU byte-cache for streamed previews (0 disables). A cache, not storage:
+  // capped, reclaimable, invisible to libraries — delete the folder any time.
+  cacheMaxMb: Number(process.env.CACHE_MAX_MB ?? 512),
 };
 if (!CFG.apiKey) { console.error('IMMICH_API_KEY required'); process.exit(1); }
 
@@ -51,12 +54,18 @@ let BANNER_JS = ''; try { BANNER_JS = fs.readFileSync(new URL('./banner.js', imp
 // ---------- immich client ----------
 const immich = async (p: string, init: RequestInit = {}, key: string = CFG.apiKey) => {
   const r = await fetch(`${CFG.immichUrl}/api${p}`, {
+    signal: AbortSignal.timeout(60000),
     ...init, headers: { 'x-api-key': key, Accept: 'application/json', ...(init.headers || {}) },
   });
   if (!r.ok) throw new Error(`immich ${p} -> ${r.status} ${await r.text().catch(() => '')}`);
   return r;
 };
-const immichJson = async (p: string, init?: RequestInit, key?: string) => (await immich(p, init, key)).json();
+const immichJson = async (p: string, init?: RequestInit, key?: string) => {
+  const r = await immich(p, init, key);
+  if (r.status === 204) return null;
+  const text = await r.text();
+  return text ? JSON.parse(text) : null;
+};
 const jsonBody = (obj) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
 
 const UTILITY_SUFFIX = ' (via shared albums)';
@@ -110,11 +119,17 @@ async function assetToRef(a) {
 // a ledger entry carry their SOURCE checksum on the wire, so the per-mapping seen-ledger
 // guarantees a household never receives its own photo back — which is what enables
 // relaying member contributions onward to other member households.
-async function shareableAssets(assets, mappingId) {
+// The full offer set for an album: media we can vouch for (human-owned, or proxies
+// with known provenance). This is what manifests advertise — members diff against it,
+// so it must NOT exclude already-synced assets.
+async function offerableAssets(assets) {
   const users = await usersById();
   return assets.filter(a => (a.type === 'IMAGE' || a.type === 'VIDEO')
-    && !seenHas(mappingId, wireChecksum(a))
     && (!users[a.ownerId]?.utility || !!ledgerByAsset(a.id)));
+}
+// The push queue: offerable minus what this mapping has already sent.
+async function shareableAssets(assets, mappingId) {
+  return (await offerableAssets(assets)).filter(a => !seenHas(mappingId, wireChecksum(a)));
 }
 async function uploadAsset(bytes, filename, key = CFG.apiKey, takenAt) {
   const fd = new FormData();
@@ -124,7 +139,7 @@ async function uploadAsset(bytes, filename, key = CFG.apiKey, takenAt) {
   fd.set('fileCreatedAt', stamp);
   fd.set('fileModifiedAt', stamp);
   fd.set('assetData', new Blob([bytes], { type: 'application/octet-stream' }), filename);
-  const r = await fetch(`${CFG.immichUrl}/api/assets`, { method: 'POST', headers: { 'x-api-key': key }, body: fd });
+  const r = await fetch(`${CFG.immichUrl}/api/assets`, { method: 'POST', headers: { 'x-api-key': key }, body: fd, signal: AbortSignal.timeout(180000) });
   if (!r.ok) throw new Error(`upload -> ${r.status} ${await r.text().catch(() => '')}`);
   return r.json(); // { id, status }
 }
@@ -160,6 +175,7 @@ const verify = (body, sig, pub) => {
   } catch { return false; }
 };
 const signedFetch = (url, body) => fetch(url, {
+  signal: AbortSignal.timeout(30000),
   method: 'POST',
   headers: { 'Content-Type': 'application/json', 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(body) },
   body,
@@ -234,7 +250,7 @@ async function syncAvatar(c, peerUrl, originUserId) {
   if (!peerUrl || !originUserId || c.avatarDone) return;
   try {
     const av = await fetch(`${peerUrl}/sidecar/api/v1/users/${originUserId}/avatar`,
-      { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(originUserId) } });
+      { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(originUserId) }, signal: AbortSignal.timeout(30000) });
     if (av.ok) {
       const fd = new FormData();
       fd.set('file', new Blob([Buffer.from(await av.arrayBuffer())], { type: av.headers.get('content-type') || 'image/jpeg' }), 'avatar.jpg');
@@ -255,9 +271,9 @@ async function ensureContributor(displayName, albumId, adminKey, peerUrl, origin
 
 // ---------- protocol handlers ----------
 // Everything shareable with the peer behind mappingId (see shareableAssets for the rules).
-async function buildManifest(assets, mappingId) {
+async function buildManifest(assets) {
   const out = [];
-  for (const a of await shareableAssets(assets, mappingId)) out.push(await assetToRef(a));
+  for (const a of await offerableAssets(assets)) out.push(await assetToRef(a));
   return out;
 }
 
@@ -274,7 +290,7 @@ async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   let bytes: Buffer;
   if (ref.kind === 'video') {
     const pr = await fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/playback`,
-      { ...sigHeaders(ref.originAsset), headers: { ...sigHeaders(ref.originAsset).headers, Range: 'bytes=0-2097151' } });
+      { ...sigHeaders(ref.originAsset), headers: { ...sigHeaders(ref.originAsset).headers, Range: 'bytes=0-2097151' }, signal: AbortSignal.timeout(120000) });
     if (!pr.ok) { log(`playback stub fetch failed for ${ref.originAsset}: ${pr.status}`); return false; }
     bytes = Buffer.concat([Buffer.from(await pr.arrayBuffer()), crypto.randomBytes(8)]);
   } else {
@@ -310,7 +326,7 @@ async function handleRedeem(req, body) {
     peer: household.publicKey, permissions: link.allowUpload ? 'contribute' : 'view' });
   save();
   log(`peer joined: "${household.name}" -> album "${album.albumName}"`);
-  const manifest = await buildManifest(album.assets, mappingId);
+  const manifest = await buildManifest(album.assets);
   // v3 album responses carry no ownerId — the share link records its creator, which is
   // exactly "the person who shared this"; majority asset owner is the empty-proof fallback
   const ownerCounts = {};
@@ -363,9 +379,11 @@ async function handleVersion(req, albumMappingId) {
 // deleted — resolved via the owning contributor's own key. Human photos are untouchable.
 async function deleteProxyAsset(assetId: string): Promise<boolean> {
   try {
-    const asset = await immichJson(`/assets/${assetId}`);
+    let asset;
+    try { asset = await immichJson(`/assets/${assetId}`); }
+    catch (e) { if (/-> 404/.test(e.message)) return true; throw e; } // already gone
     const owner = Object.values(state.contributors).find(c => c.userId === asset.ownerId);
-    if (!owner) return false; // not utility-owned -> refuse
+    if (!owner) { log(`proxy delete refused for ${assetId}: owner ${asset.ownerId} is not a utility user`); return false; }
     await immichJson('/assets', { ...jsonBody({ ids: [assetId], force: true }), method: 'DELETE' }, owner.key);
     return true;
   } catch (e) { log(`proxy delete failed for ${assetId}: ${e.message}`); return false; }
@@ -431,7 +449,7 @@ async function handleManifest(req, albumMappingId) {
   if (!peer || !verify(albumMappingId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown or unverified peer' }];
   const mapping = state.mappings.find(m => m.role === 'owner' && (m.id === albumMappingId || m.albumId === albumMappingId));
   if (!mapping) return [404, { error: 'unknown album mapping' }];
-  return [200, { manifest: await buildManifest(await getAlbumAssets(mapping.albumId), mapping.id) }];
+  return [200, { manifest: await buildManifest(await getAlbumAssets(mapping.albumId)) }];
 }
 
 // ---------- comment / activity sync ----------
@@ -499,6 +517,31 @@ async function handlePreview(req, assetId) {
   const peer = state.peers.find(p => p.pub === peerKey);
   if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
   return fetchTrueBytes(assetId, 'preview'); // chains for relayed assets
+}
+
+// ---- bounded LRU preview cache (files under <dataDir>/cache; accounting in SQLite) ----
+const CACHE_DIR = `${CFG.dataDir}/cache`;
+fs.mkdirSync(CACHE_DIR, { recursive: true });
+const cacheKey = (originAsset: string) => crypto.createHash('sha1').update(originAsset).digest('hex');
+function cacheRead(originAsset: string): Buffer | null {
+  if (!CFG.cacheMaxMb) return null;
+  const key = cacheKey(originAsset);
+  if (!store.cacheTouch(key)) return null;
+  try { return fs.readFileSync(`${CACHE_DIR}/${key}`); }
+  catch { return null; } // index said yes, disk said no — self-heals on next put
+}
+function cacheWrite(originAsset: string, bytes: Buffer) {
+  if (!CFG.cacheMaxMb || bytes.length > CFG.cacheMaxMb * 1024 * 1024 / 10) return; // no single item >10% of cap
+  const key = cacheKey(originAsset);
+  try {
+    fs.writeFileSync(`${CACHE_DIR}/${key}`, bytes);
+    store.cachePut(key, bytes.length);
+    while (store.cacheTotal() > CFG.cacheMaxMb * 1024 * 1024) {
+      const evicted = store.cacheEvictOldest();
+      if (!evicted) break;
+      try { fs.unlinkSync(`${CACHE_DIR}/${evicted.key}`); } catch { /* already gone */ }
+    }
+  } catch (e) { log(`cache write skipped: ${e.message}`); }
 }
 
 // Resolve true bytes for any local asset: local file for our own photos; for a proxy
@@ -666,19 +709,25 @@ async function reconcileOnce() {
   }
 }
 
+// per-mapping mutex: the join-time reconcile is fired unawaited and can race the
+// interval loop — both would materialise the same "missing" refs (stubs are unique
+// bytes, so Immich cannot dedup the collision into one asset).
+const RECONCILING = new Set<string>();
 async function reconcileMapping(mapping: Mapping, peer: Peer) {
-  {
+  if (RECONCILING.has(mapping.id)) return;
+  RECONCILING.add(mapping.id);
+  try {
       const target = mapping.remoteMappingId || mapping.remoteAlbumId;
       const sig = { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(target) } };
       // handshake first: only pull the full manifest when the origin's version moved.
       // remoteVersion is only stored after a CLEAN pass so failures keep retrying.
       let version = null;
-      const vr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/version`, sig);
+      const vr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/version`, { ...sig, signal: AbortSignal.timeout(15000) });
       if (vr.ok) {
         version = (await vr.json().catch(() => ({}))).version || null;
         if (version && version === mapping.remoteVersion) return;
       }
-      const r = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/manifest`, sig);
+      const r = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/manifest`, { ...sig, signal: AbortSignal.timeout(30000) });
       if (!r.ok) return;
       const { manifest = [] } = await r.json();
       // The version's asset count comes from the album table (instant); the manifest
@@ -686,16 +735,19 @@ async function reconcileMapping(mapping: Mapping, peer: Peer) {
       // where the two agree — dirty reads retry next cycle instead of poisoning the cursor.
       const expectedCount = version ? Number(String(version).split('|')[1]) : NaN;
       const consistent = !Number.isFinite(expectedCount) || manifest.length === expectedCount;
+      if (process.env.RECONCILE_DEBUG) log(`DBG reconcile "${mapping.albumName}": version=${version} cursor=${mapping.remoteVersion} manifest=${manifest.length} expected=${expectedCount} consistent=${consistent} ledger=${store.seenForMapping(mapping.id).length}`);
       // deletion propagation: refs we materialised that the owner no longer offers are
       // gone at the source — remove our stubs too (utility-owner-guarded).
+      let propagated = true;
       if (version && consistent) {
         const offered = new Set(manifest.map((x) => x.checksum));
         for (const entry of store.seenForMapping(mapping.id)) {
+          if (process.env.RECONCILE_DEBUG) log(`DBG entry c=${entry.c.slice(0,8)} o=${!!entry.o} offered=${offered.has(entry.c)}`);
           if (!entry.o || offered.has(entry.c)) continue;
           if (await deleteProxyAsset(entry.l)) {
             store.seenRemoveEntry(mapping.id, entry.c);
             log(`removed stub for a photo its owner deleted ("${mapping.albumName}")`);
-          }
+          } else propagated = false; // keep the cursor back so the removal retries next cycle
         }
       }
       const missing = manifest.filter(ref => !seenHas(mapping.id, ref.checksum));
@@ -704,8 +756,8 @@ async function reconcileMapping(mapping: Mapping, peer: Peer) {
         try { if (await materialiseRef(mapping, peer.url, peer.name, ref)) log(`reconciled missed ref into "${mapping.albumName}"`); else allOk = false; }
         catch (e) { allOk = false; log(`reconcile materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); }
       }
-      if (allOk && version && consistent) { mapping.remoteVersion = version; save(); }
-  }
+      if (allOk && propagated && version && consistent) { mapping.remoteVersion = version; save(); }
+  } finally { RECONCILING.delete(mapping.id); }
 }
 
 // push locally-authored comments (not ones we materialised) to the peer.
@@ -752,17 +804,24 @@ async function syncCommentsOnce() {
 async function pullCanonicalComments(mapping, peer) {
   const target = mapping.remoteMappingId || mapping.remoteAlbumId;
   const sig = { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(target) } };
-  const vr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/version`, sig);
+  const vr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/version`, { ...sig, signal: AbortSignal.timeout(15000) });
   if (!vr.ok) return;
   const v = await vr.json().catch(() => ({}));
   if (v.comments == null || v.comments === mapping.remoteCommentCount) return;
-  const cr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/comments`, sig);
+  const cr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/comments`, { ...sig, signal: AbortSignal.timeout(20000) });
   if (!cr.ok) return;
   const { comments = [] } = await cr.json().catch(() => ({}));
   await materialiseComments(mapping, peer.url, peer.name, comments);
   mapping.remoteCommentCount = v.comments; save();
 }
-setInterval(() => watchOnce().catch(e => log('watch loop:', e.message)), CFG.pollMs);
+// overlap guard: a slow cycle (large albums, slow peers) must not stack concurrent
+// full scans — stampedes starve the host Immich's own background jobs.
+let WATCH_RUNNING = false;
+setInterval(() => {
+  if (WATCH_RUNNING) return;
+  WATCH_RUNNING = true;
+  watchOnce().catch(e => log('watch loop:', e.message)).finally(() => { WATCH_RUNNING = false; });
+}, CFG.pollMs);
 // comments ride a fast lane: the count statistic is one indexed query, so seconds-level
 // cadence stays cheap even on low-power hosts; the full activity fetch only runs on change
 setInterval(() => syncComments().catch(e => log('comment loop:', e.message)), Number(process.env.COMMENT_POLL_MS || 5000));
@@ -908,6 +967,33 @@ const server = http.createServer(async (req, res) => {
         for (const h of ['cookie', 'x-api-key', 'authorization']) if (req.headers[h]) authHeaders[h] = req.headers[h] as string;
         const probe = await fetch(`${CFG.immichUrl}/api/assets/${assetHit[1]}`, { headers: authHeaders });
         if (!probe.ok) { res.writeHead(probe.status); return res.end(); }
+        // previews ride the bounded LRU cache: household-wide repeat views skip the
+        // cross-server fetch, and recently viewed photos survive owner downtime.
+        // Only bytes that truly came FROM THE PEER are ever cached (a local stub
+        // fallback must not poison the cache), and hits refresh their LRU slot.
+        if (kind === 'preview') {
+          const cached = cacheRead(entry.o);
+          const baseHeaders = { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=604800, immutable' };
+          if (cached) { res.writeHead(200, { ...baseHeaders, 'X-Cache': 'HIT', 'Content-Length': String(cached.length) }); return res.end(cached); }
+          const mapping2 = state.mappings.find(mp => mp.id === entry.m);
+          const peer2 = mapping2 && state.peers.find(pe => pe.pub === mapping2.peer);
+          if (peer2) {
+            try {
+              const up = await fetch(`${peer2.url}/sidecar/api/v1/assets/${entry.o}/preview`,
+                { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) } });
+              if (up.ok) {
+                const buf = Buffer.from(await up.arrayBuffer());
+                cacheWrite(entry.o, buf);
+                res.writeHead(200, { ...baseHeaders, 'Content-Type': up.headers.get('content-type') || 'image/jpeg', 'X-Cache': 'MISS', 'Content-Length': String(buf.length) });
+                return res.end(buf);
+              }
+            } catch (e) { log(`preview fetch failed, serving stub: ${e.message}`); }
+          }
+          // owner unreachable and nothing cached -> the local stub thumbnail (uncached)
+          const stub = await immich(`/assets/${assetHit[1]}/thumbnail?size=preview`).catch(() => null);
+          if (stub) { res.writeHead(200, { ...baseHeaders, 'Content-Type': stub.headers.get('content-type') || 'image/jpeg', 'X-Cache': 'BYPASS' }); return res.end(Buffer.from(await stub.arrayBuffer())); }
+          res.writeHead(503); return res.end();
+        }
         try {
           const out = await fetchTrueBytes(assetHit[1], kind, req.headers.range as string | undefined);
           if (!Array.isArray(out)) {
