@@ -1,5 +1,7 @@
 # Architecture
 
+> 🎬 The end-user experience this architecture produces: [video demo](https://www.youtube.com/watch?v=c3GO-YFchYo).
+
 One zero-dependency Node process — TypeScript run natively by Node's type
 stripping (no build step), state in SQLite via the built-in node:sqlite (WAL,
 crash-safe, indexed ledgers; a legacy state.json migrates automatically on

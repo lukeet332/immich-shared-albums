@@ -1,5 +1,7 @@
 # AI-assisted install
 
+> 🎬 What you get once installed: [2-minute demo of two servers sharing an album](https://www.youtube.com/watch?v=c3GO-YFchYo).
+
 Running an AI coding agent (Claude Code, Copilot CLI, Cursor, …) on the machine
 that hosts your Immich? Paste the prompt below and it will do the install for
 you, adapted to *your* setup, asking you only for the things it can't discover.
