@@ -19,7 +19,7 @@ Your household runs Immich. So do the grandparents, and your sister across town.
 
 Two households, two servers, one shared album — created, joined by text-message link, contributed to, and commented on, all in the stock Immich apps:
 
-[![Watch the demo — two Immich servers sharing an album live](https://img.youtube.com/vi/c3GO-YFchYo/maxresdefault.jpg)](https://www.youtube.com/watch?v=c3GO-YFchYo)
+[![Watch the demo — two Immich servers sharing an album live](https://img.youtube.com/vi/c3GO-YFchYo/hqdefault.jpg)](https://www.youtube.com/watch?v=c3GO-YFchYo)
 
 > Born from this design discussion: [immich-app/immich#30794](https://github.com/immich-app/immich/discussions/30794). No Immich source changes — everything rides the public API and your reverse proxy.
 
