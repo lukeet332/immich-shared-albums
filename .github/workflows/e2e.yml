@@ -64,7 +64,8 @@ jobs:
           cd demo/e2e
           npm install --silent
           npx playwright install --with-deps chromium
-          CKEY=$(grep -m1 C_API_KEY ../household-c/.env | cut -d= -f2-) node browser-test.mjs
+          CKEY=$(grep -m1 C_API_KEY ../household-c/.env | cut -d= -f2-) \
+          B_EMAIL=admin@e2e.local B_PASS=e2e-admin-pass-1 node browser-test.mjs
 
       - name: Dump sidecar logs on failure
         if: failure()

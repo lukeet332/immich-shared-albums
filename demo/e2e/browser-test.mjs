@@ -9,7 +9,8 @@ const C = 'http://localhost:2285';
 const SHARE_HOST = process.env.SHARE_HOST || 'http://host.docker.internal:8302';
 const B_ADDR = process.env.B_ADDR || 'host.docker.internal:8301';                // typed into the banner
 const B_PANEL_WEB = process.env.B_PANEL_WEB || 'http://localhost:8301';
-const B_EMAIL = 'demo@household-b.local', B_PASS = 'demo-household-b-1';
+const B_EMAIL = process.env.B_EMAIL || 'demo@household-b.local';
+const B_PASS = process.env.B_PASS || 'demo-household-b-1';
 const CKEY = process.env.CKEY;
 
 const results = [];
@@ -58,6 +59,7 @@ if (reached) {
 // 5. signed-in accept -> join -> progress button appears and eventually enables
 const login = await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
   headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json();
+if (!login.accessToken) { console.log(`  ❌ login failed for ${B_EMAIL} — cannot run signed-in checks`); process.exit(1); }
 // cookies are domain-scoped: they must be set for the ACCEPT PAGE's origin (the
 // address typed into the banner), not the localhost alias used for the login API
 await ctx.addCookies(['immich_access_token', 'immich_auth_type', 'immich_is_authenticated'].map((name) => ({
