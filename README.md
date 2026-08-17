@@ -17,7 +17,7 @@ Your household runs Immich. So do the grandparents, and your sister across town.
 
 ## See it in action
 
-Two households, two servers, one shared album — created, joined by text-message link, contributed to, and commented on, all in the stock Immich apps:
+Two households, two servers, one shared album — created, shared, joined, contributed to, and commented on, all in the stock Immich apps:
 
 [![Watch the demo — two Immich servers sharing an album live](https://img.youtube.com/vi/c3GO-YFchYo/hqdefault.jpg)](https://www.youtube.com/watch?v=c3GO-YFchYo)
 
