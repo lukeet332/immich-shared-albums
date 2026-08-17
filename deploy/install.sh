@@ -78,15 +78,22 @@ say "Last step (manual): route three paths through your reverse proxy"
 cat <<EOF
 Add to your existing site config, BEFORE the catch-all Immich route:
 
-  Caddy:
-    handle /sidecar/*                { reverse_proxy immich-shared:8300 }
-    handle /share/*                  { reverse_proxy immich-shared:8300 }
-    handle /api/assets/*/original    { reverse_proxy immich-shared:8300 }
+  Caddy (byte routes are GET-only and fall back to Immich if the sidecar is down):
+    handle /sidecar/* { reverse_proxy immich-shared:8300 }
+    handle /share/*   { reverse_proxy immich-shared:8300 immich-server:2283 { lb_policy first } }
+    @sharedbytes {
+      method GET
+      path /api/assets/*/thumbnail /api/assets/*/original /api/assets/*/video/playback
+    }
+    handle @sharedbytes { reverse_proxy immich-shared:8300 immich-server:2283 { lb_policy first } }
 
   nginx:
-    location /sidecar/                     { proxy_pass http://127.0.0.1:$HOST_PORT; }
-    location /share/                       { proxy_pass http://127.0.0.1:$HOST_PORT; }
-    location ~ ^/api/assets/[^/]+/original { proxy_pass http://127.0.0.1:$HOST_PORT; }
+    location /sidecar/ { proxy_pass http://127.0.0.1:$HOST_PORT; }
+    location /share/   { proxy_pass http://127.0.0.1:$HOST_PORT; }
+    location ~ ^/api/assets/[^/]+/(thumbnail|original|video/playback)$ {
+      limit_except GET { proxy_pass http://immich-upstream; }
+      proxy_pass http://127.0.0.1:$HOST_PORT;
+    }
 
 Then reload the proxy and open any Immich share link — you should see the
 "Join shared album with your server?" banner. Verify the panel at:

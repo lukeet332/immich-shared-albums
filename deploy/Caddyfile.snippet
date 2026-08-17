@@ -2,14 +2,23 @@
 handle /sidecar/* {
 	reverse_proxy immich-shared:8300
 }
-# join banner on share pages; belt-and-braces fallback keeps share pages
-# working even if the sidecar is down
+# join banner on share pages; fallback keeps share pages working if the sidecar is down
 handle /share/* {
 	reverse_proxy immich-shared:8300 immich-server:2283 {
 		lb_policy first
+		fail_duration 10s
 	}
 }
-# originals-proxy: full-quality downloads stream live from the photo's owner
-handle /api/assets/*/original {
-	reverse_proxy immich-shared:8300
+# hotlink byte routes: shared photos/videos stream live from their owner's server.
+# GET-only (uploads go straight to Immich) and fail-open: a dead sidecar only
+# degrades SHARED tiles — your own library is never affected.
+@sharedbytes {
+	method GET
+	path /api/assets/*/thumbnail /api/assets/*/original /api/assets/*/video/playback
+}
+handle @sharedbytes {
+	reverse_proxy immich-shared:8300 immich-server:2283 {
+		lb_policy first
+		fail_duration 10s
+	}
 }

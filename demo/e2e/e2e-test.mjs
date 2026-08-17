@@ -103,11 +103,18 @@ if (mAssets) {
   check('origin avatar synced onto utility user', !!(ownerUtility && ownerUtility.profileImagePath), ownerUtility?.profileImagePath ? 'has avatar' : 'no avatar');
   const originSums = new Set((await albumAssets(A, AKEY, ALBUM_ID)).map(a => a.checksum));
   check('mirrors are light renditions, not byte copies (reference model)', mAssets.every(a => !originSums.has(a.checksum)));
+  const stubSizes = mAssets.map(a => (a.exifInfo || {}).fileSizeInByte || 0);
+  check('mirrors are kilobyte stubs — hotlink model stores no pixels', stubSizes.every(n => n > 0 && n < 20000),
+        stubSizes.join(','));
   const gpsProxy = withGps || mAssets[0];
   const viaProxy = await fetchBytes(`${BS}/api/assets/${gpsProxy.id}/original`, BKEY);
   const originOrig = await fetchBytes(`${A}/api/assets/${aIds[0]}/original`, AKEY);
   check('on-demand original streams byte-identical from the owner server', sha1(viaProxy) === sha1(originOrig),
         `${viaProxy.byteLength}B via proxy vs ${originOrig.byteLength}B at origin`);
+  const viaThumb = await fetchBytes(`${BS}/api/assets/${gpsProxy.id}/thumbnail`, BKEY);
+  const originThumb = await fetchBytes(`${A}/api/assets/${aIds[0]}/thumbnail?size=preview`, AKEY);
+  check('thumbnails stream live from the owner (hotlink interception)', sha1(viaThumb) === sha1(originThumb),
+        `${viaThumb.byteLength}B via proxy vs ${originThumb.byteLength}B at origin`);
 }
 
 const bAdminUtility = `${(await api(B, BKEY, '/users/me')).name} (via shared albums)`;
@@ -253,6 +260,12 @@ if (aAfter) {
     const vOrig = await fetchBytes(`${A}/api/assets/${vres.id}/original`, AKEY);
     check('video original streams on demand from the owner', sha1(vViaProxy) === sha1(vOrig),
           `${vViaProxy.byteLength}B via proxy vs ${vOrig.byteLength}B at origin`);
+    const rangeRes = await fetch(`${BS}/api/assets/${vArrived.id}/video/playback`,
+      { headers: { 'x-api-key': BKEY, Range: 'bytes=0-99' } });
+    const rangeBytes = await rangeRes.arrayBuffer();
+    check('video playback streams with Range support (seekable hotlink)',
+          rangeRes.status === 206 && rangeBytes.byteLength === 100,
+          `status ${rangeRes.status}, ${rangeBytes.byteLength}B`);
   }
 }
 
@@ -363,6 +376,59 @@ if (DKEY) {
   check('D contribution reaches the origin', !!(await until(async () => (await albumAssets(A, AKEY, ALBUM_ID)).length === 10 ? true : null, 90000)));
   check('D contribution relays onward to B', !!(await until(async () => (await albumAssets(B, BKEY, mirror.id)).length === 10 ? true : null, 150000)));
 } else console.log('  (skipped: no DKEY)');
+
+console.log('— stage: deletion propagation + leave-&-purge (reversible joins)');
+{
+  const albD = (await api(A, AKEY, '/albums', j({ albumName: 'delete test' }))).id;
+  const d1 = await upload(A, AKEY, 'del-1.jpg', `dl1${Date.now() % 1000}`, '2026-04-01T09:00:00.000Z');
+  const d2 = await upload(A, AKEY, 'del-2.jpg', `dl2${Date.now() % 1000}`, '2026-04-02T09:00:00.000Z');
+  await ensurePreviews(A, AKEY, [d1, d2]);
+  await api(A, AKEY, `/albums/${albD}/assets`, { ...j({ ids: [d1, d2] }), method: 'PUT' });
+  const shareD = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albD, allowUpload: true }))).key;
+  const meBD = (await api(B, BKEY, '/users/me')).id;
+  const joinD2 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${shareD}`, forUserId: meBD }))).json();
+  const mirrorD = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'delete test');
+  const mD = await until(async () => { const x = await albumAssets(B, BKEY, mirrorD.id); return x.length === 2 ? x : null; }, 60000);
+  check('delete-test album joined and mirrored (2 stubs)', !!mD, mD ? '' : 'timed out');
+  await api(A, AKEY, '/assets', { ...j({ ids: [d2], force: true }), method: 'DELETE' });
+  const shrunk = await until(async () => (await albumAssets(B, BKEY, mirrorD.id)).length === 1 ? true : null, 90000);
+  check('owner deleted a photo -> member stub follows (deletion propagation)', !!shrunk,
+        shrunk ? '' : `still ${(await albumAssets(B, BKEY, mirrorD.id)).length}`);
+  // leave & purge via the NATIVE gesture: the user leaves the album in the stock app
+  // (album settings -> Leave album); the sidecar notices and cleans up everything.
+  const stubIds = (await albumAssets(B, BKEY, mirrorD.id)).map(a => a.id);
+  await api(B, BKEY, `/albums/${mirrorD.id}/user/me`, { method: 'DELETE' });
+  const albumGone = await until(async () =>
+    !(await api(B, BKEY, '/albums')).some(a => a.id === mirrorD.id) ? true : null, 90000);
+  check('native leave: sidecar removed the mirror album (no custom UI)', !!albumGone);
+  let stubsGone = true;
+  for (const id of stubIds) {
+    const r = await fetch(`${B}/api/assets/${id}`, { headers: { 'x-api-key': BKEY } });
+    if (r.ok) { const a = await r.json(); if (!a.isTrashed && !a.deletedAt) stubsGone = false; }
+  }
+  check('native leave: stubs deleted (space reclaimed)', stubsGone);
+}
+
+console.log('— stage: kill test — hotlinks must STOP working when the owner vanishes');
+{
+  // negative control: if any pixel copy existed on B, it would still serve while the
+  // origin is down. It must not. (Also locks the accepted offline trade-off.)
+  const gpsProxy2 = (await albumAssets(B, BKEY, mirror.id)).find(a => a.exifInfo?.latitude);
+  const { execSync } = await import('node:child_process');
+  const dockerEnv = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
+  execSync('docker stop household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
+  await sleep(1500);
+  const deadRes = await fetch(`${BS}/api/assets/${gpsProxy2.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
+  const deadBytes = await deadRes.arrayBuffer();
+  const originThumbSha = sha1(await fetchBytes(`${A}/api/assets/${aIds[0]}/thumbnail?size=preview`, AKEY));
+  check('owner offline: member CANNOT produce the preview (no hidden copy exists)',
+        sha1(deadBytes) !== originThumbSha, `served ${deadBytes.byteLength}B while origin down`);
+  execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
+  await sleep(4000);
+  const aliveBytes = await fetchBytes(`${BS}/api/assets/${gpsProxy2.id}/thumbnail`, BKEY);
+  check('owner back online: preview streams again (pure hotlink recovery)',
+        sha1(aliveBytes) === originThumbSha, `${aliveBytes.byteLength}B`);
+}
 
 console.log('— stage: loop prevention (2 idle watcher cycles)');
 await sleep(35000);

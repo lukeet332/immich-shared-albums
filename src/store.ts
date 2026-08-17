@@ -24,7 +24,7 @@ export type Mapping = {
   commentCount?: number; remoteCommentCount?: number;
 };
 
-export type Peer = { pub: string; url: string; name: string };
+export type Peer = { pub: string; url: string; name: string; version?: string };
 export type Contributor = { userId: string; key: string; password: string; avatarDone?: boolean };
 
 export type Collections = {
@@ -125,6 +125,12 @@ export class Store {
   }
   seenRemoveMapping(mappingId: string) {
     this.db.prepare('DELETE FROM seen WHERE m = ?').run(mappingId);
+  }
+  seenForMapping(mappingId: string): SeenEntry[] {
+    return this.db.prepare('SELECT m, c, l, o FROM seen WHERE m = ?').all(mappingId) as SeenEntry[];
+  }
+  seenRemoveEntry(mappingId: string, checksum: string) {
+    this.db.prepare('DELETE FROM seen WHERE m = ? AND c = ?').run(mappingId, checksum);
   }
 
   seenActHas(tag: string): boolean {

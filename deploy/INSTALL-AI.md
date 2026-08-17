@@ -38,9 +38,11 @@ INSTALL:
    volume for /data. Start it with docker compose up -d.
 3. Add these three routes to my reverse proxy BEFORE the catch-all Immich route,
    then reload the proxy:
-     /sidecar/*                -> sidecar :8300
-     /share/*                  -> sidecar :8300
-     /api/assets/*/original    -> sidecar :8300   (on-demand full-quality downloads)
+     /sidecar/*                                       -> sidecar :8300
+     /share/*                                         -> sidecar :8300 (fallback: immich)
+     GET /api/assets/*/{thumbnail,original,video/playback} -> sidecar :8300 (fallback: immich)
+   The byte routes MUST be GET-only and fall back to Immich when the sidecar is
+   unreachable, so a dead sidecar can never affect the user's own library.
    Show me the exact diff before applying it.
 
 VERIFY (all three, report results):

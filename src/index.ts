@@ -12,6 +12,7 @@ import { Store } from './store.ts';
 import type { Mapping, Peer } from './store.ts';
 import type { AssetRef, Household, RedeemResponse } from './types.ts';
 
+const SIDECAR_VERSION = '0.4.0';
 const CFG = {
   immichUrl: process.env.IMMICH_URL || 'http://immich-server:2283',
   apiKey: process.env.IMMICH_API_KEY,
@@ -127,6 +128,13 @@ async function uploadAsset(bytes, filename, key = CFG.apiKey, takenAt) {
   if (!r.ok) throw new Error(`upload -> ${r.status} ${await r.text().catch(() => '')}`);
   return r.json(); // { id, status }
 }
+
+// A minimal valid 1x1 JPEG (baseline, grey). Stubs get a random tail for uniqueness —
+// Immich dedupes identical bytes per user, and every proxy must stay a distinct asset.
+const STUB_JPEG = Buffer.from(
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a' +
+  'HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAA' +
+  'AAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==', 'base64');
 
 async function applyRefMetadata(assetId: string, ref: AssetRef, key: string) {
   const meta: { latitude?: number; longitude?: number; description?: string; rating?: number; dateTimeOriginal?: string } = {};
@@ -258,14 +266,20 @@ async function buildManifest(assets, mappingId) {
 async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   if (seenHas(mapping.id, ref.checksum)) return true;
   const sigHeaders = (v) => ({ headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(v) } });
-  const fetchKind = (kind) => fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/${kind}`, sigHeaders(ref.originAsset));
-  // Iron rule: only light renditions are STORED here (preview / playable transcode);
-  // originals stay at their owner's and stream on demand. A not-yet-generated rendition
-  // defers to the retry/reconcile machinery — never silently store a full copy.
-  const kind = ref.kind === 'video' ? 'playback' : 'preview';
-  const pr = await fetchKind(kind);
-  if (!pr.ok) { log(`${kind} fetch failed for ${ref.originAsset}: ${pr.status}`); return false; }
-  const bytes = Buffer.from(await pr.arrayBuffer());
+  // Hotlink model: nothing of the photo is stored here. The mirror asset is a ~2KB
+  // unique stub that exists so the stock app has a row to render; every actual pixel
+  // (thumbnails, previews, playback, originals) streams live from the owner's server
+  // through the byte interceptors below. For videos the stub is a playable prefix of
+  // the owner's rendition so the tile carries a real poster and duration.
+  let bytes: Buffer;
+  if (ref.kind === 'video') {
+    const pr = await fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/playback`,
+      { ...sigHeaders(ref.originAsset), headers: { ...sigHeaders(ref.originAsset).headers, Range: 'bytes=0-2097151' } });
+    if (!pr.ok) { log(`playback stub fetch failed for ${ref.originAsset}: ${pr.status}`); return false; }
+    bytes = Buffer.concat([Buffer.from(await pr.arrayBuffer()), crypto.randomBytes(8)]);
+  } else {
+    bytes = Buffer.concat([STUB_JPEG, crypto.randomBytes(8)]);
+  }
   const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
   const c = await ensureContributor(ref.contributor?.displayName || fallbackName, mapping.albumId, adminKey, peerUrl, ref.contributor?.originUserId);
   const ext = ref.kind === 'video' ? 'mp4' : 'jpg';
@@ -280,13 +294,16 @@ async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
 }
 
 async function handleRedeem(req, body) {
-  const { shareKey, household } = JSON.parse(body);
+  const { shareKey, household, protocol, version } = JSON.parse(body);
+  if (protocol && protocol > 1) log(`peer "${household?.name}" speaks protocol ${protocol} > ours (1) — update the immich-shared-albums sidecar on this server`);
   const link = await getSharedLinkByKey(shareKey);
   if (!link || link.type !== 'ALBUM') return [404, { error: 'unknown share key' }];
   const album = await getAlbum(link.album.id);
   album.assets = await getAlbumAssets(album.id);
   if (!state.peers.some(p => p.pub === household.publicKey)) {
-    state.peers.push({ pub: household.publicKey, url: household.url, name: household.name });
+    state.peers.push({ pub: household.publicKey, url: household.url, name: household.name, version });
+  } else if (version) {
+    const pe = state.peers.find(p => p.pub === household.publicKey); if (pe) pe.version = version;
   }
   const mappingId = crypto.randomUUID();
   state.mappings.push({ id: mappingId, role: 'owner', albumId: album.id, albumName: album.albumName,
@@ -301,6 +318,7 @@ async function handleRedeem(req, body) {
   const albumOwnerId = link.userId || album.ownerId || Object.keys(ownerCounts).sort((x, y) => ownerCounts[y] - ownerCounts[x])[0];
   const albumOwner = { displayName: await ownerName(albumOwnerId) || CFG.name, originUserId: albumOwnerId };
   return [200, {
+    protocol: 1, version: SIDECAR_VERSION,
     household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name },
     album: { id: album.id, name: album.albumName, permissions: link.allowUpload ? 'contribute' : 'view' },
     albumOwner, manifest, mappingId,
@@ -335,7 +353,44 @@ async function handleVersion(req, albumMappingId) {
   const mapping = state.mappings.find(m => m.role === 'owner' && (m.id === albumMappingId || m.albumId === albumMappingId));
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const stats = await immichJson(`/activities/statistics?albumId=${mapping.albumId}`).catch(() => null);
-  return [200, { version: (await getAlbum(mapping.albumId)).updatedAt, comments: stats?.comments ?? null }];
+  const album = await getAlbum(mapping.albumId);
+  // updatedAt alone misses cascade deletions (removing an asset from the library skips
+  // the album's timestamp) — fold the asset count in so deletions move the version too
+  return [200, { version: `${album.updatedAt}|${album.assetCount ?? ''}`, comments: stats?.comments ?? null }];
+}
+
+// Delete a materialised proxy asset. Hard guard: only utility-owned assets are ever
+// deleted — resolved via the owning contributor's own key. Human photos are untouchable.
+async function deleteProxyAsset(assetId: string): Promise<boolean> {
+  try {
+    const asset = await immichJson(`/assets/${assetId}`);
+    const owner = Object.values(state.contributors).find(c => c.userId === asset.ownerId);
+    if (!owner) return false; // not utility-owned -> refuse
+    await immichJson('/assets', { ...jsonBody({ ids: [assetId], force: true }), method: 'DELETE' }, owner.key);
+    return true;
+  } catch (e) { log(`proxy delete failed for ${assetId}: ${e.message}`); return false; }
+}
+
+// Leave & purge: the reverse of joining. Removes every stub this album materialised
+// (utility-owner-guarded), the mirror album, the mapping and its ledger — a join is
+// fully reversible and reclaims all space it ever took.
+async function leaveAlbum(mappingId: string) {
+  const mapping = state.mappings.find(mp => mp.id === mappingId);
+  if (!mapping || mapping.role !== 'member') throw new Error('unknown mapping (only joined albums can be left)');
+  let removed = 0;
+  for (const entry of store.seenForMapping(mapping.id)) {
+    if (entry.o && await deleteProxyAsset(entry.l)) removed++;
+  }
+  const host = mapping.adminSlug ? state.contributors[mapping.adminSlug] : undefined;
+  if (host?.key) {
+    try { await immichJson(`/albums/${mapping.albumId}`, { method: 'DELETE' }, host.key); }
+    catch (e) { log(`mirror album delete failed: ${e.message}`); }
+  }
+  store.seenRemoveMapping(mapping.id);
+  state.mappings = state.mappings.filter(mp => mp.id !== mapping.id);
+  save();
+  log(`left "${mapping.albumName}" — ${removed} stub(s) purged`);
+  return { left: mapping.albumName, purged: removed };
 }
 
 // Nudge: tell every OTHER household mapped to this album that it moved, so they pull
@@ -443,39 +498,43 @@ async function handlePreview(req, assetId) {
   const peerKey = req.headers['x-isa-key'];
   const peer = state.peers.find(p => p.pub === peerKey);
   if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
-  return previewStream(assetId); // Response — streamed through below
+  return fetchTrueBytes(assetId, 'preview'); // chains for relayed assets
 }
 
-// Resolve the true original for any local asset: local file for our own photos; for a
-// materialised proxy (ledger entry with `o`), chain the fetch to the owner's server —
-// this is how a relayed photo's original streams D <- origin <- contributor.
-async function fetchTrueOriginal(assetId) {
+// Resolve true bytes for any local asset: local file for our own photos; for a proxy
+// (ledger entry with `o`), chain the fetch to the owner's server — how a relayed
+// photo's pixels stream D <- origin <- contributor. Range passes through for players.
+async function fetchTrueBytes(assetId: string, kind: 'preview' | 'original' | 'playback', range?: string) {
   const entry = store.ledgerWithOrigin(assetId);
   if (entry) {
     const mapping = state.mappings.find(mp => mp.id === entry.m);
     const peer = mapping && state.peers.find(p => p.pub === mapping.peer);
     if (peer) {
-      const up = await fetch(`${peer.url}/sidecar/api/v1/assets/${entry.o}/original`,
-        { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) } });
+      const headers: Record<string, string> = { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) };
+      if (range) headers.Range = range;
+      const up = await fetch(`${peer.url}/sidecar/api/v1/assets/${entry.o}/${kind}`, { headers });
       if (up.ok) return up;
-      log(`chained original fetch failed (${up.status}) — serving local rendition`);
+      log(`chained ${kind} fetch failed (${up.status}) — serving local stub`);
     }
   }
-  return originalStream(assetId);
+  const local = kind === 'original' ? `/assets/${assetId}/original`
+    : kind === 'playback' ? `/assets/${assetId}/video/playback`
+    : `/assets/${assetId}/thumbnail?size=preview`;
+  return immich(local, range ? { headers: { Range: range } } : {});
 }
 
 async function handleOriginal(req, assetId) {
   const peerKey = req.headers['x-isa-key'];
   const peer = state.peers.find(p => p.pub === peerKey);
   if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
-  return fetchTrueOriginal(assetId);
+  return fetchTrueBytes(assetId, 'original', req.headers.range);
 }
 
 async function handlePlayback(req, assetId) {
   const peerKey = req.headers['x-isa-key'];
   const peer = state.peers.find(p => p.pub === peerKey);
   if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
-  return immich(`/assets/${assetId}/video/playback`);
+  return fetchTrueBytes(assetId, 'playback', req.headers.range);
 }
 
 // ---------- join (member side) ----------
@@ -483,13 +542,14 @@ async function join(shareUrl, forUserId) {
   const m = shareUrl.trim().match(/^(https?:\/\/[^/]+)\/share\/([A-Za-z0-9_-]+)/);
   if (!m) throw new Error('that does not look like an Immich share link');
   const [, origin, shareKey] = m;
-  const body = JSON.stringify({ shareKey,
+  const body = JSON.stringify({ shareKey, protocol: 1, version: SIDECAR_VERSION,
     household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name } });
   const r = await signedFetch(`${origin}/sidecar/api/v1/invites/redeem`, body);
   if (!r.ok) throw new Error(`redeem failed: ${r.status} ${await r.text().catch(() => '')}`);
   const res = await r.json();
+  if (res.protocol && res.protocol > 1) log(`origin "${res.household?.name}" speaks protocol ${res.protocol} > ours (1) — update the immich-shared-albums sidecar on this server`);
   if (!state.peers.some(p => p.pub === res.household.publicKey)) {
-    state.peers.push({ pub: res.household.publicKey, url: res.household.url, name: res.household.name });
+    state.peers.push({ pub: res.household.publicKey, url: res.household.url, name: res.household.name, version: res.version });
   }
   const host = await ensureUtilityUser(res.albumOwner?.displayName || res.household.name);
   await syncAvatar(host, res.household.url, res.albumOwner?.originUserId);
@@ -509,7 +569,7 @@ async function join(shareUrl, forUserId) {
   if (existing) {
     const n = await addMembers(existing.albumId);
     log(`re-join: added ${n} member(s) to existing mirror "${existing.albumName}"`);
-    return { album: existing.albumName, albumId: existing.albumId, photos: res.manifest.length, from: res.household.name, permissions: res.album.permissions };
+    return { album: existing.albumName, albumId: existing.albumId, photos: res.manifest.length, from: res.household.name, permissions: res.album.permissions, mappingId: existing.id };
   }
   // a freshly-minted utility user/key can 500 its first writes on cold instances — retry
   // with backoff and log each attempt so failures are diagnosable from CI logs
@@ -542,19 +602,30 @@ async function join(shareUrl, forUserId) {
       catch (e) { log(`post-join sync error: ${e.message} — the loops will retry`); }
     })();
   }
-  return { album: mirror.albumName, albumId: mirror.id, photos: res.manifest.length, from: res.household.name, permissions: res.album.permissions };
+  return { album: mirror.albumName, albumId: mirror.id, photos: res.manifest.length, from: res.household.name, permissions: res.album.permissions, mappingId };
 }
 
 // ---------- watcher: local additions -> push refs to peer ----------
 async function watchOnce() {
   for (const mapping of state.mappings) {
     if (mapping.dead) continue;
-    if (mapping.role === 'member' && mapping.permissions === 'view') continue; // view-only: nothing to push
+
     try {
       // handshake: skip untouched albums entirely (updatedAt bumps on any album change).
       // localVersion is only stored after a CLEAN cycle so deferred refs keep re-offering.
       const album = await getAlbum(mapping.albumId);
       if (album.updatedAt && album.updatedAt === mapping.localVersion) continue;
+      // native leave: when the last human member leaves the mirror in the STOCK app
+      // (album settings -> Leave album), the sidecar cleans up everything the join
+      // created — stubs, mirror, mapping, ledger. No custom UI involved.
+      if (mapping.role === 'member') {
+        const users = await usersById();
+        const humans = (album.albumUsers || []).filter((au) => {
+          const u = users[au.user?.id]; return u && !u.utility;
+        });
+        if (humans.length === 0) { await leaveAlbum(mapping.id); continue; }
+      }
+      if (mapping.role === 'member' && mapping.permissions === 'view') continue; // view-only: nothing to push
       const assets = await getAlbumAssets(mapping.albumId);
       mapping.failCount = 0;
       const fresh = await shareableAssets(assets, mapping.id);
@@ -610,13 +681,30 @@ async function reconcileMapping(mapping: Mapping, peer: Peer) {
       const r = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/manifest`, sig);
       if (!r.ok) return;
       const { manifest = [] } = await r.json();
+      // The version's asset count comes from the album table (instant); the manifest
+      // comes from the search index (which lags behind deletes). Only trust a read
+      // where the two agree — dirty reads retry next cycle instead of poisoning the cursor.
+      const expectedCount = version ? Number(String(version).split('|')[1]) : NaN;
+      const consistent = !Number.isFinite(expectedCount) || manifest.length === expectedCount;
+      // deletion propagation: refs we materialised that the owner no longer offers are
+      // gone at the source — remove our stubs too (utility-owner-guarded).
+      if (version && consistent) {
+        const offered = new Set(manifest.map((x) => x.checksum));
+        for (const entry of store.seenForMapping(mapping.id)) {
+          if (!entry.o || offered.has(entry.c)) continue;
+          if (await deleteProxyAsset(entry.l)) {
+            store.seenRemoveEntry(mapping.id, entry.c);
+            log(`removed stub for a photo its owner deleted ("${mapping.albumName}")`);
+          }
+        }
+      }
       const missing = manifest.filter(ref => !seenHas(mapping.id, ref.checksum));
       let allOk = true;
       for (const ref of missing) {
         try { if (await materialiseRef(mapping, peer.url, peer.name, ref)) log(`reconciled missed ref into "${mapping.albumName}"`); else allOk = false; }
         catch (e) { allOk = false; log(`reconcile materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); }
       }
-      if (allOk && version) { mapping.remoteVersion = version; save(); }
+      if (allOk && version && consistent) { mapping.remoteVersion = version; save(); }
   }
 }
 
@@ -702,7 +790,7 @@ const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="viewport" 
  <div class="card"><b style="font-size:14px">Shared albums</b>
   ${state.mappings.map(m => `<div class="item"><span>${m.albumName}</span><span class="muted">${m.role} · ${(state.peers.find(p => p.pub === m.peer) || {}).name || ''}</span></div>`).join('') || '<p class="muted" style="font-size:13px">None yet.</p>'}</div>
  <div class="card"><b style="font-size:14px">Connected households</b>
-  ${state.peers.map(p => `<div class="item"><span>${p.name}</span><span class="muted">${p.url}</span></div>`).join('') || '<p class="muted" style="font-size:13px">None yet.</p>'}</div>
+  ${state.peers.map(p => `<div class="item"><span>${p.name}</span><span class="muted">${p.url}${p.version ? ` · v${p.version}` : ''}</span></div>`).join('') || '<p class="muted" style="font-size:13px">None yet.</p>'}</div>
 </main>
 <script>async function j(e){e.preventDefault();const el=document.getElementById('msg');el.textContent='Joining…';
  const r=await fetch('join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:document.getElementById('u').value})});
@@ -805,26 +893,36 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/sidecar/accept') {
       res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(ACCEPT_PAGE());
     }
-    // Originals-proxy module: the app's own original-download URL, intercepted. For a
-    // materialised proxy asset the true bytes stream live from the owner's server; for
-    // everything else (and on any failure) it falls through to Immich untouched.
-    if ((m = u.pathname.match(/^\/api\/assets\/([^/]+)\/original$/)) && req.method === 'GET') {
-      const entry = store.ledgerWithOrigin(m[1]);
+    // Byte interceptors — hotlink model. The app's own asset URLs (thumbnails, video
+    // playback, originals) are intercepted for proxy assets and the true bytes stream
+    // live from the owner's server (chained for relayed photos). Only a stub is ever
+    // stored locally. Falls through to Immich untouched for the user's own assets and
+    // on any failure (fail-open).
+    const assetHit = u.pathname.match(/^\/api\/assets\/([^/]+)\/(thumbnail|original|video\/playback)$/);
+    if (assetHit && req.method === 'GET') {
+      const kind = assetHit[2] === 'thumbnail' ? 'preview' : (assetHit[2] === 'original' ? 'original' : 'playback');
+      const entry = store.ledgerWithOrigin(assetHit[1]);
       if (entry) {
         // authorise with the caller's OWN credentials: they must be able to see the asset
-        const authHeaders = {};
-        for (const h of ['cookie', 'x-api-key', 'authorization']) if (req.headers[h]) authHeaders[h] = req.headers[h];
-        const probe = await fetch(`${CFG.immichUrl}/api/assets/${m[1]}`, { headers: authHeaders });
+        const authHeaders: Record<string, string> = {};
+        for (const h of ['cookie', 'x-api-key', 'authorization']) if (req.headers[h]) authHeaders[h] = req.headers[h] as string;
+        const probe = await fetch(`${CFG.immichUrl}/api/assets/${assetHit[1]}`, { headers: authHeaders });
         if (!probe.ok) { res.writeHead(probe.status); return res.end(); }
         try {
-          const out = await fetchTrueOriginal(m[1]);
+          const out = await fetchTrueBytes(assetHit[1], kind, req.headers.range as string | undefined);
           if (!Array.isArray(out)) {
-            const headers = { 'Content-Type': out.headers.get('content-type') || 'application/octet-stream' };
-            const len = out.headers.get('content-length'); if (len) headers['Content-Length'] = len;
-            res.writeHead(200, headers);
+            const headers: Record<string, string> = {
+              'Content-Type': out.headers.get('content-type') || 'application/octet-stream',
+              // per-asset bytes never change: let every device cache them hard
+              'Cache-Control': 'private, max-age=604800, immutable',
+            };
+            for (const h of ['content-length', 'content-range', 'accept-ranges']) {
+              const v = out.headers.get(h); if (v) headers[h] = v;
+            }
+            res.writeHead(out.status || 200, headers);
             return Readable.fromWeb(out.body).pipe(res);
           }
-        } catch (e) { log(`originals proxy fell through: ${e.message}`); }
+        } catch (e) { log(`byte interceptor fell through (${kind}): ${e.message}`); }
       }
       // not a proxy asset / peer unreachable -> Immich serves what it has
     }
@@ -866,6 +964,10 @@ const server = http.createServer(async (req, res) => {
       try { const b = JSON.parse(body); return send(200, await join(b.url, b.forUserId)); }
       catch (e) { return send(400, { error: e.message }); }
     }
+    if (u.pathname === '/sidecar/leave' && req.method === 'POST') {
+      try { const b = JSON.parse(body); return send(200, await leaveAlbum(b.mappingId)); }
+      catch (e) { return send(400, { error: e.message }); }
+    }
     if (u.pathname === '/sidecar/api/v1/invites/redeem' && req.method === 'POST') {
       const [code, obj] = await handleRedeem(req, body); return send(code, obj);
     }
@@ -887,11 +989,13 @@ const server = http.createServer(async (req, res) => {
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/nudge$/)) && req.method === 'POST') {
       const [code, obj] = await handleNudge(req, body, m[1]); return send(code, obj);
     }
-    const streamOut = (out) => { // stream byte responses through — never buffer originals (Pi-friendly)
+    const streamOut = (out) => { // stream byte responses through — never buffer (Pi-friendly)
       if (Array.isArray(out)) return send(out[0], out[1]);
-      const headers = { 'Content-Type': out.headers.get('content-type') || 'application/octet-stream' };
-      const len = out.headers.get('content-length'); if (len) headers['Content-Length'] = len;
-      res.writeHead(200, headers);
+      const headers: Record<string, string> = { 'Content-Type': out.headers.get('content-type') || 'application/octet-stream' };
+      for (const h of ['content-length', 'content-range', 'accept-ranges']) {
+        const v = out.headers.get(h); if (v) headers[h] = v;
+      }
+      res.writeHead(out.status || 200, headers);
       Readable.fromWeb(out.body).pipe(res);
     };
     if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/original$/))) {

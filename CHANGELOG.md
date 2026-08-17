@@ -5,6 +5,31 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## v0.4.0 — 2026-08-17
+
+**The hotlink release — joining an album now costs kilobytes, not gigabytes.**
+
+- Mirrors store ~2KB placeholder stubs (videos: a ~2MB playable prefix with real poster);
+  every pixel — thumbnails, previews, originals, seekable video playback — streams live
+  from the owner's server through byte interceptors, chained through the origin for
+  relayed photos. Proven by an owner-kill negative control in the suite: when the owner
+  is offline no hidden copy can serve, and streaming resumes the moment they return.
+  Devices cache hard (immutable cache headers), so repeat views don't re-fetch.
+- Deletion propagation: photos deleted at the source lose their stubs on every member
+  server within a sync cycle (utility-owner-guarded — human assets are untouchable).
+- Leave & purge, fully native: leave the album in the stock app (album settings ->
+  Leave album) and the sidecar notices, then removes the mirror, stubs, mapping and
+  ledger — joins are fully reversible, reclaim all space, and need no custom UI.
+- Protocol/version advertisement in the redeem exchange: mixed-version federations log
+  "update the immich-shared-albums sidecar on this server" instead of degrading silently; the panel shows peer versions.
+- Browser-test lane in CI (Playwright): banner rendering, bad-address inline error,
+  scheme discovery, signed-out/in accept states, async-join progress gating.
+- ⚠️ Operators: update the reverse-proxy byte routes (see README — a GET-only matcher
+  for /api/assets/*/{thumbnail,original,video/playback} with Immich fallback replaces
+  the old originals-only route). Old routes keep working but new shared photos would
+  render as placeholders until routed. During 0.x, MINOR releases may carry flagged
+  operator actions like this.
+
 ## v0.3.1 — 2026-08-17
 
 - Joins answer in ~2 seconds regardless of album size: mirror + membership are created

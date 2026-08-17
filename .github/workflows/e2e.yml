@@ -57,6 +57,15 @@ jobs:
       - name: Run E2E suite
         run: bash demo/run-mock-e2e.sh
 
+      - name: Browser tests (banner + accept flows)
+        run: |
+          # one hostname that works for the runner's browser AND inside containers
+          echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+          cd demo/e2e
+          npm install --silent
+          npx playwright install --with-deps chromium
+          CKEY=$(grep -m1 C_API_KEY ../household-c/.env | cut -d= -f2-) node browser-test.mjs
+
       - name: Dump sidecar logs on failure
         if: failure()
         run: |

@@ -50,16 +50,23 @@ page we serve.
 - **materialiser** — makes shared state look like ordinary Immich data:
   mirror albums owned by a utility user named after the origin's album owner
   ("Jane (via shared albums)"), one utility user per contributor (with their
-  real avatar synced across), preview-grade renditions ingested as proxies
-  (images: 1440px preview; videos: the playable transcode) with capture date,
-  GPS, and an uploader credit re-applied. Originals are never stored — the
-  ledger remembers which origin asset each proxy stands for.
-- **originals proxy** — intercepts the app's own download URL
-  (`/api/assets/:id/original`). For a proxy asset it authorises the caller
-  against Immich with their own credentials, then STREAMS the true original
-  live from the owner's server (chaining through the origin for relayed
-  photos: D <- origin <- contributor). Falls through to Immich for everything
-  else and on any failure. Streaming, never buffering — Pi-friendly.
+  real avatar synced across). What it stores is a ~2KB unique STUB per photo
+  (a playable ~2MB prefix for videos, which carries the real poster and
+  duration) with capture date, GPS, and uploader credit applied — enough for
+  the stock app to have real rows. No pixels are stored; the ledger remembers
+  which origin asset each stub stands for. Deleting at the source propagates:
+  stubs whose refs vanish from the owner's manifest are removed (guarded so
+  only utility-owned assets are ever deletable). Leaving an album purges its
+  stubs, mirror, and ledger entirely.
+- **byte interceptors** — the app's own asset URLs (`/api/assets/:id/thumbnail`,
+  `/original`, `/video/playback`) intercepted for stub assets: the caller is
+  authorised against Immich with their own credentials, then the true bytes
+  STREAM live from the owner's server with Range passthrough (seekable video),
+  chaining through the origin for relayed photos (D <- origin <- contributor).
+  Responses carry immutable cache headers so devices cache hard. Falls through
+  to Immich for the user's own assets and on any failure — a dead sidecar can
+  only degrade shared tiles, never the local library. Streaming, never
+  buffering — Pi-friendly.
 - **membership = visibility** — mirrors are owned by utility users, so only
   album members see them. Joins are per-user: the accept page reads the
   visitor's own Immich session and adds exactly that account; a second user
@@ -87,8 +94,8 @@ originals; only newly synced photos participate.
 2. Every injected surface fails open — Immich must work perfectly with the
    sidecar dead.
 3. The app only ever touches its own server's ordinary data.
-4. Ownership stays with the photo's taker: other households store only
-   preview-grade renditions; originals stream on demand and are only ever
-   STORED elsewhere when a user explicitly saves a photo to their own
-   library.
+4. Ownership stays with the photo's taker: other households store nothing but
+   kilobyte placeholders — every pixel streams from its owner on demand and is
+   only ever STORED elsewhere when a user explicitly saves a photo to their
+   own library.
 5. Default-closed: no uninvited server can reach anything.
