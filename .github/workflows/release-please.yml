@@ -1,0 +1,22 @@
+name: release-please
+
+# Versioning is decided by conventional commits, not by hand:
+# feat: -> minor, fix: -> patch, feat!/BREAKING CHANGE -> major.
+# On every push to main this maintains a release PR; merging that PR
+# tags the release, which triggers the suite-gated publish (release.yml).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          # PAT (not GITHUB_TOKEN) so the release PR triggers the e2e check
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}

@@ -111,8 +111,12 @@ Releases follow semver with a **sync-contract policy**: a **MAJOR** bump means a
 on the previous version can no longer sync with you or the upgrade needs operator
 action; **MINOR** adds features old peers tolerate; **PATCH** fixes. Watch the repo's
 releases to hear about breaking changes — details in [CHANGELOG.md](./CHANGELOG.md).
-Tagged releases publish a multi-arch image (amd64/arm64) to
-`ghcr.io/lukeet332/immich-shared-albums`.
+
+Version numbers are decided by [release-please](https://github.com/googleapis/release-please)
+from conventional commits (`fix:` → patch, `feat:` → minor, `feat!:` → major), not by hand.
+All changes land through pull requests gated on the e2e suite; merging to `main` maintains
+a release PR, and merging *that* tags the release. Tagged releases publish a multi-arch
+image (amd64/arm64) to `ghcr.io/lukeet332/immich-shared-albums`.
 
 ## Trust model, in one paragraph
 

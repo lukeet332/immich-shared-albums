@@ -12,7 +12,7 @@ import { Store } from './store.ts';
 import type { Mapping, Peer } from './store.ts';
 import type { AssetRef, Household, RedeemResponse } from './types.ts';
 
-const SIDECAR_VERSION = '0.4.1';
+const SIDECAR_VERSION = '0.4.1'; // x-release-please-version
 const CFG = {
   immichUrl: process.env.IMMICH_URL || 'http://immich-server:2283',
   apiKey: process.env.IMMICH_API_KEY,
