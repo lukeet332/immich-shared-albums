@@ -127,23 +127,32 @@
       e.preventDefault();
       const raw = root.querySelector('input').value.trim();
       if (!raw) return;
-      // mobile keyboards auto-capitalise ("Http://") — parse case-insensitively
-      const scheme = /^http:\/\//i.test(raw) ? 'http' : 'https';
+      // mobile keyboards auto-capitalise ("Http://") — parse case-insensitively;
+      // no scheme typed means we discover it with the health probe below
+      let scheme = /^https:\/\//i.test(raw) ? 'https' : (/^http:\/\//i.test(raw) ? 'http' : null);
       const domain = raw.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
       const btn = root.querySelector('button.join');
       const err = root.querySelector('.err');
       err.style.display = 'none';
       btn.textContent = 'Checking…'; btn.disabled = true;
-      // pre-flight: don't strand people on a 404 if the addon isn't at that address.
-      // Browsers forbid https pages fetching http targets (mixed content), so an http
-      // destination can't be probed from an https share page — redirect blind instead.
-      const probeable = !(location.protocol === 'https:' && scheme === 'http');
-      let ok = !probeable;
-      if (probeable) {
+      // pre-flight: don't strand people on a 404/SSL error. Browsers forbid https pages
+      // fetching http targets (mixed content), so those can't be probed — redirect blind.
+      const canProbe = (sch) => !(location.protocol === 'https:' && sch === 'http');
+      const probeOk = async (sch) => {
         try {
-          const r = await fetch(`${scheme}://${domain}/sidecar/health`, { signal: AbortSignal.timeout(6000) });
-          ok = r.ok && (await r.json()).ok === true;
-        } catch (_) { /* unreachable or no addon */ }
+          const r = await fetch(`${sch}://${domain}/sidecar/health`, { signal: AbortSignal.timeout(5000) });
+          return r.ok && (await r.json()).ok === true;
+        } catch (_) { return false; }
+      };
+      let ok = false;
+      if (scheme) {
+        ok = canProbe(scheme) ? await probeOk(scheme) : true;
+      } else if (await probeOk('https')) {
+        scheme = 'https'; ok = true;
+      } else if (canProbe('http') && await probeOk('http')) {
+        scheme = 'http'; ok = true;
+      } else {
+        scheme = 'https'; ok = !canProbe('http') && location.protocol !== 'https:';
       }
       btn.textContent = 'Join'; btn.disabled = false;
       if (!ok) {

@@ -532,10 +532,15 @@ async function join(shareUrl, forUserId) {
     permissions: res.album.permissions, adminSlug: slugify(res.albumOwner?.displayName || res.household.name) });
   save();
   log(`joined "${res.album.name}" from "${res.household.name}" (${res.manifest.length} photos)`);
+  // the join answers immediately — materialisation happens right behind it via the
+  // reconciler (a big album or video transcode must not hold the accept page hostage)
   const newMapping = state.mappings.find(mp => mp.id === mappingId);
-  for (const ref of res.manifest) {
-    try { await materialiseRef(newMapping, res.household.url, res.household.name, ref); }
-    catch (e) { log(`join materialise failed (${ref.checksum?.slice(0,10)}): ${e.message} — reconciliation will retry`); }
+  const peerRec = state.peers.find(pe => pe.pub === res.household.publicKey);
+  if (newMapping && peerRec) {
+    (async () => {
+      try { await reconcileMapping(newMapping, peerRec); await pullCanonicalComments(newMapping, peerRec); }
+      catch (e) { log(`post-join sync error: ${e.message} — the loops will retry`); }
+    })();
   }
   return { album: mirror.albumName, albumId: mirror.id, photos: res.manifest.length, from: res.household.name, permissions: res.album.permissions };
 }
@@ -755,13 +760,23 @@ document.getElementById('go').onclick=async()=>{
  const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:scheme+'://'+frag.host+'/share/'+frag.key,forUserId:ME.id})});
  const d=await r.json().catch(()=>({error:'failed'}));
  if(r.ok){
-   // deeplink to the albums LIST, not the new album — the app hangs on splash when
-   // pointed at an album it has not synced yet (the one-tap list never races)
-   var deep='intent://my.immich.app/albums#Intent;scheme=https;package=app.alextran.immich;S.browser_fallback_url='+encodeURIComponent('https://my.immich.app/albums')+';end';
-   out.innerHTML='Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing.'+(d.permissions==='view'?'<br><span style="font-size:12px">View-only album: you can look and comment, but photos you add stay on your server.</span>':'')+'<br><br>'+
-     '<a href="'+deep+'" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:600;padding:12px 30px;border-radius:999px">Open in Immich app</a>'+
-     '<div style="margin-top:12px;font-size:12px;color:#9aa0a6">If the album looks empty at first, give it a moment — the app is still syncing it.</div>';
+   // album-specific deeplink: the app registers my.immich.app/albums/<id> (the bare
+   // list path is NOT registered and falls through to the web fallback)
+   var deep='intent://my.immich.app/albums/'+d.albumId+'#Intent;scheme=https;package=app.alextran.immich;S.browser_fallback_url='+encodeURIComponent('https://my.immich.app/albums/'+d.albumId)+';end';
+   out.innerHTML='Joined "'+d.album+'" from '+d.from+'.'+(d.permissions==='view'?'<br><span style="font-size:12px">View-only album: you can look and comment, but photos you add stay on your server.</span>':'')+'<br><br>'+
+     '<a id="openapp" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:600;padding:12px 30px;border-radius:999px;opacity:.45;pointer-events:none"><span class="spin"></span>Syncing 0/'+d.photos+'…</a>';
    document.getElementById('go').style.display='none';
+   // the deeplink only behaves once the album is real and filled — watch it fill live
+   var btn=document.getElementById('openapp'), t0=Date.now();
+   var ready=function(){btn.innerHTML='Open in Immich app';btn.style.opacity='1';btn.style.pointerEvents='auto';btn.href=deep;};
+   if(!d.photos){ready();}
+   else{var iv=setInterval(function(){
+     fetch('/api/albums/'+d.albumId+'?withoutAssets=true',{credentials:'include'}).then(function(x){return x.json();}).then(function(a){
+       var n=a.assetCount||0;
+       btn.innerHTML='<span class="spin"></span>Syncing '+Math.min(n,d.photos)+'/'+d.photos+'…';
+       if(n>=d.photos||Date.now()-t0>90000){clearInterval(iv);ready();}
+     }).catch(function(){if(Date.now()-t0>90000){clearInterval(iv);ready();}});
+   },1500);}
  } else { out.textContent='Error: '+(d.error||r.status); go.disabled=false; go.classList.remove('busy'); go.textContent='Accept & join'; }
 };
 </script>`;

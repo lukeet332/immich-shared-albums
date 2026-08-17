@@ -5,6 +5,14 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## v0.3.1 — 2026-08-17
+
+- Joins answer in ~2 seconds regardless of album size: mirror + membership are created
+  up front and photos/videos stream in behind via the reconciler. The accept page shows
+  live sync progress ("Syncing 3/6…") and only enables "Open in Immich app" — an
+  album-specific deeplink again — once the album is actually filled.
+- Two-sided demo filming rig (demo/e2e/demo-film.mjs).
+
 ## v0.3.0 — 2026-08-17
 
 - Nudge webhooks: when a contribution or comment lands on the origin, it pings the other
