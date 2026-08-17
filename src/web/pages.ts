@@ -60,15 +60,15 @@ export const ACCEPT_PAGE = () => `<!doctype html><meta charset="utf-8"><meta nam
 <div id="who"></div>
 <button id="go" disabled>Accept &amp; join</button><div id="out"></div></div>
 <script>
-export const frag=(()=>{
+const frag=(()=>{
  try{ if(location.hash.length>1) return JSON.parse(decodeURIComponent(location.hash.slice(1))); }catch{}
  const qp=new URLSearchParams(location.search);
  if(qp.get('h')&&qp.get('k')){ const f={v:1,host:qp.get('h'),scheme:qp.get('s')||'https',key:qp.get('k')};
    history.replaceState({},'',location.pathname); return f; }
  return null;})();
 if(!frag||!frag.host||!frag.key){document.getElementById('t').textContent='Invalid or expired invite';document.getElementById('go').style.display='none';}
-export let ME=null,POLL=null;
-export function whoami(){return fetch('/api/users/me',{credentials:'include'}).then(r=>r.ok?r.json():null).then(u=>{
+let ME=null,POLL=null;
+function whoami(){return fetch('/api/users/me',{credentials:'include'}).then(r=>r.ok?r.json():null).then(u=>{
  if(u&&u.id){ME=u;clearInterval(POLL);document.getElementById('go').disabled=false;
    document.getElementById('who').textContent='Joining as '+u.name+' — the album is added only to your account.';}
  else if(!ME){document.getElementById('who').innerHTML='<a href="/auth/login" target="_blank">Sign in to your Immich</a> to join — this page will notice once you are signed in.';}
