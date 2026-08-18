@@ -11,6 +11,7 @@ import { sign, signedFetch } from '../peers.ts';
 import { getAlbum, getAlbumAssets, usersById, immichJson } from '../immich/client.ts';
 import { shareableAssets, assetToRef } from '../immich/refs.ts';
 import { materialiseRef, deleteProxyAsset } from '../immich/materialise.ts';
+import { recordOffered, forgetOffered } from '../p2p/entitlement.ts';
 
 // Leave & purge: the reverse of joining. Removes every stub this album materialised
 // (utility-owner-guarded), the mirror album, the mapping and its ledger — a join is
@@ -28,6 +29,7 @@ export async function leaveAlbum(mappingId: string) {
     catch (e) { log(`mirror album delete failed: ${e.message}`); }
   }
   store.seenRemoveMapping(mapping.id);
+  forgetOffered(mapping.id);
   state.mappings = state.mappings.filter(mp => mp.id !== mapping.id);
   save();
   log(`left "${mapping.albumName}" — ${removed} stub(s) purged`);
@@ -67,6 +69,8 @@ export async function watchOnce() {
         const failed = new Set((await r.json().catch(() => ({}))).failed || []);
         const landed = fresh.filter(a => !failed.has(wireChecksum(a)));
         landed.forEach(a => seenAdd(mapping.id, wireChecksum(a), a.id));
+        // pushed to this peer => this peer may read their bytes (see p2p/entitlement)
+        recordOffered(mapping.id, landed.map(a => a.id));
         if (!failed.size) { mapping.localVersion = album.updatedAt; save(); }
         log(`pushed ${landed.length}/${fresh.length} ref(s) to "${peer.name}"${failed.size ? ` (${failed.size} deferred)` : ''}`);
       } else log(`ref push failed: ${r.status}`);

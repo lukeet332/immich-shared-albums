@@ -14,6 +14,9 @@ const api = async (base, key, path, init = {}) => {
   return r.status === 204 ? null : r.json();
 };
 const j = (o) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
+// /sidecar/join authenticates the caller against that household's own Immich, so the
+// suite has to present a real credential exactly like a signed-in browser would.
+const jAuth = (o, key) => ({ method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key }, body: JSON.stringify(o) });
 const albumAssets = async (base, key, albumId) =>
   (await api(base, key, '/search/metadata', j({ albumIds: [albumId], size: 100, withExif: true }))).assets.items;
 import crypto from 'node:crypto';
@@ -43,6 +46,17 @@ const ensurePreviews = async (base, key, ids) => {
 };
 const sha1 = (buf) => crypto.createHash('sha1').update(Buffer.from(buf)).digest('hex');
 const fetchBytes = async (url, key) => (await fetch(url, { headers: { 'x-api-key': key } })).arrayBuffer();
+// Read a JSON value out of a sidecar's SQLite state, via the sqlite3 CLI the runner
+// already uses. Returns null (rather than throwing) when the rig is not local.
+import { execFileSync } from 'node:child_process';
+const readSidecarKv = (stateDir, name) => {
+  try {
+    const path = new URL(`../${stateDir}/state.db`, import.meta.url).pathname;
+    const out = execFileSync('sqlite3', [path, `SELECT value FROM kv WHERE name='${name}'`],
+                             { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return out ? JSON.parse(out) : null;
+  } catch { return null; }
+};
 const until = async (fn, timeoutMs = 90000, everyMs = 5000) => {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) { const v = await fn(); if (v) return v; await sleep(everyMs); }
@@ -77,7 +91,10 @@ let shareKey = (await api(A, AKEY, '/shared-links')).find(l => l.album?.id === A
 if (!shareKey) shareKey = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: ALBUM_ID, allowUpload: true }))).key;
 // Without Caddy, sidecar and immich are on different ports — the redeem must target the ORIGIN SIDECAR.
 const ORIGIN_SIDECAR = process.env.ORIGIN_SIDECAR || A;
-const joinRes = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${shareKey}` }))).json();
+// ORIGIN_SIDECAR is resolved by B's sidecar from INSIDE its container (host.docker.internal).
+// The security stage calls the origin directly from this process, so it needs a host route.
+const ORIGIN_DIRECT = process.env.ORIGIN_SIDECAR_DIRECT || 'http://localhost:8302';
+const joinRes = await (await fetch(`${BS}/sidecar/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${shareKey}` }, BKEY))).json();
 check('join succeeded', !!joinRes.album, JSON.stringify(joinRes));
 check('join manifest = 4 photos', joinRes.photos === 4, `got ${joinRes.photos}`);
 
@@ -230,7 +247,7 @@ if (aAfter) {
   await api(A, AKEY, `/albums/${alb2}/assets`, { ...j({ ids: [aIds[0]] }), method: 'PUT' });
   const share2 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb2, allowUpload: true }))).key;
   const nanId = (await api(B, BKEY, '/users/me')).id;
-  const join2 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share2}`, forUserId: nanId }))).json();
+  const join2 = await (await fetch(`${BS}/sidecar/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share2}`, forUserId: nanId }, BKEY))).json();
   check('second album join ok', join2.photos === 1, JSON.stringify(join2));
   const mirror2 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'second album');
   const m2assets = await until(async () => { const x = await albumAssets(B, BKEY, mirror2.id); return x.length === 1 ? x : null; }, 40000);
@@ -242,7 +259,7 @@ if (aAfter) {
   console.log('— stage: re-join by a second user attaches to the existing mirror');
   let second = (await api(B, BKEY, '/admin/users')).find(u => u.email === 'second-e2e@demo.local');
   if (!second) second = await api(B, BKEY, '/admin/users', j({ email: 'second-e2e@demo.local', name: 'Second Human', password: 'e2e-pass-123' }));
-  const join2b = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share2}`, forUserId: second.id }))).json();
+  const join2b = await (await fetch(`${BS}/sidecar/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share2}`, forUserId: second.id }, BKEY))).json();
   check('re-join returns the existing mirror (no duplicate album)', join2b.albumId === mirror2.id, JSON.stringify(join2b).slice(0, 100));
   const dupCount = (await api(B, BKEY, '/albums')).filter(a => a.albumName === 'second album').length;
   check('only one "second album" mirror exists', dupCount === 1, `${dupCount} album(s)`);
@@ -282,7 +299,7 @@ console.log('— stage: instant join (no preview wait) heals via reconciliation'
   await api(A, AKEY, `/albums/${alb3}/assets`, { ...j({ ids: [fresh] }), method: 'PUT' });
   const share3 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb3, allowUpload: true }))).key;
   const meB = (await api(B, BKEY, '/users/me')).id;
-  const join3 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share3}`, forUserId: meB }))).json();
+  const join3 = await (await fetch(`${BS}/sidecar/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share3}`, forUserId: meB }, BKEY))).json();
   check('instant join accepted', !!join3.albumId, JSON.stringify(join3).slice(0, 100));
   const m3 = await until(async () => {
     const mirror3 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'instant album');
@@ -298,7 +315,7 @@ console.log('— stage: share link created before any photos (empty album) still
   const alb5 = (await api(A, AKEY, '/albums', j({ albumName: 'born empty' }))).id;
   const share5 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb5, allowUpload: true }))).key;
   const meB5 = (await api(B, BKEY, '/users/me')).id;
-  const join5 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share5}`, forUserId: meB5 }))).json();
+  const join5 = await (await fetch(`${BS}/sidecar/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share5}`, forUserId: meB5 }, BKEY))).json();
   check('empty-album join succeeds', !!join5.albumId, JSON.stringify(join5).slice(0, 100));
   const bu5 = (await api(B, BKEY, '/admin/users')).filter(u => u.email.endsWith('@sidecar.local'));
   check('empty-album mirror owner named after the sharer, not the household',
@@ -313,7 +330,7 @@ console.log('— stage: view-only share link (allowUpload off) rejects cross-ser
   await api(A, AKEY, `/albums/${alb6}/assets`, { ...j({ ids: [voId] }), method: 'PUT' });
   const share6 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb6, allowUpload: false }))).key;
   const meB6 = (await api(B, BKEY, '/users/me')).id;
-  const join6 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${share6}`, forUserId: meB6 }))).json();
+  const join6 = await (await fetch(`${BS}/sidecar/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share6}`, forUserId: meB6 }, BKEY))).json();
   const mirror6 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'view only album');
   const m6 = await until(async () => { const x = await albumAssets(B, BKEY, mirror6.id); return x.length === 1 ? x : null; }, 60000);
   check('view-only album still syncs for viewing', !!m6, m6 ? '' : 'timed out');
@@ -336,7 +353,7 @@ console.log('— stage: reverse-direction share — member-owned album with an a
   await api(B, BKEY, `/albums/${albR}/assets`, { ...j({ ids: [nIds[0]] }), method: 'PUT' });
   const shareR = (await api(B, BKEY, '/shared-links', j({ type: 'ALBUM', albumId: albR, allowUpload: true }))).key;
   const meC = (await api(A, AKEY, '/users/me')).id;
-  const joinR = await (await fetch(`${CS}/sidecar/join`, j({ url: `${REV}/share/${shareR}`, forUserId: meC }))).json();
+  const joinR = await (await fetch(`${CS}/sidecar/join`, jAuth({ url: `${REV}/share/${shareR}`, forUserId: meC }, AKEY))).json();
   check('reverse join: C joins a B-owned album', !!joinR.albumId, JSON.stringify(joinR).slice(0, 100));
   const mirrorR = (await api(A, AKEY, '/albums')).find(a => a.albumName === 'reverse album');
   const mR = mirrorR && await until(async () => { const x = await albumAssets(A, AKEY, mirrorR.id); return x.length === 1 ? x : null; }, 180000);
@@ -352,7 +369,7 @@ const DS = process.env.D_SIDECAR || 'http://localhost:8303';
 const DKEY = process.env.DKEY;
 let dMirror = null;
 if (DKEY) {
-  const joinD = await (await fetch(`${DS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${shareKey}` }))).json();
+  const joinD = await (await fetch(`${DS}/sidecar/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${shareKey}` }, DKEY))).json();
   check('D join succeeded', !!joinD.albumId, JSON.stringify(joinD).slice(0, 100));
   dMirror = (await api(D, DKEY, '/albums')).find(a => a.albumName === joinD.album);
   const dAssets = await until(async () => { const x = await albumAssets(D, DKEY, dMirror.id); return x.length === 9 ? x : null; }, 150000);
@@ -392,7 +409,7 @@ console.log('— stage: deletion propagation + leave-&-purge (reversible joins)'
   await api(A, AKEY, `/albums/${albD}/assets`, { ...j({ ids: [d1, d2] }), method: 'PUT' });
   const shareD = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albD, allowUpload: true }))).key;
   const meBD = (await api(B, BKEY, '/users/me')).id;
-  const joinD2 = await (await fetch(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${shareD}`, forUserId: meBD }))).json();
+  const joinD2 = await (await fetch(`${BS}/sidecar/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${shareD}`, forUserId: meBD }, BKEY))).json();
   const mirrorD = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'delete test');
   const mD = await until(async () => { const x = await albumAssets(B, BKEY, mirrorD.id); return x.length === 2 ? x : null; }, 60000);
   check('delete-test album joined and mirrored (2 stubs)', !!mD, mD ? '' : 'timed out');
@@ -449,6 +466,126 @@ const EXPECT = DKEY ? 10 : 9;
 check('no ping-pong on A', (await albumAssets(A, AKEY, ALBUM_ID)).length === EXPECT, `A=${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
 check('no ping-pong on B', (await albumAssets(B, BKEY, mirror.id)).length === EXPECT, `B=${(await albumAssets(B, BKEY, mirror.id)).length}`);
 if (DKEY && dMirror) check('no ping-pong on D', (await albumAssets(D, DKEY, dMirror.id)).length === EXPECT, `D=${(await albumAssets(D, DKEY, dMirror.id)).length}`);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Security regressions. Each check below maps to a specific hole that existed
+// before the hardening pass; they are the reason the sidecar is safe to publish
+// on a domain rather than only reachable over a tailnet.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('— stage: security (unauthenticated surface)');
+{
+  const status = async (url, init) => (await fetch(url, init).catch(() => ({ status: 0 }))).status;
+
+  check('panel refuses an unauthenticated caller',
+        [401, 403].includes(await status(`${BS}/sidecar/`)), `got ${await status(`${BS}/sidecar/`)}`);
+  check('join refuses an unauthenticated caller',
+        await status(`${BS}/sidecar/join`, j({ url: `${ORIGIN_SIDECAR}/share/${shareKey}` })) === 401);
+  check('leave refuses an unauthenticated caller',
+        await status(`${BS}/sidecar/leave`, j({ mappingId: 'whatever' })) === 401);
+
+  const health = await (await fetch(`${BS}/sidecar/health`)).json();
+  check('health exposes liveness only (no household name, no peer count)',
+        health.ok === true && !('household' in health) && !('peers' in health), JSON.stringify(health));
+
+  check('oversized body is rejected before it is buffered',
+        await status(`${BS}/sidecar/join`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                             body: 'x'.repeat(2 * 1024 * 1024) }) === 413);
+
+  check('redeem refuses an unsigned caller',
+        await status(`${ORIGIN_DIRECT}/sidecar/api/v1/invites/redeem`,
+                     j({ shareKey, protocol: 1, household: { publicKey: 'AAAA', url: 'http://x', name: 'imposter' } })) === 403);
+
+  check('avatar route refuses a bare public key with no signature',
+        [403, 405].includes(await status(`${ORIGIN_DIRECT}/sidecar/api/v1/users/${(await api(A, AKEY, '/users/me')).id}/avatar`,
+                                         { headers: { 'x-isa-key': 'AAAA' } })));
+}
+
+console.log('— stage: security (entitlement — a signed peer is not entitled to everything)');
+{
+  // Sign as B really is: B's keypair lives in its sidecar volume. Read it with the sqlite3
+  // CLI rather than node:sqlite — the runner already depends on the CLI, and node:sqlite
+  // needs Node 22+, which would make these checks skip silently on an older host.
+  const bKeys = readSidecarKv('b-sidecar', 'keys');
+  if (!bKeys) console.log('  (skipped: cannot read B\'s keypair from demo/b-sidecar/state.db)');
+
+  if (bKeys) {
+    const signAs = (v) => crypto.sign(null, Buffer.from(v),
+      crypto.createPrivateKey({ key: Buffer.from(bKeys.priv, 'base64url'), format: 'der', type: 'pkcs8' })).toString('base64url');
+    const asB = (v) => ({ headers: { 'x-isa-key': bKeys.pub, 'x-isa-sig': signAs(v) } });
+
+    // A private album on the origin that was never shared with anyone. Before the fix, any
+    // enrolled peer could pull its originals with the admin key just by naming the asset.
+    const privAlbum = (await api(A, AKEY, '/albums', j({ albumName: 'not shared with anyone' }))).id;
+    const privAsset = await upload(A, AKEY, 'private-e2e.jpg', `pv${Date.now() % 10000}`, '2026-07-01T09:00:00.000Z');
+    await ensurePreviews(A, AKEY, [privAsset]);
+    await api(A, AKEY, `/albums/${privAlbum}/assets`, { ...j({ ids: [privAsset] }), method: 'PUT' });
+
+    const privStatus = (await fetch(`${ORIGIN_DIRECT}/sidecar/api/v1/assets/${privAsset}/original`, asB(privAsset))).status;
+    check('a valid peer CANNOT read an asset that was never shared with it (F-05)',
+          privStatus === 403, `got ${privStatus}`);
+
+    // Control: the same signature on an asset B genuinely was offered must still work,
+    // otherwise the check above would pass simply by breaking all byte reads.
+    const okStatus = (await fetch(`${ORIGIN_DIRECT}/sidecar/api/v1/assets/${aIds[0]}/original`, asB(aIds[0]))).status;
+    check('the same peer CAN still read an asset it was offered (no over-blocking)',
+          okStatus === 200, `got ${okStatus}`);
+
+    const manifestStatus = (await fetch(`${ORIGIN_DIRECT}/sidecar/api/v1/albums/${privAlbum}/manifest`, asB(privAlbum))).status;
+    check('a valid peer CANNOT read the manifest of an album not mapped to it (F-06)',
+          [403, 404].includes(manifestStatus), `got ${manifestStatus}`);
+
+    await api(A, AKEY, '/assets', { ...j({ ids: [privAsset], force: true }), method: 'DELETE' }).catch(() => {});
+    await api(A, AKEY, `/albums/${privAlbum}`, { method: 'DELETE' }).catch(() => {});
+  }
+}
+
+console.log('— stage: security (album password gates enrolment)');
+{
+  const pwAlbum = (await api(A, AKEY, '/albums', j({ albumName: 'password album' }))).id;
+  const pwAsset = await upload(A, AKEY, 'pw-e2e.jpg', `pw${Date.now() % 10000}`, '2026-07-02T09:00:00.000Z');
+  await ensurePreviews(A, AKEY, [pwAsset]);
+  await api(A, AKEY, `/albums/${pwAlbum}/assets`, { ...j({ ids: [pwAsset] }), method: 'PUT' });
+  const pwKey = (await api(A, AKEY, '/shared-links',
+    j({ type: 'ALBUM', albumId: pwAlbum, allowUpload: true, password: 'correct horse' }))).key;
+  const meP = (await api(B, BKEY, '/users/me')).id;
+  const tryJoin = async (password) => {
+    const r = await fetch(`${BS}/sidecar/join`,
+      jAuth({ url: `${ORIGIN_SIDECAR}/share/${pwKey}`, forUserId: meP, password }, BKEY));
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  };
+  const noPw = await tryJoin(undefined);
+  check('join without the album password is refused and asks for one',
+        noPw.status === 401 && noPw.body.passwordRequired === true, JSON.stringify(noPw.body).slice(0, 120));
+  const badPw = await tryJoin('wrong horse');
+  check('join with the wrong album password is refused',
+        badPw.status >= 400 && !badPw.body.album, JSON.stringify(badPw.body).slice(0, 120));
+  const goodPw = await tryJoin('correct horse');
+  check('join with the correct album password succeeds', !!goodPw.body.album, JSON.stringify(goodPw.body).slice(0, 160));
+
+  // expiry is honoured too — a link past its date must not enrol anyone
+  const expAlbum = (await api(A, AKEY, '/albums', j({ albumName: 'expired album' }))).id;
+  const expKey = (await api(A, AKEY, '/shared-links',
+    j({ type: 'ALBUM', albumId: expAlbum, expiresAt: '2020-01-01T00:00:00.000Z' }))).key;
+  const expRes = await fetch(`${BS}/sidecar/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${expKey}`, forUserId: meP }, BKEY));
+  check('join through an expired share link is refused', expRes.status >= 400, `got ${expRes.status}`);
+  await api(A, AKEY, `/albums/${expAlbum}`, { method: 'DELETE' }).catch(() => {});
+}
+
+console.log('— stage: security (utility accounts cannot be signed into)');
+{
+  const utility = (await api(B, BKEY, '/admin/users')).filter(u => u.email.endsWith('@sidecar.local'));
+  check('utility users exist to own the stubs', utility.length > 0, `${utility.length} found`);
+  check('no utility user is an admin', utility.every(u => !u.isAdmin));
+  const contributors = readSidecarKv('b-sidecar', 'contributors');
+  if (contributors) {
+    const entries = Object.values(contributors);
+    const withPassword = entries.filter((c) => c.password).length;
+    check('utility accounts were actually provisioned with keys', entries.length > 0 && entries.every((c) => c.key),
+          `${entries.length} contributor(s)`);
+    check('no utility login password is retained in state.db once provisioned',
+          withPassword === 0, `${withPassword} of ${entries.length} still stored`);
+  } else console.log('  (skipped password-retention check: cannot read demo/b-sidecar/state.db)');
+}
 
 const fails = results.filter(r => !r.ok);
 console.log(`\n${fails.length === 0 ? '🎉 ALL PASS' : `💥 ${fails.length} FAILURES`} (${results.length} checks)`);

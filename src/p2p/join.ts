@@ -6,20 +6,30 @@
 import crypto from 'node:crypto';
 import { CFG, SIDECAR_VERSION, log } from '../config.ts';
 import { state, save } from '../state.ts';
-import { signedFetch } from '../peers.ts';
+import { signedFetch, assertPeerUrlAllowed } from '../peers.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
 import { ensureUtilityUser, syncAvatar, slugify } from '../immich/contributors.ts';
 import { reconcileMapping } from '../sync/engine.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
-export async function join(shareUrl, forUserId) {
-  const m = shareUrl.trim().match(/^(https?:\/\/[^/]+)\/share\/([A-Za-z0-9_-]+)/);
+export async function join(shareUrl, forUserId, password?: string) {
+  const m = String(shareUrl ?? '').trim().match(/^(https?:\/\/[^/]+)\/share\/([A-Za-z0-9_-]+)/);
   if (!m) throw new Error('that does not look like an Immich share link');
   const [, origin, shareKey] = m;
-  const body = JSON.stringify({ shareKey, protocol: 1, version: SIDECAR_VERSION,
+  await assertPeerUrlAllowed(origin);
+  const body = JSON.stringify({ shareKey, protocol: 1, version: SIDECAR_VERSION, password,
     household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name } });
   const r = await signedFetch(`${origin}/sidecar/api/v1/invites/redeem`, body);
-  if (!r.ok) throw new Error(`redeem failed: ${r.status} ${await r.text().catch(() => '')}`);
+  if (!r.ok) {
+    // Surface the other sidecar's own message (an expired link, a wrong password) but
+    // never an arbitrary upstream body — that would make this a read primitive for
+    // whatever the URL actually pointed at.
+    const reply = await r.json().catch(() => null);
+    const clean = typeof reply?.error === 'string' ? reply.error.slice(0, 200) : null;
+    const err = new Error(clean || `the other server refused the join (${r.status})`);
+    if (reply?.passwordRequired) (err as Error & { passwordRequired?: boolean }).passwordRequired = true;
+    throw err;
+  }
   const res = await r.json();
   if (res.protocol && res.protocol > 1) log(`origin "${res.household?.name}" speaks protocol ${res.protocol} > ours (1) — update the immich-shared-albums sidecar on this server`);
   if (!state.peers.some(p => p.pub === res.household.publicKey)) {

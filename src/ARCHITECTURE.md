@@ -51,8 +51,16 @@ ordinary data we planted, or a web page we serve.
   comments are posted via the author's utility user, and a seen-ledger keyed
   both directions prevents echo loops.
 - **protocol client/server** — signed ref exchange between households.
-  Key pinned at redemption (anchored on the share key). URLs are hints;
-  identity is the key.
+  Key pinned at redemption (anchored on the share key, whose password and expiry are
+  both honoured). URLs are hints; identity is the key. Crucially, identity is *only*
+  identity: every mapping lookup is filtered by the calling peer, so a signature can
+  never select someone else's album. See `p2p/wire-protocol.md`.
+- **entitlement** — the answer to "may this peer read these bytes", kept separately from
+  "who is this peer". Everything advertised to a mapping (a redeem response, a manifest,
+  a ref push) is recorded in an `offered` index; the peer-facing byte routes serve only
+  what is on it, falling back to album membership (throttled) so upgrades self-heal.
+  Without this, an asset id — which manifests hand out by design — would be enough for
+  any enrolled peer to read anything the admin key can reach.
 - **materialiser** — makes shared state look like ordinary Immich data:
   mirror albums owned by a utility user named after the origin's album owner
   ("Jane (via shared albums)"), one utility user per contributor (with their
@@ -145,3 +153,10 @@ human or AI agent — see [AGENTS.md](../AGENTS.md).
    only ever STORED elsewhere when a user explicitly saves a photo to their
    own library.
 5. Default-closed: no uninvited server can reach anything.
+6. **Reachability is never permission.** Every route assumes it is published to the open
+   internet. Human routes authenticate against the caller's own Immich session; peer
+   routes require a signature *and* an entitlement check. Nothing is protected by being
+   hard to find, on a private network, or behind a URL nobody has guessed.
+7. **The sidecar invents no identities and holds no logins.** The only identity that means
+   anything is an Immich one. The bot users that own the stubs get a narrowly-scoped API
+   key and no retained password, so they cannot be signed into at all.

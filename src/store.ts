@@ -25,7 +25,9 @@ export type Mapping = {
 };
 
 export type Peer = { pub: string; url: string; name: string; version?: string };
-export type Contributor = { userId: string; key: string; password: string; avatarDone?: boolean };
+// `password` is transient: it exists only while the account is being provisioned, and is
+// rolled to an unheld value once the API key is minted (see immich/contributors.ts).
+export type Contributor = { userId: string; key: string; password?: string; avatarDone?: boolean };
 
 export type Collections = {
   keys: { pub: string; priv: string } | null;
@@ -51,6 +53,15 @@ export class Store {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, size INTEGER NOT NULL, lastUsed INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS cache_lru ON cache (lastUsed);
+    `);
+    // What we have ADVERTISED to each mapping's peer. A signature proves which peer is
+    // calling; this table is what decides whether that peer may read a given asset's
+    // bytes. Without it the byte routes authorise identity but not entitlement, and any
+    // peer that learns an asset id can read anything in the library.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS offered (m TEXT NOT NULL, a TEXT NOT NULL);
+      CREATE UNIQUE INDEX IF NOT EXISTS offered_ma ON offered (m, a);
+      CREATE INDEX IF NOT EXISTS offered_a ON offered (a);
     `);
     this.migrateLegacyJson(dataDir);
     this.state = {
@@ -135,6 +146,30 @@ export class Store {
   }
   seenRemoveEntry(mappingId: string, checksum: string) {
     this.db.prepare('DELETE FROM seen WHERE m = ? AND c = ?').run(mappingId, checksum);
+  }
+
+  // ---- offered index: which assets each mapping's peer is entitled to read ----
+  offeredAdd(mappingId: string, assetIds: string[]) {
+    if (!assetIds.length) return;
+    const ins = this.db.prepare('INSERT OR IGNORE INTO offered (m, a) VALUES (?, ?)');
+    this.db.exec('BEGIN');
+    try {
+      for (const a of assetIds) ins.run(mappingId, a);
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+  /** Has any of these mappings advertised this asset? Empty list => never. */
+  offeredAllows(mappingIds: string[], assetId: string): boolean {
+    if (!mappingIds.length) return false;
+    const holes = mappingIds.map(() => '?').join(',');
+    return !!this.db.prepare(`SELECT 1 FROM offered WHERE a = ? AND m IN (${holes})`)
+      .get(assetId, ...mappingIds);
+  }
+  offeredRemoveMapping(mappingId: string) {
+    this.db.prepare('DELETE FROM offered WHERE m = ?').run(mappingId);
   }
 
   seenActHas(tag: string): boolean {

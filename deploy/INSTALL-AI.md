@@ -57,14 +57,23 @@ VERIFY (all three, report results):
 ROLLBACK (if anything fails): docker compose down the sidecar, revert the proxy
 diff, reload the proxy — Immich itself is untouched throughout.
 
+4. If my Immich is reachable from the public internet, set REQUIRE_SHARE_PASSWORD=true
+   and ALLOW_PRIVATE_PEERS=false in the sidecar env, and tell me what each one
+   changes. Skip both if I am only reachable over a LAN or a tailnet.
+
 Notes for you, the agent:
 - The sidecar is additive and fail-open: if it dies, only the banner and
   cross-server sync stop; Immich keeps working. Never modify Immich's own
   compose services, database, or upload folders.
-- State lives in the ./data volume (state.json: household keypair, peers,
-  album mappings). Losing it breaks existing cross-server links.
+- State lives in the ./data volume (state.db: household keypair, peers, album
+  mappings, ledgers). Losing it breaks existing cross-server links.
 - The API key is a live credential: keep it out of shell history, logs, and
   world-readable files.
+- All three routes are safe to expose publicly — the sidecar authenticates
+  human routes against the user's own Immich session and peer routes by
+  signature plus entitlement. Do NOT add source-IP restrictions to /sidecar/*:
+  it would break joining from mobile data, because someone's accept page calls
+  their own server's /sidecar/join.
 ```
 
 ---

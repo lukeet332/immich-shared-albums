@@ -4,33 +4,44 @@
  * In production a reverse proxy usually handles this directly; this keeps the demo/simple
  * single-front setup fully working. Websocket upgrades are refused cleanly — a fetch()-based
  * proxy can't carry them; live web updates need the Immich port (or a real reverse proxy).
+ *
+ * Both directions stream. Photo uploads reach Immich through here in the single-front
+ * setup, and buffering them would put every upload in the sidecar's heap — the opposite of
+ * Pi-friendly, and a free memory-exhaustion lever for anyone who can reach the port. Only
+ * /share HTML is buffered, because injecting the banner means rewriting the document.
  */
+import { Readable } from 'node:stream';
 import { CFG } from '../config.ts';
 import { BANNER_JS } from './banner.ts';
 
-export async function proxyToImmich(req, res, chunks, pathname: string): Promise<void> {
+export async function proxyToImmich(req, res, pathname: string): Promise<void> {
   if (req.headers.upgrade) { res.writeHead(426, { 'Content-Type': 'text/plain' }); res.end('websockets are not proxied here — connect to Immich directly'); return; }
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(req.headers)) {
     if (typeof v === 'string') headers[k] = v; else if (Array.isArray(v)) headers[k] = v.join(', ');
   }
-  delete headers.host; delete headers['content-length'];
+  delete headers.host;
+  const hasBody = !['GET', 'HEAD'].includes(req.method);
   const up = await fetch(`${CFG.immichUrl}${req.url}`, {
-    method: req.method, headers,
-    body: ['GET', 'HEAD'].includes(req.method) ? undefined : Buffer.concat(chunks),
+    method: req.method,
+    headers,
+    body: hasBody ? Readable.toWeb(req) : undefined,
+    // required by undici whenever a stream is used as a request body
+    ...(hasBody ? { duplex: 'half' } : {}),
     redirect: 'manual',
-  });
+  } as RequestInit);
   const outHeaders = {};
   for (const [k, v] of up.headers) if (!['content-encoding', 'transfer-encoding', 'content-length'].includes(k)) outHeaders[k] = v;
   const setCookie = up.headers.getSetCookie?.() || [];
   if (setCookie.length) outHeaders['set-cookie'] = setCookie;
   const ct = up.headers.get('content-type') || '';
-  const buf = Buffer.from(await up.arrayBuffer());
   if (req.method === 'GET' && pathname.startsWith('/share/') && ct.includes('text/html') && BANNER_JS) {
-    let html = buf.toString();
+    let html = Buffer.from(await up.arrayBuffer()).toString();
     html = html.includes('</body>') ? html.replace('</body>', '<script src="/sidecar/banner.js" defer></script></body>')
                                     : html + '<script src="/sidecar/banner.js" defer></script>';
     res.writeHead(up.status, outHeaders); res.end(html); return;
   }
-  res.writeHead(up.status, outHeaders); res.end(buf);
+  res.writeHead(up.status, outHeaders);
+  if (!up.body) { res.end(); return; }
+  Readable.fromWeb(up.body).pipe(res);
 }
