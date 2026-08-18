@@ -2,143 +2,63 @@
 
 [![e2e](https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml/badge.svg)](https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml)
 
-**Share albums across Immich servers — Google-Photos-easy sharing, except every family keeps their own server, their own photos, their own rules.**
+**It's finally here: cross-server shared albums for Immich!** (Hence the repo name, the code, and the over-excited sentence above.)
 
-Your household runs Immich. So do the grandparents, and your sister across town. Until now those were islands: sharing meant public links or giving family accounts on *your* server (and your disk, and your responsibility). This sidecar joins the islands — share an album with a link, and it appears **natively in everyone's own Immich app**, photos landing in seconds, credited to whoever took them, comments flowing both ways.
+It's a Google Photos style experience for shared photo and video albums, except it works across separate servers. The goal is for it to feel native: no separate apps to install, no weird web config portals to set up.
 
-- 📱 **Stock apps only** — nothing to install on any phone; albums, People, avatars, comments all render natively
-- ⚡ **Fast** — photos and messages cross servers in seconds (verified end-to-end, nudged sync + cheap handshakes)
-- 🖼️ **Every pixel streams from its owner** — thumbnails, previews, playback, originals: all served live from the photo's home server; nothing but a ~2KB placeholder ever sits on yours
-- 🔒 **Private by person, not by server** — joining adds the album to *your* account only; housemates can't even see it exists unless invited
-- 🏠 **Photos live in the house that took them** — literally: joining a 10,000-photo album costs you megabytes of placeholders, not gigabytes of copies. Leaving an album purges even those
-- 🎬 **Videos too** — playable renditions sync, originals on demand
-- 🛡️ **Built to fail soft** — if a sidecar dies, Immich keeps working and your own library is never affected; sync self-heals on return. Shared photos need their owner's server reachable to display (device caches cover recent views)
-- 🍓 **Tiny** — one zero-dependency container (TypeScript on Node, SQLite state), happy on a Raspberry Pi
+It never touches or modifies any of the Immich team's code. It runs in its own isolated Docker container on your server and only talks to Immich over the API. We call that container the sidecar.
+
+Between servers it sets up a secure handshake so the two can talk to each other. After that, a webhook (a signed HTTP request) pings the other server whenever something changes, so updates show up in seconds. A periodic check runs as a backup in case a nudge gets missed.
+
+Joining needs a small bit of custom UI on the shared album page, so the sidecar injects an HTML overlay. I know, I know, I said it never touches the stock Immich UI. It doesn't: a reverse proxy intercepts the URL and the sidecar serves its own overlay, without changing anything on your actual Immich server. It doesn't change how sharing works either. It just uses the normal share links your server already makes.
+
+Questions, suggestions and PRs are all welcome.
+
+## What you get
+
+- 🔗 **Simple link sharing.** Open a link, join, done. Works in the stock Immich apps, nothing to install on your phone.
+- 👤 **Joins your account, not the whole server.** So your parents won't see your antics from that lads' holiday.
+- 💾 **Your storage stays yours.** Photos stream from whoever owns them. All that lands on your disk is a tiny ~2KB placeholder per photo, whatever the album size, with full quality on demand.
+- 💬 **Cross-server comments.** Both ways, near-instant, credited to whoever wrote them.
+- 🎬 **Videos too.** Playable versions sync, originals stream on demand.
+- 📦 **Isolated and self-hosted.** One small container, no forks, no patched Immich, no runtime dependencies. Runs fine on a Pi.
 
 ## See it in action
 
-Two households, two servers, one shared album — created, shared, joined, contributed to, and commented on, all in the stock Immich apps:
-
 [![Watch the demo — two Immich servers sharing an album live](https://img.youtube.com/vi/c3GO-YFchYo/hqdefault.jpg)](https://www.youtube.com/watch?v=c3GO-YFchYo)
 
-> Born from this design discussion: [immich-app/immich#30794](https://github.com/immich-app/immich/discussions/30794). No Immich source changes — everything rides the public API and your reverse proxy.
+Two households, one shared album, created and shared and joined and commented on, all in the stock apps. Born from [this design discussion](https://github.com/immich-app/immich/discussions/30794). Full internals are in [ARCHITECTURE.md](./src/ARCHITECTURE.md).
 
-## How it works (four sentences)
+## Install
 
-Albums are shared **by reference**: each photo stays on its owner's server, and every participating household's sidecar maintains a local **mirror album** of kilobyte placeholder assets (owned by per-contributor utility users) so the stock app has real rows to render — names and avatars in People, capture dates, GPS, comments, all native. The actual pixels — **thumbnails, full-screen views, video playback, originals — stream live from the owner's server** through the sidecar's byte routes at view time; nothing is copied, and repeat views come from your devices' own caches. Deleting at the source propagates: members' placeholders follow within a sync cycle. Joining is **per person**: opening a share link shows a join banner, you type your own server's address once, sign in, and the album is added to *your* account only — nobody else on your server sees it. Contributing is just "add photos to the album" in the stock app; they appear on the origin server credited to you. Sidecars talk over a small signed protocol; the share link *is* the introduction — its first redemption pins the joining household's key, and the owner can eject anyone.
+- **Guided:** clone next to your Immich and run `bash deploy/install.sh`. It asks for your Immich network, public URL, household name and an API key, then builds, starts and health-checks the sidecar and prints the reverse-proxy lines you add.
+- **Got an AI agent on the box?** Paste [deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md) and it does the lot.
+- **Manual:** one container plus three proxy routes (Caddy, nginx or Traefik). See [deploy/](./deploy/).
 
-## What each person experiences
+## Permissions & security
 
-| Person | Setup | Daily use |
-|---|---|---|
-| Household admin | 15 min, once: container + 3 proxy routes + API key | Mint share links in the stock app; rare moderation in the panel |
-| Someone joining an album | One-time per album: open link → type own server → sign in → Accept | Stock app only: view, add, comment, download |
-| Everyone else on any server | **Nothing** — they can't even see the album unless invited | — |
-
-## Install (per household)
-
-**Easiest — guided script** (from a clone of this repo, next to your existing Immich):
-
-```bash
-git clone https://github.com/lukeet332/immich-shared-albums
-cd immich-shared-albums && bash deploy/install.sh
-```
-
-It asks for your Immich network, public URL, household name, and an admin API
-key, then builds, starts, health-checks the sidecar, and prints the two
-reverse-proxy lines you still add yourself.
-
-**Have an AI agent on the server?** Paste the prompt in
-[deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md) and it will discover your setup,
-install, and verify — asking you only for the public URL, a household name, and
-an API key.
-
-**Manual** — build the image from this repo, then add one container plus three proxy routes:
-
-```bash
-git clone https://github.com/lukeet332/immich-shared-albums && cd immich-shared-albums
-docker build -t immich-shared-albums:live .
-```
-
-```yaml
-# docker-compose.override.yml (next to your Immich compose file)
-services:
-  immich-shared:
-    image: immich-shared-albums:live
-    restart: always
-    environment:
-      IMMICH_URL: http://immich-server:2283
-      IMMICH_API_KEY: ${SIDECAR_API_KEY}   # admin API key, all permissions — keep it in .env
-      PUBLIC_URL: https://photos.example.com
-      HOUSEHOLD_NAME: "The Example household"
-      # optional: PORT (8300), DATA_DIR (/data), POLL_MS (20000), ALBUM_TEMPLATE ("{name}")
-    volumes:
-      - ./sidecar-data:/data
-```
-
-Reverse proxy (Caddy shown; nginx/Traefik equivalents in `deploy/`):
-
-```caddy
-photos.example.com {
-    handle /sidecar/* {
-        reverse_proxy immich-shared:8300
-    }
-    # optional module: join-banner on share pages
-    handle /share/* {
-        reverse_proxy immich-shared:8300
-    }
-    # hotlink byte routes: shared photos/videos stream live from their owner.
-    # GET-only and fail-open — a dead sidecar can only degrade SHARED tiles.
-    @sharedbytes {
-        method GET
-        path /api/assets/*/thumbnail /api/assets/*/original /api/assets/*/video/playback
-    }
-    handle @sharedbytes {
-        reverse_proxy immich-shared:8300 immich-server:2283 {
-            lb_policy first
-            fail_duration 10s
-        }
-    }
-    handle {
-        reverse_proxy immich-server:2283
-    }
-}
-```
-
-## Versioning
-
-Releases follow semver with a **sync-contract policy**: a **MAJOR** bump means a peer
-on the previous version can no longer sync with you or the upgrade needs operator
-action; **MINOR** adds features old peers tolerate; **PATCH** fixes. Watch the repo's
-releases to hear about breaking changes — details in [CHANGELOG.md](./CHANGELOG.md).
-
-Version numbers are decided by [release-please](https://github.com/googleapis/release-please)
-from conventional commits (`fix:` → patch, `feat:` → minor, `feat!:` → major), not by hand.
-All changes land through pull requests gated on the e2e suite; merging to `main` maintains
-a release PR, and merging *that* tags the release. Tagged releases publish a multi-arch
-image (amd64/arm64) to `ghcr.io/lukeet332/immich-shared-albums`.
-
-## Trust model, in one paragraph
-
-Servers must be mutually and explicitly introduced — by share link, once per household pair — before a single byte flows; the introduction *is* the act of sharing an album, not a separate ritual. The first redemption pins the joining household's public key (anchored on the share key, which only invitees held); every subsequent request is signed, so URLs are mutable hints and a DDNS rename breaks nothing. All moderation is post-hoc and owner-side: remove a household, revoke a link, or forget a key. Default-closed: uninvited servers cannot so much as introduce themselves.
+- **You choose how exposed your server is.** This addon doesn't open your server to the internet or change how sharing works; it only handles the server-to-server handshake. Each server just needs to reach the other's sidecar. A peer only ever touches `/sidecar/*` and `/share/*`, so the rest of Immich (all of `/api`, your library, admin) can stay private whichever way you set it up:
+    - **Public domain over HTTPS.** The standard reverse-proxy setup under Install.
+    - **[Tailscale](https://tailscale.com/) Funnel.** Funnel just `/sidecar/*` and `/share/*` to the sidecar over HTTPS. No domain and no open router ports needed.
+    - **Fully hidden behind a Tailscale VPN.** Put every participating server on the same tailnet and nothing is exposed publicly at all. Ideal when the other households are on your tailnet too.
+- **Your server's security is your responsibility.** This is a tool, and it's only as secure as the server you run it on.
+- **Needs an admin API key** (all permissions). It creates its own bot users to own the placeholder photos, which is what keeps shared albums out of your own timeline while still showing the right name and avatar. Keep the key in `.env`.
+- **It can't touch your photos.** It only ever deletes the placeholder stubs it made itself, and only when you leave an album. The delete code refuses any asset it doesn't own, so your real library is safe whatever the key can do.
+- **Small attack surface.** Zero dependencies, plain Node plus the built-in `node:sqlite`, and a codebase you can read.
+- **Closed by default.** Two servers have to be introduced by a share link before anything flows. After that every request is signed, and the owner can remove any household at any time.
 
 ## Good to know
 
-- **Viewing shared photos needs the owner's server reachable.** Pixels stream live from their home; if that server is offline you'll see placeholders until it's back (your devices' caches keep recently-viewed photos rendering). Your own library is never affected by anyone else's downtime.
-- **Sharing photos needs your server to be publicly reachable** (others stream your photos from you — that's the point). Viewing-only households can stay fully private/tailnet-only.
-- **Joining costs effectively no storage** — kilobytes per photo, any album size — and **leaving the album in the app purges even that** (the sidecar notices the native "Leave album" action and cleans up everything the join created). Storing a true copy is a deliberate future action (save-to-server), never a side effect.
-- **Joining privately means signing in to your own Immich web UI once** in that browser; the accept page walks you through it and remembers you after.
-- **New photos show in the mobile app on its next sync** — usually seconds while the app is open, or on reopen. That's the stock Immich app's sync cadence (identical for same-server shared albums); they're visible to your server long before the app repaints.
+- If a photo's owner server is offline you'll see placeholders until it's back (your device caches recent views). Your own library is never affected by someone else's downtime.
+- New photos show up on the app's next sync, usually within seconds while it's open, or when you reopen it.
+- Joining costs almost no storage, and leaving cleans it up. The sidecar notices the app's normal "Leave album" and removes everything the join created.
 
-## Status
+## Versioning
 
-**In daily use across real households.** TypeScript run natively by Node (no build step), zero runtime dependencies, SQLite state via the built-in `node:sqlite` — light enough for a Raspberry Pi. Every push runs a 66-check headless end-to-end suite — plus a browser-level lane for the banner and accept flows — ([demo/e2e](./demo/e2e)) against three throwaway Immich instances in CI, plus a weekly run against `immich-server:release` to catch upstream breakage early. Covered: joins (per-user + re-join), kilobyte-stub mirroring with attribution/avatars/dates/GPS, live-streamed thumbnails/originals byte-identical from the owner (proven by an owner-kill negative control — no hidden copies exist), seekable video streaming, deletion propagation, leave-&-purge, contribution + uploader credit, member→member relay across three households, timeline cleanliness both ways, canonical comments owned by the origin (two-way sync, echo prevention, relay + backfill to late joiners), cross-album re-sharing, self-healing reconciliation with a cheap version handshake, and loop prevention. Architecture and protocol: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md).
+Semver with a sync-contract policy (a MAJOR bump means older peers can't sync with you). Versions are set automatically from commits, every change is gated on the e2e suite (66 checks plus a browser lane), and a weekly job runs against the latest Immich release to catch breakage early. See [CHANGELOG.md](./CHANGELOG.md).
 
-## Support the project
+## Support
 
-If cross-server albums saved your family from the cloud, you can say thanks here:
+If this saved your family from the cloud, you can say thanks:
 
 [![Sponsor](https://img.shields.io/badge/❤-Sponsor_this_project-ea4aaa?style=for-the-badge)](https://github.com/sponsors/lukeet332)
-
-Every contribution goes toward testing against new Immich releases and keeping the
-weekly compatibility canary green.

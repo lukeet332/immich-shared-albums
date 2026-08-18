@@ -18,7 +18,14 @@ say "immich-shared-albums installer"
 echo "You'll need an Immich admin API key with all permissions:"
 echo "  Immich web -> Account Settings -> API Keys -> New API Key -> tick everything."
 
-IMMICH_NETWORK=$(ask "Docker network your Immich containers are on [immich_default]:" immich_default)
+# auto-detect the network the Immich server container is on, to pre-fill the prompt
+DEFAULT_NET=immich_default
+IMMICH_CTR=$(docker ps --format '{{.Names}} {{.Image}}' | grep -iE 'immich[-_]server|immich-app/immich' | head -1 | cut -d' ' -f1)
+if [ -n "$IMMICH_CTR" ]; then
+  DETECTED=$(docker inspect "$IMMICH_CTR" -f '{{range $n,$_ := .NetworkSettings.Networks}}{{$n}}{{"\n"}}{{end}}' 2>/dev/null | head -1)
+  [ -n "$DETECTED" ] && { DEFAULT_NET="$DETECTED"; echo "Found Immich container '$IMMICH_CTR' on network '$DEFAULT_NET'."; }
+fi
+IMMICH_NETWORK=$(ask "Docker network your Immich containers are on [$DEFAULT_NET]:" "$DEFAULT_NET")
 docker network inspect "$IMMICH_NETWORK" >/dev/null 2>&1 || {
   echo "network '$IMMICH_NETWORK' not found. Existing networks:"; docker network ls --format '  {{.Name}}'; exit 1; }
 
@@ -67,8 +74,16 @@ umask 022
 
 say "Starting sidecar"
 (cd "$INSTALL_DIR" && docker compose up -d)
-sleep 3
-if docker exec immich-shared-albums-immich-shared-1 wget -qO- http://localhost:8300/sidecar/health 2>/dev/null | grep -q '"ok":true'; then
+printf "waiting for health"
+ok=""
+for _ in $(seq 1 20); do
+  if (cd "$INSTALL_DIR" && docker compose exec -T immich-shared wget -qO- http://localhost:8300/sidecar/health 2>/dev/null) | grep -q '"ok":true'; then
+    ok=1; break
+  fi
+  printf "."; sleep 1
+done
+echo
+if [ -n "$ok" ]; then
   echo "health: OK"
 else
   echo "health check failed — logs:"; (cd "$INSTALL_DIR" && docker compose logs immich-shared --tail 30); exit 1
