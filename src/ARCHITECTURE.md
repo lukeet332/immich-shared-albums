@@ -129,11 +129,9 @@ Conventions for this tree:
    nothing else here; feature folders depend on core and, at most, on layers
    below them. `p2p` and `sync` reference each other only through runtime calls
    (join → reconcile, watcher → nudge), never at module-load time.
-4. **Keep the docs in sync — this is a rule, not a nicety.** Any change to a
-   folder's behaviour updates that folder's `.md` in the *same* change, and
-   anything that alters how sync, the protocol, or the byte path works updates
-   this file too. This applies to every contributor, human or AI agent. A doc
-   that lies is worse than no doc: treat drift as a bug and fix it with the code.
+
+Keeping these docs in sync with the code is a project rule for every contributor,
+human or AI agent — see [AGENTS.md](../AGENTS.md).
 
 ## Iron rules
 
