@@ -68,11 +68,19 @@ jobs:
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}
             ghcr.io/${{ github.repository }}:latest
 
-      - name: Create GitHub Release
+      # release-please owns the tag, the changelog and the GitHub release. This job runs
+      # on the tag it just pushed, so the release normally exists by the time we get here
+      # — creating it again is a 422, which is what failed v0.1.0, v0.4.0 and v0.5.0.
+      # Only create one if release-please didn't (it occasionally loses to a 503), and
+      # let it write the notes: it generates them from the changelog entry it authored.
+      - name: Ensure a GitHub Release exists for this tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
-            --notes "$(sed -n "/^## ${{ github.ref_name }}/,/^## v/p" CHANGELOG.md | sed '$d')" \
-            || gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes
+          TAG="${{ github.ref_name }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists (created by release-please) — nothing to do."
+          else
+            echo "No release found for $TAG — creating one as a fallback."
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
