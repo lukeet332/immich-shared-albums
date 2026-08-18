@@ -8,10 +8,16 @@ import crypto from 'node:crypto';
 const SHARE_URL = process.env.SHARE_URL;
 const OUT = process.env.OUT || './video';
 // cookies are domain-scoped and port-blind: keep C on localhost and B on the LAN IP
-// so their sessions can coexist in one browser context
+// so their sessions can coexist in one browser context. LAN_IP is this machine's address
+// on the local network — never hardcode it, this repo is public.
+const LAN_IP = process.env.LAN_IP;
+if (!LAN_IP) {
+  console.error("set LAN_IP to this machine's LAN address, e.g. LAN_IP=$(ipconfig getifaddr en0)");
+  process.exit(1);
+}
 const C = 'http://localhost:2285', C_WEB = 'http://localhost:2285';
-const B_PANEL = 'http://192.168.0.11:8301', B_WEB = 'http://192.168.0.11:2284';
-const ADDR_TYPED = '192.168.0.11:8301';
+const B_PANEL = `http://${LAN_IP}:8301`, B_WEB = `http://${LAN_IP}:2284`;
+const ADDR_TYPED = `${LAN_IP}:8301`;
 
 const browser = await chromium.launch({ args: ['--disable-features=HttpsUpgrades,HttpsFirstModeV2,HttpsFirstBalancedModeAutoEnable,LocalNetworkAccessChecks,PrivateNetworkAccessForNavigations,PrivateNetworkAccessChecks'] });
 const ctx = await browser.newContext({

@@ -17,3 +17,5 @@ demo/household-d/d-pg/
 demo/household-d/d-sidecar/
 demo/household-d/.env
 demo/recordings/
+demo/e2e/fixtures/demo-photos/
+demo/e2e/demo-targets.md
