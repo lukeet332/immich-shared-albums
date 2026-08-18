@@ -130,6 +130,9 @@ Conventions for this tree:
    below them. `p2p` and `sync` reference each other only through runtime calls
    (join → reconcile, watcher → nudge), never at module-load time.
 
+Keeping these docs in sync with the code is a project rule for every contributor,
+human or AI agent — see [AGENTS.md](../AGENTS.md).
+
 ## Iron rules
 
 1. Stock Immich is never modified; all cleverness lives at the reverse proxy
