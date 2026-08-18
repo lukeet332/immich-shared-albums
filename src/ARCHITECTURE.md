@@ -5,11 +5,12 @@
 One zero-dependency Node process — TypeScript run natively by Node's type
 stripping (no build step), state in SQLite via the built-in node:sqlite (WAL,
 crash-safe, indexed ledgers; a legacy state.json migrates automatically on
-boot). Sync is **nudge-driven with a timed backstop**: a signed HTTP nudge makes
-the common case near-instant, and three timed loops (watcher, reconciler,
-comment sync) are the fail-open safety net — no websockets, no dependency on any
-push channel staying up. Everything user-facing is either the stock Immich app
-rendering ordinary data we planted, or a web page we serve.
+boot). Sync is **nudge-driven with a timed backstop**: a signed HTTP nudge — a
+lightweight webhook — makes the common case near-instant, and two timers (the
+watch loop, which ends each cycle with a reconcile pass, and the comment loop)
+are the fail-open safety net — no websockets, no dependency on any push channel
+staying up. Everything user-facing is either the stock Immich app rendering
+ordinary data we planted, or a web page we serve.
 
 ```
             ┌─────────────────────────────────────────────┐
@@ -80,14 +81,16 @@ rendering ordinary data we planted, or a web page we serve.
   the accept page, and a transparent proxy for share-page SPA assets when the
   sidecar fronts Immich directly. All fail open.
 
-- **nudges** — when the origin materialises a member's contribution or comment,
-  it pings the other member households (a signed POST to `.../nudge`, no payload
-  beyond the album id — an ordinary HTTP request, not a websocket) so they pull
-  immediately; the timed handshake remains the fail-open safety net, so a lost
-  nudge only delays a change to the next tick, never loses it.
+- **nudges** — a lightweight webhook: when the origin materialises a member's
+  contribution or comment, it pings the other member households (a signed POST to
+  `.../nudge`, no payload beyond the album id — an ordinary event-triggered HTTP
+  request, not a websocket) so they pull immediately. The timed handshake remains
+  the fail-open safety net, so a lost nudge only delays a change to the next tick,
+  never loses it.
 
-Planned, not yet in v0: save-to-library (the explicit per-photo opt-in that
-stores a true original owned by the saving user), ref removal propagation.
+Planned, not yet built: save-to-library — the explicit per-photo opt-in that
+stores a true original owned by the saving user (the one deliberate way a copy
+ever lands on your disk).
 
 Migration note: proxies materialised before the provenance ledger have no
 origin link — they stay as-is and are excluded from relay and on-demand
