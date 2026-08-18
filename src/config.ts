@@ -4,7 +4,7 @@
  */
 import crypto from 'node:crypto';
 
-export const SIDECAR_VERSION = '0.4.1'; // x-release-please-version
+export const SIDECAR_VERSION = '0.5.0'; // x-release-please-version
 export const CFG = {
   immichUrl: process.env.IMMICH_URL || 'http://immich-server:2283',
   apiKey: process.env.IMMICH_API_KEY,

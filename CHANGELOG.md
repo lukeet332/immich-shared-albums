@@ -5,6 +5,13 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## [0.5.0](https://github.com/lukeet332/immich-shared-albums/compare/v0.4.1...v0.5.0) (2026-08-18)
+
+
+### Features
+
+* authenticate human routes and check peer entitlement, not just identity ([42d7d86](https://github.com/lukeet332/immich-shared-albums/commit/42d7d86189fad72cc1fbd427efda83ad27f94d73))
+
 ## v0.4.1 — 2026-08-17
 
 **Sync-reliability release: five root causes of the "mirror stops updating" flake.**
