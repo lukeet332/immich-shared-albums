@@ -5,7 +5,7 @@
  */
 import { CFG, log, UTILITY_SUFFIX } from '../config.ts';
 import { state, save, seenActHas, seenActAdd } from '../state.ts';
-import { sign, verify, signedFetch, nudgePeers } from '../peers.ts';
+import { sign, signedFetch, nudgePeers, callingPeer, mappingFor } from '../peers.ts';
 import { immichJson, jsonBody, usersById } from '../immich/client.ts';
 import { ensureContributor } from '../immich/contributors.ts';
 
@@ -36,23 +36,21 @@ export async function materialiseComments(mapping, peerUrl, peerName, comments) 
   return ids;
 }
 export async function handleActivity(req, body, albumMappingId) {
-  const peerKey = req.headers['x-isa-key'];
-  const peer = state.peers.find(p => p.pub === peerKey);
-  if (!peer || !verify(body, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
-  const mapping = state.mappings.find(m => m.id === albumMappingId || m.albumId === albumMappingId || m.remoteAlbumId === albumMappingId);
+  const peer = callingPeer(req, body);
+  if (!peer) return [403, { error: 'unknown or unverified peer' }];
+  const mapping = mappingFor(peer.pub, albumMappingId);
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const { comments = [] } = JSON.parse(body);
   const ids = await materialiseComments(mapping, peer.url, peer.name, comments);
-  if (Object.keys(ids).length) nudgePeers(mapping.albumId, peerKey); // new messages — tell the others
+  if (Object.keys(ids).length) nudgePeers(mapping.albumId, peer.pub); // new messages — tell the others
   return [200, { ok: true, ids }];
 }
 // Canonical comment list for an album — the origin is the source of truth for messages.
 // Utility-authored entries resolve back to the true contributor's name.
 export async function handleComments(req, albumMappingId) {
-  const peerKey = req.headers['x-isa-key'];
-  const peer = state.peers.find(p => p.pub === peerKey);
-  if (!peer || !verify(albumMappingId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown or unverified peer' }];
-  const mapping = state.mappings.find(m => m.role === 'owner' && (m.id === albumMappingId || m.albumId === albumMappingId));
+  const peer = callingPeer(req, albumMappingId);
+  if (!peer) return [403, { error: 'unknown or unverified peer' }];
+  const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const users = await usersById();
   const comments = (await getComments(mapping.albumId)).filter(a => a.comment).map(a => ({

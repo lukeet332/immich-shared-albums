@@ -12,3 +12,22 @@ live from the owner's server** (chained through the origin for relayed photos).
 
 **Fail-open:** if the owner's server is unreachable and nothing is cached, the interceptor
 falls back to the local stub (a placeholder tile) rather than erroring — the app keeps working.
+
+## Two different callers, two different gates
+
+These are the only routes that hand out real pixels, and the local branch of
+`fetchTrueBytes` reads with the admin key — so who is asking matters more here than
+anywhere else. The two entry points authorise in completely different ways:
+
+- **`interceptor.ts` serves the household's own app**, so it authorises with the *caller's
+  own* Immich credentials: it probes `/assets/:id` with their cookie or API key and serves
+  bytes only if Immich itself would have. The sidecar never grants access Immich wouldn't.
+- **`proxy.ts` serves other households**, so it needs both halves: a valid signature
+  (`peers.callingPeer`) *and* entitlement (`p2p/entitlement.peerMayRead`). The signature
+  says which peer; entitlement says whether that peer was ever offered this asset. A
+  signature alone would mean any enrolled peer could read anything in the library it could
+  name — asset ids are not secrets, and manifests hand them out by design.
+
+**Timeouts bound the handshake, not the transfer.** A hostile peer must not hold a
+connection open forever, but a legitimate 4K original may stream for minutes — so the
+clock stops the moment response headers arrive (`fetchWithHeaderTimeout`).

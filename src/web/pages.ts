@@ -1,6 +1,11 @@
 /**
  * web/pages.ts — the two HTML surfaces the sidecar serves: the admin PANEL and the
  * signed-out/signed-in ACCEPT_PAGE that turns a share link into a join.
+ *
+ * Both talk to /sidecar/join, which authenticates the caller's Immich session server-side
+ * (web/auth.ts). The client-side checks here are for UX only — telling someone they need
+ * to sign in before they fill a form, and asking for an album password when the origin
+ * says one is required. Nothing here is a security control.
  */
 import { CFG } from '../config.ts';
 import { state } from '../state.ts';
@@ -23,15 +28,22 @@ export const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="vie
  <div class="card"><b style="font-size:14px">Join an album</b>
   <p class="muted" style="font-size:13px">Paste a share link from another household.</p>
   <form onsubmit="j(event)"><input id="u" placeholder="https://their-server/share/…"><button>Join</button></form>
+  <input id="pw" type="password" placeholder="Album password" style="display:none;margin-top:8px;width:100%">
   <div id="msg"></div></div>
  <div class="card"><b style="font-size:14px">Shared albums</b>
   ${state.mappings.map(m => `<div class="item"><span>${m.albumName}</span><span class="muted">${m.role} · ${(state.peers.find(p => p.pub === m.peer) || {}).name || ''}</span></div>`).join('') || '<p class="muted" style="font-size:13px">None yet.</p>'}</div>
  <div class="card"><b style="font-size:14px">Connected households</b>
   ${state.peers.map(p => `<div class="item"><span>${p.name}</span><span class="muted">${p.url}${p.version ? ` · v${p.version}` : ''}</span></div>`).join('') || '<p class="muted" style="font-size:13px">None yet.</p>'}</div>
 </main>
-<script>async function j(e){e.preventDefault();const el=document.getElementById('msg');el.textContent='Joining…';
- const r=await fetch('join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:document.getElementById('u').value})});
+<script>async function j(e){e.preventDefault();
+ const el=document.getElementById('msg'),pw=document.getElementById('pw');el.textContent='Joining…';
+ const payload={url:document.getElementById('u').value};
+ if(pw.style.display!=='none'&&pw.value)payload.password=pw.value;
+ const r=await fetch('join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
  const d=await r.json().catch(()=>({error:'failed'}));
+ if(d&&d.needsAuth){location.href=d.signInUrl||'/auth/login';return}
+ if(d&&d.passwordRequired){pw.style.display='block';pw.focus();
+  el.textContent='This album is password protected — enter the same password you would use to view it.';return}
  el.textContent=r.ok?('Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing. It will appear in your app shortly.'):('Error: '+(d.error||r.status));
  if(r.ok)setTimeout(()=>location.reload(),2500)}</script>`;
 export const ACCEPT_PAGE = () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -58,6 +70,8 @@ export const ACCEPT_PAGE = () => `<!doctype html><meta charset="utf-8"><meta nam
 <div class="card"><div class="logo">🔗</div><h1 id="t">Join shared album?</h1>
 <p id="d">This will add the album to your account on <b>${CFG.name}</b>. Photos stay on their owners' servers.</p>
 <div id="who"></div>
+<input id="pw" type="password" placeholder="Album password" autocomplete="current-password"
+ style="display:none;width:100%;box-sizing:border-box;font:inherit;font-size:14px;padding:11px 16px;border-radius:999px;border:1px solid rgba(0,0,0,.15);margin:0 0 14px;text-align:center">
 <button id="go" disabled>Accept &amp; join</button><div id="out"></div></div>
 <script>
 const frag=(()=>{
@@ -71,7 +85,7 @@ let ME=null,POLL=null;
 function whoami(){return fetch('/api/users/me',{credentials:'include'}).then(r=>r.ok?r.json():null).then(u=>{
  if(u&&u.id){ME=u;clearInterval(POLL);document.getElementById('go').disabled=false;
    document.getElementById('who').textContent='Joining as '+u.name+' — the album is added only to your account.';}
- else if(!ME){document.getElementById('who').innerHTML='<a href="/auth/login" target="_blank">Sign in to your Immich</a> to join — this page will notice once you are signed in.';}
+ else if(!ME){document.getElementById('who').innerHTML='<a href="/auth/login">Sign in to your Immich</a> to join — this page will notice once you are signed in.';}
  return u;}).catch(()=>null);}
 whoami().then(u=>{if(!u)POLL=setInterval(whoami,2500);});
 document.getElementById('go').onclick=async()=>{
@@ -81,8 +95,19 @@ document.getElementById('go').onclick=async()=>{
  go.innerHTML='<span class="spin"></span>Joining — syncing photos…';
  const out=document.getElementById('out');out.textContent='';
  const scheme=frag.scheme||'https';
- const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:scheme+'://'+frag.host+'/share/'+frag.key,forUserId:ME.id})});
+ const pw=document.getElementById('pw');
+ const body={url:scheme+'://'+frag.host+'/share/'+frag.key,forUserId:ME.id};
+ if(pw.style.display!=='none'&&pw.value)body.password=pw.value;
+ const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
  const d=await r.json().catch(()=>({error:'failed'}));
+ var reset=function(){go.disabled=false;go.classList.remove('busy');go.textContent='Accept & join';};
+ // the session went away between page load and click — send them to sign in and back
+ if(d&&d.needsAuth){location.href=(d.signInUrl||'/auth/login');return}
+ // same password the album's own share page asks for; the origin verifies it, not us
+ if(d&&d.passwordRequired){
+   pw.style.display='block';pw.focus();reset();
+   out.innerHTML='This album is password protected.<br><span style="font-size:12px">Enter the same password you would use to view it.</span>';
+   return}
  if(r.ok){
    // album-specific deeplink: the app registers my.immich.app/albums/<id> (the bare
    // list path is NOT registered and falls through to the web fallback)
@@ -101,6 +126,6 @@ document.getElementById('go').onclick=async()=>{
        if(n>=d.photos||Date.now()-t0>90000){clearInterval(iv);ready();}
      }).catch(function(){if(Date.now()-t0>90000){clearInterval(iv);ready();}});
    },1500);}
- } else { out.textContent='Error: '+(d.error||r.status); go.disabled=false; go.classList.remove('busy'); go.textContent='Accept & join'; }
+ } else { out.textContent='Error: '+(d.error||r.status); reset(); }
 };
 </script>`;

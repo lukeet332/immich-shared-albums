@@ -14,9 +14,11 @@ mkdir -p "$OUT"
 start_one() { # chain 3-minute segments until stop-file appears
   local D=$1
   adb -s "$D" shell rm -f /sdcard/rec-*.mp4 /sdcard/rec-stop 2>/dev/null
+  local SIZE=""
+  [ "$D" = "emulator-5556" ] && SIZE="--size 672x1496"   # native 1344x2992 exceeds the encoder
   ( i=0
     while ! adb -s "$D" shell ls /sdcard/rec-stop >/dev/null 2>&1; do
-      adb -s "$D" shell screenrecord --bit-rate 8000000 "/sdcard/rec-$i.mp4"
+      adb -s "$D" shell screenrecord --bit-rate 8000000 $SIZE "/sdcard/rec-$i.mp4"
       i=$((i+1))
     done ) &
   echo "recording $D (pid $!)"

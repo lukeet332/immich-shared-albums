@@ -2,11 +2,30 @@
  * media/proxy.ts — the hotlink byte path. fetchTrueBytes resolves an asset's real pixels:
  * a local file for our own photos, or a chained fetch to the owner's server for a proxy
  * (how a relayed photo streams D <- origin <- contributor). Range passes through.
+ *
+ * These are the only routes that hand out real pixels, and the local branch reads with the
+ * admin key — so a signature is necessary but nowhere near sufficient. Every handler asks
+ * p2p/entitlement whether this specific peer was ever offered this specific asset. Without
+ * that, "a valid peer" would mean "any asset in the library that it can name".
  */
 import { log } from '../config.ts';
 import { state, store } from '../state.ts';
-import { sign, verify } from '../peers.ts';
+import { sign, callingPeer } from '../peers.ts';
+import { peerMayRead } from '../p2p/entitlement.ts';
 import { immich } from '../immich/client.ts';
+
+/**
+ * Time out the handshake, not the transfer. A hostile or crawling peer must not be able to
+ * hold a connection open forever, but a legitimate 4K original may stream for minutes — so
+ * the clock stops the moment response headers arrive.
+ */
+async function fetchWithHeaderTimeout(url: string, init: RequestInit, ms = 30000) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ac.signal });
+  } finally { clearTimeout(timer); }
+}
 
 // Resolve true bytes for any local asset: local file for our own photos; for a proxy
 // (ledger entry with `o`), chain the fetch to the owner's server — how a relayed
@@ -19,9 +38,11 @@ export async function fetchTrueBytes(assetId: string, kind: 'preview' | 'origina
     if (peer) {
       const headers: Record<string, string> = { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) };
       if (range) headers.Range = range;
-      const up = await fetch(`${peer.url}/sidecar/api/v1/assets/${entry.o}/${kind}`, { headers });
-      if (up.ok) return up;
-      log(`chained ${kind} fetch failed (${up.status}) — serving local stub`);
+      try {
+        const up = await fetchWithHeaderTimeout(`${peer.url}/sidecar/api/v1/assets/${entry.o}/${kind}`, { headers });
+        if (up.ok) return up;
+        log(`chained ${kind} fetch failed (${up.status}) — serving local stub`);
+      } catch (e) { log(`chained ${kind} fetch error (${e.message}) — serving local stub`); }
     }
   }
   const local = kind === 'original' ? `/assets/${assetId}/original`
@@ -29,21 +50,24 @@ export async function fetchTrueBytes(assetId: string, kind: 'preview' | 'origina
     : `/assets/${assetId}/thumbnail?size=preview`;
   return immich(local, range ? { headers: { Range: range } } : {});
 }
+
+/** Signed by the peer AND on the list of things we offered them. Both, every time. */
+async function authorisePeerRead(req, assetId: string) {
+  const peer = callingPeer(req, assetId);
+  if (!peer) return [403, { error: 'unknown or unverified peer' }];
+  if (!(await peerMayRead(peer.pub, assetId))) {
+    log(`byte read refused: "${peer.name}" is not entitled to asset ${assetId.slice(0, 8)}`);
+    return [403, { error: 'not shared with you' }];
+  }
+  return null;
+}
+
 export async function handlePreview(req, assetId) {
-  const peerKey = req.headers['x-isa-key'];
-  const peer = state.peers.find(p => p.pub === peerKey);
-  if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
-  return fetchTrueBytes(assetId, 'preview'); // chains for relayed assets
+  return (await authorisePeerRead(req, assetId)) ?? fetchTrueBytes(assetId, 'preview'); // chains for relayed assets
 }
 export async function handleOriginal(req, assetId) {
-  const peerKey = req.headers['x-isa-key'];
-  const peer = state.peers.find(p => p.pub === peerKey);
-  if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
-  return fetchTrueBytes(assetId, 'original', req.headers.range);
+  return (await authorisePeerRead(req, assetId)) ?? fetchTrueBytes(assetId, 'original', req.headers.range);
 }
 export async function handlePlayback(req, assetId) {
-  const peerKey = req.headers['x-isa-key'];
-  const peer = state.peers.find(p => p.pub === peerKey);
-  if (!peer || !verify(assetId, req.headers['x-isa-sig'] || '', peerKey)) return [403, { error: 'unknown peer' }];
-  return fetchTrueBytes(assetId, 'playback', req.headers.range);
+  return (await authorisePeerRead(req, assetId)) ?? fetchTrueBytes(assetId, 'playback', req.headers.range);
 }

@@ -1,5 +1,16 @@
 # Add inside your existing Immich site block, BEFORE the catch-all route.
+#
+# All of /sidecar/* is safe to expose publicly: the panel and the join/leave routes
+# require a signed-in Immich session (checked against your own Immich, server-side), and
+# the server-to-server routes require a signature plus an entitlement check. You do NOT
+# need to restrict these by source IP — doing so would break joining from mobile data,
+# since someone's accept page calls their own server's /sidecar/join.
 handle /sidecar/* {
+	# optional belt-and-braces: the sidecar caps its own JSON bodies (MAX_BODY_KB),
+	# but capping at the proxy keeps oversized requests off the process entirely.
+	request_body {
+		max_size 2MB
+	}
 	reverse_proxy immich-shared:8300
 }
 # join banner on share pages; fallback keeps share pages working if the sidecar is down

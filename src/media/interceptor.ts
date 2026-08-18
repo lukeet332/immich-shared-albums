@@ -35,7 +35,8 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
     if (peer2) {
       try {
         const up = await fetch(`${peer2.url}/sidecar/api/v1/assets/${entry.o}/preview`,
-          { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) } });
+          { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) },
+            signal: AbortSignal.timeout(30000) });
         if (up.ok) {
           const buf = Buffer.from(await up.arrayBuffer());
           cacheWrite(entry.o, buf);

@@ -44,10 +44,12 @@ Every method needs Docker, an admin API key, and **a reverse proxy in front of I
     - **[Tailscale](https://tailscale.com/) Funnel.** Funnel just `/sidecar/*` and `/share/*` to the sidecar over HTTPS. No domain and no open router ports needed.
     - **Fully hidden behind a Tailscale VPN.** Put every participating server on the same tailnet and nothing is exposed publicly at all. Ideal when the other households are on your tailnet too.
 - **Your server's security is your responsibility.** This is a tool, and it's only as secure as the server you run it on.
-- **Needs an admin API key** (all permissions). It creates its own bot users to own the placeholder photos, which is what keeps shared albums out of your own timeline while still showing the right name and avatar. Keep the key in `.env`.
+- **Nothing is protected by being hard to reach.** Every route assumes it's on the open internet. Pages you use (the panel, joining, leaving) require you to be **signed in to your own Immich** — the sidecar has no accounts of its own and checks your session against Immich itself. Server-to-server routes require a signature *and* a check that the asking household was actually offered that album and that photo. Being able to reach an endpoint is never permission to use it.
+- **Share links keep their own rules.** A password-protected link needs that same password to join across servers, and an expired link won't join at all. Set `REQUIRE_SHARE_PASSWORD=true` to refuse links that have no password — worth it on a public domain, because otherwise a forwarded link is the whole credential.
+- **Needs an admin API key** (all permissions), because it creates the bot users that own the placeholder photos — that's what keeps shared albums out of your own timeline while still showing the right name and avatar. Keep the key in `.env`. Those bot users are **not** admins, get a narrowly-scoped key, and have no password kept anywhere, so nobody can sign in as them.
 - **It can't touch your photos.** It only ever deletes the placeholder stubs it made itself, and only when you leave an album. The delete code refuses any asset it doesn't own, so your real library is safe whatever the key can do.
 - **Small attack surface.** Zero dependencies, plain Node plus the built-in `node:sqlite`, and a codebase you can read.
-- **Closed by default.** Two servers have to be introduced by a share link before anything flows. After that every request is signed, and the owner can remove any household at any time.
+- **Closed by default, with one caveat worth knowing.** Two servers have to be introduced by a share link before anything flows, every later request is signed, and the owner can remove any household at any time. The caveat: a share link is a *bearer* credential — whoever holds it (and its password) can introduce their server. Treat album links like you'd treat any link that grants access.
 
 ## Good to know
 
@@ -57,7 +59,7 @@ Every method needs Docker, an admin API key, and **a reverse proxy in front of I
 
 ## Versioning
 
-Semver with a sync-contract policy (a MAJOR bump means older peers can't sync with you). Versions are set automatically from commits, every change is gated on the e2e suite (66 checks plus a browser lane), and a weekly job runs against the latest Immich release to catch breakage early. See [CHANGELOG.md](./CHANGELOG.md).
+Semver with a sync-contract policy (a MAJOR bump means older peers can't sync with you). Versions are set automatically from commits, every change is gated on the e2e suite (84 checks plus a browser lane, 18 of them security regressions), and a weekly job runs against the latest Immich release to catch breakage early. See [CHANGELOG.md](./CHANGELOG.md).
 
 ## Support
 

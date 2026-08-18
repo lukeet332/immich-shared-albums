@@ -10,6 +10,21 @@ import { immichJson, jsonBody, usersById, USERS } from './client.ts';
 import { sign } from '../peers.ts';
 
 export const slugify = (s) => (s || 'peer').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'peer';
+
+/**
+ * Exactly what a utility user does, and nothing else. These are non-admin accounts, so an
+ * "all" key was never admin-equivalent — but it still granted every action that user could
+ * take, on a credential that sits in state.db. This is the list the sidecar actually
+ * exercises: own the stubs, curate the mirror album, mirror comments, carry an avatar.
+ */
+const UTILITY_PERMISSIONS = [
+  'asset.upload', 'asset.read', 'asset.update', 'asset.delete', 'asset.download',
+  'album.create', 'album.read', 'album.update', 'album.delete',
+  'albumAsset.create', 'albumAsset.delete',
+  'albumUser.create', 'albumUser.update', 'albumUser.delete',
+  'activity.create', 'activity.read', 'activity.delete', 'activity.statistics',
+  'user.read', 'user.update', 'userProfileImage.create', 'userProfileImage.update',
+];
 export async function ensureUtilityUser(displayName) {
   state.contributors = state.contributors || {};
   const slug = slugify(displayName);
@@ -66,11 +81,29 @@ export async function ensureUtilityUser(displayName) {
   if (!login.accessToken) throw new Error(`login failed for ${email} — will retry`);
   const keyRes = await (await fetch(`${CFG.immichUrl}/api/api-keys`,
     { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.accessToken}` },
-      body: JSON.stringify({ name: 'sidecar', permissions: ['all'] }) })).json();
+      body: JSON.stringify({ name: 'sidecar', permissions: UTILITY_PERMISSIONS }) })).json();
   if (!keyRes.secret) throw new Error(`api-key mint failed for ${email} (${JSON.stringify(keyRes).slice(0,120)}) — will retry`);
-  c = { ...(c || {}), userId: user.id, key: keyRes.secret, password };
+  // The password existed only to mint that key. Roll it to a value we never keep, so these
+  // accounts stop being sign-in-able at all: from here the sidecar holds a scoped API key
+  // and nothing that can open an interactive session. A stored password would otherwise be
+  // a standing login to your server, sitting in state.db, for a bot that never needs one.
+  let passwordRetired = false;
+  try {
+    await immichJson(`/admin/users/${user.id}`,
+      { ...jsonBody({ password: crypto.randomBytes(24).toString('base64url'), shouldChangePassword: false }), method: 'PUT' });
+    passwordRetired = true;
+  } catch (e) { log(`WARNING: could not retire the login password for ${email}: ${e.message}`); }
+  if (CFG.utilityQuotaMb > 0) {
+    try {
+      await immichJson(`/admin/users/${user.id}`,
+        { ...jsonBody({ quotaSizeInBytes: CFG.utilityQuotaMb * 1024 * 1024 }), method: 'PUT' });
+    } catch (e) { log(`could not set utility quota for ${email}: ${e.message}`); }
+  }
+  c = { ...(c || {}), userId: user.id, key: keyRes.secret };
+  if (!passwordRetired) c.password = password; // keep it only if the roll failed, so a retry can resume
+  else delete c.password;
   state.contributors[slug] = c; save();
-  log(`provisioned utility user "${displayName} (via shared albums)"`);
+  log(`provisioned utility user "${displayName} (via shared albums)" (scoped key${passwordRetired ? ', no login' : ''})`);
   return c;
 }
 export async function syncAvatar(c, peerUrl, originUserId) {
