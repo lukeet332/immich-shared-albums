@@ -33,7 +33,7 @@ Two households, one shared album, created and shared and joined and commented on
 
 Every method needs Docker, an admin API key, and **a reverse proxy in front of Immich**. Shared photos and the join banner reach your server through three small routes (`/sidecar/*`, `/share/*`, and the GET byte routes) placed ahead of your normal Immich route. Pick one, easiest first:
 
-- **Preferred: let an AI agent install it.** If you have an AI coding agent on the server (Claude Code, Cursor, Copilot CLI, etc.), paste [deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md). It discovers your setup, installs the sidecar, adds the proxy routes adapted to *your* reverse proxy, and verifies the result. It's the most hands-off option and the only one that adapts to any proxy (Caddy, nginx, NPM, Traefik, tunnels).
+- **Preferred: let an AI agent install it.** If you use an AI coding agent (Claude Code, Cursor, Copilot CLI, etc.), either on the server or on your own machine with SSH access to it, paste [deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md). It discovers your setup, installs the sidecar, adds the proxy routes adapted to *your* reverse proxy, and verifies the result. It's the most hands-off option and the only one that adapts to any proxy (Caddy, nginx, NPM, Traefik, tunnels).
 - **Guided script.** No agent? Clone next to your Immich and run `bash deploy/install.sh`. It auto-detects your Immich network, builds and starts the sidecar, health-checks it, and prints the proxy routes for you to add.
 - **Manual.** Build the container and add the three routes yourself. See [deploy/](./deploy/).
 
