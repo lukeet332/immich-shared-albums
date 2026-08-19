@@ -12,6 +12,7 @@ import { getAlbum, getAlbumAssets, usersById, immichJson } from '../immich/clien
 import { shareableAssets, assetToRef } from '../immich/refs.ts';
 import { materialiseRef, deleteProxyAsset } from '../immich/materialise.ts';
 import { recordOffered, forgetOffered } from '../p2p/entitlement.ts';
+import { detectInvitesOnce, pullInvitationsOnce } from './invites.ts';
 
 // Leave & purge: the reverse of joining. Removes every stub this album materialised
 // (utility-owner-guarded), the mirror album, the mapping and its ledger — a join is
@@ -82,6 +83,9 @@ export async function watchOnce() {
       } else log(`watcher error on "${mapping.albumName}": ${e.message}`);
     }
   }
+  // native invitations: an album shared with a peer's stand-in becomes a mapping
+  try { await detectInvitesOnce(); } catch (e) { log(`invite detection error: ${e.message}`); }
+  try { await pullInvitationsOnce(); } catch (e) { log(`invitation pull error: ${e.message}`); }
   await reconcileOnce();
 }
 // Heal member mirrors: re-pull the origin manifest and materialise anything we

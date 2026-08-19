@@ -85,6 +85,11 @@ ordinary data we planted, or a web page we serve.
   album members see them. Joins are per-user: the accept page reads the
   visitor's own Immich session and adds exactly that account; a second user
   joining the same link is added to the existing mirror.
+- **native invitations** — a peer household gets a local stand-in user, so adding it to an
+  album in Immich's own picker shares that album cross-server and removing it revokes. Detected
+  by listing albums *as the stand-in* (the admin key only sees its own albums, which is why
+  link-based sharing is broken for non-admins). Members **pull** invitations rather than being
+  pushed them, so a household with no inbound reachability still works. See `sync/invites.ts`.
 - **web** — the panel, the share-page join banner (shadow-DOM, fails silent),
   the accept page, and a transparent proxy for share-page SPA assets when the
   sidecar fronts Immich directly. All fail open.

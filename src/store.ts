@@ -19,6 +19,15 @@ export type Mapping = {
   id: string; role: 'owner' | 'member'; albumId: string; albumName: string;
   peer: string; remoteAlbumId?: string; remoteMappingId?: string;
   permissions?: 'view' | 'contribute'; adminSlug?: string;
+  /** How this share came about. Absent means 'link' (every mapping predating invitations).
+   *  Load-bearing: only 'invite' mappings may be retired by sync/invites when a peer's
+   *  stand-in disappears from an album — a link-redeemed mapping never had a stand-in added
+   *  to its album, so retiring those there would silently unshare every link-based album. */
+  via?: 'link' | 'invite';
+  /** Display name of the album's owner, captured when an invitation is detected. Link joins
+   *  learn this from the redeem response instead; without it a mirror would be named after
+   *  the household rather than the person who shared it. */
+  albumOwnerName?: string;
   dead?: boolean; failCount?: number;
   localVersion?: string; remoteVersion?: string;
   commentCount?: number; remoteCommentCount?: number;

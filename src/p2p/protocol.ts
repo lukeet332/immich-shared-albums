@@ -73,7 +73,7 @@ export async function handleRedeem(req, body) {
     mapping.permissions = link.allowUpload ? 'contribute' : 'view';
   } else {
     mapping = { id: crypto.randomUUID(), role: 'owner', albumId: album.id, albumName: album.albumName,
-      peer: household.publicKey, permissions: link.allowUpload ? 'contribute' : 'view' };
+      peer: household.publicKey, permissions: link.allowUpload ? 'contribute' : 'view', via: 'link' };
     state.mappings.push(mapping);
     log(`peer joined: "${household.name}" -> album "${album.albumName}"`);
   }

@@ -8,6 +8,7 @@ folder is the **application** protocol on top of them.
 |---|---|
 | `protocol.ts` | Inbound handlers, mostly owner-side. `handleRedeem` turns a share link into a pinned peer + mapping and returns the manifest; `handleRefs` accepts pushed photos; `handleVersion`/`handleManifest` answer the cheap handshake and the full offer set; `handleNudge` reacts to "something moved, pull now". Each returns `[statusCode, jsonBody]` for the router. |
 | `join.ts` | The **member side** of joining. Redeems a share link against the origin, pins the peer, provisions the host utility user, creates the local mirror album, adds the joining user, and kicks off the first reconcile. Idempotent — re-joining just adds the user to the existing mirror. |
+| `mirror.ts` | Creating the local mirror of a remote album — the utility-user owner, local members as editors, the mapping, and the background fill. Shared by `join.ts` (share link) and `sync/invites.ts` (native invitation): two ways to acquire an album, one way to mirror it. |
 | `entitlement.ts` | What a peer may **read**, as distinct from who it is. Records every asset advertised to a mapping, and answers the byte routes' "is this peer allowed this asset". |
 
 **The handshake, end to end:** the banner (`../web/banner/`) collects the joiner's own
