@@ -1,9 +1,10 @@
 /**
  * web/passthrough.ts — transparent fall-through proxy to Immich for anything that isn't a
  * sidecar route (share pages, SPA bundles, /api). Injects the join banner into /share HTML.
- * In production a reverse proxy usually handles this directly; this keeps the demo/simple
- * single-front setup fully working. Websocket upgrades are refused cleanly — a fetch()-based
- * proxy can't carry them; live web updates need the Immich port (or a real reverse proxy).
+ * In production a reverse proxy may handle this directly, but the sidecar can also be the
+ * SINGLE front for Immich — which is the simplest thing to install, because it needs one
+ * reverse-proxy route instead of three path-matched ones in a required order. Protocol
+ * upgrades are carried by web/upgrade.ts, so live web updates work in that mode too.
  *
  * Both directions stream. Photo uploads reach Immich through here in the single-front
  * setup, and buffering them would put every upload in the sidecar's heap — the opposite of
@@ -15,7 +16,6 @@ import { CFG } from '../config.ts';
 import { BANNER_JS } from './banner.ts';
 
 export async function proxyToImmich(req, res, pathname: string): Promise<void> {
-  if (req.headers.upgrade) { res.writeHead(426, { 'Content-Type': 'text/plain' }); res.end('websockets are not proxied here — connect to Immich directly'); return; }
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(req.headers)) {
     if (typeof v === 'string') headers[k] = v; else if (Array.isArray(v)) headers[k] = v.join(', ');

@@ -60,6 +60,9 @@ diff, reload the proxy — Immich itself is untouched throughout.
 4. If my Immich is reachable from the public internet, set REQUIRE_SHARE_PASSWORD=true
    and ALLOW_PRIVATE_PEERS=false in the sidecar env, and tell me what each one
    changes. Skip both if I am only reachable over a LAN or a tailnet.
+5. Read deploy/exposure.md and offer me the hardening from section 2 (access log,
+   rate limiting, security headers) as a diff I can approve. Do not apply it
+   without showing me first.
 
 Notes for you, the agent:
 - The sidecar is additive and fail-open: if it dies, only the banner and
