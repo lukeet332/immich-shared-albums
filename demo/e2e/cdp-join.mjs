@@ -34,7 +34,7 @@ await page.evaluate(async ({ addr, fn }) => {
 }, { addr: ADDR, fn: bannerEl.toString() });
 await page.waitForTimeout(800);
 await page.evaluate((fn) => { eval(`(${fn})`)('button.join').click(); }, bannerEl.toString());
-await page.waitForURL('**/sidecar/accept*', { timeout: 30000 });
+await page.waitForURL('**/immich-shared-albums/accept*', { timeout: 30000 });
 console.log('accept page reached');
 
 await page.waitForFunction(() => document.getElementById('who')?.textContent?.includes('Joining as'), null, { timeout: 20000 });

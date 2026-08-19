@@ -58,7 +58,7 @@ photos.example.com {
 	}
 
 	# the sidecar speaks JSON only, so a tight body cap is safe HERE
-	handle /sidecar/* {
+	handle /immich-shared-albums/* {
 		request_body {
 			max_size 2MB
 		}
@@ -101,7 +101,7 @@ Apply changes with `docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 downtime, and it refuses a bad config rather than half-applying it.
 
 Using nginx, Traefik or NPM instead? The single route above translates directly: one
-`location /`, one router label, or one proxy host. Only the `handle /sidecar/*` body cap and
+`location /`, one router label, or one proxy host. Only the `handle /immich-shared-albums/*` body cap and
 the header lines need their equivalents.
 
 ---
@@ -166,7 +166,7 @@ for p in 22 2283 9090 5432; do nc -z -w3 your-public-ip $p && echo "$p OPEN"; do
 curl -sI https://photos.example.com/ | grep -iE 'strict-transport|x-content-type|referrer'
 
 # the sidecar's admin surface must be closed
-curl -s -o /dev/null -w '%{http_code}\n' https://photos.example.com/sidecar/   # expect 401
+curl -s -o /dev/null -w '%{http_code}\n' https://photos.example.com/immich-shared-albums/   # expect 401
 
 # rate limiting bites (expect 401s then 429s)
 for i in $(seq 1 8); do

@@ -2,12 +2,12 @@
  * web/pages.ts — the two HTML surfaces the sidecar serves: the admin PANEL and the
  * signed-out/signed-in ACCEPT_PAGE that turns a share link into a join.
  *
- * Both talk to /sidecar/join, which authenticates the caller's Immich session server-side
+ * Both talk to <prefix>/join, which authenticates the caller's Immich session server-side
  * (web/auth.ts). The client-side checks here are for UX only — telling someone they need
  * to sign in before they fill a form, and asking for an album password when the origin
  * says one is required. Nothing here is a security control.
  */
-import { CFG } from '../config.ts';
+import { CFG, ROUTE_PREFIX } from '../config.ts';
 import { state } from '../state.ts';
 
 export const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -39,7 +39,7 @@ export const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="vie
  const el=document.getElementById('msg'),pw=document.getElementById('pw');el.textContent='Joining…';
  const payload={url:document.getElementById('u').value};
  if(pw.style.display!=='none'&&pw.value)payload.password=pw.value;
- const r=await fetch('join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+ const r=await fetch('${ROUTE_PREFIX}/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
  const d=await r.json().catch(()=>({error:'failed'}));
  if(d&&d.needsAuth){location.href=d.signInUrl||'/auth/login';return}
  if(d&&d.passwordRequired){pw.style.display='block';pw.focus();
@@ -98,7 +98,7 @@ document.getElementById('go').onclick=async()=>{
  const pw=document.getElementById('pw');
  const body={url:scheme+'://'+frag.host+'/share/'+frag.key,forUserId:ME.id};
  if(pw.style.display!=='none'&&pw.value)body.password=pw.value;
- const r=await fetch('/sidecar/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ const r=await fetch('${ROUTE_PREFIX}/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
  const d=await r.json().catch(()=>({error:'failed'}));
  var reset=function(){go.disabled=false;go.classList.remove('busy');go.textContent='Accept & join';};
  // the session went away between page load and click — send them to sign in and back

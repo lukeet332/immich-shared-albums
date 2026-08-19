@@ -37,3 +37,13 @@ export const CFG = {
 if (!CFG.apiKey) { console.error('IMMICH_API_KEY required'); process.exit(1); }
 export const log = (...a) => console.log(new Date().toISOString(), ...a);
 export const UTILITY_SUFFIX = ' (via shared albums)';
+
+/**
+ * The URL prefix this addon owns on the Immich origin.
+ *
+ * "sidecar" was a generic term staking a claim another Immich addon could reasonably want, so
+ * it moved to a name specific to this project. There is deliberately no compatibility shim for
+ * the old prefix: the install base was small enough that a clean break beat carrying a second
+ * route surface forever. Both peers must run a version that agrees on this.
+ */
+export const ROUTE_PREFIX = '/immich-shared-albums';

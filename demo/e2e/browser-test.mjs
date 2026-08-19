@@ -44,7 +44,7 @@ check('unknown server shows inline error (no 404 stranding)',
 // 3. auto-capitalised scheme + scheme discovery still reach the accept page
 await input.fill('Http://' + B_ADDR);
 await page.locator('#immich-shared-albums-banner button.join').click();
-const reached = await page.waitForURL('**/sidecar/accept*', { timeout: 20000 }).then(() => true).catch(() => false);
+const reached = await page.waitForURL('**/immich-shared-albums/accept*', { timeout: 20000 }).then(() => true).catch(() => false);
 check('"Http://"-cased address still reaches the accept page', reached);
 
 // 4. signed-out accept page: sign-in prompt, Accept disabled

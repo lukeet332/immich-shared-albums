@@ -5,7 +5,7 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import { state } from './state.ts';
-import { CFG } from './config.ts';
+import { CFG, ROUTE_PREFIX } from './config.ts';
 
 const PRIVATE_V4 = [
   /^127\./, /^10\./, /^192\.168\./, /^169\.254\./, /^0\./,
@@ -77,7 +77,7 @@ export function nudgePeers(albumId: string, exceptPeerPub?: string) {
     if (mp.albumId !== albumId || mp.dead || mp.role !== 'owner' || mp.peer === exceptPeerPub) continue;
     const peer = state.peers.find(p => p.pub === mp.peer);
     if (!peer) continue;
-    signedFetch(`${peer.url}/sidecar/api/v1/albums/${albumId}/nudge`, JSON.stringify({ album: albumId }))
+    signedFetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${albumId}/nudge`, JSON.stringify({ album: albumId }))
       .catch(() => { /* fail-open */ });
   }
 }

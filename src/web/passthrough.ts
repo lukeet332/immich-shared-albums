@@ -12,7 +12,7 @@
  * /share HTML is buffered, because injecting the banner means rewriting the document.
  */
 import { Readable } from 'node:stream';
-import { CFG } from '../config.ts';
+import { CFG, ROUTE_PREFIX } from '../config.ts';
 import { BANNER_JS } from './banner.ts';
 
 export async function proxyToImmich(req, res, pathname: string): Promise<void> {
@@ -37,8 +37,8 @@ export async function proxyToImmich(req, res, pathname: string): Promise<void> {
   const ct = up.headers.get('content-type') || '';
   if (req.method === 'GET' && pathname.startsWith('/share/') && ct.includes('text/html') && BANNER_JS) {
     let html = Buffer.from(await up.arrayBuffer()).toString();
-    html = html.includes('</body>') ? html.replace('</body>', '<script src="/sidecar/banner.js" defer></script></body>')
-                                    : html + '<script src="/sidecar/banner.js" defer></script>';
+    html = html.includes('</body>') ? html.replace('</body>', `<script src="${ROUTE_PREFIX}/banner.js" defer></script></body>`)
+                                    : html + `<script src="${ROUTE_PREFIX}/banner.js" defer></script>`;
     res.writeHead(up.status, outHeaders); res.end(html); return;
   }
   res.writeHead(up.status, outHeaders);

@@ -6,7 +6,7 @@
  * Returns true iff it wrote the response; false tells the router to fall through.
  */
 import { Readable } from 'node:stream';
-import { CFG, log } from '../config.ts';
+import { CFG, log, ROUTE_PREFIX } from '../config.ts';
 import { state, store } from '../state.ts';
 import { sign } from '../peers.ts';
 import { immich } from '../immich/client.ts';
@@ -34,7 +34,7 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
     const peer2 = mapping2 && state.peers.find(pe => pe.pub === mapping2.peer);
     if (peer2) {
       try {
-        const up = await fetch(`${peer2.url}/sidecar/api/v1/assets/${entry.o}/preview`,
+        const up = await fetch(`${peer2.url}${ROUTE_PREFIX}/api/v1/assets/${entry.o}/preview`,
           { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) },
             signal: AbortSignal.timeout(30000) });
         if (up.ok) {

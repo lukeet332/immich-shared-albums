@@ -8,7 +8,7 @@
  * p2p/entitlement whether this specific peer was ever offered this specific asset. Without
  * that, "a valid peer" would mean "any asset in the library that it can name".
  */
-import { log } from '../config.ts';
+import { log, ROUTE_PREFIX } from '../config.ts';
 import { state, store } from '../state.ts';
 import { sign, callingPeer } from '../peers.ts';
 import { peerMayRead } from '../p2p/entitlement.ts';
@@ -39,7 +39,7 @@ export async function fetchTrueBytes(assetId: string, kind: 'preview' | 'origina
       const headers: Record<string, string> = { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) };
       if (range) headers.Range = range;
       try {
-        const up = await fetchWithHeaderTimeout(`${peer.url}/sidecar/api/v1/assets/${entry.o}/${kind}`, { headers });
+        const up = await fetchWithHeaderTimeout(`${peer.url}${ROUTE_PREFIX}/api/v1/assets/${entry.o}/${kind}`, { headers });
         if (up.ok) return up;
         log(`chained ${kind} fetch failed (${up.status}) — serving local stub`);
       } catch (e) { log(`chained ${kind} fetch error (${e.message}) — serving local stub`); }

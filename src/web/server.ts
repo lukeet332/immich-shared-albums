@@ -14,7 +14,7 @@
  */
 import http from 'node:http';
 import { Readable } from 'node:stream';
-import { CFG, log } from '../config.ts';
+import { CFG, log, ROUTE_PREFIX } from '../config.ts';
 import { state } from '../state.ts';
 import { immich } from '../immich/client.ts';
 import { verify } from '../peers.ts';
@@ -55,10 +55,11 @@ export const server = http.createServer(async (req, res) => {
   const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
   try {
     const u = new URL(req.url, 'http://x');
+    const path = u.pathname;
     let m;
     // Peer-facing avatar read. Signed like every other peer route — a bare public key is
     // not a credential, it is published in every redeem response.
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/users\/([^/]+)\/avatar$/))) {
+    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/users\/([^/]+)\/avatar$/))) {
       if (req.method !== 'GET') return send(405, { error: 'method not allowed' });
       const peerKey = req.headers['x-isa-key'] as string;
       const peer = state.peers.find(pp => pp.pub === peerKey);
@@ -72,10 +73,10 @@ export const server = http.createServer(async (req, res) => {
         return res.end(Buffer.from(await av.arrayBuffer()));
       } catch { return send(404, { error: 'no avatar' }); }
     }
-    if (u.pathname === '/sidecar/banner.js') {
+    if (path === `${ROUTE_PREFIX}/banner.js`) {
       res.writeHead(200, { 'Content-Type': 'application/javascript' }); return res.end(BANNER_JS);
     }
-    if (u.pathname === '/sidecar/accept') {
+    if (path === `${ROUTE_PREFIX}/accept`) {
       res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(ACCEPT_PAGE());
     }
     // Byte interceptors (hotlink model): the app's own asset URLs are served with true
@@ -84,13 +85,13 @@ export const server = http.createServer(async (req, res) => {
     if (assetHit && req.method === 'GET' && await serveInterceptedBytes(req, res, assetHit[1], assetHit[2])) return;
     // Everything that isn't a sidecar route -> transparent proxy to Immich (banner-injected
     // on /share pages). Streams both ways: uploads must not be buffered here.
-    if (!u.pathname.startsWith('/sidecar')) return proxyToImmich(req, res, u.pathname);
+    if (!path.startsWith(ROUTE_PREFIX)) return proxyToImmich(req, res, u.pathname);
 
     // ---- the sidecar's own routes: cap the body, then authorise ----
     const body = await readCappedBody(req);
     if (body === null) return send(413, { error: `request body exceeds ${CFG.maxBodyKb}KB` });
 
-    if (u.pathname === '/sidecar/' || u.pathname === '/sidecar') {
+    if (path === `${ROUTE_PREFIX}/` || path === ROUTE_PREFIX) {
       const caller = await callerIdentity(req);
       if (!caller?.isAdmin) {
         res.writeHead(caller ? 403 : 401, { 'Content-Type': 'text/html' });
@@ -98,7 +99,7 @@ export const server = http.createServer(async (req, res) => {
       }
       res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(PANEL());
     }
-    if (u.pathname === '/sidecar/join' && req.method === 'POST') {
+    if (path === `${ROUTE_PREFIX}/join` && req.method === 'POST') {
       // The account being joined is the SIGNED-IN one. The request body may name a
       // different user only if the caller is an admin acting on their behalf.
       const caller = await callerIdentity(req);
@@ -115,32 +116,32 @@ export const server = http.createServer(async (req, res) => {
           e.passwordRequired ? { error: e.message, passwordRequired: true } : { error: e.message });
       }
     }
-    if (u.pathname === '/sidecar/leave' && req.method === 'POST') {
+    if (path === `${ROUTE_PREFIX}/leave` && req.method === 'POST') {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('leave a shared album'));
       if (!caller.isAdmin) return send(403, { error: 'only an admin can remove a shared album' });
       try { const b = JSON.parse(body); return send(200, await leaveAlbum(b.mappingId)); }
       catch (e) { return send(400, { error: e.message }); }
     }
-    if (u.pathname === '/sidecar/api/v1/invites/redeem' && req.method === 'POST') {
+    if (path === `${ROUTE_PREFIX}/api/v1/invites/redeem` && req.method === 'POST') {
       const [code, obj] = await handleRedeem(req, body); return send(code, obj);
     }
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/activity$/)) && req.method === 'POST') {
+    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/activity$/)) && req.method === 'POST') {
       const [code, obj] = await handleActivity(req, body, m[1]); return send(code, obj);
     }
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/refs$/)) && req.method === 'POST') {
+    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/refs$/)) && req.method === 'POST') {
       const [code, obj] = await handleRefs(req, body, m[1]); return send(code, obj);
     }
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/version$/)) && req.method === 'GET') {
+    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/version$/)) && req.method === 'GET') {
       const [code, obj] = await handleVersion(req, m[1]); return send(code, obj);
     }
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/manifest$/)) && req.method === 'GET') {
+    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/manifest$/)) && req.method === 'GET') {
       const [code, obj] = await handleManifest(req, m[1]); return send(code, obj);
     }
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/comments$/)) && req.method === 'GET') {
+    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/comments$/)) && req.method === 'GET') {
       const [code, obj] = await handleComments(req, m[1]); return send(code, obj);
     }
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/albums\/([^/]+)\/nudge$/)) && req.method === 'POST') {
+    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/nudge$/)) && req.method === 'POST') {
       const [code, obj] = await handleNudge(req, body, m[1]); return send(code, obj);
     }
     const streamOut = (out) => { // stream byte responses through — never buffer (Pi-friendly)
@@ -152,13 +153,13 @@ export const server = http.createServer(async (req, res) => {
       res.writeHead(out.status || 200, headers);
       Readable.fromWeb(out.body).pipe(res);
     };
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/original$/))) {
+    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/assets\/([^/]+)\/original$/))) {
       return streamOut(await handleOriginal(req, m[1]));
     }
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/playback$/))) {
+    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/assets\/([^/]+)\/playback$/))) {
       return streamOut(await handlePlayback(req, m[1]));
     }
-    if ((m = u.pathname.match(/^\/sidecar\/api\/v1\/assets\/([^/]+)\/preview$/))) {
+    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/assets\/([^/]+)\/preview$/))) {
       const out = await handlePreview(req, m[1]);
       if (Array.isArray(out)) return send(out[0], out[1]);
       res.writeHead(200, { 'Content-Type': out.headers.get('content-type') || 'image/jpeg' });
@@ -166,7 +167,7 @@ export const server = http.createServer(async (req, res) => {
     }
     // Liveness only. The join banner probes this cross-origin to discover a sidecar, so
     // it stays open — which is exactly why it must not name the household or count peers.
-    if (u.pathname === '/sidecar/health') {
+    if (path === `${ROUTE_PREFIX}/health`) {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       return res.end(JSON.stringify({ ok: true }));
     }

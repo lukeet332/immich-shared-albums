@@ -41,7 +41,7 @@ INSTALL:
    volume for /data. Start it with docker compose up -d.
 3. Add these three routes to my reverse proxy BEFORE the catch-all Immich route,
    then reload the proxy:
-     /sidecar/*                                       -> sidecar :8300
+     /immich-shared-albums/*                                       -> sidecar :8300
      /share/*                                         -> sidecar :8300 (fallback: immich)
      GET /api/assets/*/{thumbnail,original,video/playback} -> sidecar :8300 (fallback: immich)
    The byte routes MUST be GET-only and fall back to Immich when the sidecar is
@@ -49,7 +49,7 @@ INSTALL:
    Show me the exact diff before applying it.
 
 VERIFY (all three, report results):
-1. GET <public-url>/sidecar/health returns {"ok":true,...}.
+1. GET <public-url>/immich-shared-albums/health returns {"ok":true,...}.
 2. Any Immich share link opened in a browser shows the
    "Join shared album with your server?" banner over the working share page.
 3. The share page itself still fully loads (photos render behind the banner).
@@ -74,9 +74,9 @@ Notes for you, the agent:
   world-readable files.
 - All three routes are safe to expose publicly — the sidecar authenticates
   human routes against the user's own Immich session and peer routes by
-  signature plus entitlement. Do NOT add source-IP restrictions to /sidecar/*:
+  signature plus entitlement. Do NOT add source-IP restrictions to /immich-shared-albums/*:
   it would break joining from mobile data, because someone's accept page calls
-  their own server's /sidecar/join.
+  their own server's /immich-shared-albums/join.
 ```
 
 ---
@@ -84,5 +84,5 @@ Notes for you, the agent:
 ## What a successful install looks like
 
 - One new container (`immich-shared`) on your Immich docker network.
-- `https://your-domain/sidecar/` shows the sidecar panel.
+- `https://your-domain/immich-shared-albums/` shows the sidecar panel.
 - Share links show the join banner; everything else about Immich is unchanged.

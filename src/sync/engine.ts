@@ -4,7 +4,7 @@
  * refs, and propagate deletions. leaveAlbum is the full reverse of a join. startWatchLoop
  * runs it all on an overlap-guarded interval.
  */
-import { CFG, log } from '../config.ts';
+import { CFG, log, ROUTE_PREFIX } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
 import { state, store, save, seenHas, seenAdd, wireChecksum } from '../state.ts';
 import { sign, signedFetch } from '../peers.ts';
@@ -64,7 +64,7 @@ export async function watchOnce() {
       const add = [];
       for (const a of fresh) add.push(await assetToRef(a));
       const body = JSON.stringify({ add });
-      const r = await signedFetch(`${peer.url}/sidecar/api/v1/albums/${targetMapping}/refs`, body);
+      const r = await signedFetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${targetMapping}/refs`, body);
       if (r.ok) {
         const failed = new Set((await r.json().catch(() => ({}))).failed || []);
         const landed = fresh.filter(a => !failed.has(wireChecksum(a)));
@@ -108,12 +108,12 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
       // handshake first: only pull the full manifest when the origin's version moved.
       // remoteVersion is only stored after a CLEAN pass so failures keep retrying.
       let version = null;
-      const vr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/version`, { ...sig, signal: AbortSignal.timeout(15000) });
+      const vr = await fetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${target}/version`, { ...sig, signal: AbortSignal.timeout(15000) });
       if (vr.ok) {
         version = (await vr.json().catch(() => ({}))).version || null;
         if (version && version === mapping.remoteVersion) return;
       }
-      const r = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/manifest`, { ...sig, signal: AbortSignal.timeout(30000) });
+      const r = await fetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${target}/manifest`, { ...sig, signal: AbortSignal.timeout(30000) });
       if (!r.ok) return;
       const { manifest = [] } = await r.json();
       // The version's asset count comes from the album table (instant); the manifest

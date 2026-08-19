@@ -140,7 +140,7 @@
       const canProbe = (sch) => !(location.protocol === 'https:' && sch === 'http');
       const probeOk = async (sch) => {
         try {
-          const r = await fetch(`${sch}://${domain}/sidecar/health`, { signal: AbortSignal.timeout(5000) });
+          const r = await fetch(`${sch}://${domain}/immich-shared-albums/health`, { signal: AbortSignal.timeout(5000) });
           return r.ok && (await r.json()).ok === true;
         } catch (_) { return false; }
       };
@@ -163,7 +163,7 @@
       localStorage.setItem('isa-my-server', raw);
       // Invite payload rides the fragment: never appears in any server's logs.
       const payload = encodeURIComponent(JSON.stringify({ v: 1, host: location.host, scheme: location.protocol.replace(':',''), key: SHARE_KEY }));
-      location.href = `${scheme}://${domain}/sidecar/accept#${payload}`;
+      location.href = `${scheme}://${domain}/immich-shared-albums/accept#${payload}`;
     });
 
     document.body.appendChild(host);

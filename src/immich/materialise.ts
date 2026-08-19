@@ -4,7 +4,7 @@
  * hard-guarded so only utility-owned proxies are ever deleted.
  */
 import crypto from 'node:crypto';
-import { log } from '../config.ts';
+import { log, ROUTE_PREFIX } from '../config.ts';
 import { state, seenHas, seenAdd } from '../state.ts';
 import { sign } from '../peers.ts';
 import { STUB_JPEG, immichJson, jsonBody, uploadAsset, addToAlbum, applyRefMetadata } from './client.ts';
@@ -22,7 +22,7 @@ export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   // the owner's rendition so the tile carries a real poster and duration.
   let bytes: Buffer;
   if (ref.kind === 'video') {
-    const pr = await fetch(`${peerUrl}/sidecar/api/v1/assets/${ref.originAsset}/playback`,
+    const pr = await fetch(`${peerUrl}${ROUTE_PREFIX}/api/v1/assets/${ref.originAsset}/playback`,
       { ...sigHeaders(ref.originAsset), headers: { ...sigHeaders(ref.originAsset).headers, Range: 'bytes=0-2097151' }, signal: AbortSignal.timeout(120000) });
     if (!pr.ok) { log(`playback stub fetch failed for ${ref.originAsset}: ${pr.status}`); return false; }
     bytes = Buffer.concat([Buffer.from(await pr.arrayBuffer()), crypto.randomBytes(8)]);
