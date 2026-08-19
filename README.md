@@ -59,7 +59,7 @@ Every method needs Docker, an admin API key, and **a reverse proxy in front of I
 
 ## Versioning
 
-Semver with a sync-contract policy (a MAJOR bump means older peers can't sync with you). Versions are set automatically from commits, every change is gated on the e2e suite (84 checks plus a browser lane, 18 of them security regressions), and a weekly job runs against the latest Immich release to catch breakage early. See [CHANGELOG.md](./CHANGELOG.md).
+Semver with a sync-contract policy (a MAJOR bump means older peers can't sync with you). Versions are set automatically from commits, every change is gated on the e2e suite (86 checks plus a browser lane, 18 of them security regressions), and a weekly job runs against the latest Immich release to catch breakage early. See [CHANGELOG.md](./CHANGELOG.md).
 
 ## Support
 

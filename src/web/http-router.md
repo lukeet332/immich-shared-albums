@@ -5,7 +5,8 @@ The single process's one HTTP entry point and the HTML it serves.
 | File | What it does |
 |---|---|
 | `server.ts` | The router: a thin dispatch table mapping each path to a handler. Exports `server`; `index.ts` calls `.listen()`. |
-| `passthrough.ts` | The transparent fall-through proxy to Immich for anything that isn't a sidecar route (share pages, SPA bundles, `/api`), with join-banner injection on `/share/*` HTML. Websocket upgrades are refused cleanly. |
+| `passthrough.ts` | The transparent fall-through proxy to Immich for anything that isn't a sidecar route (share pages, SPA bundles, `/api`), with join-banner injection on `/share/*` HTML. Streams both directions — uploads must never be buffered here. |
+| `upgrade.ts` | Websockets and any other protocol upgrade, piped at the socket level. Separate from `passthrough.ts` because `fetch()` cannot carry an upgrade at all: these never reach the router, arriving on the server's `upgrade` event instead. Two transports, two files. |
 | `banner.ts` | Loads `banner/banner.js` once — it's both served at `/sidecar/banner.js` and injected by `passthrough.ts`. |
 | `pages.ts` | The two HTML surfaces: the admin **PANEL** (join box + status) and the **ACCEPT_PAGE** that turns a share link into a join (detects sign-in, prompts for an album password when the origin asks, then deeplinks into the app once the album has filled). |
 | `auth.ts` | Who is calling a human-facing route. Forwards the caller's own Immich credentials (session cookie or API key) to Immich's `/users/me` and believes the answer. The sidecar has no accounts of its own and must never invent any. |
@@ -29,6 +30,26 @@ they fill a form. The server never trusts it.
 JSON routes are buffered, under `MAX_BODY_KB`; passthrough traffic including photo uploads
 streams through), and authorise before doing work.
 
-**On the byte interceptors:** in production a reverse proxy (Caddy) usually routes the byte
-paths straight to the sidecar; when the sidecar fronts Immich directly (demo/simple setups)
-the fall-through proxy keeps the whole Immich SPA working, websockets excepted.
+## Two deployment shapes
+
+**Single front (simplest to install).** Point the reverse proxy at the sidecar and let it
+pass everything else through to Immich — one route, no path matching, no ordering to get
+wrong. Keep Immich as a second upstream so a dead sidecar fails open:
+
+```caddy
+photos.example.com {
+	reverse_proxy immich-shared:8300 immich-server:2283 {
+		lb_policy first
+		fail_duration 10s
+	}
+}
+```
+
+This is the shape the demo rig uses — the phones sign in to the sidecar's origin, because
+that is where the byte interceptors live. It also removes every same-origin question at a
+stroke: banner injection, byte interception and the accept page's session cookie all just
+work, because there genuinely is one origin.
+
+**Path-routed (Immich stays the front).** Route only `/sidecar/*`, `/share/*` and the three
+GET byte paths to the sidecar, ahead of the catch-all. More proxy config, and the ordering
+matters, but Immich's traffic never traverses the sidecar. See [deploy/](../../deploy/).

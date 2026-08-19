@@ -472,6 +472,36 @@ if (DKEY && dMirror) check('no ping-pong on D', (await albumAssets(D, DKEY, dMir
 // before the hardening pass; they are the reason the sidecar is safe to publish
 // on a domain rather than only reachable over a tailnet.
 // ─────────────────────────────────────────────────────────────────────────────
+// Websockets: the sidecar must be able to front Immich on its own, which means carrying
+// protocol upgrades. Without this, live web updates silently die in single-front setups —
+// invisible to the mobile apps, which is exactly how it went unnoticed before.
+console.log('— stage: websocket upgrades pass through the sidecar');
+{
+  const http = await import('node:http');
+  // the accept hash is derived from the client key, so BOTH handshakes must send the same
+  // key for the comparison below to mean anything
+  const key = crypto.randomBytes(16).toString('base64');
+  const wsHandshake = (base) => new Promise((resolve) => {
+    const u = new URL('/api/socket.io/?EIO=4&transport=websocket', base);
+    const req = http.request({
+      hostname: u.hostname, port: u.port, path: u.pathname + u.search, method: 'GET',
+      headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key },
+    });
+    const done = (v) => { try { req.destroy(); } catch {} resolve(v); };
+    req.on('upgrade', (res, sock) => { try { sock.destroy(); } catch {} done({ status: 101, accept: res.headers['sec-websocket-accept'] }); });
+    req.on('response', (res) => done({ status: res.statusCode }));
+    req.on('error', () => done({ status: 0 }));
+    setTimeout(() => done({ status: -1 }), 8000);
+    req.end();
+  });
+  const viaSidecar = await wsHandshake(BS);
+  const direct = await wsHandshake(B);
+  check('websocket upgrade completes through the sidecar (101)', viaSidecar.status === 101, `got ${viaSidecar.status}`);
+  check('handshake is byte-exact (same Sec-WebSocket-Accept as Immich direct)',
+        !!viaSidecar.accept && viaSidecar.accept === direct.accept,
+        `sidecar=${viaSidecar.accept} immich=${direct.accept}`);
+}
+
 console.log('— stage: security (unauthenticated surface)');
 {
   const status = async (url, init) => (await fetch(url, init).catch(() => ({ status: 0 }))).status;
