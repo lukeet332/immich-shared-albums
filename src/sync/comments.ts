@@ -3,7 +3,7 @@
  * members pull the canonical list and push their own, gated by a cheap activity-count
  * statistic so messages land in seconds without heavy polling. startCommentLoop runs it.
  */
-import { CFG, log, UTILITY_SUFFIX } from '../config.ts';
+import { CFG, log, UTILITY_SUFFIX, ROUTE_PREFIX } from '../config.ts';
 import { state, save, seenActHas, seenActAdd } from '../state.ts';
 import { sign, signedFetch, nudgePeers, callingPeer, mappingFor } from '../peers.ts';
 import { immichJson, jsonBody, usersById } from '../immich/client.ts';
@@ -84,7 +84,7 @@ export async function syncCommentsOnce() {
       if (!comments.length) { if (stats) { mapping.commentCount = stats.comments; save(); } continue; }
       const targetMapping = mapping.role === 'member' ? (mapping.remoteMappingId || mapping.remoteAlbumId) : mapping.albumId;
       const payload = comments.map(a => ({ id: a.id, comment: a.comment, author: a.user?.name || CFG.name, authorUserId: a.user?.id }));
-      const r = await signedFetch(`${peer.url}/sidecar/api/v1/albums/${targetMapping}/activity`, JSON.stringify({ comments: payload }));
+      const r = await signedFetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${targetMapping}/activity`, JSON.stringify({ comments: payload }));
       if (r.ok) {
         comments.forEach(a => seenActAdd(`local:${a.id}`));
         // the origin answers with canonical ids for our comments — remember them so the
@@ -103,11 +103,11 @@ export async function syncCommentsOnce() {
 export async function pullCanonicalComments(mapping, peer) {
   const target = mapping.remoteMappingId || mapping.remoteAlbumId;
   const sig = { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(target) } };
-  const vr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/version`, { ...sig, signal: AbortSignal.timeout(15000) });
+  const vr = await fetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${target}/version`, { ...sig, signal: AbortSignal.timeout(15000) });
   if (!vr.ok) return;
   const v = await vr.json().catch(() => ({}));
   if (v.comments == null || v.comments === mapping.remoteCommentCount) return;
-  const cr = await fetch(`${peer.url}/sidecar/api/v1/albums/${target}/comments`, { ...sig, signal: AbortSignal.timeout(20000) });
+  const cr = await fetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${target}/comments`, { ...sig, signal: AbortSignal.timeout(20000) });
   if (!cr.ok) return;
   const { comments = [] } = await cr.json().catch(() => ({}));
   await materialiseComments(mapping, peer.url, peer.name, comments);

@@ -57,7 +57,7 @@ await page.waitForTimeout(600);
 await page.locator('#immich-shared-albums-banner button.join').click();
 
 console.log('scene 3: accept page — already knows who I am');
-await page.waitForURL('**/sidecar/accept*', { timeout: 20000 });
+await page.waitForURL('**/immich-shared-albums/accept*', { timeout: 20000 });
 await page.waitForFunction(() => document.getElementById('who')?.textContent?.includes('Joining as'), null, { timeout: 20000 });
 await page.waitForTimeout(1800);
 await page.locator('#go').click();

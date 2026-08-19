@@ -77,7 +77,7 @@ say "Starting sidecar"
 printf "waiting for health"
 ok=""
 for _ in $(seq 1 20); do
-  if (cd "$INSTALL_DIR" && docker compose exec -T immich-shared wget -qO- http://localhost:8300/sidecar/health 2>/dev/null) | grep -q '"ok":true'; then
+  if (cd "$INSTALL_DIR" && docker compose exec -T immich-shared wget -qO- http://localhost:8300/immich-shared-albums/health 2>/dev/null) | grep -q '"ok":true'; then
     ok=1; break
   fi
   printf "."; sleep 1
@@ -94,7 +94,7 @@ cat <<EOF
 Add to your existing site config, BEFORE the catch-all Immich route:
 
   Caddy (byte routes are GET-only and fall back to Immich if the sidecar is down):
-    handle /sidecar/* { reverse_proxy immich-shared:8300 }
+    handle /immich-shared-albums/* { reverse_proxy immich-shared:8300 }
     handle /share/*   { reverse_proxy immich-shared:8300 immich-server:2283 { lb_policy first } }
     @sharedbytes {
       method GET
@@ -103,7 +103,7 @@ Add to your existing site config, BEFORE the catch-all Immich route:
     handle @sharedbytes { reverse_proxy immich-shared:8300 immich-server:2283 { lb_policy first } }
 
   nginx:
-    location /sidecar/ { proxy_pass http://127.0.0.1:$HOST_PORT; }
+    location /immich-shared-albums/ { proxy_pass http://127.0.0.1:$HOST_PORT; }
     location /share/   { proxy_pass http://127.0.0.1:$HOST_PORT; }
     location ~ ^/api/assets/[^/]+/(thumbnail|original|video/playback)$ {
       limit_except GET { proxy_pass http://immich-upstream; }
@@ -112,7 +112,7 @@ Add to your existing site config, BEFORE the catch-all Immich route:
 
 Then reload the proxy and open any Immich share link — you should see the
 "Join shared album with your server?" banner. Verify the panel at:
-  $PUBLIC_URL/sidecar/
+  $PUBLIC_URL/immich-shared-albums/
 
 To uninstall: cd $INSTALL_DIR && docker compose down && remove the proxy lines.
 EOF

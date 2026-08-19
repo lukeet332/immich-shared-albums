@@ -41,7 +41,7 @@ await page.waitForTimeout(900);
 
 console.log('scene 3: Join -> pre-flight -> accept page (already signed in)');
 await page.locator('#immich-shared-albums-banner button.join').click();
-await page.waitForURL('**/sidecar/accept*', { timeout: 20000 });
+await page.waitForURL('**/immich-shared-albums/accept*', { timeout: 20000 });
 await page.waitForFunction(() => document.getElementById('who')?.textContent?.includes('Joining as'), null, { timeout: 20000 });
 await page.waitForTimeout(2500);
 

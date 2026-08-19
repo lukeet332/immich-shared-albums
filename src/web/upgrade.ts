@@ -13,7 +13,7 @@
  * regardless and why the gap went unnoticed for so long.
  */
 import net from 'node:net';
-import { CFG, log } from '../config.ts';
+import { CFG, log, ROUTE_PREFIX } from '../config.ts';
 
 /**
  * Pipe an upgrade straight through to Immich.
@@ -24,8 +24,8 @@ import { CFG, log } from '../config.ts';
  * dropping it truncates the first frame.
  */
 export function proxyUpgrade(req, socket, head: Buffer): void {
-  // nothing under /sidecar speaks a websocket — refuse rather than open a socket to Immich
-  if ((req.url || '').startsWith('/sidecar')) { socket.destroy(); return; }
+  // nothing under our own prefix speaks a websocket — refuse rather than open a socket
+  if ((req.url || '').startsWith(ROUTE_PREFIX)) { socket.destroy(); return; }
   let target: URL;
   try { target = new URL(CFG.immichUrl); } catch { socket.destroy(); return; }
 

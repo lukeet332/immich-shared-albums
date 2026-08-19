@@ -31,7 +31,7 @@ Two households, one shared album, created and shared and joined and commented on
 
 ## Install
 
-Every method needs Docker, an admin API key, and **a reverse proxy in front of Immich**. Shared photos and the join banner reach your server through three small routes (`/sidecar/*`, `/share/*`, and the GET byte routes) placed ahead of your normal Immich route. Pick one, easiest first:
+Every method needs Docker, an admin API key, and **a reverse proxy in front of Immich**. Shared photos and the join banner reach your server through three small routes (`/immich-shared-albums/*`, `/share/*`, and the GET byte routes) placed ahead of your normal Immich route. Pick one, easiest first:
 
 - **Preferred: let an AI agent install it.** If you use an AI coding agent (Claude Code, Cursor, Copilot CLI, etc.), either on the server or on your own machine with SSH access to it, paste [deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md). It discovers your setup, installs the sidecar, adds the proxy routes adapted to *your* reverse proxy, and verifies the result. It's the most hands-off option and the only one that adapts to any proxy (Caddy, nginx, NPM, Traefik, tunnels).
 - **Guided script.** No agent? Clone next to your Immich and run `bash deploy/install.sh`. It auto-detects your Immich network, builds and starts the sidecar, health-checks it, and prints the proxy routes for you to add.
@@ -39,9 +39,9 @@ Every method needs Docker, an admin API key, and **a reverse proxy in front of I
 
 ## Permissions & security
 
-- **You choose how exposed your server is.** This addon doesn't open your server to the internet or change how sharing works; it only handles the server-to-server handshake. Each server just needs to reach the other's sidecar. A peer only ever touches `/sidecar/*` and `/share/*`, so the rest of Immich (all of `/api`, your library, admin) can stay private whichever way you set it up:
+- **You choose how exposed your server is.** This addon doesn't open your server to the internet or change how sharing works; it only handles the server-to-server handshake. Each server just needs to reach the other's sidecar. A peer only ever touches `/immich-shared-albums/*` and `/share/*`, so the rest of Immich (all of `/api`, your library, admin) can stay private whichever way you set it up:
     - **Public domain over HTTPS.** The standard reverse-proxy setup under Install.
-    - **[Tailscale](https://tailscale.com/) Funnel.** Funnel just `/sidecar/*` and `/share/*` to the sidecar over HTTPS. No domain and no open router ports needed.
+    - **[Tailscale](https://tailscale.com/) Funnel.** Funnel just `/immich-shared-albums/*` and `/share/*` to the sidecar over HTTPS. No domain and no open router ports needed.
     - **Fully hidden behind a Tailscale VPN.** Put every participating server on the same tailnet and nothing is exposed publicly at all. Ideal when the other households are on your tailnet too.
 - **Your server's security is your responsibility.** This is a tool, and it's only as secure as the server you run it on. [deploy/exposure.md](./deploy/exposure.md) is a short, practical guide: pick how exposed you want to be, then paste one hardening block.
 - **Nothing is protected by being hard to reach.** Every route assumes it's on the open internet. Pages you use (the panel, joining, leaving) require you to be **signed in to your own Immich** — the sidecar has no accounts of its own and checks your session against Immich itself. Server-to-server routes require a signature *and* a check that the asking household was actually offered that album and that photo. Being able to reach an endpoint is never permission to use it.

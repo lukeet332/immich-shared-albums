@@ -4,7 +4,7 @@
  * kicks off the first reconcile. Idempotent: re-joining just adds the user to the mirror.
  */
 import crypto from 'node:crypto';
-import { CFG, SIDECAR_VERSION, log } from '../config.ts';
+import { CFG, SIDECAR_VERSION, log, ROUTE_PREFIX } from '../config.ts';
 import { state, save } from '../state.ts';
 import { signedFetch, assertPeerUrlAllowed } from '../peers.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
@@ -19,7 +19,7 @@ export async function join(shareUrl, forUserId, password?: string) {
   await assertPeerUrlAllowed(origin);
   const body = JSON.stringify({ shareKey, protocol: 1, version: SIDECAR_VERSION, password,
     household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name } });
-  const r = await signedFetch(`${origin}/sidecar/api/v1/invites/redeem`, body);
+  const r = await signedFetch(`${origin}${ROUTE_PREFIX}/api/v1/invites/redeem`, body);
   if (!r.ok) {
     // Surface the other sidecar's own message (an expired link, a wrong password) but
     // never an arbitrary upstream body — that would make this a read primitive for

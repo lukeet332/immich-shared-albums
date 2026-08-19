@@ -25,8 +25,8 @@ ordinary data we planted, or a web page we serve.
             │  state.db (SQLite): keys, peers, mappings,  │
             │        seen ledger, activity, contributors  │
             │                                             │
-            │  web: panel (/sidecar/) · banner (/share/*) │
-            │       accept page (/sidecar/accept)         │
+            │  web: panel (/immich-shared-albums/) · banner (/share/*) │
+            │       accept page (/immich-shared-albums/accept)         │
             └─────────────────────────────────────────────┘
 ```
 

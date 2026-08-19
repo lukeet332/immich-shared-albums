@@ -4,7 +4,7 @@
  * attribution). Provisions/heals them, mints their API keys, and syncs their avatars.
  */
 import crypto from 'node:crypto';
-import { CFG, log, UTILITY_SUFFIX } from '../config.ts';
+import { CFG, log, UTILITY_SUFFIX, ROUTE_PREFIX } from '../config.ts';
 import { state, save } from '../state.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
 import { sign } from '../peers.ts';
@@ -109,7 +109,7 @@ export async function ensureUtilityUser(displayName) {
 export async function syncAvatar(c, peerUrl, originUserId) {
   if (!peerUrl || !originUserId || c.avatarDone) return;
   try {
-    const av = await fetch(`${peerUrl}/sidecar/api/v1/users/${originUserId}/avatar`,
+    const av = await fetch(`${peerUrl}${ROUTE_PREFIX}/api/v1/users/${originUserId}/avatar`,
       { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(originUserId) }, signal: AbortSignal.timeout(30000) });
     if (av.ok) {
       const fd = new FormData();
