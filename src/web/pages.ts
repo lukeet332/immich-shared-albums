@@ -37,6 +37,16 @@ export const PANEL =
   <div id="msg"></div></div>
  <div class="card"><b style="font-size:14px">Shared albums</b>
   ${state.mappings.map(m => `<div class="item"><span>${m.albumName}</span><span class="muted">${m.role} · ${(state.peers.find(p => p.pub === m.peer) || {}).name || ''}</span></div>`).join('') || '<p class="muted" style="font-size:13px">None yet.</p>'}</div>
+ <div class="card"><b style="font-size:14px">Link a server</b>
+  <p class="muted" style="font-size:13px">Send this link to the other server's admin, who pastes it
+   into their own panel. It links the two servers so you can invite each other's people to albums
+   in Immich. It is single-use, expires in 15 minutes, and grants access to no photos on its own.</p>
+  <div style="display:flex;gap:8px"><button onclick="mint()">Create a link</button>
+   <button onclick="document.getElementById('pastebox').style.display='flex'">I have a link</button></div>
+  <div id="minted"></div>
+  <form id="pastebox" style="display:none;margin-top:10px" onsubmit="redeem(event)">
+   <input id="plink" placeholder="Paste the link they sent you"><button>Link</button></form>
+  <div id="pmsg"></div></div>
  <div class="card"><b style="font-size:14px">Connected servers</b>
   <p class="muted" style="font-size:13px">Once a server is connected, its people appear in Immich's
    own “share album” picker. Unlinking removes them from the picker, tears down the albums they
@@ -65,6 +75,31 @@ export const PANEL =
   el.textContent='This album is password protected — enter the same password you would use to view it.';return}
  el.textContent=r.ok?('Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing. It will appear in your app shortly.'):('Error: '+(d.error||r.status));
  if(r.ok)setTimeout(()=>location.reload(),2500)}
+async function mint(){
+ const el=document.getElementById('pmsg');el.textContent='Creating…';
+ const r=await fetch('${ROUTE_PREFIX}/pairings',{method:'POST'});
+ const d=await r.json().catch(()=>({error:'failed'}));
+ if(!r.ok){el.textContent='Error: '+(d.error||r.status);return}
+ el.textContent='';
+ const mins=Math.max(1,Math.round((d.expiresAt-Date.now())/60000));
+ const box=document.getElementById('minted');
+ box.innerHTML='<p class="muted" style="font-size:13px;margin:10px 0 6px">Send this to them — it works once, and expires in '+mins+' minutes.</p>';
+ const inp=document.createElement('input');inp.readOnly=true;inp.value=d.link;inp.style.width='100%';
+ const row=document.createElement('div');row.style.display='flex';row.style.gap='8px';
+ const copy=document.createElement('button');copy.textContent='Copy';
+ // navigator.clipboard needs a secure context, so it is absent on a plain-HTTP LAN panel.
+ // Selecting the text is the fallback, otherwise the button looks broken for exactly the
+ // people running the simplest setups.
+ copy.onclick=async()=>{try{await navigator.clipboard.writeText(d.link);copy.textContent='Copied'}
+  catch{inp.select();copy.textContent='Press Ctrl/Cmd+C'}};
+ row.appendChild(inp);row.appendChild(copy);box.appendChild(row)}
+async function redeem(e){e.preventDefault();
+ const el=document.getElementById('pmsg'),v=document.getElementById('plink').value;
+ el.textContent='Linking…';
+ const r=await fetch('${ROUTE_PREFIX}/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({link:v})});
+ const d=await r.json().catch(()=>({error:'failed'}));
+ el.textContent=r.ok?('Linked with '+d.linked+' — their people can now be invited to albums.'):('Error: '+(d.error||r.status));
+ if(r.ok)setTimeout(()=>location.reload(),1800)}
 async function unlink(pub,name){
  if(!confirm('Unlink "'+name+'"?\n\nTheir photos and albums are removed from this server, and '
   +'albums you shared with them stop syncing. Your own photos are untouched.'))return;

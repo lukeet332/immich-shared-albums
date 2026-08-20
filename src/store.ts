@@ -119,6 +119,18 @@ export class Store {
     };
   }
 
+  /**
+   * Generic kv access, for small side-tables that do not deserve a typed field on `state` —
+   * currently just unredeemed pairing codes. Deliberately narrow: the four main collections have
+   * their own fields and their own save path, and this must not become a second way to write them.
+   */
+  kv(name: string) {
+    return this.kvGet(name);
+  }
+  kvSet(name: string, value: unknown) {
+    this.db.prepare('INSERT OR REPLACE INTO kv (name, value) VALUES (?, ?)').run(name, JSON.stringify(value));
+  }
+
   private kvGet(name: string) {
     const row = this.db.prepare('SELECT value FROM kv WHERE name = ?').get(name) as
       { value: string } | undefined;

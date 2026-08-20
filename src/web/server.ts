@@ -28,6 +28,7 @@ import { handleRedeem, handleRefs, handleVersion, handleNudge, handleManifest } 
 import { join } from '../p2p/join.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { unlinkPeer, linkedPeers, localHousehold } from '../p2p/unlink.ts';
+import { handlePair, mintPairing, pendingPairings, revokePairing, redeemPairing } from '../p2p/pair.ts';
 import { handleActivity, handleComments } from '../sync/comments.ts';
 import { invitationsFor, localDirectory } from '../sync/invites.ts';
 
@@ -154,6 +155,52 @@ export const server = http.createServer(async (req, res) => {
       if (!caller.isAdmin) return send(403, { error: 'only an admin can see connected servers' });
       return send(200, { household: localHousehold(), peers: linkedPeers() });
     }
+    if (path === `${ROUTE_PREFIX}/pairings` && req.method === 'GET') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('link a server'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can link a server' });
+      return send(200, { pairings: pendingPairings(), publicUrl: CFG.publicUrl });
+    }
+    if (path === `${ROUTE_PREFIX}/pairings` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('link a server'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can link a server' });
+      try {
+        return send(200, mintPairing());
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
+    }
+    if (path === `${ROUTE_PREFIX}/pairings/revoke` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('revoke a pairing link'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can revoke a pairing link' });
+      try {
+        const b = JSON.parse(body);
+        // Accept the whole link, so the panel can pass back exactly what it displayed.
+        const code =
+          String(b.link || b.code || '')
+            .split('#')
+            .pop() ?? '';
+        revokePairing(code);
+        return send(200, { revoked: true });
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
+    }
+    // Pasting a link another server gave us. This is the standalone way to link two servers:
+    // no album is involved, and pairing conveys no access to any photo.
+    if (path === `${ROUTE_PREFIX}/pair` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('link a server'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can link a server' });
+      try {
+        const b = JSON.parse(body);
+        return send(200, await redeemPairing(b.link));
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
+    }
     if (path === `${ROUTE_PREFIX}/unlink` && req.method === 'POST') {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('unlink a server'));
@@ -164,6 +211,12 @@ export const server = http.createServer(async (req, res) => {
       } catch (e) {
         return send(400, { error: e.message });
       }
+    }
+    // Another server redeeming a code we minted. Signature-bound to the key being enrolled, and
+    // deliberately NOT session-authed: the caller is a server, not a person.
+    if (path === `${ROUTE_PREFIX}/api/v1/pair` && req.method === 'POST') {
+      const [code, obj] = await handlePair(req, body);
+      return send(code, obj);
     }
     if (path === `${ROUTE_PREFIX}/api/v1/invites/redeem` && req.method === 'POST') {
       const [code, obj] = await handleRedeem(req, body);
