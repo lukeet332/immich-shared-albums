@@ -63,6 +63,12 @@ export function mappingFor(peerPub: string, ref: string, role?: 'owner' | 'membe
     && (!role || m.role === role)
     && (m.id === ref || m.albumId === ref || m.remoteAlbumId === ref));
 }
+/** GET with a detached signature over `signedValue` — the read-side counterpart of signedFetch. */
+export const signedGet = (url: string, signedValue: string, init: RequestInit = {}) => fetch(url, {
+  ...init,
+  signal: init.signal ?? AbortSignal.timeout(20000),
+  headers: { ...(init.headers || {}), 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(signedValue) },
+});
 export const signedFetch = (url, body) => fetch(url, {
   signal: AbortSignal.timeout(30000),
   method: 'POST',

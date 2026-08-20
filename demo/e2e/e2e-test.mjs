@@ -317,9 +317,16 @@ console.log('— stage: share link created before any photos (empty album) still
   const meB5 = (await api(B, BKEY, '/users/me')).id;
   const join5 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share5}`, forUserId: meB5 }, BKEY))).json();
   check('empty-album join succeeds', !!join5.albumId, JSON.stringify(join5).slice(0, 100));
-  const bu5 = (await api(B, BKEY, '/admin/users')).filter(u => u.email.endsWith('@sidecar.local'));
+  // Assert the property directly, via the mirror's actual owner. The old form asserted that no
+  // household-named utility user existed anywhere, which stopped being a valid proxy once peer
+  // stand-ins arrived — a household-named user is now expected and correct.
+  const mirror5 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'born empty');
+  const owner5 = mirror5
+    ? ((await api(B, BKEY, `/albums/${mirror5.id}?withoutAssets=true`)).albumUsers || [])
+        .find(au => au.role === 'owner')?.user?.name
+    : undefined;
   check('empty-album mirror owner named after the sharer, not the household',
-        !bu5.some(u => u.name.startsWith('Mock household')), bu5.map(u => u.name).join(', '));
+        !!owner5 && !owner5.startsWith('Mock household'), `owner=${owner5}`);
 }
 
 console.log('— stage: view-only share link (allowUpload off) rejects cross-server uploads');
@@ -475,6 +482,75 @@ if (DKEY && dMirror) check('no ping-pong on D', (await albumAssets(D, DKEY, dMir
 // Websockets: the sidecar must be able to front Immich on its own, which means carrying
 // protocol upgrades. Without this, live web updates silently die in single-front setups —
 // invisible to the mobile apps, which is exactly how it went unnoticed before.
+// Native invitations: sharing an album by adding a peer's stand-in user in Immich's OWN
+// picker, with no share link involved. The origin detects it by listing albums AS the stand-in
+// (which is why this works for albums a non-admin owns), and the member discovers it by polling.
+console.log('— stage: native album invitations (no share link)');
+{
+  const originPeers = readSidecarKv('household-c/c-sidecar', 'peers');
+  const bPeer = (originPeers || []).find(p => (p.name || '').includes('(B)'));
+  if (!bPeer) console.log('  (skipped: cannot read the origin\'s peer record for B)');
+  else {
+    const bKeys = readSidecarKv('b-sidecar', 'keys');
+    const signAsB = (v) => crypto.sign(null, Buffer.from(v),
+      crypto.createPrivateKey({ key: Buffer.from(bKeys.priv, 'base64url'), format: 'der', type: 'pkcs8' })).toString('base64url');
+    const marker = (await api(A, AKEY, '/admin/users')).find(u => u.name === `${bPeer.name} (via shared albums)`);
+    check('origin auto-created a stand-in user for the peer household', !!marker,
+          marker ? marker.email : 'not found');
+
+    if (marker) {
+      const invAlb = (await api(A, AKEY, '/albums', j({ albumName: 'natively invited album' }))).id;
+      const invAsset = await upload(A, AKEY, 'invited.jpg', `inv${Date.now() % 10000}`, '2026-05-01T09:00:00.000Z');
+      await ensurePreviews(A, AKEY, [invAsset]);
+      await api(A, AKEY, `/albums/${invAlb}/assets`, { ...j({ ids: [invAsset] }), method: 'PUT' });
+      // exactly what a human does in the picker
+      await api(A, AKEY, `/albums/${invAlb}/users`,
+        { ...j({ albumUsers: [{ userId: marker.id, role: 'editor' }] }), method: 'PUT' });
+      // 200 is not proof — Immich silently ignores some adds, so read it back
+      const back = await api(A, AKEY, `/albums/${invAlb}?withoutAssets=true`);
+      check('stand-in is really a member after the invite',
+            (back.albumUsers || []).some(au => au.user?.id === marker.id && au.role === 'editor'));
+
+      const mirrored = await until(async () => {
+        const al = await api(B, BKEY, '/albums');
+        return al.find(a => a.albumName === 'natively invited album') || null;
+      }, 150000);
+      check('member mirrors an invited album automatically, with no link', !!mirrored,
+            mirrored ? '' : 'timed out');
+      if (mirrored) {
+        const arrived = await until(async () => {
+          const x = await albumAssets(B, BKEY, mirrored.id); return x.length >= 1 ? x : null;
+        }, 150000);
+        check('invited album\'s photo materialises on the member', !!arrived,
+              arrived ? '' : 'timed out');
+      }
+
+      // Withdrawal. Asserted against the /invitations CONTRACT rather than state.db: the
+      // running process is the authoritative view, and the runner deletes state.db from under
+      // a live sidecar during purge, so a host-side file read is not a reliable oracle here.
+      const invitations = async () => {
+        const r = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/invitations`,
+          { headers: { 'x-isa-key': bKeys.pub, 'x-isa-sig': signAsB('invitations') } });
+        return r.ok ? ((await r.json()).invitations || []) : null;
+      };
+      const listedBefore = await invitations();
+      check('the invited album is offered on /invitations',
+            !!listedBefore?.some(i => i.album?.name === 'natively invited album'),
+            JSON.stringify(listedBefore?.map(i => i.album?.name)));
+      check('/invitations offers ONLY invitation-shaped shares, never link ones',
+            !!listedBefore && listedBefore.every(i => i.album?.name === 'natively invited album'),
+            `${listedBefore?.length} entries`);
+
+      await fetch(`${A}/api/albums/${invAlb}/user/${marker.id}`, { method: 'DELETE', headers: { 'x-api-key': AKEY } });
+      const retired = await until(async () => {
+        const list = await invitations();
+        return list && !list.some(i => i.album?.name === 'natively invited album') ? true : null;
+      }, 90000);
+      check('withdrawing the invite stops it being offered', !!retired, retired ? '' : 'still offered');
+    }
+  }
+}
+
 // The route prefix moved from /sidecar to /immich-shared-albums — a clean break, no shim, so
 // both peers must agree on it. Pins the panel answering WITHOUT a trailing slash, and that
 // nothing still emits the old prefix.

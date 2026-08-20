@@ -17,7 +17,7 @@ import { Readable } from 'node:stream';
 import { CFG, log, ROUTE_PREFIX } from '../config.ts';
 import { state } from '../state.ts';
 import { immich } from '../immich/client.ts';
-import { verify } from '../peers.ts';
+import { verify, callingPeer } from '../peers.ts';
 import { handlePreview, handleOriginal, handlePlayback } from '../media/proxy.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { PANEL, ACCEPT_PAGE } from './pages.ts';
@@ -28,6 +28,7 @@ import { handleRedeem, handleRefs, handleVersion, handleNudge, handleManifest } 
 import { join } from '../p2p/join.ts';
 import { leaveAlbum } from '../sync/engine.ts';
 import { handleActivity, handleComments } from '../sync/comments.ts';
+import { invitationsFor } from '../sync/invites.ts';
 
 /**
  * Read a JSON-route body under a hard cap, or null if it is too big.
@@ -140,6 +141,12 @@ export const server = http.createServer(async (req, res) => {
     }
     if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/comments$/)) && req.method === 'GET') {
       const [code, obj] = await handleComments(req, m[1]); return send(code, obj);
+    }
+    // What has this peer been invited to? Pull-only by design — see sync/invites.
+    if (path === `${ROUTE_PREFIX}/api/v1/invitations` && req.method === 'GET') {
+      const peer = callingPeer(req, 'invitations');
+      if (!peer) return send(403, { error: 'unknown or unverified peer' });
+      return send(200, { invitations: invitationsFor(peer.pub) });
     }
     if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/nudge$/)) && req.method === 'POST') {
       const [code, obj] = await handleNudge(req, body, m[1]); return send(code, obj);

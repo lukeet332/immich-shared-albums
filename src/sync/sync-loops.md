@@ -5,9 +5,43 @@ also driven on demand by nudges (`../p2p/protocol.ts`) so changes land in second
 
 | File | What it does |
 |---|---|
+| `invites.ts` | **Native album invitations.** Each peer gets a local stand-in user; adding it to any album in Immich's own picker shares that album, and removing it revokes. The origin detects this by listing albums as the stand-in; members discover it by polling `…/api/v1/invitations`. |
 | `engine.ts` | Photo sync. `watchOnce` pushes local additions out to peers; `reconcileOnce`/`reconcileMapping` pull the origin manifest, materialise anything missing, and **propagate deletions** (with a consistency gate so an indexing lag never wrongly deletes). `leaveAlbum` is the full reverse of a join — purges every stub, the mirror album, the mapping and its ledger. `startWatchLoop` runs it on an overlap-guarded interval. |
 | `comments.ts` | Cross-server comments. The origin album is the source of truth: members pull the canonical list and push their own, gated by a cheap activity-count statistic so messages land in seconds without heavy polling. Includes the inbound `handleActivity`/`handleComments` handlers. `startCommentLoop` runs the fast lane. |
 
 **Why loops and not just webhooks:** nudges make the common case instant, but the timed
 sweep is the safety net — a lost nudge costs nothing because the next scheduled handshake
 catches everything (fail-open by design). `RECONCILE_DEBUG=1` traces every decision.
+
+## Why invitations are detected as the stand-in, not with the admin key
+
+`GET /albums` is scoped per user, so the admin key only ever sees the admin's own albums —
+which is exactly why a non-admin cannot share cross-server through a share link today. Asking
+*as the stand-in* sidesteps it: it does not matter who owns the album, only that the stand-in
+was invited to it.
+
+Three Immich behaviours this has to allow for:
+
+- the album **owner** appears inside `albumUsers` with `role: 'owner'`, and `GET /albums`
+  returns no `ownerId` at all — so the owner is only discoverable there;
+- a stand-in that *owns* an album is a mirror we created for inbound content, not an
+  invitation, so those are skipped;
+- adding a user who is already the owner returns **200 and is silently ignored**, so a 200 is
+  never proof an invitation took. Read `albumUsers` back.
+
+## Provenance is load-bearing
+
+`Mapping.via` records whether a share came from a link or an invitation, and two rules depend
+on it:
+
+1. **Only `via: 'invite'` mappings may be retired** when a stand-in vanishes from an album. A
+   link-redeemed mapping never had a stand-in added to its album, so it is absent from that
+   list by design — retiring those here would silently unshare every link-based album.
+2. **Only `via: 'invite'` mappings are offered** on `…/api/v1/invitations`. Offering link ones
+   would re-mirror albums the member already handled through `join`, and worse, would silently
+   undo `leaveAlbum` on the next poll, because leaving removes the member's mapping but not the
+   origin's.
+
+Invitations are **pulled**, never pushed: a member with no inbound reachability still syncs
+perfectly well by pulling, so a push-based invitation would fail for exactly the households
+that most need this.
