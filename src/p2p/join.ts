@@ -5,7 +5,7 @@
  */
 import { CFG, SIDECAR_VERSION, log, ROUTE_PREFIX } from '../config.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
-import { state } from '../state.ts';
+import { state, keys } from '../state.ts';
 import { signedFetch, assertPeerUrlAllowed } from '../peers.ts';
 import { ensureMirror, fillMirrorInBackground } from './mirror.ts';
 
@@ -21,7 +21,7 @@ export async function join(shareUrl, forUserId, password?: string) {
     protocol: PROTOCOL_VERSION,
     version: SIDECAR_VERSION,
     password,
-    household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name },
+    household: { publicKey: keys.pub, url: CFG.publicUrl, name: CFG.name },
   });
   const r = await signedFetch(`${origin}${ROUTE_PREFIX}/api/v1/invites/redeem`, body);
   if (!r.ok) {
@@ -47,8 +47,12 @@ export async function join(shareUrl, forUserId, password?: string) {
       version: res.version,
     });
   }
+  // Pinned just above if it was missing, so this cannot be undefined — but find it once and
+  // say so, rather than looking it up twice and pretending each result might be absent.
+  const peer = state.peers.find(pe => pe.pub === res.household.publicKey);
+  if (!peer) throw new Error('peer record vanished during join — retry');
   const { mapping, created } = await ensureMirror({
-    peer: state.peers.find(pe => pe.pub === res.household.publicKey),
+    peer,
     album: { id: res.album.id, name: res.album.name },
     permissions: res.album.permissions,
     albumOwnerName: res.albumOwner?.displayName,

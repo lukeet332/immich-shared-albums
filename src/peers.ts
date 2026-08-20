@@ -4,7 +4,7 @@
  */
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
-import { state } from './state.ts';
+import { state, keys } from './state.ts';
 import { CFG, ROUTE_PREFIX } from './config.ts';
 
 const PRIVATE_V4 = [
@@ -53,7 +53,7 @@ export const sign = body =>
       null,
       Buffer.from(body),
       crypto.createPrivateKey({
-        key: Buffer.from(state.keys.priv, 'base64url'),
+        key: Buffer.from(keys.priv, 'base64url'),
         format: 'der',
         type: 'pkcs8',
       })
@@ -105,13 +105,13 @@ export const signedGet = (url: string, signedValue: string, init: RequestInit = 
   fetch(url, {
     ...init,
     signal: init.signal ?? AbortSignal.timeout(20000),
-    headers: { ...(init.headers || {}), 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(signedValue) },
+    headers: { ...(init.headers || {}), 'x-isa-key': keys.pub, 'x-isa-sig': sign(signedValue) },
   });
 export const signedFetch = (url, body) =>
   fetch(url, {
     signal: AbortSignal.timeout(30000),
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(body) },
+    headers: { 'Content-Type': 'application/json', 'x-isa-key': keys.pub, 'x-isa-sig': sign(body) },
     body,
   });
 // Nudge: tell every OTHER household mapped to this album that it moved, so they pull

@@ -150,8 +150,9 @@ export async function detectInvitesOnce() {
         for (const [id, v] of part.invited) {
           if (!seen.invited.has(id)) seen.invited.set(id, v);
           if (t.peerUserId) {
-            if (!invitees.has(id)) invitees.set(id, new Set());
-            invitees.get(id).add(t.peerUserId);
+            let people = invitees.get(id);
+            if (!people) invitees.set(id, (people = new Set()));
+            people.add(t.peerUserId);
           }
         }
         for (const id of part.visible) seen.visible.add(id);

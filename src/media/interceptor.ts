@@ -7,7 +7,7 @@
  */
 import { Readable } from 'node:stream';
 import { CFG, log, ROUTE_PREFIX } from '../config.ts';
-import { state, store } from '../state.ts';
+import { state, store, keys } from '../state.ts';
 import { sign } from '../peers.ts';
 import { immich } from '../immich/client.ts';
 import { fetchTrueBytes } from './proxy.ts';
@@ -47,7 +47,7 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
     if (peer2) {
       try {
         const up = await fetch(`${peer2.url}${ROUTE_PREFIX}/api/v1/assets/${entry.o}/preview`, {
-          headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) },
+          headers: { 'x-isa-key': keys.pub, 'x-isa-sig': sign(entry.o) },
           signal: AbortSignal.timeout(30000),
         });
         if (up.ok) {
@@ -94,7 +94,7 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
         if (v) headers[h] = v;
       }
       res.writeHead(out.status || 200, headers);
-      Readable.fromWeb(out.body).pipe(res);
+      Readable.fromWeb(out.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
       return true;
     }
   } catch (e) {

@@ -4,9 +4,10 @@
  * refs, and propagate deletions. leaveAlbum is the full reverse of a join. startWatchLoop
  * runs it all on an overlap-guarded interval.
  */
+import type { AssetRef } from '../types.ts';
 import { CFG, log, ROUTE_PREFIX } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
-import { state, store, save, seenHas, seenAdd, wireChecksum } from '../state.ts';
+import { state, store, save, seenHas, seenAdd, wireChecksum, keys } from '../state.ts';
 import { sign, signedFetch } from '../peers.ts';
 import { getAlbum, getAlbumAssets, usersById } from '../immich/client.ts';
 import { shareableAssets, assetToRef } from '../immich/refs.ts';
@@ -47,9 +48,12 @@ export async function watchOnce() {
         continue;
       }
       const peer = state.peers.find(p => p.pub === mapping.peer);
+      // No peer record: nothing to push to. The reconcile loop below already did this;
+      // without it, peer.url below throws instead of skipping.
+      if (!peer) continue;
       const targetMapping =
         mapping.role === 'member' ? mapping.remoteMappingId || mapping.remoteAlbumId : mapping.albumId;
-      const add = [];
+      const add: AssetRef[] = [];
       for (const a of fresh) add.push(await assetToRef(a));
       const body = JSON.stringify({ add });
       const r = await signedFetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${targetMapping}/refs`, body);
@@ -105,7 +109,7 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
   RECONCILING.add(mapping.id);
   try {
     const target = mapping.remoteMappingId || mapping.remoteAlbumId;
-    const sig = { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(target) } };
+    const sig = { headers: { 'x-isa-key': keys.pub, 'x-isa-sig': sign(target) } };
     // handshake first: only pull the full manifest when the origin's version moved.
     // remoteVersion is only stored after a CLEAN pass so failures keep retrying.
     let version = null;

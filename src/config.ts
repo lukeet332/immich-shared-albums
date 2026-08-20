@@ -4,9 +4,17 @@
  */
 
 export const SIDECAR_VERSION = '0.5.0'; // x-release-please-version
+// Read and check this first: the process cannot run without it, so proving that here once
+// means `CFG.apiKey` is a plain `string` everywhere instead of `string | undefined`.
+const apiKey = process.env.IMMICH_API_KEY;
+if (!apiKey) {
+  console.error('IMMICH_API_KEY required');
+  process.exit(1);
+}
+
 export const CFG = {
   immichUrl: process.env.IMMICH_URL || 'http://immich-server:2283',
-  apiKey: process.env.IMMICH_API_KEY,
+  apiKey,
   publicUrl: (process.env.PUBLIC_URL || '').replace(/\/$/, ''),
   name: process.env.HOUSEHOLD_NAME || 'Unnamed household',
   port: Number(process.env.PORT || 8300),
@@ -38,10 +46,6 @@ export const CFG = {
   // at internal services.
   allowPrivatePeers: process.env.ALLOW_PRIVATE_PEERS !== 'false',
 };
-if (!CFG.apiKey) {
-  console.error('IMMICH_API_KEY required');
-  process.exit(1);
-}
 export const log = (...a) => console.log(new Date().toISOString(), ...a);
 export const UTILITY_SUFFIX = ' (via shared albums)';
 

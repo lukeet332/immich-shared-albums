@@ -13,7 +13,7 @@
 import crypto from 'node:crypto';
 import { CFG, SIDECAR_VERSION, log } from '../config.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
-import { state, save } from '../state.ts';
+import { state, save, keys } from '../state.ts';
 import { verify, nudgePeers, callingPeer, mappingFor } from '../peers.ts';
 import { getSharedLinkByKey, getAlbum, getAlbumAssets, ownerName, immichJson } from '../immich/client.ts';
 import { buildManifest } from '../immich/refs.ts';
@@ -113,7 +113,7 @@ export async function handleRedeem(req, body) {
     {
       protocol: PROTOCOL_VERSION,
       version: SIDECAR_VERSION,
-      household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name },
+      household: { publicKey: keys.pub, url: CFG.publicUrl, name: CFG.name },
       album: { id: album.id, name: album.albumName, permissions: link.allowUpload ? 'contribute' : 'view' },
       albumOwner,
       manifest,
@@ -129,7 +129,7 @@ export async function handleRefs(req, body, albumMappingId) {
   // the share link's "allow public user to upload" switch, honoured cross-server
   if (mapping.permissions === 'view') return [403, { error: 'view-only album — uploads not allowed' }];
   const { add = [] } = JSON.parse(body);
-  const failed = [];
+  const failed: string[] = [];
   for (const ref of add) {
     try {
       if (!(await materialiseRef(mapping, peer.url, peer.name, ref))) failed.push(ref.checksum);

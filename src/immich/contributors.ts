@@ -5,7 +5,7 @@
  */
 import crypto from 'node:crypto';
 import { CFG, log, UTILITY_SUFFIX, ROUTE_PREFIX, UTILITY_EMAIL_DOMAIN, BOT_PREFIX } from '../config.ts';
-import { state, save } from '../state.ts';
+import { state, save, keys } from '../state.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
 import { sign } from '../peers.ts';
 
@@ -200,7 +200,7 @@ export async function syncAvatar(c, peerUrl, originUserId) {
   if (!peerUrl || !originUserId || c.avatarDone) return;
   try {
     const av = await fetch(`${peerUrl}${ROUTE_PREFIX}/api/v1/users/${originUserId}/avatar`, {
-      headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(originUserId) },
+      headers: { 'x-isa-key': keys.pub, 'x-isa-sig': sign(originUserId) },
       signal: AbortSignal.timeout(30000),
     });
     if (av.ok) {
