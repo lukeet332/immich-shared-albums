@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fast gate on every commit: seconds, no containers. The e2e suite stays in CI and in
+# `bash demo/run-mock-e2e.sh` — putting a seven-minute run in a hook is how hooks get bypassed.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+set -e
+echo "pre-commit: format check, lint, typecheck, cycles"
+npx prettier --check "src/**/*.ts" "scripts/**/*.mjs" >/dev/null || {
+  echo "  ✗ formatting — run: npm run format"; exit 1; }
+npx eslint src || exit 1
+npx tsc --noEmit || exit 1
+node scripts/check-cycles.mjs >/dev/null || exit 1
+echo "pre-commit: ok"

@@ -8,6 +8,26 @@ on:
     - cron: '0 6 * * 1' # weekly: catch breakage in immich-server:release before users do
 
 jobs:
+  # Its own job, not a step in e2e: a lint failure should report as "checks", not as a
+  # confusing e2e failure, and it finishes in ~1 minute instead of waiting on Immich to boot.
+  # Worth marking as a required status check in branch protection alongside e2e.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install --silent
+      - name: Formatting (prettier)
+        run: npm run format:check
+      - name: Lint (eslint)
+        run: npm run lint
+      - name: Types (tsc)
+        run: npm run typecheck
+      - name: Import cycles
+        run: npm run cycles
+      - name: Unit tests
+        run: npm test
+
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -17,11 +37,6 @@ jobs:
       IMMICH_REF: ${{ github.event_name == 'schedule' && ':release' || '@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb' }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Typecheck (contract enforcement)
-        run: |
-          npm install --silent
-          npx tsc --noEmit
 
       - name: Start mock Immich instances (B + C + D)
         run: |

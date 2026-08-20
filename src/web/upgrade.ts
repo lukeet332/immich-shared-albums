@@ -25,9 +25,17 @@ import { CFG, log, ROUTE_PREFIX } from '../config.ts';
  */
 export function proxyUpgrade(req, socket, head: Buffer): void {
   // nothing under our own prefix speaks a websocket — refuse rather than open a socket
-  if ((req.url || '').startsWith(ROUTE_PREFIX)) { socket.destroy(); return; }
+  if ((req.url || '').startsWith(ROUTE_PREFIX)) {
+    socket.destroy();
+    return;
+  }
   let target: URL;
-  try { target = new URL(CFG.immichUrl); } catch { socket.destroy(); return; }
+  try {
+    target = new URL(CFG.immichUrl);
+  } catch {
+    socket.destroy();
+    return;
+  }
 
   const upstream = net.connect({
     host: target.hostname,
@@ -35,14 +43,16 @@ export function proxyUpgrade(req, socket, head: Buffer): void {
   });
   const bail = (why: string) => (e?: Error) => {
     if (e) log(`websocket proxy ${why}: ${e.message}`);
-    upstream.destroy(); socket.destroy();
+    upstream.destroy();
+    socket.destroy();
   };
   socket.setNoDelay(true);
   upstream.setNoDelay(true);
 
   upstream.on('connect', () => {
     const lines = [`${req.method} ${req.url} HTTP/1.1`];
-    for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+    for (let i = 0; i < req.rawHeaders.length; i += 2)
+      lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
     upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
     if (head?.length) upstream.write(head);
     socket.pipe(upstream);

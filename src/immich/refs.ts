@@ -12,15 +12,24 @@ import { wireChecksum, ledgerByAsset, seenHas } from '../state.ts';
 // append locally is stripped so downstream hops don't stack "Shared by" twice.
 export async function assetToRef(a) {
   const u = (await usersById())[a.ownerId];
-  const displayName = u?.utility ? u.name.replace(UTILITY_SUFFIX, '')
-                                 : (a.owner?.name || u?.name || CFG.name);
+  const displayName = u?.utility ? u.name.replace(UTILITY_SUFFIX, '') : a.owner?.name || u?.name || CFG.name;
   const description = (a.exifInfo?.description || '').replace(/(?:\n\n)?Shared by [^\n]*$/, '') || undefined;
-  return { originAsset: a.id, checksum: wireChecksum(a), kind: a.type === 'VIDEO' ? 'video' : 'image',
+  return {
+    originAsset: a.id,
+    checksum: wireChecksum(a),
+    kind: a.type === 'VIDEO' ? 'video' : 'image',
     fileName: a.originalFileName,
     takenAt: a.exifInfo?.dateTimeOriginal || a.fileCreatedAt,
-    exif: a.exifInfo ? { latitude: a.exifInfo.latitude, longitude: a.exifInfo.longitude,
-      description, rating: a.exifInfo.rating } : undefined,
-    contributor: { displayName, originUserId: a.ownerId } };
+    exif: a.exifInfo
+      ? {
+          latitude: a.exifInfo.latitude,
+          longitude: a.exifInfo.longitude,
+          description,
+          rating: a.exifInfo.rating,
+        }
+      : undefined,
+    contributor: { displayName, originUserId: a.ownerId },
+  };
 }
 
 // What may be offered to the peer behind `mappingId`: photos/videos they haven't seen,
@@ -33,8 +42,9 @@ export async function assetToRef(a) {
 // so it must NOT exclude already-synced assets.
 export async function offerableAssets(assets) {
   const users = await usersById();
-  return assets.filter(a => (a.type === 'IMAGE' || a.type === 'VIDEO')
-    && (!users[a.ownerId]?.utility || !!ledgerByAsset(a.id)));
+  return assets.filter(
+    a => (a.type === 'IMAGE' || a.type === 'VIDEO') && (!users[a.ownerId]?.utility || !!ledgerByAsset(a.id))
+  );
 }
 // The push queue: offerable minus what this mapping has already sent.
 export async function shareableAssets(assets, mappingId) {

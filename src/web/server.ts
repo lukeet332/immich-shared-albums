@@ -42,19 +42,28 @@ import { invitationsFor, localDirectory } from '../sync/invites.ts';
  */
 async function readCappedBody(req): Promise<string | null> {
   const max = CFG.maxBodyKb * 1024;
-  if (Number(req.headers['content-length'] || 0) > max) { req.resume(); return null; }
+  if (Number(req.headers['content-length'] || 0) > max) {
+    req.resume();
+    return null;
+  }
   const chunks = [];
   let size = 0;
   for await (const c of req) {
     size += c.length;
-    if (size > max) { req.resume(); return null; }
+    if (size > max) {
+      req.resume();
+      return null;
+    }
     chunks.push(c);
   }
   return Buffer.concat(chunks).toString();
 }
 
 export const server = http.createServer(async (req, res) => {
-  const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+  const send = (code, obj) => {
+    res.writeHead(code, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(obj));
+  };
   try {
     const u = new URL(req.url, 'http://x');
     const path = u.pathname;
@@ -66,25 +75,30 @@ export const server = http.createServer(async (req, res) => {
       const peerKey = req.headers['x-isa-key'] as string;
       const peer = state.peers.find(pp => pp.pub === peerKey);
       const related = peer && state.mappings.some(mp => mp.peer === peerKey && !mp.dead);
-      if (!peer || !related || !verify(m[1], req.headers['x-isa-sig'] as string || '', peerKey)) {
+      if (!peer || !related || !verify(m[1], (req.headers['x-isa-sig'] as string) || '', peerKey)) {
         return send(403, { error: 'unknown or unverified peer' });
       }
       try {
         const av = await immich(`/users/${m[1]}/profile-image`);
         res.writeHead(200, { 'Content-Type': av.headers.get('content-type') || 'image/jpeg' });
         return res.end(Buffer.from(await av.arrayBuffer()));
-      } catch { return send(404, { error: 'no avatar' }); }
+      } catch {
+        return send(404, { error: 'no avatar' });
+      }
     }
     if (path === `${ROUTE_PREFIX}/banner.js`) {
-      res.writeHead(200, { 'Content-Type': 'application/javascript' }); return res.end(BANNER_JS);
+      res.writeHead(200, { 'Content-Type': 'application/javascript' });
+      return res.end(BANNER_JS);
     }
     if (path === `${ROUTE_PREFIX}/accept`) {
-      res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(ACCEPT_PAGE());
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      return res.end(ACCEPT_PAGE());
     }
     // Byte interceptors (hotlink model): the app's own asset URLs are served with true
     // bytes streamed live from the owner's server for proxy assets. See media/interceptor.
     const assetHit = u.pathname.match(/^\/api\/assets\/([^/]+)\/(thumbnail|original|video\/playback)$/);
-    if (assetHit && req.method === 'GET' && await serveInterceptedBytes(req, res, assetHit[1], assetHit[2])) return;
+    if (assetHit && req.method === 'GET' && (await serveInterceptedBytes(req, res, assetHit[1], assetHit[2])))
+      return;
     // Everything that isn't a sidecar route -> transparent proxy to Immich (banner-injected
     // on /share pages). Streams both ways: uploads must not be buffered here.
     if (!path.startsWith(ROUTE_PREFIX)) return proxyToImmich(req, res, u.pathname);
@@ -99,7 +113,8 @@ export const server = http.createServer(async (req, res) => {
         res.writeHead(caller ? 403 : 401, { 'Content-Type': 'text/html' });
         return res.end(SIGN_IN_PAGE('manage shared albums'));
       }
-      res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(PANEL());
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      return res.end(PANEL());
     }
     if (path === `${ROUTE_PREFIX}/join` && req.method === 'POST') {
       // The account being joined is the SIGNED-IN one. The request body may name a
@@ -114,16 +129,22 @@ export const server = http.createServer(async (req, res) => {
         }
         return send(200, await join(b.url, forUserId, b.password));
       } catch (e) {
-        return send(e.passwordRequired ? 401 : 400,
-          e.passwordRequired ? { error: e.message, passwordRequired: true } : { error: e.message });
+        return send(
+          e.passwordRequired ? 401 : 400,
+          e.passwordRequired ? { error: e.message, passwordRequired: true } : { error: e.message }
+        );
       }
     }
     if (path === `${ROUTE_PREFIX}/leave` && req.method === 'POST') {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('leave a shared album'));
       if (!caller.isAdmin) return send(403, { error: 'only an admin can remove a shared album' });
-      try { const b = JSON.parse(body); return send(200, await leaveAlbum(b.mappingId)); }
-      catch (e) { return send(400, { error: e.message }); }
+      try {
+        const b = JSON.parse(body);
+        return send(200, await leaveAlbum(b.mappingId));
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
     }
     // Server links are admin-owned, so managing them is an admin route — not something expressed
     // by removing a bot from an album. See p2p/unlink.ts.
@@ -137,26 +158,51 @@ export const server = http.createServer(async (req, res) => {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('unlink a server'));
       if (!caller.isAdmin) return send(403, { error: 'only an admin can unlink a server' });
-      try { const b = JSON.parse(body); return send(200, await unlinkPeer(b.pub)); }
-      catch (e) { return send(400, { error: e.message }); }
+      try {
+        const b = JSON.parse(body);
+        return send(200, await unlinkPeer(b.pub));
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
     }
     if (path === `${ROUTE_PREFIX}/api/v1/invites/redeem` && req.method === 'POST') {
-      const [code, obj] = await handleRedeem(req, body); return send(code, obj);
+      const [code, obj] = await handleRedeem(req, body);
+      return send(code, obj);
     }
-    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/activity$/)) && req.method === 'POST') {
-      const [code, obj] = await handleActivity(req, body, m[1]); return send(code, obj);
+    if (
+      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/activity$/)) &&
+      req.method === 'POST'
+    ) {
+      const [code, obj] = await handleActivity(req, body, m[1]);
+      return send(code, obj);
     }
-    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/refs$/)) && req.method === 'POST') {
-      const [code, obj] = await handleRefs(req, body, m[1]); return send(code, obj);
+    if (
+      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/refs$/)) &&
+      req.method === 'POST'
+    ) {
+      const [code, obj] = await handleRefs(req, body, m[1]);
+      return send(code, obj);
     }
-    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/version$/)) && req.method === 'GET') {
-      const [code, obj] = await handleVersion(req, m[1]); return send(code, obj);
+    if (
+      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/version$/)) &&
+      req.method === 'GET'
+    ) {
+      const [code, obj] = await handleVersion(req, m[1]);
+      return send(code, obj);
     }
-    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/manifest$/)) && req.method === 'GET') {
-      const [code, obj] = await handleManifest(req, m[1]); return send(code, obj);
+    if (
+      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/manifest$/)) &&
+      req.method === 'GET'
+    ) {
+      const [code, obj] = await handleManifest(req, m[1]);
+      return send(code, obj);
     }
-    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/comments$/)) && req.method === 'GET') {
-      const [code, obj] = await handleComments(req, m[1]); return send(code, obj);
+    if (
+      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/comments$/)) &&
+      req.method === 'GET'
+    ) {
+      const [code, obj] = await handleComments(req, m[1]);
+      return send(code, obj);
     }
     // Our people, so a paired household can invite one of us specifically. Names only.
     if (path === `${ROUTE_PREFIX}/api/v1/directory` && req.method === 'GET') {
@@ -170,14 +216,22 @@ export const server = http.createServer(async (req, res) => {
       if (!peer) return send(403, { error: 'unknown or unverified peer' });
       return send(200, { invitations: invitationsFor(peer.pub) });
     }
-    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/nudge$/)) && req.method === 'POST') {
-      const [code, obj] = await handleNudge(req, body, m[1]); return send(code, obj);
+    if (
+      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/nudge$/)) &&
+      req.method === 'POST'
+    ) {
+      const [code, obj] = await handleNudge(req, body, m[1]);
+      return send(code, obj);
     }
-    const streamOut = (out) => { // stream byte responses through — never buffer (Pi-friendly)
+    const streamOut = out => {
+      // stream byte responses through — never buffer (Pi-friendly)
       if (Array.isArray(out)) return send(out[0], out[1]);
-      const headers: Record<string, string> = { 'Content-Type': out.headers.get('content-type') || 'application/octet-stream' };
+      const headers: Record<string, string> = {
+        'Content-Type': out.headers.get('content-type') || 'application/octet-stream',
+      };
       for (const h of ['content-length', 'content-range', 'accept-ranges']) {
-        const v = out.headers.get(h); if (v) headers[h] = v;
+        const v = out.headers.get(h);
+        if (v) headers[h] = v;
       }
       res.writeHead(out.status || 200, headers);
       Readable.fromWeb(out.body).pipe(res);
@@ -201,5 +255,8 @@ export const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: true }));
     }
     send(404, { error: 'not found' });
-  } catch (e) { log('http error:', e.message); send(500, { error: e.message }); }
+  } catch (e) {
+    log('http error:', e.message);
+    send(500, { error: e.message });
+  }
 });

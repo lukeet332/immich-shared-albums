@@ -3,10 +3,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"scripts/**/*.mjs\" \"*.json\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"scripts/**/*.mjs\" \"*.json\"",
+    "cycles": "node scripts/check-cycles.mjs",
+    "test": "docker run --rm -e IMMICH_API_KEY=test-only -v \"$PWD/src\":/app/src -w /app node:24-alpine node --test \"src/**/*.test.ts\"",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run cycles && npm test"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
+    "eslint": "^10.8.1",
+    "prettier": "^3.9.6",
     "typescript": "^5.6.0",
-    "@types/node": "^24.0.0"
+    "typescript-eslint": "^8.67.0"
   }
 }

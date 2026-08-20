@@ -14,7 +14,7 @@ import { ensureContributor } from './contributors.ts';
 // false (without marking seen) on failure so reconciliation can retry later.
 export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   if (seenHas(mapping.id, ref.checksum)) return true;
-  const sigHeaders = (v) => ({ headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(v) } });
+  const sigHeaders = v => ({ headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(v) } });
   // Hotlink model: nothing of the photo is stored here. The mirror asset is a ~2KB
   // unique stub that exists so the stock app has a row to render; every actual pixel
   // (thumbnails, previews, playback, originals) streams live from the owner's server
@@ -22,15 +22,28 @@ export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   // the owner's rendition so the tile carries a real poster and duration.
   let bytes: Buffer;
   if (ref.kind === 'video') {
-    const pr = await fetch(`${peerUrl}${ROUTE_PREFIX}/api/v1/assets/${ref.originAsset}/playback`,
-      { ...sigHeaders(ref.originAsset), headers: { ...sigHeaders(ref.originAsset).headers, Range: 'bytes=0-2097151' }, signal: AbortSignal.timeout(120000) });
-    if (!pr.ok) { log(`playback stub fetch failed for ${ref.originAsset}: ${pr.status}`); return false; }
+    const pr = await fetch(`${peerUrl}${ROUTE_PREFIX}/api/v1/assets/${ref.originAsset}/playback`, {
+      ...sigHeaders(ref.originAsset),
+      headers: { ...sigHeaders(ref.originAsset).headers, Range: 'bytes=0-2097151' },
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!pr.ok) {
+      log(`playback stub fetch failed for ${ref.originAsset}: ${pr.status}`);
+      return false;
+    }
     bytes = Buffer.concat([Buffer.from(await pr.arrayBuffer()), crypto.randomBytes(8)]);
   } else {
     bytes = Buffer.concat([STUB_JPEG, crypto.randomBytes(8)]);
   }
   const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
-  const c = await ensureContributor(ref.contributor?.displayName || fallbackName, mapping.albumId, adminKey, peerUrl, ref.contributor?.originUserId, mapping.peer);
+  const c = await ensureContributor(
+    ref.contributor?.displayName || fallbackName,
+    mapping.albumId,
+    adminKey,
+    peerUrl,
+    ref.contributor?.originUserId,
+    mapping.peer
+  );
   const ext = ref.kind === 'video' ? 'mp4' : 'jpg';
   // base64 checksums contain / and + — never let them into filenames
   const slug = ref.checksum.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
@@ -46,11 +59,25 @@ export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
 export async function deleteProxyAsset(assetId: string): Promise<boolean> {
   try {
     let asset;
-    try { asset = await immichJson(`/assets/${assetId}`); }
-    catch (e) { if (/-> 404/.test(e.message)) return true; throw e; } // already gone
+    try {
+      asset = await immichJson(`/assets/${assetId}`);
+    } catch (e) {
+      if (/-> 404/.test(e.message)) return true;
+      throw e;
+    } // already gone
     const owner = Object.values(state.contributors).find(c => c.userId === asset.ownerId);
-    if (!owner) { log(`proxy delete refused for ${assetId}: owner ${asset.ownerId} is not a utility user`); return false; }
-    await immichJson('/assets', { ...jsonBody({ ids: [assetId], force: true }), method: 'DELETE' }, owner.key);
+    if (!owner) {
+      log(`proxy delete refused for ${assetId}: owner ${asset.ownerId} is not a utility user`);
+      return false;
+    }
+    await immichJson(
+      '/assets',
+      { ...jsonBody({ ids: [assetId], force: true }), method: 'DELETE' },
+      owner.key
+    );
     return true;
-  } catch (e) { log(`proxy delete failed for ${assetId}: ${e.message}`); return false; }
+  } catch (e) {
+    log(`proxy delete failed for ${assetId}: ${e.message}`);
+    return false;
+  }
 }

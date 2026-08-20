@@ -18,7 +18,8 @@ import { BANNER_JS } from './banner.ts';
 export async function proxyToImmich(req, res, pathname: string): Promise<void> {
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(req.headers)) {
-    if (typeof v === 'string') headers[k] = v; else if (Array.isArray(v)) headers[k] = v.join(', ');
+    if (typeof v === 'string') headers[k] = v;
+    else if (Array.isArray(v)) headers[k] = v.join(', ');
   }
   delete headers.host;
   const hasBody = !['GET', 'HEAD'].includes(req.method);
@@ -31,17 +32,24 @@ export async function proxyToImmich(req, res, pathname: string): Promise<void> {
     redirect: 'manual',
   } as RequestInit);
   const outHeaders = {};
-  for (const [k, v] of up.headers) if (!['content-encoding', 'transfer-encoding', 'content-length'].includes(k)) outHeaders[k] = v;
+  for (const [k, v] of up.headers)
+    if (!['content-encoding', 'transfer-encoding', 'content-length'].includes(k)) outHeaders[k] = v;
   const setCookie = up.headers.getSetCookie?.() || [];
   if (setCookie.length) outHeaders['set-cookie'] = setCookie;
   const ct = up.headers.get('content-type') || '';
   if (req.method === 'GET' && pathname.startsWith('/share/') && ct.includes('text/html') && BANNER_JS) {
     let html = Buffer.from(await up.arrayBuffer()).toString();
-    html = html.includes('</body>') ? html.replace('</body>', `<script src="${ROUTE_PREFIX}/banner.js" defer></script></body>`)
-                                    : html + `<script src="${ROUTE_PREFIX}/banner.js" defer></script>`;
-    res.writeHead(up.status, outHeaders); res.end(html); return;
+    html = html.includes('</body>')
+      ? html.replace('</body>', `<script src="${ROUTE_PREFIX}/banner.js" defer></script></body>`)
+      : html + `<script src="${ROUTE_PREFIX}/banner.js" defer></script>`;
+    res.writeHead(up.status, outHeaders);
+    res.end(html);
+    return;
   }
   res.writeHead(up.status, outHeaders);
-  if (!up.body) { res.end(); return; }
+  if (!up.body) {
+    res.end();
+    return;
+  }
   Readable.fromWeb(up.body).pipe(res);
 }

@@ -17,15 +17,19 @@ import { forgetOffered } from '../p2p/entitlement.ts';
 // fully reversible and reclaims all space it ever took.
 export async function leaveAlbum(mappingId: string) {
   const mapping = state.mappings.find(mp => mp.id === mappingId);
-  if (!mapping || mapping.role !== 'member') throw new Error('unknown mapping (only joined albums can be left)');
+  if (!mapping || mapping.role !== 'member')
+    throw new Error('unknown mapping (only joined albums can be left)');
   let removed = 0;
   for (const entry of store.seenForMapping(mapping.id)) {
-    if (entry.o && await deleteProxyAsset(entry.l)) removed++;
+    if (entry.o && (await deleteProxyAsset(entry.l))) removed++;
   }
   const host = mapping.adminSlug ? state.contributors[mapping.adminSlug] : undefined;
   if (host?.key) {
-    try { await immichJson(`/albums/${mapping.albumId}`, { method: 'DELETE' }, host.key); }
-    catch (e) { log(`mirror album delete failed: ${e.message}`); }
+    try {
+      await immichJson(`/albums/${mapping.albumId}`, { method: 'DELETE' }, host.key);
+    } catch (e) {
+      log(`mirror album delete failed: ${e.message}`);
+    }
   }
   store.seenRemoveMapping(mapping.id);
   forgetOffered(mapping.id);

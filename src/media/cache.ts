@@ -15,11 +15,14 @@ export function cacheRead(originAsset: string): Buffer | null {
   if (!CFG.cacheMaxMb) return null;
   const key = cacheKey(originAsset);
   if (!store.cacheTouch(key)) return null;
-  try { return fs.readFileSync(`${CACHE_DIR}/${key}`); }
-  catch { return null; } // index said yes, disk said no — self-heals on next put
+  try {
+    return fs.readFileSync(`${CACHE_DIR}/${key}`);
+  } catch {
+    return null;
+  } // index said yes, disk said no — self-heals on next put
 }
 export function cacheWrite(originAsset: string, bytes: Buffer) {
-  if (!CFG.cacheMaxMb || bytes.length > CFG.cacheMaxMb * 1024 * 1024 / 10) return; // no single item >10% of cap
+  if (!CFG.cacheMaxMb || bytes.length > (CFG.cacheMaxMb * 1024 * 1024) / 10) return; // no single item >10% of cap
   const key = cacheKey(originAsset);
   try {
     fs.writeFileSync(`${CACHE_DIR}/${key}`, bytes);
@@ -27,7 +30,13 @@ export function cacheWrite(originAsset: string, bytes: Buffer) {
     while (store.cacheTotal() > CFG.cacheMaxMb * 1024 * 1024) {
       const evicted = store.cacheEvictOldest();
       if (!evicted) break;
-      try { fs.unlinkSync(`${CACHE_DIR}/${evicted.key}`); } catch { /* already gone */ }
+      try {
+        fs.unlinkSync(`${CACHE_DIR}/${evicted.key}`);
+      } catch {
+        /* already gone */
+      }
     }
-  } catch (e) { log(`cache write skipped: ${e.message}`); }
+  } catch (e) {
+    log(`cache write skipped: ${e.message}`);
+  }
 }
