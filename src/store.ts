@@ -24,6 +24,11 @@ export type Mapping = {
    *  stand-in disappears from an album — a link-redeemed mapping never had a stand-in added
    *  to its album, so retiring those there would silently unshare every link-based album. */
   via?: 'link' | 'invite';
+  /** Which people at the peer this invitation names, by their user id on their own server.
+   *  Sharing is per person, so an invitation always names at least one; there is no
+   *  household-wide form. The member mirrors for exactly these users and follows the list as it
+   *  changes — see sync/invites.syncMirrorMembers. */
+  forPeerUserIds?: string[];
   /** Display name of the album's owner, captured when an invitation is detected. Link joins
    *  learn this from the redeem response instead; without it a mirror would be named after
    *  the household rather than the person who shared it. */
@@ -36,7 +41,14 @@ export type Mapping = {
 export type Peer = { pub: string; url: string; name: string; version?: string };
 // `password` is transient: it exists only while the account is being provisioned, and is
 // rolled to an unheld value once the API key is minted (see immich/contributors.ts).
-export type Contributor = { userId: string; key: string; password?: string; avatarDone?: boolean };
+export type Contributor = {
+  userId: string; key: string; password?: string; avatarDone?: boolean;
+  /** Public key of the peer household this person belongs to. */
+  peer?: string;
+  /** That person's user id ON THE PEER, for invite targets — what lets an invitation be routed
+   *  to one specific person rather than the whole household. */
+  peerUserId?: string;
+};
 
 export type Collections = {
   keys: { pub: string; priv: string } | null;

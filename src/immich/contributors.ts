@@ -4,7 +4,7 @@
  * attribution). Provisions/heals them, mints their API keys, and syncs their avatars.
  */
 import crypto from 'node:crypto';
-import { CFG, log, UTILITY_SUFFIX, ROUTE_PREFIX } from '../config.ts';
+import { CFG, log, UTILITY_SUFFIX, ROUTE_PREFIX, UTILITY_EMAIL_DOMAIN, BOT_PREFIX } from '../config.ts';
 import { state, save } from '../state.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
 import { sign } from '../peers.ts';
@@ -25,12 +25,32 @@ const UTILITY_PERMISSIONS = [
   'activity.create', 'activity.read', 'activity.delete', 'activity.statistics',
   'user.read', 'user.update', 'userProfileImage.create', 'userProfileImage.update',
 ];
-export async function ensureUtilityUser(displayName) {
+/**
+ * Provision (or heal) a utility user.
+ *
+ * `opts` exists because there are two KINDS of utility user and conflating them is unsafe:
+ *  - contributors (default) own stubs and carry attribution. The sidecar adds them to albums
+ *    itself, so their album membership means "this person contributed here".
+ *  - invite targets (`stateKey`/`email`/`fullName` supplied) exist ONLY to be picked by a human
+ *    in Immich's album picker. The sidecar never adds them to an album, so their membership is
+ *    unambiguous intent — which is exactly what invitation detection needs.
+ * Giving them separate email prefixes and state keys keeps the two from ever being mistaken for
+ * one another. An earlier attempt to reuse contributors as invite targets turned every
+ * link-shared album into a bogus invitation and corrupted sync.
+ */
+export async function ensureUtilityUser(displayName, opts: {
+  peerPub?: string; peerUserId?: string; stateKey?: string; email?: string; fullName?: string;
+} | string = {}) {
+  if (typeof opts === 'string') opts = { peerPub: opts };   // legacy positional peerPub
+  const { peerPub, peerUserId } = opts;
   state.contributors = state.contributors || {};
-  const slug = slugify(displayName);
+  const slug = opts.stateKey || slugify(displayName);
   let c = state.contributors[slug];
-  const wantedName = `${displayName}${UTILITY_SUFFIX}`;
+  const wantedName = opts.fullName || `${displayName}${UTILITY_SUFFIX}`;
   if (c && c.key) {                       // already fully provisioned — heal a stale display name
+    if ((peerPub && c.peer !== peerPub) || (peerUserId && c.peerUserId !== peerUserId)) {
+      c.peer = peerPub ?? c.peer; c.peerUserId = peerUserId ?? c.peerUserId; save();
+    }
     const current = (await usersById(10000))[c.userId]?.name;
     if (current && current !== wantedName) {
       try {
@@ -41,12 +61,12 @@ export async function ensureUtilityUser(displayName) {
     }
     return c;
   }
-  const email = `shared-${slug}@sidecar.local`;
+  const email = opts.email || `${BOT_PREFIX.contributor}${slug}@${UTILITY_EMAIL_DOMAIN}`;
   // reuse a persisted password if we have one (survives partial-provision retries), else fresh
   const password = c?.password || crypto.randomBytes(18).toString('base64url');
   let user;
   try {
-    user = await immichJson('/admin/users', jsonBody({ email, name: `${displayName} (via shared albums)`, password }));
+    user = await immichJson('/admin/users', jsonBody({ email, name: wantedName, password }));
   } catch {
     const all = await immichJson('/admin/users?withDeleted=true');
     user = all.find(u => u.email === email);
@@ -99,7 +119,7 @@ export async function ensureUtilityUser(displayName) {
         { ...jsonBody({ quotaSizeInBytes: CFG.utilityQuotaMb * 1024 * 1024 }), method: 'PUT' });
     } catch (e) { log(`could not set utility quota for ${email}: ${e.message}`); }
   }
-  c = { ...(c || {}), userId: user.id, key: keyRes.secret };
+  c = { ...(c || {}), userId: user.id, key: keyRes.secret, peer: peerPub ?? c?.peer, peerUserId: peerUserId ?? c?.peerUserId };
   if (!passwordRetired) c.password = password; // keep it only if the roll failed, so a retry can resume
   else delete c.password;
   state.contributors[slug] = c; save();
@@ -119,8 +139,8 @@ export async function syncAvatar(c, peerUrl, originUserId) {
     }
   } catch { /* avatars are garnish */ }
 }
-export async function ensureContributor(displayName, albumId, adminKey, peerUrl, originUserId) {
-  const c = await ensureUtilityUser(displayName);
+export async function ensureContributor(displayName, albumId, adminKey, peerUrl, originUserId, peerPub?: string) {
+  const c = await ensureUtilityUser(displayName, { peerPub });
   if (!c.key) throw new Error(`contributor "${displayName}" has no API key yet — will retry`);
   await syncAvatar(c, peerUrl, originUserId);
   try {

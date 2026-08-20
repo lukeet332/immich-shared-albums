@@ -9,14 +9,28 @@ import { sign, signedFetch, nudgePeers, callingPeer, mappingFor } from '../peers
 import { immichJson, jsonBody, usersById } from '../immich/client.ts';
 import { ensureContributor } from '../immich/contributors.ts';
 
-export const getComments = (albumId) => immichJson(`/activities?albumId=${albumId}&type=comment`);
+export const getComments = (albumId, key?: string) =>
+  immichJson(`/activities?albumId=${albumId}&type=comment`, {}, key);
+
+/**
+ * Whose credential can read this album's activity.
+ *
+ * For a mirror, the admin key is NOT a safe default: a per-person invitation adds only the one
+ * invited human, so the sidecar's own admin may not be a member and Immich answers
+ * `400 Not found or no album.read access` on every poll. The mirror-owning stand-in always has
+ * access because it owns the album. Owner mappings keep the admin key (undefined => default).
+ */
+const albumReaderKey = (mapping) =>
+  mapping.role === 'member' && mapping.adminSlug
+    ? state.contributors?.[mapping.adminSlug]?.key
+    : undefined;
 export const postComment = (albumId, comment, key) => immichJson('/activities', jsonBody({ albumId, type: 'comment', comment }), key);
 // Materialise foreign comments locally via the author's utility user. Skips ids already
 // seen AND (author, text) pairs already present locally — the latter guards legacy comments
 // synced before canonical ids existed.
 export async function materialiseComments(mapping, peerUrl, peerName, comments) {
   const users = await usersById();
-  const local = await getComments(mapping.albumId);
+  const local = await getComments(mapping.albumId, albumReaderKey(mapping));
   const localPairs = new Set(local.map(a => {
     const n = (users[a.user?.id]?.name || a.user?.name || '').replace(UTILITY_SUFFIX, '');
     return `${n}\u0000${a.comment}`;
@@ -27,7 +41,7 @@ export async function materialiseComments(mapping, peerUrl, peerName, comments) 
     if (seenActHas(tag)) continue;
     if (localPairs.has(`${cm.author}\u0000${cm.comment}`)) { seenActAdd(tag); continue; }
     const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
-    const c = await ensureContributor(cm.author || peerName, mapping.albumId, adminKey, peerUrl, cm.authorUserId);
+    const c = await ensureContributor(cm.author || peerName, mapping.albumId, adminKey, peerUrl, cm.authorUserId, mapping.peer);
     const posted = await postComment(mapping.albumId, cm.comment, c.key);
     ids[cm.id] = posted.id;
     seenActAdd(tag); seenActAdd(`local:${posted.id}`); // don't echo it back
@@ -76,10 +90,11 @@ export async function syncCommentsOnce() {
       const peer = state.peers.find(p => p.pub === mapping.peer);
       if (!peer) continue;
       if (mapping.role === 'member') await pullCanonicalComments(mapping, peer);
-      const stats = await immichJson(`/activities/statistics?albumId=${mapping.albumId}`).catch(() => null);
+      const stats = await immichJson(`/activities/statistics?albumId=${mapping.albumId}`, {},
+                                     albumReaderKey(mapping)).catch(() => null);
       if (stats && stats.comments === mapping.commentCount) continue;
       const utilityIds = new Set(Object.values(state.contributors || {}).map(c => c.userId));
-      const comments = (await getComments(mapping.albumId))
+      const comments = (await getComments(mapping.albumId, albumReaderKey(mapping)))
         .filter(a => a.comment && !seenActHas(`local:${a.id}`) && !seenActHas(`remote:${a.id}`) && !utilityIds.has(a.user?.id));
       if (!comments.length) { if (stats) { mapping.commentCount = stats.comments; save(); } continue; }
       const targetMapping = mapping.role === 'member' ? (mapping.remoteMappingId || mapping.remoteAlbumId) : mapping.albumId;

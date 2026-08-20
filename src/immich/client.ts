@@ -4,7 +4,7 @@
  * album/asset getters, asset upload, metadata apply, and the stub-JPEG constant.
  */
 import crypto from 'node:crypto';
-import { CFG, log } from '../config.ts';
+import { CFG, log, isUtilityEmail } from '../config.ts';
 import type { AssetRef } from '../types.ts';
 
 export const immich = async (p: string, init: RequestInit = {}, key: string = CFG.apiKey) => {
@@ -29,7 +29,7 @@ export async function usersById(maxAgeMs = 60000) {
   if (Date.now() - USERS_AT > maxAgeMs) {
     try {
       USERS = Object.fromEntries((await immichJson('/admin/users'))
-        .map(u => [u.id, { name: u.name, utility: u.email.endsWith('@sidecar.local') }]));
+        .map(u => [u.id, { name: u.name, utility: isUtilityEmail(u.email) }]));
       USERS_AT = Date.now();
     } catch { /* keep stale map */ }
   }

@@ -10,6 +10,7 @@ folder is the **application** protocol on top of them.
 | `join.ts` | The **member side** of joining. Redeems a share link against the origin, pins the peer, provisions the host utility user, creates the local mirror album, adds the joining user, and kicks off the first reconcile. Idempotent — re-joining just adds the user to the existing mirror. |
 | `mirror.ts` | Creating the local mirror of a remote album — the utility-user owner, local members as editors, the mapping, and the background fill. Shared by `join.ts` (share link) and `sync/invites.ts` (native invitation): two ways to acquire an album, one way to mirror it. |
 | `entitlement.ts` | What a peer may **read**, as distinct from who it is. Records every asset advertised to a mapping, and answers the byte routes' "is this peer allowed this asset". |
+| `unlink.ts` | Cutting a server link, from the panel. Tears down mirrors held from that peer (via `sync/leave.ts`, so their stubs go too), drops the mappings and entitlement for albums shared *to* them, and deletes their per-person invite markers so they leave Immich's picker. Attribution contributors are deliberately **kept**: they own real photos that local people can see, so an unlink must never be a data-loss event. |
 
 **The handshake, end to end:** the banner (`../web/banner/`) collects the joiner's own
 server address → their sidecar calls `join()` → which POSTs `handleRedeem` on the origin

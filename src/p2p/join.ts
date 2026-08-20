@@ -38,7 +38,8 @@ export async function join(shareUrl, forUserId, password?: string) {
     albumOwnerName: res.albumOwner?.displayName,
     albumOwnerId: res.albumOwner?.originUserId,
     remoteMappingId: res.mappingId,
-    forUserId,
+    // A link join is for one account when the panel/accept page names one, else the household.
+    forUserIds: forUserId ? [forUserId] : undefined,
   });
   log(created
     ? `joined "${res.album.name}" from "${res.household.name}" (${res.manifest.length} photos)`

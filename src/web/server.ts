@@ -26,9 +26,10 @@ import { proxyToImmich } from './passthrough.ts';
 import { callerIdentity, signInRequired, SIGN_IN_PAGE } from './auth.ts';
 import { handleRedeem, handleRefs, handleVersion, handleNudge, handleManifest } from '../p2p/protocol.ts';
 import { join } from '../p2p/join.ts';
-import { leaveAlbum } from '../sync/engine.ts';
+import { leaveAlbum } from '../sync/leave.ts';
+import { unlinkPeer, linkedPeers, localHousehold } from '../p2p/unlink.ts';
 import { handleActivity, handleComments } from '../sync/comments.ts';
-import { invitationsFor } from '../sync/invites.ts';
+import { invitationsFor, localDirectory } from '../sync/invites.ts';
 
 /**
  * Read a JSON-route body under a hard cap, or null if it is too big.
@@ -124,6 +125,21 @@ export const server = http.createServer(async (req, res) => {
       try { const b = JSON.parse(body); return send(200, await leaveAlbum(b.mappingId)); }
       catch (e) { return send(400, { error: e.message }); }
     }
+    // Server links are admin-owned, so managing them is an admin route — not something expressed
+    // by removing a bot from an album. See p2p/unlink.ts.
+    if (path === `${ROUTE_PREFIX}/peers` && req.method === 'GET') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('see connected servers'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can see connected servers' });
+      return send(200, { household: localHousehold(), peers: linkedPeers() });
+    }
+    if (path === `${ROUTE_PREFIX}/unlink` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('unlink a server'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can unlink a server' });
+      try { const b = JSON.parse(body); return send(200, await unlinkPeer(b.pub)); }
+      catch (e) { return send(400, { error: e.message }); }
+    }
     if (path === `${ROUTE_PREFIX}/api/v1/invites/redeem` && req.method === 'POST') {
       const [code, obj] = await handleRedeem(req, body); return send(code, obj);
     }
@@ -141,6 +157,12 @@ export const server = http.createServer(async (req, res) => {
     }
     if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/comments$/)) && req.method === 'GET') {
       const [code, obj] = await handleComments(req, m[1]); return send(code, obj);
+    }
+    // Our people, so a paired household can invite one of us specifically. Names only.
+    if (path === `${ROUTE_PREFIX}/api/v1/directory` && req.method === 'GET') {
+      const peer = callingPeer(req, 'directory');
+      if (!peer) return send(403, { error: 'unknown or unverified peer' });
+      return send(200, { users: await localDirectory() });
     }
     // What has this peer been invited to? Pull-only by design — see sync/invites.
     if (path === `${ROUTE_PREFIX}/api/v1/invitations` && req.method === 'GET') {

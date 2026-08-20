@@ -29,6 +29,11 @@ export const CFG = {
   // ever store ~2KB per photo and ~2MB per video, so a cap bounds what a stolen utility
   // key could write — but set it too low and materialisation silently starts failing.
   utilityQuotaMb: Number(process.env.UTILITY_QUOTA_MB ?? 0),
+  // Share the names of local (human) users with linked servers, so they can invite a specific
+  // person to an album. Names only — never emails. Set false to keep your user list private;
+  // because sharing is per person, that disables native invitations from that server entirely
+  // (there is nobody to name) and leaves share links as the way in.
+  shareUserDirectory: process.env.SHARE_USER_DIRECTORY !== 'false',
   // Peer URLs on private ranges are normal for LAN and tailnet deployments, so they are
   // allowed by default. Set false on a public-facing host to stop a peer URL being aimed
   // at internal services.
@@ -37,6 +42,58 @@ export const CFG = {
 if (!CFG.apiKey) { console.error('IMMICH_API_KEY required'); process.exit(1); }
 export const log = (...a) => console.log(new Date().toISOString(), ...a);
 export const UTILITY_SUFFIX = ' (via shared albums)';
+
+/**
+ * Email domain for the bot users this addon creates. Named after the project for the same
+ * reason ROUTE_PREFIX is: "sidecar" is a generic term another Immich addon could reasonably
+ * claim, and these addresses are how we tell our own bots apart from real people.
+ *
+ * A clean break from the old `@sidecar.local`: no rename migration, no dual-domain acceptance.
+ * That was a ONE-TIME v1.0.0 allowance, taken because the install base was ~zero and a legacy
+ * bridge here would be permanent maintenance. It is NOT the policy going forward — post-v1,
+ * changes to this domain need a migration path.
+ *
+ * Getting this check wrong is not cosmetic (a bot misread as a human gets added to mirrors and
+ * its stubs counted as someone's photos), so the test stays obviously correct by inspection.
+ */
+export const UTILITY_EMAIL_DOMAIN = 'immich-shared-albums.local';
+
+/**
+ * The three kinds of bot user, in three separate namespaces.
+ *
+ * This separation is load-bearing, not tidiness. Invitation detection reads "is this bot a
+ * member of that album?" as a human's intent to share, which is only sound for bots the sidecar
+ * NEVER adds to an album itself. Contributors are the opposite: the sidecar adds them for
+ * attribution whenever their owner contributes a photo.
+ *
+ * Collapsing any two of these breaks sync. A single stand-in once served as both the household
+ * invitation marker and the household's attribution contributor; the sidecar added it to a
+ * mirror as `editor`, its own detector read that as an invitation, and origin and member
+ * ping-ponged mirror/withdraw every poll — each offering the other a mirror of the other's
+ * album. Keep the namespaces disjoint and that class of bug cannot be expressed.
+ */
+export const BOT_PREFIX = {
+  /** Owns mirrored stubs and carries attribution. The sidecar DOES add these to albums. */
+  contributor: 'shared-',
+  /** One remote person. Sidecar never adds it — membership is a human's intent. */
+  invitePerson: 'invite-person-',
+} as const;
+
+/**
+ * Display names, by what the user is actually doing when they read them.
+ *
+ * An invite marker is a DESTINATION you pick in Immich's album picker, so it names the person and
+ * the server the album is going to. An attribution contributor is a PHOTO OWNER you see in an
+ * album, so it keeps UTILITY_SUFFIX. The two must never collide: a marker and a contributor can
+ * exist for the same remote person on the same server, and two identically-named users are
+ * unpickable. There is no household-wide marker: a server link is not a person (see p2p/unlink).
+ */
+export const markerName = {
+  person: (personName: string, peerName: string) => `${personName} (via ${peerName} server)`,
+};
+
+/** Is this one of our bot users? The single source of truth — never inline the check. */
+export const isUtilityEmail = (email?: string) => !!email && email.endsWith(`@${UTILITY_EMAIL_DOMAIN}`);
 
 /**
  * The URL prefix this addon owns on the Immich origin.

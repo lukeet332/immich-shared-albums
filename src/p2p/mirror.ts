@@ -8,7 +8,7 @@
  * fills it in behind the answer.
  */
 import crypto from 'node:crypto';
-import { CFG, log } from '../config.ts';
+import { CFG, log, isUtilityEmail } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
 import { state, save } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
@@ -26,8 +26,12 @@ export type MirrorRequest = {
   albumOwnerId?: string;
   /** The origin's own mapping id, when known (link joins carry it; invitations do not). */
   remoteMappingId?: string;
-  /** Restrict the mirror to one local user (per-user joins). Omit to add every human. */
-  forUserId?: string;
+  /** Restrict the mirror to these local users (per-person invitations). Omit to add every
+   *  human, which is what a link join does — a link is redeemed BY someone, for the household. */
+  forUserIds?: string[];
+  /** How this share was acquired. Scopes member-side withdrawal: only invitation-created
+   *  mirrors may be torn down when an invitation stops being offered. */
+  via?: 'link' | 'invite';
 };
 
 /**
@@ -35,14 +39,14 @@ export type MirrorRequest = {
  * makes sure the requested local user is a member, matching the re-join behaviour.
  */
 export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mapping; created: boolean }> {
-  const { peer, album, permissions, forUserId } = req;
+  const { peer, album, permissions, forUserIds } = req;
   const ownerName = req.albumOwnerName || peer.name;
-  const host = await ensureUtilityUser(ownerName);
+  const host = await ensureUtilityUser(ownerName, { peerPub: peer.pub });
   await syncAvatar(host, peer.url, req.albumOwnerId);
 
   const addMembers = async (albumId: string) => {
-    let members = (await immichJson('/admin/users')).filter((u) => !u.email.endsWith('@sidecar.local'));
-    if (forUserId) members = members.filter((u) => u.id === forUserId); // per-user join
+    let members = (await immichJson('/admin/users')).filter((u) => !isUtilityEmail(u.email));
+    if (forUserIds?.length) members = members.filter((u) => forUserIds.includes(u.id));
     const alb = await immichJson(`/albums/${albumId}`, {}, host.key);
     const already = new Set((alb.albumUsers || []).map((au) => au.user?.id));
     members = members.filter((u) => !already.has(u.id));
@@ -72,12 +76,13 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
   }
   try {
     const n = await addMembers(mirror.id);
-    log(`mirror shared with ${forUserId ? 'one user (per-user join)' : n + ' household member(s)'}`);
+    log(`mirror shared with ${forUserIds?.length ? forUserIds.length + ' named user(s)' : n + ' household member(s)'}`);
   } catch (e) { log(`could not add local members to mirror: ${e.message}`); }
 
   const mapping: Mapping = { id: crypto.randomUUID(), role: 'member', albumId: mirror.id,
     albumName: mirror.albumName, peer: peer.pub, remoteAlbumId: album.id,
-    remoteMappingId: req.remoteMappingId, permissions, adminSlug: slugify(ownerName) };
+    remoteMappingId: req.remoteMappingId, permissions, adminSlug: slugify(ownerName),
+    via: req.via ?? 'link' };
   state.mappings.push(mapping);
   save();
   return { mapping, created: true };

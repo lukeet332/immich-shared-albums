@@ -14,6 +14,9 @@ const api = async (base, key, path, init = {}) => {
   return r.status === 204 ? null : r.json();
 };
 const j = (o) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
+// Bot users live on the project's own email domain — the one check that separates our bots from
+// real people, so it must match src/config.ts isUtilityEmail exactly.
+const isBot = (e) => !!e && e.endsWith('@immich-shared-albums.local');
 // /immich-shared-albums/join authenticates the caller against that household's own Immich, so the
 // suite has to present a real credential exactly like a signed-in browser would.
 const jAuth = (o, key) => ({ method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key }, body: JSON.stringify(o) });
@@ -103,13 +106,13 @@ const bAlbums = await api(B, BKEY, '/albums');
 const mirror = bAlbums.find(a => a.albumName === joinRes.album && a.assetCount > 0) || bAlbums.find(a => a.albumName === joinRes.album);
 check('mirror exists', !!mirror);
 const bUsers = await api(B, BKEY, '/admin/users');
-const bUtility = bUsers.filter(u => u.email.endsWith('@sidecar.local'));
+const bUtility = bUsers.filter(u => isBot(u.email));
 const originOwnerName = (await api(A, AKEY, '/users/me')).name;
 check(`mirror owner is ${originOwnerName} (via shared albums)`, bUtility.some(u => u.name === `${originOwnerName} (via shared albums)`), bUtility.map(u => u.name).join(', '));
 const mAssets = await until(async () => { const x = await albumAssets(B, BKEY, mirror.id); return x.length === 4 ? x : null; });
 check('mirror has 4 assets', !!mAssets, mAssets ? '' : 'timed out');
 if (mAssets) {
-  const humanIds = bUsers.filter(u => !u.email.endsWith('@sidecar.local')).map(u => u.id);
+  const humanIds = bUsers.filter(u => !isBot(u.email)).map(u => u.id);
   check('no mirror asset owned by a human on B', mAssets.every(a => !humanIds.includes(a.ownerId)));
   const dates = mAssets.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
   check('capture dates preserved (order fix)', JSON.stringify(dates) === JSON.stringify(['2026-08-11','2026-08-12','2026-08-13','2026-08-14']), dates.join(','));
@@ -253,7 +256,7 @@ if (aAfter) {
   const m2assets = await until(async () => { const x = await albumAssets(B, BKEY, mirror2.id); return x.length === 1 ? x : null; }, 40000);
   check('previously-shared photo synced into second album', !!m2assets);
   const m2detail = await api(B, BKEY, `/albums/${mirror2.id}`);
-  const m2humans = (m2detail.albumUsers || []).filter(u => !(u.user?.email || '').endsWith('@sidecar.local')).map(u => u.user?.id);
+  const m2humans = (m2detail.albumUsers || []).filter(u => !isBot(u.user?.email)).map(u => u.user?.id);
   check('private join: only the receiving user among human members', m2humans.length === 1 && m2humans[0] === nanId, `${m2humans.length} human member(s)`);
 
   console.log('— stage: re-join by a second user attaches to the existing mirror');
@@ -264,7 +267,7 @@ if (aAfter) {
   const dupCount = (await api(B, BKEY, '/albums')).filter(a => a.albumName === 'second album').length;
   check('only one "second album" mirror exists', dupCount === 1, `${dupCount} album(s)`);
   const m2after = await api(B, BKEY, `/albums/${mirror2.id}`);
-  const m2h2 = (m2after.albumUsers || []).filter(u => !(u.user?.email || '').endsWith('@sidecar.local')).map(u => u.user?.id);
+  const m2h2 = (m2after.albumUsers || []).filter(u => !isBot(u.user?.email)).map(u => u.user?.id);
   check('re-join added the second user as member', m2h2.length === 2 && m2h2.includes(second.id), `${m2h2.length} human member(s)`);
 
   console.log('— stage: video syncs cross-server as a full original');
@@ -382,7 +385,7 @@ if (DKEY) {
   const dAssets = await until(async () => { const x = await albumAssets(D, DKEY, dMirror.id); return x.length === 9 ? x : null; }, 150000);
   check('D mirror receives all 9 photos incl. B contributions (relay)', !!dAssets,
         dAssets ? '' : `at ${(await albumAssets(D, DKEY, dMirror.id)).length}`);
-  const dUtility = (await api(D, DKEY, '/admin/users')).filter(u => u.email.endsWith('@sidecar.local'));
+  const dUtility = (await api(D, DKEY, '/admin/users')).filter(u => isBot(u.email));
   check('relayed photos attributed to the original contributor on D', dUtility.some(u => u.name === bAdminUtility),
         dUtility.map(u => u.name).join(', '));
   if (dAssets) {
@@ -482,10 +485,11 @@ if (DKEY && dMirror) check('no ping-pong on D', (await albumAssets(D, DKEY, dMir
 // Websockets: the sidecar must be able to front Immich on its own, which means carrying
 // protocol upgrades. Without this, live web updates silently die in single-front setups —
 // invisible to the mobile apps, which is exactly how it went unnoticed before.
-// Native invitations: sharing an album by adding a peer's stand-in user in Immich's OWN
-// picker, with no share link involved. The origin detects it by listing albums AS the stand-in
-// (which is why this works for albums a non-admin owns), and the member discovers it by polling.
-console.log('— stage: native album invitations (no share link)');
+// Native invitations: sharing an album by adding a PERSON from a linked server in Immich's OWN
+// picker, with no share link involved. The origin detects it by listing albums AS that person's
+// marker (which is why this works for albums a non-admin owns), and the member discovers it by
+// polling. Sharing is per person: there is deliberately no household-wide stand-in.
+console.log('— stage: native album invitations, per person (no share link)');
 {
   const originPeers = readSidecarKv('household-c/c-sidecar', 'peers');
   const bPeer = (originPeers || []).find(p => (p.name || '').includes('(B)'));
@@ -494,40 +498,75 @@ console.log('— stage: native album invitations (no share link)');
     const bKeys = readSidecarKv('b-sidecar', 'keys');
     const signAsB = (v) => crypto.sign(null, Buffer.from(v),
       crypto.createPrivateKey({ key: Buffer.from(bKeys.priv, 'base64url'), format: 'der', type: 'pkcs8' })).toString('base64url');
-    const marker = (await api(A, AKEY, '/admin/users')).find(u => u.name === `${bPeer.name} (via shared albums)`);
-    check('origin auto-created a stand-in user for the peer household', !!marker,
-          marker ? marker.email : 'not found');
+    const bAdmin = await api(B, BKEY, '/users/me');
+    // Markers are identified by display name — exactly how a human picks one in Immich.
+    const markerFor = async (person) => (await api(A, AKEY, '/admin/users'))
+      .find(u => u.name === `${person} (via ${bPeer.name} server)`);
+    const nan = await until(async () => (await markerFor(bAdmin.name)) || null, 90000);
+    check('origin created a per-person invite marker for each person on the linked server', !!nan,
+          nan ? nan.email : `no user named "${bAdmin.name} (via ${bPeer.name} server)"`);
+    check('the marker lives in the per-person namespace, not the contributors one',
+          !!nan && nan.email.startsWith('invite-person-'), nan?.email);
+    // Sharing is per person. A server link is not a person, so it must not exist as a pickable
+    // user at all — managing the link belongs to the panel (see the unlink stage).
+    const households = (await api(A, AKEY, '/admin/users')).filter(u => u.email.startsWith('invite-household-'));
+    check('no household-wide stand-in exists — a server link is not a person',
+          households.length === 0, households.map(u => u.email).join(', '));
+    // An invite marker and an attribution contributor can exist for the SAME remote person. If
+    // they ever share a display name the two are indistinguishable in the picker.
+    {
+      const counts = {};
+      for (const u of await api(A, AKEY, '/admin/users')) counts[u.name] = (counts[u.name] || 0) + 1;
+      const dupes = Object.entries(counts).filter(([, n]) => n > 1);
+      check('no two users share a display name (unpickable picker entries)', dupes.length === 0,
+            dupes.map(([n, c]) => `${n} x${c}`).join(', '));
+    }
 
-    if (marker) {
+    // A narrowed mirror excludes B's admin, so GET /albums as BKEY cannot see it. Look with the
+    // stand-in keys that OWN the mirrors — asserting via the admin only proves it was excluded.
+    const standInKeys = () => Object.values(readSidecarKv('b-sidecar', 'contributors') || {})
+      .map(c => c && c.key).filter(Boolean);
+    const findOnB = async (name, timeout = 150000) => until(async () => {
+      for (const k of standInKeys()) {
+        const al = await api(B, k, '/albums').catch(() => []);
+        const hit = (al || []).find(a => a.albumName === name);
+        if (hit) return { album: hit, key: k };
+      }
+      return null;
+    }, timeout);
+    const humansOn = async (found) => {
+      const full = await api(B, found.key, `/albums/${found.album.id}?withoutAssets=true`);
+      return (full.albumUsers || []).filter(au => !isBot(au.user?.email)).map(au => au.user?.name).sort();
+    };
+
+    if (nan) {
       const invAlb = (await api(A, AKEY, '/albums', j({ albumName: 'natively invited album' }))).id;
       const invAsset = await upload(A, AKEY, 'invited.jpg', `inv${Date.now() % 10000}`, '2026-05-01T09:00:00.000Z');
       await ensurePreviews(A, AKEY, [invAsset]);
       await api(A, AKEY, `/albums/${invAlb}/assets`, { ...j({ ids: [invAsset] }), method: 'PUT' });
       // exactly what a human does in the picker
       await api(A, AKEY, `/albums/${invAlb}/users`,
-        { ...j({ albumUsers: [{ userId: marker.id, role: 'editor' }] }), method: 'PUT' });
+        { ...j({ albumUsers: [{ userId: nan.id, role: 'editor' }] }), method: 'PUT' });
       // 200 is not proof — Immich silently ignores some adds, so read it back
       const back = await api(A, AKEY, `/albums/${invAlb}?withoutAssets=true`);
-      check('stand-in is really a member after the invite',
-            (back.albumUsers || []).some(au => au.user?.id === marker.id && au.role === 'editor'));
+      check('marker is really a member after the invite',
+            (back.albumUsers || []).some(au => au.user?.id === nan.id && au.role === 'editor'));
 
-      const mirrored = await until(async () => {
-        const al = await api(B, BKEY, '/albums');
-        return al.find(a => a.albumName === 'natively invited album') || null;
-      }, 150000);
+      const mirrored = await findOnB('natively invited album');
       check('member mirrors an invited album automatically, with no link', !!mirrored,
             mirrored ? '' : 'timed out');
       if (mirrored) {
         const arrived = await until(async () => {
-          const x = await albumAssets(B, BKEY, mirrored.id); return x.length >= 1 ? x : null;
+          const x = await albumAssets(B, mirrored.key, mirrored.album.id); return x.length >= 1 ? x : null;
         }, 150000);
-        check('invited album\'s photo materialises on the member', !!arrived,
-              arrived ? '' : 'timed out');
+        check('invited album\'s photo materialises on the member', !!arrived, arrived ? '' : 'timed out');
+        check('an invite reaches ONLY the invited person', (await humansOn(mirrored)).join(',') === bAdmin.name,
+              (await humansOn(mirrored)).join(', '));
       }
 
-      // Withdrawal. Asserted against the /invitations CONTRACT rather than state.db: the
-      // running process is the authoritative view, and the runner deletes state.db from under
-      // a live sidecar during purge, so a host-side file read is not a reliable oracle here.
+      // Withdrawal is asserted against the /invitations CONTRACT rather than state.db: the running
+      // process is the authoritative view, and the runner deletes state.db from under a live
+      // sidecar during purge, so a host-side file read is not a reliable oracle here.
       const invitations = async () => {
         const r = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/invitations`,
           { headers: { 'x-isa-key': bKeys.pub, 'x-isa-sig': signAsB('invitations') } });
@@ -540,13 +579,65 @@ console.log('— stage: native album invitations (no share link)');
       check('/invitations offers ONLY invitation-shaped shares, never link ones',
             !!listedBefore && listedBefore.every(i => i.album?.name === 'natively invited album'),
             `${listedBefore?.length} entries`);
+      check('an invitation names the people it is for, not just the household',
+            !!listedBefore?.[0]?.forUserIds?.length, JSON.stringify(listedBefore?.[0]?.forUserIds));
 
-      await fetch(`${A}/api/albums/${invAlb}/user/${marker.id}`, { method: 'DELETE', headers: { 'x-api-key': AKEY } });
+      // TWO people, one album: adding a second person must widen the SAME mirror, not fork it.
+      const second = await until(async () => (await markerFor('Second Human')) || null, 90000);
+      check('origin has a marker for every person on the linked server, not just the admin', !!second,
+            second ? second.email : 'no marker for Second Human');
+      if (second && mirrored) {
+        await api(A, AKEY, `/albums/${invAlb}/users`,
+          { ...j({ albumUsers: [{ userId: second.id, role: 'editor' }] }), method: 'PUT' });
+        const widened = await until(async () => {
+          const h = await humansOn(mirrored); return h.length === 2 ? h : null;
+        }, 120000);
+        check('inviting a second person widens the existing mirror', !!widened,
+              widened ? widened.join(', ') : (await humansOn(mirrored)).join(', ') || 'timed out');
+
+        // Dropping ONE person while another remains is a revocation for that person only. Without
+        // member-side narrowing the sender's action appears to work and silently does nothing.
+        await fetch(`${A}/api/albums/${invAlb}/user/${nan.id}`, { method: 'DELETE', headers: { 'x-api-key': AKEY } });
+        const narrowed = await until(async () => {
+          const h = await humansOn(mirrored);
+          return h.length === 1 && h[0] === 'Second Human' ? h : null;
+        }, 150000);
+        check('de-inviting one person removes only them, and keeps the album for the rest',
+              !!narrowed, narrowed ? narrowed.join(', ') : (await humansOn(mirrored)).join(', ') || 'timed out');
+        // and the album itself must survive a partial revocation
+        const survives = await findOnB('natively invited album', 20000);
+        check('a partial revocation does not tear down the whole mirror', !!survives);
+        await fetch(`${A}/api/albums/${invAlb}/user/${second.id}`, { method: 'DELETE', headers: { 'x-api-key': AKEY } });
+      } else {
+        await fetch(`${A}/api/albums/${invAlb}/user/${nan.id}`, { method: 'DELETE', headers: { 'x-api-key': AKEY } });
+      }
+
       const retired = await until(async () => {
         const list = await invitations();
         return list && !list.some(i => i.album?.name === 'natively invited album') ? true : null;
       }, 90000);
       check('withdrawing the invite stops it being offered', !!retired, retired ? '' : 'still offered');
+
+      // and the member must not be left holding a stale album of placeholders
+      const mirrorGone = await until(async () => {
+        for (const k of standInKeys()) {
+          const al = await api(B, k, '/albums').catch(() => []);
+          if ((al || []).some(a => a.albumName === 'natively invited album')) return null;
+        }
+        return true;
+      }, 120000);
+      check('member tears down its mirror when the last invitee is removed', !!mirrorGone,
+            mirrorGone ? '' : 'stale mirror still present');
+
+      // REGRESSION (run12): B must never read its OWN mirror as an invitation it received.
+      // Nothing at B ever invites C in this suite, so any owner+invite mapping on B is bogus.
+      // It happened because one stand-in was both C's invitation marker and C's attribution
+      // contributor: the sidecar added it to B's mirror as editor, B's detector called that an
+      // invitation, offered C a mirror of C's own album, and the two ping-ponged every 8s.
+      const bMappings = readSidecarKv('b-sidecar', 'mappings') || [];
+      const bogus = bMappings.filter(m => m.role === 'owner' && m.via === 'invite');
+      check('member never mistakes its own mirror for an invitation (no ping-pong)',
+            bogus.length === 0, bogus.map(m => `${m.albumName}`).join(', ') || '');
     }
   }
 }
@@ -710,9 +801,18 @@ console.log('— stage: security (album password gates enrolment)');
   await api(A, AKEY, `/albums/${expAlbum}`, { method: 'DELETE' }).catch(() => {});
 }
 
+console.log('— stage: bot naming uses the project domain');
+{
+  const bots = (await api(B, BKEY, '/admin/users')).filter(u => isBot(u.email));
+  check('bot users exist', bots.length > 0, `${bots.length} found`);
+  check('every bot uses the project email domain, not the legacy @sidecar.local',
+        bots.every(u => u.email.endsWith('@immich-shared-albums.local')),
+        bots.map(u => u.email.split('@')[1]).filter((v, i, a) => a.indexOf(v) === i).join(', '));
+}
+
 console.log('— stage: security (utility accounts cannot be signed into)');
 {
-  const utility = (await api(B, BKEY, '/admin/users')).filter(u => u.email.endsWith('@sidecar.local'));
+  const utility = (await api(B, BKEY, '/admin/users')).filter(u => isBot(u.email));
   check('utility users exist to own the stubs', utility.length > 0, `${utility.length} found`);
   check('no utility user is an admin', utility.every(u => !u.isAdmin));
   const contributors = readSidecarKv('b-sidecar', 'contributors');
@@ -724,6 +824,58 @@ console.log('— stage: security (utility accounts cannot be signed into)');
     check('no utility login password is retained in state.db once provisioned',
           withPassword === 0, `${withPassword} of ${entries.length} still stored`);
   } else console.log('  (skipped password-retention check: cannot read demo/b-sidecar/state.db)');
+}
+
+// LAST STAGE, deliberately: unlinking is destructive, so it runs after everything that needs
+// the B<->C link. Server links are admin-owned objects managed from the panel — not something
+// expressed by removing a bot from an album.
+console.log('— stage: panel manages server links (unlink)');
+{
+  const peersUrl = `${BS}/immich-shared-albums/peers`;
+  const anon = await fetch(peersUrl);
+  check('connected-servers list is not readable without a session', anon.status === 401,
+        `status ${anon.status}`);
+  const unlinkAnon = await fetch(`${BS}/immich-shared-albums/unlink`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"pub":"x"}' });
+  check('unlink is not callable without a session', unlinkAnon.status === 401,
+        `status ${unlinkAnon.status}`);
+
+  const listed = await (await fetch(peersUrl, { headers: { 'x-api-key': BKEY } })).json();
+  const target = (listed.peers || []).find(p => (p.name || '').includes('(C)'));
+  check('panel lists the connected server with what the link carries', !!target,
+        target ? `${target.name}: ${target.people} people, ${target.sharedToUs} in, ${target.sharedToThem} out` : JSON.stringify(listed));
+  check('panel reports the people the link made invitable', !!target && target.people > 0,
+        `${target?.people} marker(s)`);
+
+  if (target) {
+    const before = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('invite-person-')).length;
+    const res = await fetch(`${BS}/immich-shared-albums/unlink`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+        body: JSON.stringify({ pub: target.pub }) });
+    const out = await res.json().catch(() => ({}));
+    check('unlink succeeds from the panel', res.ok && out.household, JSON.stringify(out));
+    check('unlink removes the mirrors that server shared with us', (out.mirrorsRemoved || 0) > 0,
+          `${out.mirrorsRemoved} removed`);
+
+    const gone = await until(async () => {
+      const peers = await (await fetch(peersUrl, { headers: { 'x-api-key': BKEY } })).json();
+      return (peers.peers || []).some(p => p.pub === target.pub) ? null : true;
+    }, 30000);
+    check('the server is gone from the panel after unlinking', !!gone, gone ? '' : 'still listed');
+
+    // Its people must leave Immich's picker — that is the visible half of unlinking.
+    const after = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('invite-person-')).length;
+    check('unlink deletes that server\'s invite markers so they leave the picker',
+          after < before, `${before} -> ${after}`);
+    // Attribution contributors OWN real photos; deleting them would be a data-loss event.
+    const attrib = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('shared-'));
+    check('unlink keeps attribution contributors (they own real photos)', attrib.length > 0,
+          `${attrib.length} kept`);
+    const dead = await fetch(`${BS}/immich-shared-albums/unlink`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+        body: JSON.stringify({ pub: target.pub }) });
+    check('unlinking an already-unlinked server fails cleanly', dead.status === 400, `status ${dead.status}`);
+  }
 }
 
 const fails = results.filter(r => !r.ok);
