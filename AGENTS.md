@@ -37,10 +37,19 @@ saying so.
   and talks to Immich over the public API. Never modify Immich's source, compose
   services, database, or upload folders. Everything must fail open — Immich has to work
   perfectly with the sidecar dead. (Design invariants: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md) "Iron rules".)
-- **Keep the docs in sync.** Every folder under `src/` has a Markdown doc describing it,
-  and `src/ARCHITECTURE.md` describes the whole. Any behaviour change updates the relevant
-  doc(s) in the same change. A doc that lies is worse than no doc: treat drift as a bug and
-  fix it with the code that caused it.
+- **Keep the docs in sync — and this rule is load-bearing, not housekeeping.** `src/` carries
+  Markdown docs at whatever level earns one: a folder doc where modules are small and cohesive, a
+  file-level doc next to anything with dense reasoning of its own, and neither where a file needs
+  no explaining. `src/ARCHITECTURE.md` describes the whole.
+
+  Any behaviour change updates the relevant doc(s) **in the same change**. A doc that lies is
+  worse than no doc: treat drift as a bug and fix it with the code that caused it.
+
+  This matters more than it used to. Explanation deliberately lives in these docs rather than in
+  comments — naming carries the *what*, docs carry the *why* (see the naming section below). That
+  only works while they track the code, so the further an explanation sits from what it explains,
+  the more strictly this rule applies. Moving prose out of a source file and then letting it rot
+  is worse than having left it inline.
 - **Never test against a real server.** Use the throwaway mock rig in `demo/`. Never run
   the suite or experiments against anyone's production Immich, and never modify a real
   user's library.
