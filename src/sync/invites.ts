@@ -287,7 +287,15 @@ export async function pullInvitationsOnce() {
       if (known) {
         // The sender can add or drop individual people without withdrawing the album. Follow it,
         // or a de-invited person keeps the mirror forever and revocation silently does nothing.
-        if (known.role === 'member') await syncMirrorMembers(known, inv.forUserIds || []);
+        //
+        // Only for mirrors an INVITATION created. A link-redeemed mirror has its own membership
+        // (whoever redeemed it, plus anyone who re-joined) and the invitation list is not
+        // authoritative over it — narrowing one would evict people who joined by link. A throw
+        // here must not abandon the rest of this peer's invitations either.
+        if (known.role === 'member' && known.via === 'invite') {
+          try { await syncMirrorMembers(known, inv.forUserIds || []); }
+          catch (e) { log(`could not follow the invitee list for "${known.albumName}": ${e.message}`); }
+        }
         continue;
       }
       try {
