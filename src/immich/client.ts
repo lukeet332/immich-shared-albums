@@ -67,11 +67,8 @@ export const getAlbumAssets = async albumId => {
   }
   return out;
 };
-export const createAlbum = albumName => immichJson('/albums', jsonBody({ albumName }));
 export const addToAlbum = (albumId, ids, key) =>
   immichJson(`/albums/${albumId}/assets`, { ...jsonBody({ ids }), method: 'PUT' }, key);
-export const previewStream = assetId => immich(`/assets/${assetId}/thumbnail?size=preview`);
-export const originalStream = assetId => immich(`/assets/${assetId}/original`);
 export async function uploadAsset(bytes, filename, key = CFG.apiKey, takenAt) {
   const fd = new FormData();
   const stamp = takenAt || new Date().toISOString();

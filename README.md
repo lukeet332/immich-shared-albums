@@ -37,6 +37,27 @@ Every method needs Docker, an admin API key, and **a reverse proxy in front of I
 - **Guided script.** No agent? Clone next to your Immich and run `bash deploy/install.sh`. It auto-detects your Immich network, builds and starts the sidecar, health-checks it, and prints the proxy routes for you to add.
 - **Manual.** Build the container and add the three routes yourself. See [deploy/](./deploy/).
 
+### Configuration
+
+Only two are required. The rest have working defaults, so set them only if you need to.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `IMMICH_API_KEY` | — | **Required.** Admin API key. The addon refuses to start without one. |
+| `PUBLIC_URL` | — | **Required in practice.** How the *other* server reaches yours. Peers use it to pull photos. |
+| `HOUSEHOLD_NAME` | `Unnamed household` | The name peers see, and the name mirrored albums are attributed to. |
+| `IMMICH_URL` | `http://immich-server:2283` | Your Immich, from inside the container. |
+| `PORT` | `8300` | Port the addon listens on. |
+| `DATA_DIR` | `/data` | Where `state.db` lives. Back this up; it holds your signing key. |
+| `REQUIRE_SHARE_PASSWORD` | `false` | Refuse to link with a server whose share link has no password. **Recommended if you are publicly reachable** — otherwise possession of a link is the whole credential. A link's own password and expiry are always enforced regardless. |
+| `SHARE_USER_DIRECTORY` | `true` | Share your users' **names** (never emails) with linked servers, so they can invite a specific person. Set `false` to keep your user list private — that disables native invitations with that server, leaving share links. |
+| `ALLOW_PRIVATE_PEERS` | `true` | Allow peer URLs on private ranges (normal for LAN and tailnet). Set `false` on a public host so a peer URL cannot be aimed at your internal services. |
+| `ALBUM_TEMPLATE` | `{name}` | Naming for mirrored albums, e.g. `{name} (shared)`. |
+| `CACHE_MAX_MB` | `512` | Bounded cache for viewed photos. `0` disables. Delete the folder any time — it is a cache, not storage. |
+| `UTILITY_QUOTA_MB` | `0` (none) | Storage cap on the addon's bot accounts. Bounds what a stolen key could write, but too low and syncing silently fails. |
+| `MAX_BODY_KB` | `1024` | Hard cap on any request body the addon buffers. |
+| `POLL_MS` | `20000` | How often it checks peers for changes. |
+
 ## Permissions & security
 
 - **You choose how exposed your server is.** This addon doesn't open your server to the internet or change how sharing works; it only handles the server-to-server handshake. Each server just needs to reach the other's sidecar. A peer only ever touches `/immich-shared-albums/*` and `/share/*`, so the rest of Immich (all of `/api`, your library, admin) can stay private whichever way you set it up:

@@ -19,7 +19,6 @@ purge() { # base key statedir : delete all albums, sidecar users, non-admin asse
   # mirror albums are owned by utility users — only their own keys (in the state store) can delete them
   local CONTRIB=""
   [ -f "$STATEDIR/state.db" ] && CONTRIB=$(sqlite3 "$STATEDIR/state.db" "SELECT value FROM kv WHERE name='contributors'" 2>/dev/null)
-  [ -z "$CONTRIB" ] && [ -f "$STATEDIR/state.json" ] && CONTRIB=$(python3 -c "import json;print(json.dumps(json.load(open('$STATEDIR/state.json')).get('contributors',{})))" 2>/dev/null)
   if [ -n "$CONTRIB" ]; then
     for CK in $(echo "$CONTRIB" | python3 -c "import json,sys;print('\n'.join(c.get('key','') for c in json.load(sys.stdin).values() if c.get('key')))" 2>/dev/null); do
       for AL in $(curl -s $BASE/api/albums -H "x-api-key: $CK" | python3 -c "import json,sys;[print(a['id']) for a in json.load(sys.stdin)]" 2>/dev/null); do
@@ -37,11 +36,11 @@ purge() { # base key statedir : delete all albums, sidecar users, non-admin asse
 
 echo "== redeploy + purge B =="
 cd "$DIR/demo" && docker compose up -d --force-recreate sidecar-b >/dev/null 2>&1
-purge http://localhost:2284 "$BKEY" b-sidecar; docker compose exec -T sidecar-b rm -f /data/state.json /data/state.json.migrated /data/state.db /data/state.db-wal /data/state.db-shm 2>/dev/null; docker compose restart sidecar-b >/dev/null 2>&1
+purge http://localhost:2284 "$BKEY" b-sidecar; docker compose exec -T sidecar-b rm -f /data/state.db /data/state.db-wal /data/state.db-shm 2>/dev/null; docker compose restart sidecar-b >/dev/null 2>&1
 
 echo "== redeploy + purge C =="
 cd "$DIR/demo/household-c" && docker compose up -d --force-recreate sidecar-c >/dev/null 2>&1
-purge http://localhost:2285 "$CKEY" c-sidecar; docker compose exec -T sidecar-c rm -f /data/state.json /data/state.json.migrated /data/state.db /data/state.db-wal /data/state.db-shm 2>/dev/null; docker compose restart sidecar-c >/dev/null 2>&1
+purge http://localhost:2285 "$CKEY" c-sidecar; docker compose exec -T sidecar-c rm -f /data/state.db /data/state.db-wal /data/state.db-shm 2>/dev/null; docker compose restart sidecar-c >/dev/null 2>&1
 
 echo "== redeploy + purge D (third household — relay coverage) =="
 cd "$DIR/demo/household-d"
@@ -51,7 +50,7 @@ if [ ! -f .env ]; then
 fi
 DKEY=$(grep -m1 D_API_KEY .env | cut -d= -f2-)
 docker compose up -d --force-recreate sidecar-d >/dev/null 2>&1
-purge http://localhost:2286 "$DKEY" d-sidecar; docker compose exec -T sidecar-d rm -f /data/state.json /data/state.json.migrated /data/state.db /data/state.db-wal /data/state.db-shm 2>/dev/null; docker compose restart sidecar-d >/dev/null 2>&1
+purge http://localhost:2286 "$DKEY" d-sidecar; docker compose exec -T sidecar-d rm -f /data/state.db /data/state.db-wal /data/state.db-shm 2>/dev/null; docker compose restart sidecar-d >/dev/null 2>&1
 sleep 4
 
 echo "== harden C like production (passwordLogin off) =="

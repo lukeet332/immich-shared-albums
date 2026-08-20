@@ -148,7 +148,7 @@ export async function ensureUtilityUser(
     await fetch(`${CFG.immichUrl}/api/api-keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.accessToken}` },
-      body: JSON.stringify({ name: 'sidecar', permissions: UTILITY_PERMISSIONS }),
+      body: JSON.stringify({ name: 'immich-shared-albums', permissions: UTILITY_PERMISSIONS }),
     })
   ).json();
   if (!keyRes.secret)

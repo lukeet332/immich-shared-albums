@@ -7,10 +7,8 @@
  * as an in-memory object persisted to a kv table in one transaction — same ergonomics
  * as before, now crash-safe (WAL).
  *
- * A legacy state.json is migrated on first boot and kept as state.json.migrated.
  */
 import { DatabaseSync } from 'node:sqlite';
-import fs from 'node:fs';
 import path from 'node:path';
 
 export type SeenEntry = { m: string; c: string; l: string; o?: string };
@@ -96,7 +94,6 @@ export class Store {
       CREATE UNIQUE INDEX IF NOT EXISTS offered_ma ON offered (m, a);
       CREATE INDEX IF NOT EXISTS offered_a ON offered (a);
     `);
-    this.migrateLegacyJson(dataDir);
     this.state = {
       keys: this.kvGet('keys'),
       peers: this.kvGet('peers') ?? [],
@@ -109,33 +106,6 @@ export class Store {
     const row = this.db.prepare('SELECT value FROM kv WHERE name = ?').get(name) as
       { value: string } | undefined;
     return row ? JSON.parse(row.value) : null;
-  }
-
-  private migrateLegacyJson(dataDir: string) {
-    const legacy = path.join(dataDir, 'state.json');
-    const already = this.db.prepare('SELECT 1 FROM kv LIMIT 1').get();
-    if (already || !fs.existsSync(legacy)) return;
-    const old = JSON.parse(fs.readFileSync(legacy, 'utf8'));
-    const put = this.db.prepare('INSERT OR REPLACE INTO kv (name, value) VALUES (?, ?)');
-    const seenIns = this.db.prepare('INSERT OR IGNORE INTO seen (m, c, l, o) VALUES (?, ?, ?, ?)');
-    const actIns = this.db.prepare('INSERT OR IGNORE INTO seen_activity (tag) VALUES (?)');
-    this.db.exec('BEGIN');
-    try {
-      for (const name of ['keys', 'peers', 'mappings', 'contributors']) {
-        if (old[name] != null) put.run(name, JSON.stringify(old[name]));
-      }
-      for (const s of old.seen ?? []) seenIns.run(s.m, s.c, s.l, s.o ?? null);
-      for (const tag of old.seenActivity ?? []) actIns.run(tag);
-      this.db.exec('COMMIT');
-    } catch (e) {
-      this.db.exec('ROLLBACK');
-      throw e;
-    }
-    fs.renameSync(legacy, `${legacy}.migrated`);
-    console.log(
-      new Date().toISOString(),
-      `migrated state.json -> state.db (${(old.seen ?? []).length} ledger entries)`
-    );
   }
 
   /** Persist the in-memory collections (small; one transaction). */
