@@ -208,7 +208,7 @@ Six checks, all of them seconds:
 | --- | --- | --- |
 | Header | line 1 is `path — description. See doc.md.`, and a whole sentence | *Every source file opens with one line* |
 | Comments | the header, load-bearing lines and TODOs — nothing else | *Comments: a paired doc is the default* |
-| Names | **rename rather than explain** — a function, const or var needing a comment is misnamed | *A comment explaining a symbol* |
+| Names | **rename rather than explain** — any name you must explain is not descriptive enough | *A name that needs a comment* |
 | Doc placement | one exists at the right level for what you touched | *Where a doc lives* |
 | Doc truth | you re-read it against the code you just changed | *Keep the docs in sync* |
 | Doc style | dense bullets, every claim naming a real symbol | *Keep the docs in sync* |
@@ -308,20 +308,29 @@ one sweep purely because it contained the word `ONLY`, and it was design prose t
 `wire-protocol.md`. And **a mechanical strip truncates**: nine comments were left as fragments
 ending mid-clause, still reading like instructions. Re-read every comment you touch, in full.
 
-## A comment explaining a symbol means the NAME is wrong
+## A name that needs a comment is the wrong name
 
-This is the default, and it comes before every other rule about comments: **if a function, constant
-or variable needs a comment to say what it is, rename it.** The comment is a symptom. Fix the cause.
+This is the default, and it comes before every other rule about comments: **if you have to explain
+a name, the name is not descriptive enough. Rename it.** The comment is a symptom; fix the cause.
 
-- `/** How often to re-check whether they have signed in. */` above `POLL` → delete the comment,
-  call it `SIGN_IN_POLL_MS`.
-- `/** The server this person actually lives on. */` above `peer` → delete the comment, call it
-  `homePeer`.
-- `/** Whether the sidecar may add this member itself. */` above `flag` → call it `mayAdd`.
+It applies to everything you get to name — functions, variables, constants, parameters, type
+fields, files, routes, env vars, test titles, doc headings. Nothing is exempt for being small or
+local.
+
+The test is whether a reader who has never seen the code guesses right from the name alone:
+
+- `/** How often to re-check whether they have signed in. */` above `POLL` → `SIGN_IN_POLL_MS`.
+- `/** The server this person actually lives on. */` above `peer` → `homePeer`.
+- `(CFG.cacheMaxMb * 1024 * 1024) / 10` with `// no single item >10% of cap` →
+  `/ MAX_ITEM_SHARE_OF_CACHE`.
+- `mayAdd`, with a comment about revoked members — **still wrong**, which is the point: it says
+  permission where the real meaning is "if they are missing, put them back". Renamed to
+  `reAddIfMissing`, and its two comments went with it. Getting one rename in and still needing the
+  comment means go again, not settle.
 
 Reach for a longer name before reaching for a comment. `startPollingUntilSignedIn` needs no
-explanation; `tick` needs a paragraph. A name is read every time the symbol is used; a comment is
-read once, if at all, and then rots.
+explanation; `tick` needs a paragraph. A name is read every time it is used; a comment is read
+once, if at all, and then rots.
 
 What survives this rule is only what a name **cannot** carry:
 
