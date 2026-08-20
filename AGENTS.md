@@ -124,6 +124,32 @@ Corollary: a fact only counts as known if something *proved* it. `Contributor.ho
 only by a linked server's directory, never by an incoming photo — a relayed ref names the person
 but not their server, and guessing would route someone's album to the wrong household.
 
+## Name things so the next reader does not have to decode them
+
+Not style policing — bad names hide bugs. A `useEffect` in the accept page used `tick`, `u`, `iv`
+and `stop`, and buried in that soup was a `return () => clearInterval(iv)` inside a `.then()`,
+which is dead code: Preact only honours the value the effect itself returns, so the poll kept
+running after the page navigated away. With the pieces named for what they hold, the missing
+cleanup was obvious on sight.
+
+- **Name a variable for what it holds, not its type or its position.** `signedInUser`, not `u`.
+  `pollTimer`, not `iv`. `outcome`, not `d`. `minutesLeft`, not `minutes`.
+- **Name a function for what it does to the world**, and make the verb match: `acceptInvite`,
+  `startPollingUntilSignedIn`, `copyToClipboard` — not `accept`, `tick`, `copy`.
+- **Single letters only for a genuinely anonymous, one-line scope** — `xs.map(x => x.id)`. Never
+  for anything that lives more than a couple of lines, and never for a caught error you go on to
+  inspect.
+- **Magic numbers get a named constant with a unit**: `SIGN_IN_POLL_MS`, `SYNC_WAIT_LIMIT_MS`.
+  `2500` in the middle of an effect tells the reader nothing about whether it is safe to change.
+- **Extract the condition rather than commenting it.** `const waitedTooLong = Date.now() - since >
+  LIMIT_MS` reads better than the inequality inline, and it puts the reasoning in the name.
+- **Comments say WHY, names say WHAT.** If a comment is needed to explain what a line does, the
+  names are wrong. Reserve comments for the reason: which Immich quirk forced this, which failure
+  it protects against, which direction it fails in.
+
+This applies to test code too. An assertion whose message does not say what broke costs a
+debugging cycle every time it fires.
+
 ## Invariants that will bite you
 
 These are enforced by lint or tests where possible, because each one has already caused a bug.

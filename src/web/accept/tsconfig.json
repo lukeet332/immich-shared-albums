@@ -1,0 +1,28 @@
+{
+  "// why this lives here": [
+    "The panel is a browser Preact app: it needs the JSX transform and DOM types, which the",
+    "sidecar deliberately does not have. Editors resolve a file against the NEAREST tsconfig, so",
+    "keeping it in this folder is what makes VS Code show the same result as `npm run typecheck`.",
+    "With only a root config, every .tsx file reported 'Cannot use JSX unless the --jsx flag is",
+    "provided' while the CLI was perfectly green."
+  ],
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node"
+    ],
+    "noEmit": true
+  },
+  "include": [
+    "./**/*.ts",
+    "./**/*.tsx"
+  ],
+  "exclude": []
+}

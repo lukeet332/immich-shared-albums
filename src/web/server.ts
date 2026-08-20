@@ -20,14 +20,13 @@ import { immich } from '../immich/client.ts';
 import { verify, callingPeer } from '../peers.ts';
 import { handlePreview, handleOriginal, handlePlayback } from '../media/proxy.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
-import { PANEL, ACCEPT_PAGE } from './pages.ts';
-import { BANNER_JS } from './banner.ts';
+import { surfaceFor } from './frontend.ts';
 import { proxyToImmich } from './passthrough.ts';
 import { callerIdentity, signInRequired, SIGN_IN_PAGE } from './auth.ts';
 import { handleRedeem, handleRefs, handleVersion, handleNudge, handleManifest } from '../p2p/protocol.ts';
 import { join } from '../p2p/join.ts';
 import { leaveAlbum } from '../sync/leave.ts';
-import { unlinkPeer, linkedPeers, localHousehold } from '../p2p/unlink.ts';
+import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
 import { handlePair, mintPairing, pendingPairings, revokePairing, redeemPairing } from '../p2p/pair.ts';
 import { handleActivity, handleComments } from '../sync/comments.ts';
 import { invitationsFor, localDirectory } from '../sync/invites.ts';
@@ -87,13 +86,20 @@ export const server = http.createServer(async (req, res) => {
         return send(404, { error: 'no avatar' });
       }
     }
-    if (path === `${ROUTE_PREFIX}/banner.js`) {
-      res.writeHead(200, { 'Content-Type': 'application/javascript' });
-      return res.end(BANNER_JS);
-    }
-    if (path === `${ROUTE_PREFIX}/accept`) {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      return res.end(ACCEPT_PAGE());
+    // Human-facing surfaces — pages and scripts — come from ONE table, so "what exists and who
+    // may see it" is answerable by reading web/frontend.ts rather than tracing this file. Served
+    // before the body cap because none of them has a body to read.
+    const surface = surfaceFor(path);
+    if (surface) {
+      if (surface.admin) {
+        const caller = await callerIdentity(req);
+        if (!caller?.isAdmin) {
+          res.writeHead(caller ? 403 : 401, { 'Content-Type': 'text/html' });
+          return res.end(SIGN_IN_PAGE(surface.action ?? 'use this page'));
+        }
+      }
+      res.writeHead(200, { 'Content-Type': surface.type, 'Cache-Control': 'no-cache' });
+      return res.end(surface.body());
     }
     // Byte interceptors (hotlink model): the app's own asset URLs are served with true
     // bytes streamed live from the owner's server for proxy assets. See media/interceptor.
@@ -108,15 +114,6 @@ export const server = http.createServer(async (req, res) => {
     const body = await readCappedBody(req);
     if (body === null) return send(413, { error: `request body exceeds ${CFG.maxBodyKb}KB` });
 
-    if (path === `${ROUTE_PREFIX}/` || path === ROUTE_PREFIX) {
-      const caller = await callerIdentity(req);
-      if (!caller?.isAdmin) {
-        res.writeHead(caller ? 403 : 401, { 'Content-Type': 'text/html' });
-        return res.end(SIGN_IN_PAGE('manage shared albums'));
-      }
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      return res.end(PANEL());
-    }
     if (path === `${ROUTE_PREFIX}/join` && req.method === 'POST') {
       // The account being joined is the SIGNED-IN one. The request body may name a
       // different user only if the caller is an admin acting on their behalf.
@@ -153,7 +150,7 @@ export const server = http.createServer(async (req, res) => {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('see connected servers'));
       if (!caller.isAdmin) return send(403, { error: 'only an admin can see connected servers' });
-      return send(200, { household: localHousehold(), peers: linkedPeers() });
+      return send(200, { household: localHousehold(), peers: linkedPeers(), albums: sharedAlbums() });
     }
     if (path === `${ROUTE_PREFIX}/pairings` && req.method === 'GET') {
       const caller = await callerIdentity(req);

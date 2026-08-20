@@ -8,187 +8,249 @@
  * says one is required. Nothing here is a security control.
  */
 import { CFG, ROUTE_PREFIX } from '../config.ts';
-import { linkedPeers } from '../p2p/unlink.ts';
-import { state } from '../state.ts';
+import { html, css, raw } from './tags.ts';
 
-export const PANEL =
-  () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${CFG.name} — shared albums</title>
-<style>
- body{margin:0;font-family:Inter,-apple-system,sans-serif;background:#101216;color:#e5e7eb;display:grid;place-items:start center;min-height:100vh}
- main{width:min(560px,92vw);padding:40px 0}
- h1{font-size:20px;letter-spacing:-.02em} h1 small{color:#6b7280;font-weight:400}
- .card{background:#1f2229;border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:18px;margin:14px 0}
- form{display:flex;gap:8px} input{flex:1;font:inherit;font-size:14px;padding:10px 12px;border-radius:11px;border:1px solid rgba(255,255,255,.12);background:#15171c;color:inherit;outline:none}
- input:focus{border-color:#4250af;box-shadow:0 0 0 3px rgba(66,80,175,.25)}
- button{font:inherit;font-size:14px;font-weight:600;padding:10px 18px;border:0;border-radius:11px;background:#4250af;color:#fff;cursor:pointer}
- .item{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:14px}
- .muted{color:#6b7280} #msg{font-size:13px;margin-top:10px;color:#8b9cf9;min-height:18px}
- button.danger{background:transparent;border:1px solid rgba(248,113,113,.45);color:#f87171;padding:5px 12px;font-size:12px;margin-top:5px}
- button.danger:hover{background:rgba(248,113,113,.12)}
- #umsg{font-size:13px;margin-top:10px;color:#8b9cf9;min-height:0}
-</style>
-<main>
- <h1>🔗 Shared albums <small>· ${CFG.name}</small></h1>
- <div class="card"><b style="font-size:14px">Join an album</b>
-  <p class="muted" style="font-size:13px">Paste a share link from another household.</p>
-  <form onsubmit="j(event)"><input id="u" placeholder="https://their-server/share/…"><button>Join</button></form>
-  <input id="pw" type="password" placeholder="Album password" style="display:none;margin-top:8px;width:100%">
-  <div id="msg"></div></div>
- <div class="card"><b style="font-size:14px">Shared albums</b>
-  ${state.mappings.map(m => `<div class="item"><span>${m.albumName}</span><span class="muted">${m.role} · ${(state.peers.find(p => p.pub === m.peer) || {}).name || ''}</span></div>`).join('') || '<p class="muted" style="font-size:13px">None yet.</p>'}</div>
- <div class="card"><b style="font-size:14px">Link a server</b>
-  <p class="muted" style="font-size:13px">Send this link to the other server's admin, who pastes it
-   into their own panel. It links the two servers so you can invite each other's people to albums
-   in Immich. It is single-use, expires in 15 minutes, and grants access to no photos on its own.</p>
-  <div style="display:flex;gap:8px"><button onclick="mint()">Create a link</button>
-   <button onclick="document.getElementById('pastebox').style.display='flex'">I have a link</button></div>
-  <div id="minted"></div>
-  <form id="pastebox" style="display:none;margin-top:10px" onsubmit="redeem(event)">
-   <input id="plink" placeholder="Paste the link they sent you"><button>Link</button></form>
-  <div id="pmsg"></div></div>
- <div class="card"><b style="font-size:14px">Connected servers</b>
-  <p class="muted" style="font-size:13px">Once a server is connected, its people appear in Immich's
-   own “share album” picker. Unlinking removes them from the picker, tears down the albums they
-   shared with you, and stops serving the albums you shared with them.</p>
-  ${
-    linkedPeers()
-      .map(
-        p => `<div class="item">
-    <span>${p.name}<br><span class="muted" style="font-size:12px">${p.url}${p.version ? ` · v${p.version}` : ''}</span></span>
-    <span style="text-align:right"><span class="muted" style="font-size:12px">${p.people} ${p.people === 1 ? 'person' : 'people'} · ${p.sharedToThem} out · ${p.sharedToUs} in</span><br>
-     <button class="danger" onclick="unlink('${p.pub}','${p.name.replace(/'/g, "\\'")}')">Unlink</button></span></div>`
-      )
-      .join('') ||
-    '<p class="muted" style="font-size:13px">None yet — join a shared album above to connect one.</p>'
+/**
+ * The admin panel is a Preact app (src/web/panel/, bundled to panel.bundle.js). This is only the
+ * shell it mounts into.
+ *
+ * Client-rendered on purpose: the panel is admin-only, behind auth, and every action it offers was
+ * already a JSON call, so server-rendering would pre-paint one frame of a page nobody waits on —
+ * and would mean compiling the components for the server too, which runs TypeScript directly and
+ * cannot import .tsx. The accept page below is the opposite case and stays server-rendered.
+ */
+export const PANEL = () => html`
+  <!doctype html>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>${CFG.name} — shared albums</title>
+  <style>
+    ${raw(PANEL_CSS)}
+  </style>
+  <main>
+    <div id="app"></div>
+    <noscript>
+      This page needs JavaScript. Everything it does — linking servers, unlinking them — is an admin action
+      against this server's API, so there is nothing useful to show without it.
+    </noscript>
+  </main>
+  <script type="module" src="${ROUTE_PREFIX}/panel.bundle.js"></script>
+`;
+
+/**
+ * Only what inline style objects cannot express: the page ground, and focus/hover states. Every
+ * other style in the panel lives with its component, in src/web/panel/theme.ts.
+ */
+const PANEL_CSS = css`
+  body {
+    margin: 0;
+    font-family:
+      Inter,
+      -apple-system,
+      sans-serif;
+    background: #101216;
+    color: #e5e7eb;
+    display: grid;
+    place-items: start center;
+    min-height: 100vh;
   }
-  <div id="umsg"></div></div>
-</main>
-<script>async function j(e){e.preventDefault();
- const el=document.getElementById('msg'),pw=document.getElementById('pw');el.textContent='Joining…';
- const payload={url:document.getElementById('u').value};
- if(pw.style.display!=='none'&&pw.value)payload.password=pw.value;
- const r=await fetch('${ROUTE_PREFIX}/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
- const d=await r.json().catch(()=>({error:'failed'}));
- if(d&&d.needsAuth){location.href=d.signInUrl||'/auth/login';return}
- if(d&&d.passwordRequired){pw.style.display='block';pw.focus();
-  el.textContent='This album is password protected — enter the same password you would use to view it.';return}
- el.textContent=r.ok?('Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing. It will appear in your app shortly.'):('Error: '+(d.error||r.status));
- if(r.ok)setTimeout(()=>location.reload(),2500)}
-async function mint(){
- const el=document.getElementById('pmsg');el.textContent='Creating…';
- const r=await fetch('${ROUTE_PREFIX}/pairings',{method:'POST'});
- const d=await r.json().catch(()=>({error:'failed'}));
- if(!r.ok){el.textContent='Error: '+(d.error||r.status);return}
- el.textContent='';
- const mins=Math.max(1,Math.round((d.expiresAt-Date.now())/60000));
- const box=document.getElementById('minted');
- box.innerHTML='<p class="muted" style="font-size:13px;margin:10px 0 6px">Send this to them — it works once, and expires in '+mins+' minutes.</p>';
- const inp=document.createElement('input');inp.readOnly=true;inp.value=d.link;inp.style.width='100%';
- const row=document.createElement('div');row.style.display='flex';row.style.gap='8px';
- const copy=document.createElement('button');copy.textContent='Copy';
- // navigator.clipboard needs a secure context, so it is absent on a plain-HTTP LAN panel.
- // Selecting the text is the fallback, otherwise the button looks broken for exactly the
- // people running the simplest setups.
- copy.onclick=async()=>{try{await navigator.clipboard.writeText(d.link);copy.textContent='Copied'}
-  catch{inp.select();copy.textContent='Press Ctrl/Cmd+C'}};
- row.appendChild(inp);row.appendChild(copy);box.appendChild(row)}
-async function redeem(e){e.preventDefault();
- const el=document.getElementById('pmsg'),v=document.getElementById('plink').value;
- el.textContent='Linking…';
- const r=await fetch('${ROUTE_PREFIX}/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({link:v})});
- const d=await r.json().catch(()=>({error:'failed'}));
- el.textContent=r.ok?('Linked with '+d.linked+' — their people can now be invited to albums.'):('Error: '+(d.error||r.status));
- if(r.ok)setTimeout(()=>location.reload(),1800)}
-async function unlink(pub,name){
- if(!confirm('Unlink "'+name+'"?\n\nTheir photos and albums are removed from this server, and '
-  +'albums you shared with them stop syncing. Your own photos are untouched.'))return;
- const el=document.getElementById('umsg');el.textContent='Unlinking…';
- const r=await fetch('${ROUTE_PREFIX}/unlink',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pub:pub})});
- const d=await r.json().catch(()=>({error:'failed'}));
- el.textContent=r.ok?('Unlinked '+d.household+' — '+d.mirrorsRemoved+' album(s) removed, '+d.sharesRevoked+' share(s) revoked.'):('Error: '+(d.error||r.status));
- if(r.ok)setTimeout(()=>location.reload(),1800)}</script>`;
-export const ACCEPT_PAGE =
-  () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Join shared album — ${CFG.name}</title>
-<style>
- body{margin:0;font-family:Overpass,Inter,Roboto,-apple-system,sans-serif;background:#f8f9fa;color:#202124;display:grid;place-items:center;min-height:100vh}
- .card{width:min(440px,calc(100vw - 32px));box-sizing:border-box;background:#fff;border:1px solid rgba(0,0,0,.06);border-radius:28px;padding:30px 26px 26px;text-align:center;box-shadow:0 1px 3px rgba(60,64,67,.15),0 8px 28px rgba(60,64,67,.15)}
- .logo{width:56px;height:56px;border-radius:50%;margin:0 auto 16px;display:grid;place-items:center;background:linear-gradient(135deg,#4250af,#7c3aed);font-size:26px;box-shadow:0 2px 10px rgba(66,80,175,.35)}
- h1{font-size:19px;font-weight:600;margin:0 0 6px;letter-spacing:-.01em} p{color:#5f6368;font-size:13.5px;line-height:1.55;margin:6px 0 18px}
- button{font:inherit;font-size:15px;font-weight:600;padding:12px 36px;border:0;border-radius:999px;background:#4250af;color:#fff;cursor:pointer;transition:filter .15s,box-shadow .15s}
- button:hover{filter:brightness(1.08);box-shadow:0 2px 10px rgba(66,80,175,.4)} button:disabled{opacity:.4;cursor:default;box-shadow:none}
- button.busy{opacity:.85}
- .spin{display:inline-block;width:14px;height:14px;margin-right:9px;vertical-align:-2px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:isa-spin .8s linear infinite}
- @keyframes isa-spin{to{transform:rotate(360deg)}}
- #who{font-size:12.5px;color:#4250af;margin:-6px 0 16px;line-height:1.5} #who a{color:#4250af}
- #out{margin-top:16px;font-size:13px;color:#4250af;min-height:20px;line-height:1.5}
- @media (prefers-color-scheme:dark){
-  body{background:#101216;color:#e8eaed}
-  .card{background:#1b1f26;border-color:rgba(255,255,255,.08);box-shadow:0 1px 3px rgba(0,0,0,.4),0 10px 32px rgba(0,0,0,.5)}
-  p{color:#9aa0a6} #who,#who a,#out{color:#a8c7fa}
-  button{background:#a8c7fa;color:#0d1b3d}
- }
-</style>
-<div class="card"><div class="logo">🔗</div><h1 id="t">Join shared album?</h1>
-<p id="d">This will add the album to your account on <b>${CFG.name}</b>. Photos stay on their owners' servers.</p>
-<div id="who"></div>
-<input id="pw" type="password" placeholder="Album password" autocomplete="current-password"
- style="display:none;width:100%;box-sizing:border-box;font:inherit;font-size:14px;padding:11px 16px;border-radius:999px;border:1px solid rgba(0,0,0,.15);margin:0 0 14px;text-align:center">
-<button id="go" disabled>Accept &amp; join</button><div id="out"></div></div>
-<script>
-const frag=(()=>{
- try{ if(location.hash.length>1) return JSON.parse(decodeURIComponent(location.hash.slice(1))); }catch{}
- const qp=new URLSearchParams(location.search);
- if(qp.get('h')&&qp.get('k')){ const f={v:1,host:qp.get('h'),scheme:qp.get('s')||'https',key:qp.get('k')};
-   history.replaceState({},'',location.pathname); return f; }
- return null;})();
-if(!frag||!frag.host||!frag.key){document.getElementById('t').textContent='Invalid or expired invite';document.getElementById('go').style.display='none';}
-let ME=null,POLL=null;
-function whoami(){return fetch('/api/users/me',{credentials:'include'}).then(r=>r.ok?r.json():null).then(u=>{
- if(u&&u.id){ME=u;clearInterval(POLL);document.getElementById('go').disabled=false;
-   document.getElementById('who').textContent='Joining as '+u.name+' — the album is added only to your account.';}
- else if(!ME){document.getElementById('who').innerHTML='<a href="/auth/login">Sign in to your Immich</a> to join — this page will notice once you are signed in.';}
- return u;}).catch(()=>null);}
-whoami().then(u=>{if(!u)POLL=setInterval(whoami,2500);});
-document.getElementById('go').onclick=async()=>{
- if(!ME)return;
- const go=document.getElementById('go');
- go.disabled=true;go.classList.add('busy');
- go.innerHTML='<span class="spin"></span>Joining — syncing photos…';
- const out=document.getElementById('out');out.textContent='';
- const scheme=frag.scheme||'https';
- const pw=document.getElementById('pw');
- const body={url:scheme+'://'+frag.host+'/share/'+frag.key,forUserId:ME.id};
- if(pw.style.display!=='none'&&pw.value)body.password=pw.value;
- const r=await fetch('${ROUTE_PREFIX}/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
- const d=await r.json().catch(()=>({error:'failed'}));
- var reset=function(){go.disabled=false;go.classList.remove('busy');go.textContent='Accept & join';};
- // the session went away between page load and click — send them to sign in and back
- if(d&&d.needsAuth){location.href=(d.signInUrl||'/auth/login');return}
- // same password the album's own share page asks for; the origin verifies it, not us
- if(d&&d.passwordRequired){
-   pw.style.display='block';pw.focus();reset();
-   out.innerHTML='This album is password protected.<br><span style="font-size:12px">Enter the same password you would use to view it.</span>';
-   return}
- if(r.ok){
-   // album-specific deeplink: the app registers my.immich.app/albums/<id> (the bare
-   // list path is NOT registered and falls through to the web fallback)
-   var deep='intent://my.immich.app/albums/'+d.albumId+'#Intent;scheme=https;package=app.alextran.immich;S.browser_fallback_url='+encodeURIComponent('https://my.immich.app/albums/'+d.albumId)+';end';
-   out.innerHTML='Joined "'+d.album+'" from '+d.from+'.'+(d.permissions==='view'?'<br><span style="font-size:12px">View-only album: you can look and comment, but photos you add stay on your server.</span>':'')+'<br><br>'+
-     '<a id="openapp" style="display:inline-block;background:#4250af;color:#fff;text-decoration:none;font-weight:600;padding:12px 30px;border-radius:999px;opacity:.45;pointer-events:none"><span class="spin"></span>Syncing 0/'+d.photos+'…</a>';
-   document.getElementById('go').style.display='none';
-   // the deeplink only behaves once the album is real and filled — watch it fill live
-   var btn=document.getElementById('openapp'), t0=Date.now();
-   var ready=function(){btn.innerHTML='Open in Immich app';btn.style.opacity='1';btn.style.pointerEvents='auto';btn.href=deep;};
-   if(!d.photos){ready();}
-   else{var iv=setInterval(function(){
-     fetch('/api/albums/'+d.albumId+'?withoutAssets=true',{credentials:'include'}).then(function(x){return x.json();}).then(function(a){
-       var n=a.assetCount||0;
-       btn.innerHTML='<span class="spin"></span>Syncing '+Math.min(n,d.photos)+'/'+d.photos+'…';
-       if(n>=d.photos||Date.now()-t0>90000){clearInterval(iv);ready();}
-     }).catch(function(){if(Date.now()-t0>90000){clearInterval(iv);ready();}});
-   },1500);}
- } else { out.textContent='Error: '+(d.error||r.status); reset(); }
-};
-</script>`;
+  main {
+    width: min(560px, 92vw);
+    padding: 40px 0;
+  }
+  input:focus {
+    border-color: #4250af;
+    box-shadow: 0 0 0 3px rgba(66, 80, 175, 0.25);
+  }
+  button:hover {
+    filter: brightness(1.08);
+  }
+  noscript {
+    color: #9aa0a6;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+`;
+
+/**
+ * The joining page is a Preact app too (src/web/accept/, bundled to accept.bundle.js). This is
+ * the shell it mounts into.
+ *
+ * Its own bundle, not the panel's: this page is public and must not download admin code. It IS
+ * client-rendered despite being the public surface — everything it does (find who is signed in,
+ * redeem the link, watch the album fill, hand over a deeplink) needs JS, so there is no useful
+ * pre-JS state to render.
+ */
+export const ACCEPT_PAGE = () => html`
+  <!doctype html>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Join shared album — ${CFG.name}</title>
+  <style>
+    ${raw(ACCEPT_CSS)}
+  </style>
+  <div class="card">
+    <div class="logo">🔗</div>
+    <div id="app" data-household="${CFG.name}"></div>
+    <noscript>Joining needs JavaScript — it signs you in to your own server and redeems the link.</noscript>
+  </div>
+  <script type="module" src="${ROUTE_PREFIX}/accept.bundle.js"></script>
+`;
+
+/** Light/dark card styling, plus the states inline styles cannot express. */
+const ACCEPT_CSS = css`
+  body {
+    margin: 0;
+    font-family:
+      Overpass,
+      Inter,
+      Roboto,
+      -apple-system,
+      sans-serif;
+    background: #f8f9fa;
+    color: #202124;
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+  }
+  .card {
+    width: min(440px, calc(100vw - 32px));
+    box-sizing: border-box;
+    background: #fff;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    border-radius: 28px;
+    padding: 30px 26px 26px;
+    text-align: center;
+    box-shadow:
+      0 1px 3px rgba(60, 64, 67, 0.15),
+      0 8px 28px rgba(60, 64, 67, 0.15);
+  }
+  .logo {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    margin: 0 auto 16px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, #4250af, #7c3aed);
+    font-size: 26px;
+    box-shadow: 0 2px 10px rgba(66, 80, 175, 0.35);
+  }
+  h1 {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+  p {
+    color: #5f6368;
+    font-size: 13.5px;
+    line-height: 1.55;
+    margin: 6px 0 18px;
+  }
+  button {
+    font: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 12px 36px;
+    border: 0;
+    border-radius: 999px;
+    background: #4250af;
+    color: #fff;
+    cursor: pointer;
+    transition:
+      filter 0.15s,
+      box-shadow 0.15s;
+  }
+  button:hover {
+    filter: brightness(1.08);
+    box-shadow: 0 2px 10px rgba(66, 80, 175, 0.4);
+  }
+  button:disabled {
+    opacity: 0.4;
+    cursor: default;
+    box-shadow: none;
+  }
+  button.busy {
+    opacity: 0.85;
+  }
+  .cta {
+    display: inline-block;
+    background: #4250af;
+    color: #fff;
+    text-decoration: none;
+    font-weight: 600;
+    padding: 12px 30px;
+    border-radius: 999px;
+  }
+  .pw {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 14px;
+    padding: 11px 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    margin: 0 0 14px;
+    text-align: center;
+  }
+  .spin {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    margin-right: 9px;
+    vertical-align: -2px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: isa-spin 0.8s linear infinite;
+  }
+  @keyframes isa-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .who {
+    font-size: 12.5px;
+    color: #4250af;
+    margin: -6px 0 16px;
+    line-height: 1.5;
+  }
+  .who a {
+    color: #4250af;
+  }
+  .out {
+    margin-top: 16px;
+    font-size: 13px;
+    color: #4250af;
+    min-height: 20px;
+    line-height: 1.5;
+  }
+  @media (prefers-color-scheme: dark) {
+    body {
+      background: #101216;
+      color: #e8eaed;
+    }
+    .card {
+      background: #1b1f26;
+      border-color: rgba(255, 255, 255, 0.08);
+      box-shadow:
+        0 1px 3px rgba(0, 0, 0, 0.4),
+        0 10px 32px rgba(0, 0, 0, 0.5);
+    }
+    p {
+      color: #9aa0a6;
+    }
+    .who,
+    .who a,
+    .out {
+      color: #a8c7fa;
+    }
+    button,
+    .cta {
+      background: #a8c7fa;
+      color: #0d1b3d;
+    }
+  }
+`;
