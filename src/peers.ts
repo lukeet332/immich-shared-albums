@@ -1,7 +1,4 @@
-/**
- * peers.ts — peer-to-peer transport primitives: detached-signature sign/verify over the
- * ed25519 household keypair, the signed POST helper, and the fire-and-forget nudge.
- */
+/** peers.ts — signing, verification and the signed fetch helpers. See peers.md. */
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import { state, keys } from './state.ts';
@@ -23,12 +20,6 @@ const isPrivateAddress = (ip: string) =>
   /^f[cd]/i.test(ip) ||
   /^fe80:/i.test(ip);
 
-/**
- * Guard a peer-supplied URL before we fetch it. Private destinations are normal for LAN
- * and tailnet deployments, so they are allowed unless ALLOW_PRIVATE_PEERS=false — which is
- * what a public-facing host should set, so that a peer URL cannot be aimed at services
- * only the container can reach.
- */
 export async function assertPeerUrlAllowed(rawUrl: string) {
   if (CFG.allowPrivatePeers) return;
   let u: URL;
@@ -75,11 +66,6 @@ export const verify = (body, sig, pub) => {
     return false;
   }
 };
-/**
- * The peer behind an inbound request, or null. A key names a peer; only the signature
- * proves it, so these two always travel together — never match on the key alone, since
- * every public key is published in redeem responses.
- */
 export function callingPeer(req, signedValue: string) {
   const peerKey = req.headers['x-isa-key'] as string;
   if (!peerKey) return null;
@@ -87,11 +73,6 @@ export function callingPeer(req, signedValue: string) {
   if (!peer) return null;
   return verify(signedValue, (req.headers['x-isa-sig'] as string) || '', peerKey) ? peer : null;
 }
-/**
- * Find one of THIS peer's mappings. The `m.peer === peerPub` term is the whole point:
- * without it a mapping id alone selects an album, and any enrolled peer can act on a
- * relationship that belongs to a different household.
- */
 export function mappingFor(peerPub: string, ref: string, role?: 'owner' | 'member') {
   return state.mappings.find(
     m =>
@@ -100,7 +81,6 @@ export function mappingFor(peerPub: string, ref: string, role?: 'owner' | 'membe
       (m.id === ref || m.albumId === ref || m.remoteAlbumId === ref)
   );
 }
-/** GET with a detached signature over `signedValue` — the read-side counterpart of signedFetch. */
 export const signedGet = (url: string, signedValue: string, init: RequestInit = {}) =>
   fetch(url, {
     ...init,
@@ -114,9 +94,6 @@ export const signedFetch = (url, body) =>
     headers: { 'Content-Type': 'application/json', 'x-isa-key': keys.pub, 'x-isa-sig': sign(body) },
     body,
   });
-// Nudge: tell every OTHER household mapped to this album that it moved, so they pull
-// now instead of at their next tick. Fire-and-forget — a lost nudge costs nothing,
-// the scheduled handshake still catches everything (fail-open by design).
 export function nudgePeers(albumId: string, exceptPeerPub?: string) {
   for (const mp of state.mappings) {
     if (mp.albumId !== albumId || mp.dead || mp.role !== 'owner' || mp.peer === exceptPeerPub) continue;

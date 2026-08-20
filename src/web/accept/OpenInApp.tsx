@@ -1,12 +1,7 @@
+/** web/accept/OpenInApp.tsx — the deeplink, gated on the album filling. See ../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
 import { albumCount, deepLink } from './api.ts';
 
-/**
- * The deeplink only behaves once the album exists AND has filled, so this watches it fill rather
- * than handing over a button that opens an empty album. Gives up after 90s and enables anyway —
- * a slow sync should not strand someone on this page.
- */
-/** How long to wait for the album to fill before handing over the link regardless. */
 const SYNC_WAIT_LIMIT_MS = 90_000;
 const SYNC_CHECK_EVERY_MS = 1_500;
 

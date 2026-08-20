@@ -1,18 +1,10 @@
-/**
- * p2p/mirror.ts — creating the local mirror of a remote album.
- *
- * Extracted from join.ts because there are now two ways to acquire an album and only one way to
- * mirror it: redeeming a share link (join.ts), and being invited in the origin's own Immich
- * picker (sync/invites.ts). The mirror itself is identical either way — a utility user owns it
- * so it stays out of local timelines, local humans are added as editors, and the reconciler
- * fills it in behind the answer.
- */
+/** p2p/mirror.ts — creating the local mirror of a remote album. See wire-protocol.md. */
 import crypto from 'node:crypto';
 import { CFG, log, isUtilityEmail, BOT_PREFIX, UTILITY_EMAIL_DOMAIN } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
 import { state, save } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
-import { ensureUtilityUser, syncAvatar, slugify } from '../immich/contributors.ts';
+import { ensureLocalAccountFor, syncAvatar, slugify } from '../immich/contributors.ts';
 import { reconcileMapping } from '../sync/engine.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
@@ -20,33 +12,18 @@ export type MirrorRequest = {
   peer: Peer;
   album: { id: string; name: string };
   permissions: 'view' | 'contribute';
-  /** Display name of the album's owner on the origin; falls back to the household name. */
   albumOwnerName?: string;
-  /** Origin user id, for syncing that person's avatar onto the local utility user. */
   albumOwnerId?: string;
-  /** The origin's own mapping id, when known (link joins carry it; invitations do not). */
   remoteMappingId?: string;
-  /** Restrict the mirror to these local users (per-person invitations). Omit to add every
-   *  human, which is what a link join does — a link is redeemed BY someone, for the household. */
   forUserIds?: string[];
-  /** How this share was acquired. Scopes member-side withdrawal: only invitation-created
-   *  mirrors may be torn down when an invitation stops being offered. */
   via?: 'link' | 'invite';
 };
 
-/**
- * Ensure a mirror exists for `album` from `peer`. Idempotent: if one already exists this just
- * makes sure the requested local user is a member, matching the re-join behaviour.
- */
 export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mapping; created: boolean }> {
   const { peer, album, permissions, forUserIds } = req;
   const ownerName = req.albumOwnerName || peer.name;
-  // The album's owner is a person on that peer, so key them by their id on THEIR server when we
-  // know it. That makes the account we create here and the one the directory creates the same
-  // human rather than two picker entries for one person. `homePeer` is deliberately NOT set: a
-  // redeem does not prove where they live, only a directory does.
   const hostSlug = req.albumOwnerId ? `${BOT_PREFIX.person}${req.albumOwnerId}` : slugify(ownerName);
-  const host = await ensureUtilityUser(
+  const host = await ensureLocalAccountFor(
     ownerName,
     req.albumOwnerId
       ? {
@@ -78,13 +55,11 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     mp => mp.role === 'member' && mp.peer === peer.pub && mp.remoteAlbumId === album.id && !mp.dead
   );
   if (existing) {
-    const n = await addMembers(existing.albumId);
-    if (n) log(`added ${n} member(s) to existing mirror "${existing.albumName}"`);
+    const addedCount = await addMembers(existing.albumId);
+    if (addedCount) log(`added ${addedCount} member(s) to existing mirror "${existing.albumName}"`);
     return { mapping: existing, created: false };
   }
 
-  // a freshly-minted utility user/key can 500 its first writes on cold instances — retry
-  // with backoff and log each attempt so failures are diagnosable from CI logs
   let mirror;
   for (let attempt = 1; ; attempt++) {
     try {
@@ -101,9 +76,9 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     }
   }
   try {
-    const n = await addMembers(mirror.id);
+    const addedCount = await addMembers(mirror.id);
     log(
-      `mirror shared with ${forUserIds?.length ? forUserIds.length + ' named user(s)' : n + ' household member(s)'}`
+      `mirror shared with ${forUserIds?.length ? forUserIds.length + ' named user(s)' : addedCount + ' household member(s)'}`
     );
   } catch (e) {
     log(`could not add local members to mirror: ${e.message}`);
@@ -126,12 +101,7 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
   return { mapping, created: true };
 }
 
-/**
- * Fill the mirror in behind the caller's answer. Deliberately unawaited by callers: a large
- * album or a video transcode must not hold the accept page (or a poll cycle) hostage.
- */
 export function fillMirrorInBackground(mapping: Mapping, peer: Peer) {
-  // `void`: deliberately not awaited — a large album or a transcode must not block the caller.
   void (async () => {
     try {
       await reconcileMapping(mapping, peer);

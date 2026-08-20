@@ -124,7 +124,7 @@ a stored fact is also a stored liability:**
   the bot accounts' API keys, so anything added inherits that blast radius. (The *admin* key is
   not in there — it comes from `IMMICH_API_KEY` in the environment.) Two rules follow, neither
   about compliance:
-  - The bot password is rolled to a value nobody keeps (`ensureUtilityUser`), because it existed
+  - The bot password is rolled to a value nobody keeps (`ensureLocalAccountFor`), because it existed
     only to mint one API key and has no purpose afterwards. The concrete gain is small but real:
     a bot key deliberately lacks `apiKey.create`, so it can do its 22 things and no more, whereas
     a password logs in interactively and can mint an unrestricted key for that account. Keeping it
@@ -147,6 +147,112 @@ a stored fact is also a stored liability:**
 Corollary: a fact only counts as known if something *proved* it. `Contributor.homePeer` is set
 only by a linked server's directory, never by an incoming photo — a relayed ref names the person
 but not their server, and guessing would route someone's album to the wrong household.
+
+## Every source file opens with one line: what it is, and where its doc is
+
+A single line, first line, no exceptions:
+
+```ts
+/** sync/invites.ts — sharing an album by inviting a PERSON in Immich's own picker. See invites.md. */
+/** sync/leave.ts — undoing a join. See sync-loops.md. */
+```
+
+Format: `path — brief description. See <doc>.md.`
+
+This is the one comment whose job cannot be done by naming, because it answers a question the code
+cannot: **where is the context for this file?** Some files have a doc of their own beside them
+(`config.ts` → `config.md`); others are covered by a folder doc under a different name
+(`p2p/protocol.ts` → `wire-protocol.md`). Without the pointer you would have to guess or grep.
+
+It also makes the link machine-followable, which matters because agents work here: open the file,
+read one line, know exactly which doc to load for context before changing anything.
+
+Two rules keep it honest:
+
+- **Keep the pointer accurate.** A header pointing at a doc that no longer exists, or at the wrong
+  one, is worse than none — it sends the next reader somewhere useless. Renaming or moving a doc
+  means updating every header that references it.
+- **Do not let it grow.** It is a pointer, not a summary. If you find yourself adding a second
+  sentence, that sentence belongs in the doc.
+
+## Comments: a paired doc is the default, inline is the exception
+
+Explanation belongs in a Markdown doc beside the code, not in the code. Naming carries the *what*;
+the doc carries the *why*. Code that reads cleanly and a doc that explains fully beats a file where
+both are tangled — and a doc can hold far more context than anyone would tolerate inline.
+
+**The test for keeping a comment inline: would moving it to the doc stop it doing its job?**
+
+Almost always the answer is no, so it moves. Two cases where it is yes, and they are the only ones:
+
+- **A hazard at the trigger line.** `record BEFORE the add`, `splice, never reassign`,
+  `ORDER IS LOAD-BEARING`. The person editing that exact statement must see the warning without
+  knowing a doc exists. One line, and it may point at the doc for the reasoning.
+- **A test case's rationale.** *"the compounded form seen in run27, which is what this exists to
+  prevent"* — that sentence IS the case's meaning. Without it the assertion is a bare comparison
+  that a later reader deletes as redundant, or "fixes" to match new behaviour. The reader who needs
+  it is looking at the assertion, so it cannot live anywhere else.
+
+- **A one-line JSDoc on an exported type field or function.** Editors surface it on hover at every
+  use site, which no doc can do. `/** Mutable hint — where to reach them right now. */` on
+  `Household.url` earns its place; a paragraph above the type does not.
+
+Everything else goes: background, design reasoning, Immich quirks, "why this shape", history. The
+reader who needs those is trying to understand the module and will be reading its doc. Inline, they
+are noise standing between someone and the code.
+
+Corollary, and the reason this is worth the effort: comments rot **silently**, and porting them
+found four statements in these docs that were simply false — a `state.json` importer that no longer
+exists, a household stand-in that was deleted, an `invite-*` prefix that was renamed. Prose in a
+doc gets reviewed as prose. Prose wedged between statements gets skipped.
+
+### What survives, concretely
+
+The whole surviving set here is ~47 lines across 46 files, and each one falls into a named
+category. If a comment you are about to keep fits none of these, it belongs in the doc:
+
+| Category | Example |
+| --- | --- |
+| Deliberate-swallow marker on an empty `catch` | `/* already gone */`, `/* fail-open */` |
+| Ordering or aliasing hazard at the line | `record BEFORE the add`, `Splice, NEVER reassign` |
+| A revocation rule (fails towards under-sharing) | `missing member on an invitation album = REVOKED` |
+| A test contract other tooling depends on | `#who/#go/#out are a TEST CONTRACT` |
+| A wire route a type name cannot hold | `POST …/albums/:mappingId/refs` |
+| An external contract we do not get to name | the Immich API's response shape, a CGNAT regex |
+| A tooling marker | `// x-release-please-version` |
+
+A bare `catch {}` reads as a forgotten branch, so three words saying the swallow is intended is
+load-bearing — that is why the first row exists and why it is the largest group.
+
+Two traps when doing this work. **Judge each comment; never keyword-match it** — a block survived
+one sweep purely because it contained the word `ONLY`, and it was design prose that belonged in
+`wire-protocol.md`. And **a mechanical strip truncates**: nine comments were left as fragments
+ending mid-clause, still reading like instructions. Re-read every comment you touch, in full.
+
+## A comment explaining a symbol means the NAME is wrong
+
+This is the default, and it comes before every other rule about comments: **if a function, constant
+or variable needs a comment to say what it is, rename it.** The comment is a symptom. Fix the cause.
+
+- `/** How often to re-check whether they have signed in. */` above `POLL` → delete the comment,
+  call it `SIGN_IN_POLL_MS`.
+- `/** The server this person actually lives on. */` above `peer` → delete the comment, call it
+  `homePeer`.
+- `/** Whether the sidecar may add this member itself. */` above `flag` → call it `mayAdd`.
+
+Reach for a longer name before reaching for a comment. `startPollingUntilSignedIn` needs no
+explanation; `tick` needs a paragraph. A name is read every time the symbol is used; a comment is
+read once, if at all, and then rots.
+
+What survives this rule is only what a name **cannot** carry:
+
+- a hazard about ORDER or CONCURRENCY at the exact line it applies to
+- a reference to an external behaviour that is not in this codebase — an Immich quirk, a browser
+  constraint — and even then prefer the paired doc unless the reader of that line needs it
+- a `TODO` with enough context to act on
+
+If you find yourself writing "this is needed because…", that is doc material, not a comment. If you
+find yourself writing "this does X", the name should have said X.
 
 ## Name things so the next reader does not have to decode them
 

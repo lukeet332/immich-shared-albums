@@ -1,27 +1,20 @@
-/**
- * Where the invite details come from.
- *
- * The banner puts them in the URL fragment so they never reach a server log — neither the
- * origin's nor ours. The query-string form is the fallback for anything that strips fragments;
- * it is rewritten out of the address bar immediately for the same reason.
- */
+/** Where the invite details come from. See ../http-router.md. */
 export type Invite = { host: string; scheme: string; key: string };
 
 export const readInvite = (): Invite | null => {
   try {
     if (location.hash.length > 1) {
-      const f = JSON.parse(decodeURIComponent(location.hash.slice(1)));
-      if (f?.host && f?.key) return { host: f.host, scheme: f.scheme || 'https', key: f.key };
+      const fragment = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+      if (fragment?.host && fragment?.key)
+        return { host: fragment.host, scheme: fragment.scheme || 'https', key: fragment.key };
     }
-  } catch {
-    // fall through to the query form
-  }
-  const qp = new URLSearchParams(location.search);
-  const host = qp.get('h');
-  const key = qp.get('k');
+  } catch {}
+  const query = new URLSearchParams(location.search);
+  const host = query.get('h');
+  const key = query.get('k');
   if (host && key) {
     history.replaceState({}, '', location.pathname);
-    return { host, scheme: qp.get('s') || 'https', key };
+    return { host, scheme: query.get('s') || 'https', key };
   }
   return null;
 };

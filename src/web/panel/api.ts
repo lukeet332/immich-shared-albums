@@ -1,10 +1,10 @@
-/** The panel's whole server surface. Every route here is admin-only. */
+/** The panel's whole server surface. Every route here is admin-only. See ../http-router.md. */
 const ROUTE_PREFIX = '/immich-shared-albums';
 
 const json = async (path: string, init?: RequestInit) => {
-  const r = await fetch(ROUTE_PREFIX + path, init);
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.error || `${r.status}`);
+  const response = await fetch(ROUTE_PREFIX + path, init);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `${response.status}`);
   return body;
 };
 

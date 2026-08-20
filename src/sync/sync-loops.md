@@ -8,6 +8,7 @@ also driven on demand by nudges (`../p2p/protocol.ts`) so changes land in second
 | `invites.ts` | **Native album invitations, per person.** Every person on a linked server gets a local marker user; adding one to an album in Immich's own picker shares that album with that person, and removing them revokes it. The origin detects this by listing albums as each marker; members discover it by polling `…/api/v1/invitations`. Server *linking* is not here — it is admin-owned, in [`p2p/unlink.ts`](../p2p/) and the panel. |
 | `engine.ts` | Photo sync. `watchOnce` pushes local additions out to peers; `reconcileOnce`/`reconcileMapping` pull the origin manifest, materialise anything missing, and **propagate deletions** (with a consistency gate so an indexing lag never wrongly deletes). `leaveAlbum` is the full reverse of a join — purges every stub, the mirror album, the mapping and its ledger. `startWatchLoop` runs it on an overlap-guarded interval. |
 | `comments.ts` | Cross-server comments. The origin album is the source of truth: members pull the canonical list and push their own, gated by a cheap activity-count statistic so messages land in seconds without heavy polling. Includes the inbound `handleActivity`/`handleComments` handlers. `startCommentLoop` runs the fast lane. |
+| `invitees.ts` | Who should be on a mirror, as pure set arithmetic — extracted so the one code path that removes a real person from a real album can be tested in milliseconds. An EMPTY wanted-list is never "remove everyone" (that is a withdrawal), and only our own humans are ever removed. |
 
 **Why loops and not just webhooks:** nudges make the common case instant, but the timed
 sweep is the safety net — a lost nudge costs nothing because the next scheduled handshake
@@ -58,3 +59,25 @@ on it:
 Invitations are **pulled**, never pushed: a member with no inbound reachability still syncs
 perfectly well by pulling, so a push-based invitation would fail for exactly the households
 that most need this.
+
+## How the loops avoid stampeding the host
+
+**A cheap handshake gates the expensive work.** Immich bumps an album's `updatedAt` on any change,
+so untouched albums are skipped entirely and the full manifest is pulled only when the origin's
+version actually moved. The version's asset count comes from the album table (instant); the manifest
+is the expensive call.
+
+**An overlap guard, not a queue.** A slow cycle — large albums, slow peers — must not stack
+concurrent full scans. Stampedes starve the host Immich's own background jobs, which is the one
+thing this addon must never do.
+
+**A per-mapping mutex.** The join-time reconcile is fired unawaited and can race the background
+loop for the same album, which would materialise the same photos twice.
+
+**Deletion propagation is gated.** Refs we materialised that the owner no longer offers are removed
+— but only when the manifest is consistent, so an indexing lag on the origin can never be mistaken
+for a deletion.
+
+**Native leave is detected, not just offered.** When the last human member leaves a mirror in the
+stock Immich app, that is treated as leaving the album: the mapping and its stubs go. Nobody should
+have to come to this addon's panel to undo something they did in Immich.

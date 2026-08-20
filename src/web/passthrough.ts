@@ -1,16 +1,4 @@
-/**
- * web/passthrough.ts — transparent fall-through proxy to Immich for anything that isn't a
- * sidecar route (share pages, SPA bundles, /api). Injects the join banner into /share HTML.
- * In production a reverse proxy may handle this directly, but the sidecar can also be the
- * SINGLE front for Immich — which is the simplest thing to install, because it needs one
- * reverse-proxy route instead of three path-matched ones in a required order. Protocol
- * upgrades are carried by web/upgrade.ts, so live web updates work in that mode too.
- *
- * Both directions stream. Photo uploads reach Immich through here in the single-front
- * setup, and buffering them would put every upload in the sidecar's heap — the opposite of
- * Pi-friendly, and a free memory-exhaustion lever for anyone who can reach the port. Only
- * /share HTML is buffered, because injecting the banner means rewriting the document.
- */
+/** web/passthrough.ts — transparent proxy to Immich. Never buffer: uploads stream. See http-router.md. */
 import { Readable } from 'node:stream';
 import { CFG, ROUTE_PREFIX } from '../config.ts';
 import { BANNER_JS } from './banner.ts';
@@ -23,33 +11,37 @@ export async function proxyToImmich(req, res, pathname: string): Promise<void> {
   }
   delete headers.host;
   const hasBody = !['GET', 'HEAD'].includes(req.method);
-  const up = await fetch(`${CFG.immichUrl}${req.url}`, {
+  const upstream = await fetch(`${CFG.immichUrl}${req.url}`, {
     method: req.method,
     headers,
     body: hasBody ? Readable.toWeb(req) : undefined,
-    // required by undici whenever a stream is used as a request body
     ...(hasBody ? { duplex: 'half' } : {}),
     redirect: 'manual',
   } as RequestInit);
   const outHeaders = {};
-  for (const [k, v] of up.headers)
+  for (const [k, v] of upstream.headers)
     if (!['content-encoding', 'transfer-encoding', 'content-length'].includes(k)) outHeaders[k] = v;
-  const setCookie = up.headers.getSetCookie?.() || [];
+  const setCookie = upstream.headers.getSetCookie?.() || [];
   if (setCookie.length) outHeaders['set-cookie'] = setCookie;
-  const ct = up.headers.get('content-type') || '';
-  if (req.method === 'GET' && pathname.startsWith('/share/') && ct.includes('text/html') && BANNER_JS) {
-    let html = Buffer.from(await up.arrayBuffer()).toString();
+  const contentType = upstream.headers.get('content-type') || '';
+  if (
+    req.method === 'GET' &&
+    pathname.startsWith('/share/') &&
+    contentType.includes('text/html') &&
+    BANNER_JS
+  ) {
+    let html = Buffer.from(await upstream.arrayBuffer()).toString();
     html = html.includes('</body>')
       ? html.replace('</body>', `<script src="${ROUTE_PREFIX}/banner.js" defer></script></body>`)
       : html + `<script src="${ROUTE_PREFIX}/banner.js" defer></script>`;
-    res.writeHead(up.status, outHeaders);
+    res.writeHead(upstream.status, outHeaders);
     res.end(html);
     return;
   }
-  res.writeHead(up.status, outHeaders);
-  if (!up.body) {
+  res.writeHead(upstream.status, outHeaders);
+  if (!upstream.body) {
     res.end();
     return;
   }
-  Readable.fromWeb(up.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+  Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
 }

@@ -1,8 +1,4 @@
-/**
- * media/cache.ts — a bounded LRU byte-cache for streamed previews. Files live under
- * <dataDir>/cache with accounting in SQLite; a cache, not storage (capped, reclaimable,
- * safe to delete). Disabled when CACHE_MAX_MB=0.
- */
+/** media/cache.ts — a bounded LRU byte-cache for streamed previews. Files live under. See hotlink-bytes.md. */
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { CFG, log } from '../config.ts';
@@ -21,8 +17,10 @@ export function cacheRead(originAsset: string): Buffer | null {
     return null;
   } // index said yes, disk said no — self-heals on next put
 }
+const MAX_ITEM_SHARE_OF_CACHE = 10;
+
 export function cacheWrite(originAsset: string, bytes: Buffer) {
-  if (!CFG.cacheMaxMb || bytes.length > (CFG.cacheMaxMb * 1024 * 1024) / 10) return; // no single item >10% of cap
+  if (!CFG.cacheMaxMb || bytes.length > (CFG.cacheMaxMb * 1024 * 1024) / MAX_ITEM_SHARE_OF_CACHE) return;
   const key = cacheKey(originAsset);
   try {
     fs.writeFileSync(`${CACHE_DIR}/${key}`, bytes);

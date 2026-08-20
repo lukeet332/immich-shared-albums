@@ -1,10 +1,4 @@
-/**
- * panel-bundle.ts — reads the committed page bundles at startup.
- *
- * A separate module so server.ts does not do file IO inline, and so the failure is loud: if the
- * bundle is missing the panel is blank, which is worth an explicit error rather than a 404 that
- * looks like a routing bug.
- */
+/** web/panel-bundle.ts — reads the committed page bundles at startup. See http-router.md. */
 import fs from 'node:fs';
 import path from 'node:path';
 

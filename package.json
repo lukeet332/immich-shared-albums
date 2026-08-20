@@ -10,9 +10,10 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"scripts/**/*.mjs\" \"*.json\"",
     "cycles": "node scripts/check-cycles.mjs",
     "test": "docker run --rm -e IMMICH_API_KEY=test-only -v \"$PWD/src\":/app/src -w /app node:24-alpine node --test \"src/**/*.test.ts\"",
-    "verify": "npm run build:panel && npm run format:check && npm run lint && npm run typecheck && npm run check:runtime && npm run cycles && npm test",
+    "verify": "npm run build:panel && npm run format:check && npm run lint && npm run typecheck && npm run headers && npm run check:runtime && npm run cycles && npm test",
     "build:panel": "node scripts/build-panel.mjs",
-    "check:runtime": "docker run --rm -v \"$PWD/src\":/app/src -v \"$PWD/scripts\":/app/scripts -w /app node:24-alpine node scripts/check-runtime.mjs"
+    "check:runtime": "docker run --rm -v \"$PWD/src\":/app/src -v \"$PWD/scripts\":/app/scripts -w /app node:24-alpine node scripts/check-runtime.mjs",
+    "headers": "node scripts/check-headers.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -4,8 +4,7 @@
 
 One zero-dependency Node process — TypeScript run natively by Node's type
 stripping (no build step), state in SQLite via the built-in node:sqlite (WAL,
-crash-safe, indexed ledgers; a legacy state.json migrates automatically on
-boot). Sync is **nudge-driven with a timed backstop**: a signed HTTP nudge — a
+crash-safe, indexed ledgers). Sync is **nudge-driven with a timed backstop**: a signed HTTP nudge — a
 lightweight webhook — makes the common case near-instant, and two timers (the
 watch loop, which ends each cycle with a reconcile pass, and the comment loop)
 are the fail-open safety net — no websockets, no dependency on any push channel
@@ -62,10 +61,10 @@ ordinary data we planted, or a web page we serve.
   Without this, an asset id — which manifests hand out by design — would be enough for
   any enrolled peer to read anything the admin key can reach.
 - **materialiser** — makes shared state look like ordinary Immich data:
-  mirror albums owned by a utility user named after the origin's album owner
-  ("Jane (via shared albums)"), one utility user per contributor (with their
-  real avatar synced across). What it stores is a ~2KB unique STUB per photo
-  (a playable ~2MB prefix for videos, which carries the real poster and
+  mirror albums owned by the local account standing in for the origin's album
+  owner, and ONE account per remote person — keyed by their user id on their own
+  server, so the same human is one account however we meet them, with their real
+  avatar synced across. What it stores is a ~2KB unique STUB per photo
   duration) with capture date, GPS, and uploader credit applied — enough for
   the stock app to have real rows. No pixels are stored; the ledger remembers
   which origin asset each stub stands for. Deleting at the source propagates:
@@ -81,13 +80,13 @@ ordinary data we planted, or a web page we serve.
   to Immich for the user's own assets and on any failure — a dead sidecar can
   only degrade shared tiles, never the local library. Streaming, never
   buffering — Pi-friendly.
-- **membership = visibility** — mirrors are owned by utility users, so only
+- **membership = visibility** — mirrors are owned by these accounts, so only
   album members see them. Joins are per-user: the accept page reads the
   visitor's own Immich session and adds exactly that account; a second user
   joining the same link is added to the existing mirror.
-- **native invitations** — a peer household gets a local stand-in user, so adding it to an
-  album in Immich's own picker shares that album cross-server and removing it revokes. Detected
-  by listing albums *as the stand-in* (the admin key only sees its own albums, which is why
+- **native invitations** — every person on a linked server has a local account, so adding one
+  to an album in Immich's own picker shares it with THAT PERSON, and removing them revokes.
+  Sharing never names a household. Detected by listing albums *as that account* (the admin key
   link-based sharing is broken for non-admins). Members **pull** invitations rather than being
   pushed them, so a household with no inbound reachability still works. See `sync/invites.ts`.
 - **web** — the panel, the share-page join banner (shadow-DOM, fails silent),

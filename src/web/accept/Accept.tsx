@@ -1,22 +1,15 @@
+/** web/accept/Accept.tsx — the joining flow. See ../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
 import { readInvite } from './fragment.ts';
 import { join, whoami, type JoinResult, type Me } from './api.ts';
 import { OpenInApp } from './OpenInApp.tsx';
 
-/**
- * The element ids below (#who, #go, #out, and #openapp in OpenInApp) are a TEST CONTRACT: the
- * browser lane in demo/e2e/browser-test.mjs drives this page through them. Converting this page
- * to components dropped them for class names, and the browser tests failed while the 141-check
- * API suite stayed green — that lane is the only thing covering this flow end to end. Keep them.
- */
+// #who/#go/#out/#openapp are a TEST CONTRACT — the browser lane drives them. Keep them.
 
-/** How often to re-check whether they have signed in, while this page waits. */
 const SIGN_IN_POLL_MS = 2500;
 
 export const Accept = ({ household }: { household: string }) => {
-  // Read ONCE. readInvite() has a side effect — it strips the invite out of the query string via
-  // history.replaceState so it never lingers in the address bar — so calling it on every render
-  // makes the invite vanish on the second one, mid-join.
+  // Read ONCE: readInvite() mutates the URL, so a second call finds nothing.
   const [invite] = useState(readInvite);
   const [signedInUser, setSignedInUser] = useState<Me | null>(null);
   const [joinInProgress, setJoinInProgress] = useState(false);
@@ -25,8 +18,6 @@ export const Accept = ({ household }: { household: string }) => {
   const [joined, setJoined] = useState<JoinResult | null>(null);
   const [message, setMessage] = useState('');
 
-  // Wait for a session rather than demanding one up front: people arrive here from someone else's
-  // share page, sign in to their own Immich in another tab, and come back to this one.
   useEffect(() => {
     let unmounted = false;
     let pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -46,8 +37,6 @@ export const Accept = ({ household }: { household: string }) => {
     };
     void startPollingUntilSignedIn();
 
-    // The effect's own return value is the only cleanup Preact honours — returning it from inside
-    // a .then() was dead code, and left this interval running after the page navigated away.
     return () => {
       unmounted = true;
       clearInterval(pollTimer);
@@ -71,12 +60,10 @@ export const Accept = ({ household }: { household: string }) => {
     const shareUrl = `${invite.scheme}://${invite.host}/share/${invite.key}`;
     const outcome = await join(shareUrl, signedInUser.id, albumNeedsPassword ? password : undefined);
 
-    // The session went away between page load and click — send them to sign in and back.
     if (outcome.needsAuth) {
       location.href = outcome.signInUrl || '/auth/login';
       return;
     }
-    // The same password the album's own share page asks for. The origin verifies it, not us.
     if (outcome.passwordRequired) {
       setAlbumNeedsPassword(true);
       setJoinInProgress(false);

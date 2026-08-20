@@ -1,25 +1,8 @@
-/**
- * web/pages.ts — the two HTML surfaces the sidecar serves: the admin PANEL and the
- * signed-out/signed-in ACCEPT_PAGE that turns a share link into a join.
- *
- * Both talk to <prefix>/join, which authenticates the caller's Immich session server-side
- * (web/auth.ts). The client-side checks here are for UX only — telling someone they need
- * to sign in before they fill a form, and asking for an album password when the origin
- * says one is required. Nothing here is a security control.
- */
+/** web/pages.ts — the shells the two Preact apps mount into. See http-router.md. */
 import { CFG, ROUTE_PREFIX } from '../config.ts';
 import { html, css, raw } from './tags.ts';
 
-/**
- * The admin panel is a Preact app (src/web/panel/, bundled to panel.bundle.js). This is only the
- * shell it mounts into.
- *
- * Client-rendered on purpose: the panel is admin-only, behind auth, and every action it offers was
- * already a JSON call, so server-rendering would pre-paint one frame of a page nobody waits on —
- * and would mean compiling the components for the server too, which runs TypeScript directly and
- * cannot import .tsx. The accept page below is the opposite case and stays server-rendered.
- */
-export const PANEL = () => html`
+export const PANEL_SHELL = () => html`
   <!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -37,10 +20,6 @@ export const PANEL = () => html`
   <script type="module" src="${ROUTE_PREFIX}/panel.bundle.js"></script>
 `;
 
-/**
- * Only what inline style objects cannot express: the page ground, and focus/hover states. Every
- * other style in the panel lives with its component, in src/web/panel/theme.ts.
- */
 const PANEL_CSS = css`
   body {
     margin: 0;
@@ -72,16 +51,7 @@ const PANEL_CSS = css`
   }
 `;
 
-/**
- * The joining page is a Preact app too (src/web/accept/, bundled to accept.bundle.js). This is
- * the shell it mounts into.
- *
- * Its own bundle, not the panel's: this page is public and must not download admin code. It IS
- * client-rendered despite being the public surface — everything it does (find who is signed in,
- * redeem the link, watch the album fill, hand over a deeplink) needs JS, so there is no useful
- * pre-JS state to render.
- */
-export const ACCEPT_PAGE = () => html`
+export const ACCEPT_SHELL = () => html`
   <!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -97,7 +67,6 @@ export const ACCEPT_PAGE = () => html`
   <script type="module" src="${ROUTE_PREFIX}/accept.bundle.js"></script>
 `;
 
-/** Light/dark card styling, plus the states inline styles cannot express. */
 const ACCEPT_CSS = css`
   body {
     margin: 0;

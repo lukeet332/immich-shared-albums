@@ -23,6 +23,8 @@ jobs:
         run: npm run lint
       - name: Types (tsc)
         run: npm run typecheck
+      - name: File headers point at real docs
+        run: npm run headers
       - name: Import cycles
         run: npm run cycles
       - name: Unit tests

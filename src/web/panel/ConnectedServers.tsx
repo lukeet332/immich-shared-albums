@@ -1,5 +1,6 @@
+/** web/panel/ConnectedServers.tsx — linked servers, and unlinking them. See ../http-router.md. */
 import { useState } from 'preact/hooks';
-import { s } from './theme.ts';
+import { styles } from './theme.ts';
 import { unlinkPeer, type Peer } from './api.ts';
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -18,8 +19,8 @@ export const ConnectedServers = ({ peers, onChange }: { peers: Peer[]; onChange:
     }
     setNote('Unlinking…');
     try {
-      const r = await unlinkPeer(peer.pub);
-      setNote(`Unlinked ${r.household}.`);
+      const result = await unlinkPeer(peer.pub);
+      setNote(`Unlinked ${result.household}.`);
       onChange();
     } catch (e) {
       setNote(`Error: ${(e as Error).message}`);
@@ -27,33 +28,33 @@ export const ConnectedServers = ({ peers, onChange }: { peers: Peer[]; onChange:
   };
 
   return (
-    <div style={s.card}>
+    <div style={styles.card}>
       <b style={{ fontSize: 14 }}>Connected servers</b>
-      <p style={s.muted}>
+      <p style={styles.muted}>
         Their people appear in Immich's own “share album” picker. Unlinking removes them and everything they
         shared here.
       </p>
-      {peers.length === 0 && <p style={s.muted}>None yet — use “Link a server” above.</p>}
+      {peers.length === 0 && <p style={styles.muted}>None yet — use “Link a server” above.</p>}
       {peers.map(p => (
-        <div key={p.pub} style={{ ...s.item, ...s.row }}>
+        <div key={p.pub} style={{ ...styles.item, ...styles.row }}>
           <span>
             {p.name}
-            <div style={s.sub}>
+            <div style={styles.sub}>
               {p.url}
               {p.version ? ` · v${p.version}` : ''}
             </div>
           </span>
           <span style={{ textAlign: 'right' }}>
-            <div style={s.sub}>
+            <div style={styles.sub}>
               {plural(p.people, 'person', 'people')} · {p.sharedToThem} out · {p.sharedToUs} in
             </div>
-            <button style={s.danger} onClick={() => unlink(p)}>
+            <button style={styles.danger} onClick={() => unlink(p)}>
               Unlink
             </button>
           </span>
         </div>
       ))}
-      <div style={s.note}>{note}</div>
+      <div style={styles.note}>{note}</div>
     </div>
   );
 };

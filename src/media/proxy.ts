@@ -1,37 +1,20 @@
-/**
- * media/proxy.ts — the hotlink byte path. fetchTrueBytes resolves an asset's real pixels:
- * a local file for our own photos, or a chained fetch to the owner's server for a proxy
- * (how a relayed photo streams D <- origin <- contributor). Range passes through.
- *
- * These are the only routes that hand out real pixels, and the local branch reads with the
- * admin key — so a signature is necessary but nowhere near sufficient. Every handler asks
- * p2p/entitlement whether this specific peer was ever offered this specific asset. Without
- * that, "a valid peer" would mean "any asset in the library that it can name".
- */
+/** media/proxy.ts — the hotlink byte path. fetchTrueBytes resolves an asset's real pixels: See hotlink-bytes.md. */
 import { log, ROUTE_PREFIX } from '../config.ts';
 import { state, store, keys } from '../state.ts';
 import { sign, callingPeer } from '../peers.ts';
 import { peerMayRead } from '../p2p/entitlement.ts';
 import { immich } from '../immich/client.ts';
 
-/**
- * Time out the handshake, not the transfer. A hostile or crawling peer must not be able to
- * hold a connection open forever, but a legitimate 4K original may stream for minutes — so
- * the clock stops the moment response headers arrive.
- */
 async function fetchWithHeaderTimeout(url: string, init: RequestInit, ms = 30000) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), ms);
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), ms);
   try {
-    return await fetch(url, { ...init, signal: ac.signal });
+    return await fetch(url, { ...init, signal: abort.signal });
   } finally {
     clearTimeout(timer);
   }
 }
 
-// Resolve true bytes for any local asset: local file for our own photos; for a proxy
-// (ledger entry with `o`), chain the fetch to the owner's server — how a relayed
-// photo's pixels stream D <- origin <- contributor. Range passes through for players.
 export async function fetchTrueBytes(
   assetId: string,
   kind: 'preview' | 'original' | 'playback',
@@ -45,12 +28,12 @@ export async function fetchTrueBytes(
       const headers: Record<string, string> = { 'x-isa-key': keys.pub, 'x-isa-sig': sign(entry.o) };
       if (range) headers.Range = range;
       try {
-        const up = await fetchWithHeaderTimeout(
+        const ownerResponse = await fetchWithHeaderTimeout(
           `${peer.url}${ROUTE_PREFIX}/api/v1/assets/${entry.o}/${kind}`,
           { headers }
         );
-        if (up.ok) return up;
-        log(`chained ${kind} fetch failed (${up.status}) — serving local stub`);
+        if (ownerResponse.ok) return ownerResponse;
+        log(`chained ${kind} fetch failed (${ownerResponse.status}) — serving local stub`);
       } catch (e) {
         log(`chained ${kind} fetch error (${e.message}) — serving local stub`);
       }
@@ -65,8 +48,7 @@ export async function fetchTrueBytes(
   return immich(local, range ? { headers: { Range: range } } : {});
 }
 
-/** Signed by the peer AND on the list of things we offered them. Both, every time. */
-async function authorisePeerRead(req, assetId: string) {
+async function assertSignedAndEntitled(req, assetId: string) {
   const peer = callingPeer(req, assetId);
   if (!peer) return [403, { error: 'unknown or unverified peer' }];
   if (!(await peerMayRead(peer.pub, assetId))) {
@@ -77,11 +59,15 @@ async function authorisePeerRead(req, assetId: string) {
 }
 
 export async function handlePreview(req, assetId) {
-  return (await authorisePeerRead(req, assetId)) ?? fetchTrueBytes(assetId, 'preview'); // chains for relayed assets
+  return (await assertSignedAndEntitled(req, assetId)) ?? fetchTrueBytes(assetId, 'preview'); // chains for relayed assets
 }
 export async function handleOriginal(req, assetId) {
-  return (await authorisePeerRead(req, assetId)) ?? fetchTrueBytes(assetId, 'original', req.headers.range);
+  return (
+    (await assertSignedAndEntitled(req, assetId)) ?? fetchTrueBytes(assetId, 'original', req.headers.range)
+  );
 }
 export async function handlePlayback(req, assetId) {
-  return (await authorisePeerRead(req, assetId)) ?? fetchTrueBytes(assetId, 'playback', req.headers.range);
+  return (
+    (await assertSignedAndEntitled(req, assetId)) ?? fetchTrueBytes(assetId, 'playback', req.headers.range)
+  );
 }

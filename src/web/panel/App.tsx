@@ -1,5 +1,6 @@
+/** web/panel/App.tsx — the admin panel shell and its data load. See ../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
-import { s, t } from './theme.ts';
+import { styles, theme } from './theme.ts';
 import { overview, type Overview } from './api.ts';
 import { LinkServer } from './LinkServer.tsx';
 import { ConnectedServers } from './ConnectedServers.tsx';
@@ -20,17 +21,17 @@ export const App = () => {
 
   if (error) {
     return (
-      <p style={{ ...s.muted, color: t.danger }}>
+      <p style={{ ...styles.muted, color: theme.danger }}>
         Could not load: {error}. You may need to sign in to Immich as an admin.
       </p>
     );
   }
-  if (!data) return <p style={s.muted}>Loading…</p>;
+  if (!data) return <p style={styles.muted}>Loading…</p>;
 
   return (
     <>
       <h1 style={{ fontSize: 20, letterSpacing: '-.02em' }}>
-        🔗 Shared albums <span style={{ color: t.muted, fontWeight: 400 }}>· {data.household.name}</span>
+        🔗 Shared albums <span style={{ color: theme.muted, fontWeight: 400 }}>· {data.household.name}</span>
       </h1>
       <LinkServer onLinked={load} />
       <SharedAlbums albums={data.albums} />

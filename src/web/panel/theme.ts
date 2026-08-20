@@ -1,5 +1,5 @@
-/** Shared values, so colours and spacing are not repeated magic numbers across components. */
-export const t = {
+/** Shared values, so colours and spacing are not repeated magic numbers across components. See ../http-router.md. */
+export const theme = {
   bg: '#101216',
   card: '#1f2229',
   line: 'rgba(255,255,255,.08)',
@@ -10,18 +10,18 @@ export const t = {
   radius: 18,
 } as const;
 
-export const s = {
+export const styles = {
   card: {
-    background: t.card,
-    border: `1px solid ${t.line}`,
-    borderRadius: t.radius,
+    background: theme.card,
+    border: `1px solid ${theme.line}`,
+    borderRadius: theme.radius,
     padding: 18,
     margin: '14px 0',
   },
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
   item: { padding: '9px 0', borderBottom: `1px solid rgba(255,255,255,.06)`, fontSize: 14 },
-  muted: { color: t.muted, fontSize: 13 },
-  sub: { color: t.muted, fontSize: 12 },
+  muted: { color: theme.muted, fontSize: 13 },
+  sub: { color: theme.muted, fontSize: 12 },
   input: {
     flex: 1,
     font: 'inherit',
@@ -41,14 +41,14 @@ export const s = {
     padding: '10px 18px',
     border: 0,
     borderRadius: 11,
-    background: t.accent,
+    background: theme.accent,
     color: '#fff',
     cursor: 'pointer',
   },
   danger: {
     background: 'transparent',
     border: `1px solid rgba(248,113,113,.45)`,
-    color: t.danger,
+    color: theme.danger,
     padding: '5px 12px',
     fontSize: 12,
     borderRadius: 11,
