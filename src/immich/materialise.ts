@@ -30,7 +30,7 @@ export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
     bytes = Buffer.concat([STUB_JPEG, crypto.randomBytes(8)]);
   }
   const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
-  const c = await ensureContributor(ref.contributor?.displayName || fallbackName, mapping.albumId, adminKey, peerUrl, ref.contributor?.originUserId);
+  const c = await ensureContributor(ref.contributor?.displayName || fallbackName, mapping.albumId, adminKey, peerUrl, ref.contributor?.originUserId, mapping.peer);
   const ext = ref.kind === 'video' ? 'mp4' : 'jpg';
   // base64 checksums contain / and + — never let them into filenames
   const slug = ref.checksum.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);

@@ -8,6 +8,7 @@
  * says one is required. Nothing here is a security control.
  */
 import { CFG, ROUTE_PREFIX } from '../config.ts';
+import { linkedPeers } from '../p2p/unlink.ts';
 import { state } from '../state.ts';
 
 export const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -22,6 +23,9 @@ export const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="vie
  button{font:inherit;font-size:14px;font-weight:600;padding:10px 18px;border:0;border-radius:11px;background:#4250af;color:#fff;cursor:pointer}
  .item{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:14px}
  .muted{color:#6b7280} #msg{font-size:13px;margin-top:10px;color:#8b9cf9;min-height:18px}
+ button.danger{background:transparent;border:1px solid rgba(248,113,113,.45);color:#f87171;padding:5px 12px;font-size:12px;margin-top:5px}
+ button.danger:hover{background:rgba(248,113,113,.12)}
+ #umsg{font-size:13px;margin-top:10px;color:#8b9cf9;min-height:0}
 </style>
 <main>
  <h1>🔗 Shared albums <small>· ${CFG.name}</small></h1>
@@ -32,8 +36,16 @@ export const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="vie
   <div id="msg"></div></div>
  <div class="card"><b style="font-size:14px">Shared albums</b>
   ${state.mappings.map(m => `<div class="item"><span>${m.albumName}</span><span class="muted">${m.role} · ${(state.peers.find(p => p.pub === m.peer) || {}).name || ''}</span></div>`).join('') || '<p class="muted" style="font-size:13px">None yet.</p>'}</div>
- <div class="card"><b style="font-size:14px">Connected households</b>
-  ${state.peers.map(p => `<div class="item"><span>${p.name}</span><span class="muted">${p.url}${p.version ? ` · v${p.version}` : ''}</span></div>`).join('') || '<p class="muted" style="font-size:13px">None yet.</p>'}</div>
+ <div class="card"><b style="font-size:14px">Connected servers</b>
+  <p class="muted" style="font-size:13px">Once a server is connected, its people appear in Immich's
+   own “share album” picker. Unlinking removes them from the picker, tears down the albums they
+   shared with you, and stops serving the albums you shared with them.</p>
+  ${linkedPeers().map(p => `<div class="item">
+    <span>${p.name}<br><span class="muted" style="font-size:12px">${p.url}${p.version ? ` · v${p.version}` : ''}</span></span>
+    <span style="text-align:right"><span class="muted" style="font-size:12px">${p.people} ${p.people === 1 ? 'person' : 'people'} · ${p.sharedToThem} out · ${p.sharedToUs} in</span><br>
+     <button class="danger" onclick="unlink('${p.pub}','${p.name.replace(/'/g, "\\'")}')">Unlink</button></span></div>`).join('')
+   || '<p class="muted" style="font-size:13px">None yet — join a shared album above to connect one.</p>'}
+  <div id="umsg"></div></div>
 </main>
 <script>async function j(e){e.preventDefault();
  const el=document.getElementById('msg'),pw=document.getElementById('pw');el.textContent='Joining…';
@@ -45,7 +57,15 @@ export const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="vie
  if(d&&d.passwordRequired){pw.style.display='block';pw.focus();
   el.textContent='This album is password protected — enter the same password you would use to view it.';return}
  el.textContent=r.ok?('Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing. It will appear in your app shortly.'):('Error: '+(d.error||r.status));
- if(r.ok)setTimeout(()=>location.reload(),2500)}</script>`;
+ if(r.ok)setTimeout(()=>location.reload(),2500)}
+async function unlink(pub,name){
+ if(!confirm('Unlink "'+name+'"?\n\nAlbums they shared with you will be removed from this server, '
+  +'and albums you shared with them will stop syncing. Photos you own are not touched.'))return;
+ const el=document.getElementById('umsg');el.textContent='Unlinking…';
+ const r=await fetch('${ROUTE_PREFIX}/unlink',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pub:pub})});
+ const d=await r.json().catch(()=>({error:'failed'}));
+ el.textContent=r.ok?('Unlinked '+d.household+' — '+d.mirrorsRemoved+' album(s) removed, '+d.sharesRevoked+' share(s) revoked.'):('Error: '+(d.error||r.status));
+ if(r.ok)setTimeout(()=>location.reload(),1800)}</script>`;
 export const ACCEPT_PAGE = () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Join shared album — ${CFG.name}</title>
 <style>

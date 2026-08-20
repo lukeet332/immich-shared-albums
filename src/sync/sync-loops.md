@@ -5,7 +5,7 @@ also driven on demand by nudges (`../p2p/protocol.ts`) so changes land in second
 
 | File | What it does |
 |---|---|
-| `invites.ts` | **Native album invitations.** Each peer gets a local stand-in user; adding it to any album in Immich's own picker shares that album, and removing it revokes. The origin detects this by listing albums as the stand-in; members discover it by polling `…/api/v1/invitations`. |
+| `invites.ts` | **Native album invitations, per person.** Every person on a linked server gets a local marker user; adding one to an album in Immich's own picker shares that album with that person, and removing them revokes it. The origin detects this by listing albums as each marker; members discover it by polling `…/api/v1/invitations`. Server *linking* is not here — it is admin-owned, in [`p2p/unlink.ts`](../p2p/) and the panel. |
 | `engine.ts` | Photo sync. `watchOnce` pushes local additions out to peers; `reconcileOnce`/`reconcileMapping` pull the origin manifest, materialise anything missing, and **propagate deletions** (with a consistency gate so an indexing lag never wrongly deletes). `leaveAlbum` is the full reverse of a join — purges every stub, the mirror album, the mapping and its ledger. `startWatchLoop` runs it on an overlap-guarded interval. |
 | `comments.ts` | Cross-server comments. The origin album is the source of truth: members pull the canonical list and push their own, gated by a cheap activity-count statistic so messages land in seconds without heavy polling. Includes the inbound `handleActivity`/`handleComments` handlers. `startCommentLoop` runs the fast lane. |
 
@@ -13,7 +13,20 @@ also driven on demand by nudges (`../p2p/protocol.ts`) so changes land in second
 sweep is the safety net — a lost nudge costs nothing because the next scheduled handshake
 catches everything (fail-open by design). `RECONCILE_DEBUG=1` traces every decision.
 
-## Why invitations are detected as the stand-in, not with the admin key
+## Why sharing is per person, and links are not shareable objects
+
+Sharing names a **person**, never a whole server. A server link is not a person, so it gets no
+marker user and never appears in Immich's people picker; it is created by redeeming a share link
+and destroyed from the panel (`…/unlink`). This also means `SHARE_USER_DIRECTORY=false` disables
+native invitations with that peer — with no directory there is nobody to name — and share links
+remain the way in.
+
+An invitation may name several people. `Mapping.forPeerUserIds` holds the whole set, and the
+member side follows it in both directions: people added upstream are added to the mirror, and a
+person dropped while others remain is removed from it. Without that second half a revocation for
+one person would appear to work and silently do nothing.
+
+## Why invitations are detected as the marker, not with the admin key
 
 `GET /albums` is scoped per user, so the admin key only ever sees the admin's own albums —
 which is exactly why a non-admin cannot share cross-server through a share link today. Asking

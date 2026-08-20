@@ -11,31 +11,9 @@ import { sign, signedFetch } from '../peers.ts';
 import { getAlbum, getAlbumAssets, usersById, immichJson } from '../immich/client.ts';
 import { shareableAssets, assetToRef } from '../immich/refs.ts';
 import { materialiseRef, deleteProxyAsset } from '../immich/materialise.ts';
-import { recordOffered, forgetOffered } from '../p2p/entitlement.ts';
-import { detectInvitesOnce, pullInvitationsOnce } from './invites.ts';
+import { recordOffered } from '../p2p/entitlement.ts';
+import { leaveAlbum } from './leave.ts';
 
-// Leave & purge: the reverse of joining. Removes every stub this album materialised
-// (utility-owner-guarded), the mirror album, the mapping and its ledger — a join is
-// fully reversible and reclaims all space it ever took.
-export async function leaveAlbum(mappingId: string) {
-  const mapping = state.mappings.find(mp => mp.id === mappingId);
-  if (!mapping || mapping.role !== 'member') throw new Error('unknown mapping (only joined albums can be left)');
-  let removed = 0;
-  for (const entry of store.seenForMapping(mapping.id)) {
-    if (entry.o && await deleteProxyAsset(entry.l)) removed++;
-  }
-  const host = mapping.adminSlug ? state.contributors[mapping.adminSlug] : undefined;
-  if (host?.key) {
-    try { await immichJson(`/albums/${mapping.albumId}`, { method: 'DELETE' }, host.key); }
-    catch (e) { log(`mirror album delete failed: ${e.message}`); }
-  }
-  store.seenRemoveMapping(mapping.id);
-  forgetOffered(mapping.id);
-  state.mappings = state.mappings.filter(mp => mp.id !== mapping.id);
-  save();
-  log(`left "${mapping.albumName}" — ${removed} stub(s) purged`);
-  return { left: mapping.albumName, purged: removed };
-}
 export async function watchOnce() {
   for (const mapping of state.mappings) {
     if (mapping.dead) continue;
@@ -83,9 +61,6 @@ export async function watchOnce() {
       } else log(`watcher error on "${mapping.albumName}": ${e.message}`);
     }
   }
-  // native invitations: an album shared with a peer's stand-in becomes a mapping
-  try { await detectInvitesOnce(); } catch (e) { log(`invite detection error: ${e.message}`); }
-  try { await pullInvitationsOnce(); } catch (e) { log(`invitation pull error: ${e.message}`); }
   await reconcileOnce();
 }
 // Heal member mirrors: re-pull the origin manifest and materialise anything we
