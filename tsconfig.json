@@ -14,7 +14,8 @@
     "alwaysStrict": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
-    "noUnusedLocals": true
+    "noUnusedLocals": true,
+    "strictNullChecks": true
   },
   "include": ["src/**/*.ts"]
 }

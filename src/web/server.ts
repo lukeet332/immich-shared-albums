@@ -46,7 +46,7 @@ async function readCappedBody(req): Promise<string | null> {
     req.resume();
     return null;
   }
-  const chunks = [];
+  const chunks: Buffer[] = [];
   let size = 0;
   for await (const c of req) {
     size += c.length;
@@ -65,7 +65,7 @@ export const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify(obj));
   };
   try {
-    const u = new URL(req.url, 'http://x');
+    const u = new URL(req.url ?? '/', 'http://x');
     const path = u.pathname;
     let m;
     // Peer-facing avatar read. Signed like every other peer route — a bare public key is

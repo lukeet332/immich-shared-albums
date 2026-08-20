@@ -3,6 +3,7 @@
  * assets to AssetRefs, decides what an album may offer a peer (offer set vs push queue),
  * and builds the manifest a member diffs against.
  */
+import type { AssetRef } from '../types.ts';
 import { CFG, UTILITY_SUFFIX } from '../config.ts';
 import { usersById } from './client.ts';
 import { wireChecksum, ledgerByAsset, seenHas } from '../state.ts';
@@ -10,7 +11,7 @@ import { wireChecksum, ledgerByAsset, seenHas } from '../state.ts';
 // A shared photo, described for a peer. For utility-owned proxies (relayed photos)
 // the true contributor is recovered from the utility user's name; the credit line we
 // append locally is stripped so downstream hops don't stack "Shared by" twice.
-export async function assetToRef(a) {
+export async function assetToRef(a): Promise<AssetRef> {
   const u = (await usersById())[a.ownerId];
   const displayName = u?.utility ? u.name.replace(UTILITY_SUFFIX, '') : a.owner?.name || u?.name || CFG.name;
   const description = (a.exifInfo?.description || '').replace(/(?:\n\n)?Shared by [^\n]*$/, '') || undefined;
@@ -18,7 +19,6 @@ export async function assetToRef(a) {
     originAsset: a.id,
     checksum: wireChecksum(a),
     kind: a.type === 'VIDEO' ? 'video' : 'image',
-    fileName: a.originalFileName,
     takenAt: a.exifInfo?.dateTimeOriginal || a.fileCreatedAt,
     exif: a.exifInfo
       ? {
@@ -52,7 +52,7 @@ export async function shareableAssets(assets, mappingId) {
 }
 // Everything shareable with the peer behind mappingId (see shareableAssets for the rules).
 export async function buildManifest(assets) {
-  const out = [];
+  const out: AssetRef[] = [];
   for (const a of await offerableAssets(assets)) out.push(await assetToRef(a));
   return out;
 }

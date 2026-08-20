@@ -9,7 +9,7 @@
  * that, "a valid peer" would mean "any asset in the library that it can name".
  */
 import { log, ROUTE_PREFIX } from '../config.ts';
-import { state, store } from '../state.ts';
+import { state, store, keys } from '../state.ts';
 import { sign, callingPeer } from '../peers.ts';
 import { peerMayRead } from '../p2p/entitlement.ts';
 import { immich } from '../immich/client.ts';
@@ -42,7 +42,7 @@ export async function fetchTrueBytes(
     const mapping = state.mappings.find(mp => mp.id === entry.m);
     const peer = mapping && state.peers.find(p => p.pub === mapping.peer);
     if (peer) {
-      const headers: Record<string, string> = { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) };
+      const headers: Record<string, string> = { 'x-isa-key': keys.pub, 'x-isa-sig': sign(entry.o) };
       if (range) headers.Range = range;
       try {
         const up = await fetchWithHeaderTimeout(

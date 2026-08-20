@@ -168,13 +168,15 @@ export class Store {
   ledgerByAsset(assetId: string): SeenEntry | undefined {
     return this.db
       .prepare('SELECT m, c, l, o FROM seen WHERE l = ? ORDER BY (o IS NOT NULL) DESC, rowid DESC LIMIT 1')
-      .get(assetId) as SeenEntry | undefined;
+      .get(assetId) as (SeenEntry & { o: string }) | undefined;
   }
   /** Ledger entry that can chain to the owner (has an origin asset id). */
-  ledgerWithOrigin(assetId: string): SeenEntry | undefined {
+  /** A ledger row that definitely has an origin asset: the SQL filters `o IS NOT NULL`,
+   *  so the type says so and callers stop re-checking what the query already guaranteed. */
+  ledgerWithOrigin(assetId: string): (SeenEntry & { o: string }) | undefined {
     return this.db
       .prepare('SELECT m, c, l, o FROM seen WHERE l = ? AND o IS NOT NULL ORDER BY rowid DESC LIMIT 1')
-      .get(assetId) as SeenEntry | undefined;
+      .get(assetId) as (SeenEntry & { o: string }) | undefined;
   }
   seenRemoveMapping(mappingId: string) {
     this.db.prepare('DELETE FROM seen WHERE m = ?').run(mappingId);

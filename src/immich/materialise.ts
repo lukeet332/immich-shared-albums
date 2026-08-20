@@ -5,7 +5,7 @@
  */
 import crypto from 'node:crypto';
 import { log, ROUTE_PREFIX } from '../config.ts';
-import { state, seenHas, seenAdd } from '../state.ts';
+import { state, seenHas, seenAdd, keys } from '../state.ts';
 import { sign } from '../peers.ts';
 import { STUB_JPEG, immichJson, jsonBody, uploadAsset, addToAlbum, applyRefMetadata } from './client.ts';
 import { ensureContributor } from './contributors.ts';
@@ -14,7 +14,7 @@ import { ensureContributor } from './contributors.ts';
 // false (without marking seen) on failure so reconciliation can retry later.
 export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   if (seenHas(mapping.id, ref.checksum)) return true;
-  const sigHeaders = v => ({ headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(v) } });
+  const sigHeaders = v => ({ headers: { 'x-isa-key': keys.pub, 'x-isa-sig': sign(v) } });
   // Hotlink model: nothing of the photo is stored here. The mirror asset is a ~2KB
   // unique stub that exists so the stock app has a row to render; every actual pixel
   // (thumbnails, previews, playback, originals) streams live from the owner's server

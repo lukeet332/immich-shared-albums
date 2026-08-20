@@ -51,5 +51,5 @@ export async function proxyToImmich(req, res, pathname: string): Promise<void> {
     res.end();
     return;
   }
-  Readable.fromWeb(up.body).pipe(res);
+  Readable.fromWeb(up.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
 }

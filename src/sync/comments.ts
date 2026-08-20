@@ -4,7 +4,7 @@
  * statistic so messages land in seconds without heavy polling. startCommentLoop runs it.
  */
 import { CFG, log, UTILITY_SUFFIX, ROUTE_PREFIX } from '../config.ts';
-import { state, save, seenActHas, seenActAdd } from '../state.ts';
+import { state, save, seenActHas, seenActAdd, keys } from '../state.ts';
 import { sign, signedFetch, nudgePeers, callingPeer, mappingFor } from '../peers.ts';
 import { immichJson, jsonBody, usersById } from '../immich/client.ts';
 import { ensureContributor } from '../immich/contributors.ts';
@@ -165,7 +165,7 @@ export async function syncCommentsOnce() {
 // This is also what relays member comments onward to other member households.
 export async function pullCanonicalComments(mapping, peer) {
   const target = mapping.remoteMappingId || mapping.remoteAlbumId;
-  const sig = { headers: { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(target) } };
+  const sig = { headers: { 'x-isa-key': keys.pub, 'x-isa-sig': sign(target) } };
   const vr = await fetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${target}/version`, {
     ...sig,
     signal: AbortSignal.timeout(15000),
