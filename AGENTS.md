@@ -37,10 +37,19 @@ saying so.
   and talks to Immich over the public API. Never modify Immich's source, compose
   services, database, or upload folders. Everything must fail open — Immich has to work
   perfectly with the sidecar dead. (Design invariants: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md) "Iron rules".)
-- **Keep the docs in sync.** Every folder under `src/` has a Markdown doc describing it,
-  and `src/ARCHITECTURE.md` describes the whole. Any behaviour change updates the relevant
-  doc(s) in the same change. A doc that lies is worse than no doc: treat drift as a bug and
-  fix it with the code that caused it.
+- **Keep the docs in sync — and this rule is load-bearing, not housekeeping.** `src/` carries
+  Markdown docs at whatever level earns one: a folder doc where modules are small and cohesive, a
+  file-level doc next to anything with dense reasoning of its own, and neither where a file needs
+  no explaining. `src/ARCHITECTURE.md` describes the whole.
+
+  Any behaviour change updates the relevant doc(s) **in the same change**. A doc that lies is
+  worse than no doc: treat drift as a bug and fix it with the code that caused it.
+
+  This matters more than it used to. Explanation deliberately lives in these docs rather than in
+  comments — naming carries the *what*, docs carry the *why* (see the naming section below). That
+  only works while they track the code, so the further an explanation sits from what it explains,
+  the more strictly this rule applies. Moving prose out of a source file and then letting it rot
+  is worse than having left it inline.
 - **Never test against a real server.** Use the throwaway mock rig in `demo/`. Never run
   the suite or experiments against anyone's production Immich, and never modify a real
   user's library.
@@ -53,9 +62,24 @@ saying so.
   lane) and the fast gate below. Branch protection enforces it; merges are squash-only.
 - **Conventional commits** decide the version automatically via release-please
   (`fix:` → patch, `feat:` → minor, `feat!:` → major). Don't hand-edit version numbers.
-- **Before pushing:** `npm run verify` clean (format, lint, types, import cycles, unit tests —
-  seconds), then the e2e suite green (`bash demo/run-mock-e2e.sh` — minutes). CI runs the fast
-  gate first so a formatting slip fails in seconds rather than after booting four Immich stacks.
+- **Before pushing:** `npm run verify` clean (format, lint, types, runtime load, import cycles,
+  unit tests — seconds), then BOTH e2e lanes:
+
+  ```
+  bash demo/run-mock-e2e.sh                       # API suite, 141 checks
+  cd demo/e2e && CKEY=<origin key> \
+    HOST_RESOLVER_RULES="MAP host.docker.internal 127.0.0.1" node browser-test.mjs
+  ```
+
+  **Run the browser lane whenever you touch a page.** It is the only coverage of the banner and
+  accept flows — the API suite has 141 checks and not one of them loads a page in a browser. The
+  accept page was converted to components with the API suite fully green, and CI caught two real
+  breakages: the element ids the lane drives, and an invite that evaporated mid-join. The resolver
+  rule exists so this runs on a dev machine without editing /etc/hosts.
+
+  Run against a FRESHLY PURGED rig. `run-mock-e2e.sh` purges; recreating containers by hand does
+  not, and stale bot keys in `state.db` produce `Invalid API key` failures that look like product
+  bugs and are not.
 - **Enable the hook once per clone:** `git config core.hooksPath .githooks`. It runs the fast
   gate on commit. The e2e suite is deliberately NOT in the hook — a seven-minute hook is a hook
   people bypass.
@@ -123,6 +147,32 @@ a stored fact is also a stored liability:**
 Corollary: a fact only counts as known if something *proved* it. `Contributor.homePeer` is set
 only by a linked server's directory, never by an incoming photo — a relayed ref names the person
 but not their server, and guessing would route someone's album to the wrong household.
+
+## Name things so the next reader does not have to decode them
+
+Not style policing — bad names hide bugs. A `useEffect` in the accept page used `tick`, `u`, `iv`
+and `stop`, and buried in that soup was a `return () => clearInterval(iv)` inside a `.then()`,
+which is dead code: Preact only honours the value the effect itself returns, so the poll kept
+running after the page navigated away. With the pieces named for what they hold, the missing
+cleanup was obvious on sight.
+
+- **Name a variable for what it holds, not its type or its position.** `signedInUser`, not `u`.
+  `pollTimer`, not `iv`. `outcome`, not `d`. `minutesLeft`, not `minutes`.
+- **Name a function for what it does to the world**, and make the verb match: `acceptInvite`,
+  `startPollingUntilSignedIn`, `copyToClipboard` — not `accept`, `tick`, `copy`.
+- **Single letters only for a genuinely anonymous, one-line scope** — `xs.map(x => x.id)`. Never
+  for anything that lives more than a couple of lines, and never for a caught error you go on to
+  inspect.
+- **Magic numbers get a named constant with a unit**: `SIGN_IN_POLL_MS`, `SYNC_WAIT_LIMIT_MS`.
+  `2500` in the middle of an effect tells the reader nothing about whether it is safe to change.
+- **Extract the condition rather than commenting it.** `const waitedTooLong = Date.now() - since >
+  LIMIT_MS` reads better than the inequality inline, and it puts the reasoning in the name.
+- **Comments say WHY, names say WHAT.** If a comment is needed to explain what a line does, the
+  names are wrong. Reserve comments for the reason: which Immich quirk forced this, which failure
+  it protects against, which direction it fails in.
+
+This applies to test code too. An assertion whose message does not say what broke costs a
+debugging cycle every time it fires.
 
 ## Invariants that will bite you
 

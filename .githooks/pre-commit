@@ -4,7 +4,11 @@
 #
 # Enable once per clone:  git config core.hooksPath .githooks
 set -e
-echo "pre-commit: format check, lint, typecheck, cycles"
+echo "pre-commit: panel bundle, format check, lint, typecheck, cycles"
+# Rebuild the committed panel bundle, then stage it: it is generated from src/web/panel/**, and a
+# stale copy would silently ship different UI than the source says.
+npm run --silent build:panel >/dev/null || { echo "  ✗ panel build failed"; exit 1; }
+git add src/web/panel.bundle.js
 npx prettier --check "src/**/*.ts" "scripts/**/*.mjs" >/dev/null || {
   echo "  ✗ formatting — run: npm run format"; exit 1; }
 npx eslint src || exit 1

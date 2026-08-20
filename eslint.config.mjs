@@ -17,12 +17,14 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['node_modules/**', 'demo/**', 'scripts/**', 'eslint.config.mjs'],
+    ignores: ['node_modules/**', 'demo/**', 'scripts/**', 'eslint.config.mjs', 'src/web/panel.bundle.js', 'src/web/accept.bundle.js'],
   },
   {
     files: ['src/**/*.ts'],
     extends: [tseslint.configs.base],
-    languageOptions: { parserOptions: { projectService: true } },
+    languageOptions: {
+      parserOptions: { project: ['./tsconfig.json'], tsconfigRootDir: import.meta.dirname },
+    },
     rules: {
       // This whole codebase is concurrent async loops sharing one state object. An unawaited
       // promise here does not just lose an error — it reorders writes to that shared state.
@@ -53,6 +55,20 @@ export default tseslint.config(
             'Use PROTOCOL_VERSION from types.ts rather than a literal protocol number.',
         },
       ],
+    },
+  },
+  {
+    // The panel is a browser Preact app: its own tsconfig gives it DOM types and the JSX
+    // transform, which the server deliberately does not have.
+    files: ['src/web/panel/**/*.{ts,tsx}', 'src/web/accept/**/*.{ts,tsx}'],
+    extends: [tseslint.configs.base],
+    languageOptions: {
+      parserOptions: { project: ['./src/web/panel/tsconfig.json', './src/web/accept/tsconfig.json'], tsconfigRootDir: import.meta.dirname },
+    },
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/await-thenable': 'error',
+      eqeqeq: ['error', 'smart'],
     },
   },
   {

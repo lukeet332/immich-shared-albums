@@ -108,5 +108,16 @@ export const linkedPeers = () =>
     ).length,
   }));
 
+/** Albums this server is sharing or receiving, for the panel. */
+export const sharedAlbums = () =>
+  state.mappings
+    .filter(m => !m.dead)
+    .map(m => ({
+      name: m.albumName,
+      role: m.role,
+      via: m.via ?? 'link',
+      peer: state.peers.find(p => p.pub === m.peer)?.name ?? '',
+    }));
+
 /** Our own household identity, for the panel header. */
 export const localHousehold = () => ({ name: CFG.name, url: CFG.publicUrl });
