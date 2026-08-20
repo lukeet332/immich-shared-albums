@@ -3,11 +3,21 @@ import { readInvite } from './fragment.ts';
 import { join, whoami, type JoinResult, type Me } from './api.ts';
 import { OpenInApp } from './OpenInApp.tsx';
 
+/**
+ * The element ids below (#who, #go, #out, and #openapp in OpenInApp) are a TEST CONTRACT: the
+ * browser lane in demo/e2e/browser-test.mjs drives this page through them. Converting this page
+ * to components dropped them for class names, and the browser tests failed while the 141-check
+ * API suite stayed green — that lane is the only thing covering this flow end to end. Keep them.
+ */
+
 /** How often to re-check whether they have signed in, while this page waits. */
 const SIGN_IN_POLL_MS = 2500;
 
 export const Accept = ({ household }: { household: string }) => {
-  const invite = readInvite();
+  // Read ONCE. readInvite() has a side effect — it strips the invite out of the query string via
+  // history.replaceState so it never lingers in the address bar — so calling it on every render
+  // makes the invite vanish on the second one, mid-join.
+  const [invite] = useState(readInvite);
   const [signedInUser, setSignedInUser] = useState<Me | null>(null);
   const [joinInProgress, setJoinInProgress] = useState(false);
   const [albumNeedsPassword, setAlbumNeedsPassword] = useState(false);
@@ -82,12 +92,12 @@ export const Accept = ({ household }: { household: string }) => {
   if (joined?.ok) {
     return (
       <>
-        <h1>Joined “{joined.album}”</h1>
-        <p>
-          From {joined.from}.
+        <h1>All set</h1>
+        <div id="out" class="out">
+          Joined “{joined.album}” from {joined.from}.
           {joined.permissions === 'view' &&
             ' View-only album: you can look and comment, but photos you add stay on your server.'}
-        </p>
+        </div>
         <OpenInApp albumId={joined.albumId!} photos={joined.photos ?? 0} />
       </>
     );
@@ -99,7 +109,7 @@ export const Accept = ({ household }: { household: string }) => {
       <p>
         This will add the album to your account on <b>{household}</b>. Photos stay on their owners' servers.
       </p>
-      <div class="who">
+      <div id="who" class="who">
         {signedInUser ? (
           `Joining as ${signedInUser.name} — the album is added only to your account.`
         ) : (
@@ -120,6 +130,7 @@ export const Accept = ({ household }: { household: string }) => {
         />
       )}
       <button
+        id="go"
         disabled={!signedInUser || joinInProgress}
         class={joinInProgress ? 'busy' : ''}
         onClick={acceptInvite}
@@ -133,7 +144,9 @@ export const Accept = ({ household }: { household: string }) => {
           'Accept & join'
         )}
       </button>
-      <div class="out">{message}</div>
+      <div id="out" class="out">
+        {message}
+      </div>
     </>
   );
 };

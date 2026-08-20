@@ -35,14 +35,14 @@ export const OpenInApp = ({ albumId, photos }: { albumId: string; photos: number
 
   if (!linkEnabled) {
     return (
-      <a class="cta" style={{ opacity: 0.45, pointerEvents: 'none' }}>
+      <a id="openapp" class="cta" style={{ opacity: 0.45, pointerEvents: 'none' }}>
         <span class="spin" />
         Syncing {photosArrived}/{photos}…
       </a>
     );
   }
   return (
-    <a class="cta" href={deepLink(albumId)}>
+    <a id="openapp" class="cta" href={deepLink(albumId)}>
       Open in Immich app
     </a>
   );

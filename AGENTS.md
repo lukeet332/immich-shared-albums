@@ -62,9 +62,24 @@ saying so.
   lane) and the fast gate below. Branch protection enforces it; merges are squash-only.
 - **Conventional commits** decide the version automatically via release-please
   (`fix:` → patch, `feat:` → minor, `feat!:` → major). Don't hand-edit version numbers.
-- **Before pushing:** `npm run verify` clean (format, lint, types, import cycles, unit tests —
-  seconds), then the e2e suite green (`bash demo/run-mock-e2e.sh` — minutes). CI runs the fast
-  gate first so a formatting slip fails in seconds rather than after booting four Immich stacks.
+- **Before pushing:** `npm run verify` clean (format, lint, types, runtime load, import cycles,
+  unit tests — seconds), then BOTH e2e lanes:
+
+  ```
+  bash demo/run-mock-e2e.sh                       # API suite, 141 checks
+  cd demo/e2e && CKEY=<origin key> \
+    HOST_RESOLVER_RULES="MAP host.docker.internal 127.0.0.1" node browser-test.mjs
+  ```
+
+  **Run the browser lane whenever you touch a page.** It is the only coverage of the banner and
+  accept flows — the API suite has 141 checks and not one of them loads a page in a browser. The
+  accept page was converted to components with the API suite fully green, and CI caught two real
+  breakages: the element ids the lane drives, and an invite that evaporated mid-join. The resolver
+  rule exists so this runs on a dev machine without editing /etc/hosts.
+
+  Run against a FRESHLY PURGED rig. `run-mock-e2e.sh` purges; recreating containers by hand does
+  not, and stale bot keys in `state.db` produce `Invalid API key` failures that look like product
+  bugs and are not.
 - **Enable the hook once per clone:** `git config core.hooksPath .githooks`. It runs the fast
   gate on commit. The e2e suite is deliberately NOT in the hook — a seven-minute hook is a hook
   people bypass.

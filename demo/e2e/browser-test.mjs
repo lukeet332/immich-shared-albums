@@ -23,7 +23,17 @@ const album = await api('/albums', { albumName: `browser test ${Date.now()}` });
 const share = await api('/shared-links', { type: 'ALBUM', albumId: album.id, allowUpload: true });
 const SHARE_PATH = `/share/${share.key}`;
 
-const browser = await chromium.launch({ args: ['--disable-features=HttpsUpgrades,LocalNetworkAccessChecks,PrivateNetworkAccessForNavigations,PrivateNetworkAccessChecks'] });
+// CI puts `host.docker.internal` in /etc/hosts; a dev machine has no reason to. Setting
+// HOST_RESOLVER_RULES lets this lane run locally without touching the host's DNS, which matters
+// because it is the ONLY coverage of the banner and accept flows — the API suite cannot see them.
+//   HOST_RESOLVER_RULES="MAP host.docker.internal 127.0.0.1" node browser-test.mjs
+const launchArgs = [
+  '--disable-features=HttpsUpgrades,LocalNetworkAccessChecks,PrivateNetworkAccessForNavigations,PrivateNetworkAccessChecks',
+];
+if (process.env.HOST_RESOLVER_RULES) {
+  launchArgs.push(`--host-resolver-rules=${process.env.HOST_RESOLVER_RULES}`);
+}
+const browser = await chromium.launch({ args: launchArgs });
 const ctx = await browser.newContext();
 const page = await ctx.newPage();
 
