@@ -65,24 +65,28 @@ export const UTILITY_SUFFIX = ' (via shared albums)';
 export const UTILITY_EMAIL_DOMAIN = 'immich-shared-albums.local';
 
 /**
- * The three kinds of bot user, in three separate namespaces.
+ * ONE local account per remote person, doing both jobs: it owns their mirrored photos, and it is
+ * what a human picks in Immich's album picker to share with them.
  *
- * This separation is load-bearing, not tidiness. Invitation detection reads "is this bot a
- * member of that album?" as a human's intent to share, which is only sound for bots the sidecar
- * NEVER adds to an album itself. Contributors are the opposite: the sidecar adds them for
- * attribution whenever their owner contributes a photo.
+ * They used to be two accounts, because invitation detection reads "this account is an album
+ * member" as human intent, and the sidecar adds accounts to albums itself for attribution.
+ * Immich forces that overlap — an album owner adding an asset owned by a NON-member is refused
+ * with `no_permission` — so the account must be a member wherever it owns content.
  *
- * Collapsing any two of these breaks sync. A single stand-in once served as both the household
- * invitation marker and the household's attribution contributor; the sidecar added it to a
- * mirror as `editor`, its own detector read that as an invitation, and origin and member
- * ping-ponged mirror/withdraw every poll — each offering the other a mirror of the other's
- * album. Keep the namespaces disjoint and that class of bug cannot be expressed.
+ * The distinction therefore moved out of the namespace and into two explicit records:
+ *  - `added` (store.addedRecord) says which memberships WE created, so only a human's counts as
+ *    an invitation. Its write order is a security property: record first, add second.
+ *  - `Contributor.directory` says we actually know which server the person is on, which only a
+ *    linked server's directory can tell us. Without it an account is attribution-only.
+ *
+ * `person-` is keyed on the person's user id on THEIR OWN server, so the same human resolves to
+ * the same local account whether we meet them through a directory or a relayed photo.
  */
 export const BOT_PREFIX = {
-  /** Owns mirrored stubs and carries attribution. The sidecar DOES add these to albums. */
+  /** One remote person, keyed by their user id on their home server. */
+  person: 'person-',
+  /** Album-owner stand-ins and other non-person helpers. */
   contributor: 'shared-',
-  /** One remote person. Sidecar never adds it — membership is a human's intent. */
-  invitePerson: 'invite-person-',
 } as const;
 
 /**
@@ -94,6 +98,19 @@ export const BOT_PREFIX = {
  * exist for the same remote person on the same server, and two identically-named users are
  * unpickable. There is no household-wide marker: a server link is not a person (see p2p/unlink).
  */
+/**
+ * Recover a person's real name from whatever decoration a local account carries.
+ *
+ * Accounts here are named for what they are locally — "(via The Smiths server)" for someone on a
+ * linked server, "(via shared albums)" for an attribution-only account — but the name that goes
+ * ON THE WIRE must be the person's own. Stripping only UTILITY_SUFFIX was not enough once markers
+ * carried a server name: the decorated name travelled as the "true" contributor, the receiver
+ * appended its own suffix, and the decoration accumulated one layer per relay hop
+ * ("Nan (via B server) (via shared albums)"). Greedy on purpose, so a doubled name collapses back
+ * to the person in one pass.
+ */
+export const personName = (name?: string) => (name || '').replace(/\s*\(via .*\)\s*$/, '').trim();
+
 export const markerName = {
   person: (personName: string, peerName: string) => `${personName} (via ${peerName} server)`,
 };

@@ -3,7 +3,7 @@
  * members pull the canonical list and push their own, gated by a cheap activity-count
  * statistic so messages land in seconds without heavy polling. startCommentLoop runs it.
  */
-import { CFG, log, UTILITY_SUFFIX, ROUTE_PREFIX } from '../config.ts';
+import { CFG, log, ROUTE_PREFIX, personName } from '../config.ts';
 import { state, save, seenActHas, seenActAdd, keys } from '../state.ts';
 import { sign, signedFetch, nudgePeers, callingPeer, mappingFor } from '../peers.ts';
 import { immichJson, jsonBody, usersById } from '../immich/client.ts';
@@ -32,7 +32,7 @@ export async function materialiseComments(mapping, peerUrl, peerName, comments) 
   const local = await getComments(mapping.albumId, albumReaderKey(mapping));
   const localPairs = new Set(
     local.map(a => {
-      const n = (users[a.user?.id]?.name || a.user?.name || '').replace(UTILITY_SUFFIX, '');
+      const n = personName(users[a.user?.id]?.name || a.user?.name || '');
       return `${n}\u0000${a.comment}`;
     })
   );
@@ -85,7 +85,7 @@ export async function handleComments(req, albumMappingId) {
       id: a.id,
       comment: a.comment,
       createdAt: a.createdAt,
-      author: (users[a.user?.id]?.name || a.user?.name || CFG.name).replace(UTILITY_SUFFIX, ''),
+      author: personName(users[a.user?.id]?.name || a.user?.name || CFG.name) || CFG.name,
       authorUserId: a.user?.id,
     }));
   return [200, { comments }];

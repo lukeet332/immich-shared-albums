@@ -25,9 +25,9 @@
  */
 import { CFG, log, isUtilityEmail, UTILITY_EMAIL_DOMAIN, BOT_PREFIX, markerName } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
-import { state, save, store } from '../state.ts';
+import { state, save, store, addedHas, addedForget } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
-import { ensureUtilityUser, slugify } from '../immich/contributors.ts';
+import { ensureUtilityUser } from '../immich/contributors.ts';
 import { signedGet } from '../peers.ts';
 import { ROUTE_PREFIX } from '../config.ts';
 import { ensureMirror, fillMirrorInBackground } from '../p2p/mirror.ts';
@@ -70,9 +70,12 @@ async function syncPeerDirectory(peer: Peer) {
       await ensureUtilityUser(person.name, {
         peerPub: peer.pub,
         peerUserId: person.id,
-        stateKey: `${BOT_PREFIX.invitePerson}${slugify(peer.name)}-${slugify(person.name)}`,
-        email: `${BOT_PREFIX.invitePerson}${slugify(peer.name)}-${slugify(person.name)}@${UTILITY_EMAIL_DOMAIN}`,
+        // Keyed on the person's id on THEIR server, so the same human resolves to the same
+        // account whether we meet them via this directory or via a relayed photo.
+        stateKey: `${BOT_PREFIX.person}${person.id}`,
+        email: `${BOT_PREFIX.person}${person.id}@${UTILITY_EMAIL_DOMAIN}`,
         fullName: markerName.person(person.name, peer.name),
+        homePeer: peer.pub,
       });
     } catch (e) {
       log(`could not create an invite target for "${person.name}": ${e.message}`);
@@ -80,11 +83,17 @@ async function syncPeerDirectory(peer: Peer) {
   }
 }
 
-/** Per-person invite markers for this peer. Never contributors — see BOT_PREFIX. */
+/**
+ * People we can actually invite to an album on this peer.
+ *
+ * `homePeer === peerPub` is the whole gate, and it is a security gate rather than a tidiness one.
+ * Attribution accounts are also created from incoming refs, and a ref carries the person's own
+ * user id but NOT their home server — for relayed content, `peer` is the hop it travelled
+ * through. Treating one of those as invitable would take an album a human shared with a person at
+ * D and hand it to C. Only a linked server's directory proves where someone lives.
+ */
 function inviteTargetsFor(peerPub: string) {
-  return Object.entries(state.contributors || {})
-    .filter(([k, c]) => k.startsWith(BOT_PREFIX.invitePerson) && c.peer === peerPub && c.key && c.userId)
-    .map(([, c]) => c);
+  return Object.values(state.contributors || {}).filter(c => c.homePeer === peerPub && c.key && c.userId);
 }
 
 /** Immich album roles map onto the permission a share link would have carried. */
@@ -116,7 +125,14 @@ async function albumsAsMarker(markerKey: string, markerUserId: string): Promise<
     visible.add(a.id);
     const mine = (a.albumUsers || []).find(au => au.user?.id === markerUserId);
     // 'owner' means this is a mirror we created for inbound content, not an invitation
-    if (!mine || mine.role === 'owner') continue;
+    if (!mine || mine.role === 'owner') {
+      // Membership gone (or ours as owner): drop any record, so a future hand-invite to this
+      // album still reads as intent rather than matching a stale row forever.
+      addedForget(a.id, markerUserId);
+      continue;
+    }
+    // WE put them here, for attribution. Not an invitation, however it looks.
+    if (addedHas(a.id, markerUserId)) continue;
     // v3 album responses carry no ownerId — the owner is only discoverable inside albumUsers
     const owner = (a.albumUsers || []).find(au => au.role === 'owner');
     invited.set(a.id, {
@@ -231,6 +247,25 @@ export async function detectInvitesOnce() {
       mp.dead = true;
       save();
       log(`invitation withdrawn: "${peer.name}" removed from "${mp.albumName}" — no longer syncing it`);
+      // Clean up after ourselves, or Immich keeps showing these people on an album we have
+      // stopped syncing — and that divergence is silent, because re-adding an existing member is
+      // a no-op that produces no new signal, so the share could never be restored by hand.
+      //
+      // ONLY memberships in the `added` ledger, i.e. ones we created for attribution. A human's
+      // membership is their decision and is never touched. Assets already in the album stay in
+      // it: membership governs who may ADD assets, not what the album holds.
+      for (const t of targets) {
+        if (!addedHas(mp.albumId, t.userId)) continue;
+        try {
+          await immichJson(`/albums/${mp.albumId}/user/${t.userId}`, { method: 'DELETE' });
+          addedForget(mp.albumId, t.userId);
+          log(`  removed our own attribution membership from "${mp.albumName}"`);
+        } catch (e) {
+          // Left in place, so the ledger row stays too — that keeps it non-invitable rather than
+          // letting a stale membership read as fresh intent on the next pass.
+          log(`  could not tidy our membership on "${mp.albumName}": ${e.message}`);
+        }
+      }
     }
   }
 }

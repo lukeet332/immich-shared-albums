@@ -66,8 +66,8 @@ export const PANEL =
  el.textContent=r.ok?('Joined "'+d.album+'" from '+d.from+' — '+d.photos+' photos syncing. It will appear in your app shortly.'):('Error: '+(d.error||r.status));
  if(r.ok)setTimeout(()=>location.reload(),2500)}
 async function unlink(pub,name){
- if(!confirm('Unlink "'+name+'"?\n\nAlbums they shared with you will be removed from this server, '
-  +'and albums you shared with them will stop syncing. Photos you own are not touched.'))return;
+ if(!confirm('Unlink "'+name+'"?\n\nTheir photos and albums are removed from this server, and '
+  +'albums you shared with them stop syncing. Your own photos are untouched.'))return;
  const el=document.getElementById('umsg');el.textContent='Unlinking…';
  const r=await fetch('${ROUTE_PREFIX}/unlink',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pub:pub})});
  const d=await r.json().catch(()=>({error:'failed'}));

@@ -5,7 +5,7 @@
  */
 import crypto from 'node:crypto';
 import { CFG, log, UTILITY_SUFFIX, ROUTE_PREFIX, UTILITY_EMAIL_DOMAIN, BOT_PREFIX } from '../config.ts';
-import { state, save, keys } from '../state.ts';
+import { state, save, keys, addedRecord } from '../state.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
 import { sign } from '../peers.ts';
 
@@ -66,6 +66,8 @@ export async function ensureUtilityUser(
     stateKey?: string;
     email?: string;
     fullName?: string;
+    /** The server this person lives on. Set ONLY by the directory sync. */
+    homePeer?: string;
   } = {}
 ) {
   const { peerPub, peerUserId } = opts;
@@ -73,14 +75,25 @@ export async function ensureUtilityUser(
   let c = state.contributors[slug];
   const wantedName = opts.fullName || `${displayName}${UTILITY_SUFFIX}`;
   if (c && c.key) {
-    // already fully provisioned — heal a stale display name
+    // already fully provisioned — heal a stale display name.
+    // Only a directory may say where someone lives. A relayed ref knows the person's id but not
+    // their server, so it must never set or move `homePeer` — that is what stops an album shared
+    // with a person at D from being handed to the C it travelled through.
+    if (opts.homePeer && c.homePeer !== opts.homePeer) {
+      c.homePeer = opts.homePeer;
+      save();
+    }
     if ((peerPub && c.peer !== peerPub) || (peerUserId && c.peerUserId !== peerUserId)) {
       c.peer = peerPub ?? c.peer;
       c.peerUserId = peerUserId ?? c.peerUserId;
       save();
     }
+    // The directory owns the name of anyone it has placed: it is the only caller that knows
+    // which server to name. An attribution ref arriving later must not rename them back to the
+    // generic suffix, or the two would overwrite each other on every poll.
+    const directoryOwnsName = !!c.homePeer && !opts.fullName;
     const current = (await usersById(10000))[c.userId]?.name;
-    if (current && current !== wantedName) {
+    if (!directoryOwnsName && current && current !== wantedName) {
       try {
         await immichJson(`/admin/users/${c.userId}`, { ...jsonBody({ name: wantedName }), method: 'PUT' });
         if (USERS[c.userId]) USERS[c.userId].name = wantedName;
@@ -185,6 +198,7 @@ export async function ensureUtilityUser(
     key: keyRes.secret,
     peer: peerPub ?? c?.peer,
     peerUserId: peerUserId ?? c?.peerUserId,
+    homePeer: opts.homePeer ?? c?.homePeer,
   };
   if (!passwordRetired)
     c.password = password; // keep it only if the roll failed, so a retry can resume
@@ -226,25 +240,79 @@ export async function syncAvatar(c, peerUrl, originUserId) {
     /* avatars are garnish */
   }
 }
+/**
+ * The remote person's local account, present in the album so it can own their photos.
+ *
+ * ONE account per remote person does both jobs: it is what a human picks in Immich's album
+ * picker to share with them, and it owns their mirrored photos so attribution survives. Immich
+ * forces that overlap — an album owner adding an asset owned by a NON-member is refused with
+ * `no_permission` — so the account has to be a member wherever it owns content.
+ *
+ * Which means album membership alone no longer tells us whether a human invited them. That
+ * distinction moves into the `added` ledger, and the order below is the security property:
+ *
+ *  1. read the album's current members
+ *  2. if the account is ALREADY a member, do nothing and record nothing — someone else put them
+ *     there, and that someone is a human whose intent we must not overwrite
+ *  3. otherwise record the membership as ours FIRST, then add it
+ *
+ * Recording after the add would leave, on any crash in between, a membership with no record —
+ * which reads as human intent and shares the album with a server nobody offered it to. This way
+ * the same crash leaves a record with no membership, which merely ignores a real invitation
+ * until the human re-adds. Always fail towards under-sharing.
+ */
 export async function ensureContributor(
   displayName,
   albumId,
   adminKey,
   peerUrl,
   originUserId,
-  peerPub?: string
+  peerPub?: string,
+  opts: { mayAdd?: boolean } = {}
 ) {
-  const c = await ensureUtilityUser(displayName, { peerPub });
+  // Key on the person's id on their OWN server when the ref carries it, so this is the same
+  // account the directory creates rather than a second entry for one human. No `fullName` and no
+  // `homePeer`: a ref proves neither what to call them nor where they live.
+  const c = await ensureUtilityUser(
+    displayName,
+    originUserId
+      ? {
+          peerPub,
+          peerUserId: originUserId,
+          stateKey: `${BOT_PREFIX.person}${originUserId}`,
+          email: `${BOT_PREFIX.person}${originUserId}@${UTILITY_EMAIL_DOMAIN}`,
+        }
+      : { peerPub, peerUserId: originUserId }
+  );
   if (!c.key) throw new Error(`contributor "${displayName}" has no API key yet — will retry`);
   await syncAvatar(c, peerUrl, originUserId);
+
+  let alreadyMember = false;
   try {
-    await immichJson(
-      `/albums/${albumId}/users`,
-      { ...jsonBody({ albumUsers: [{ userId: c.userId, role: 'editor' }] }), method: 'PUT' },
-      adminKey
-    );
+    const alb = await immichJson(`/albums/${albumId}?withoutAssets=true`, {}, adminKey);
+    alreadyMember = (alb.albumUsers || []).some(au => au.user?.id === c.userId);
   } catch {
-    /* already a member */
+    // Cannot read the album, so cannot prove the membership is not already a human's. Do not
+    // add: a blind add here could later be misread as an invitation. The next cycle retries.
+    return c;
+  }
+  if (!alreadyMember && opts.mayAdd === false) {
+    // An invited person who is not a member has been REVOKED. Do not put them back: the human's
+    // removal is the authority here, and the withdrawal sweep will retire the mapping shortly.
+    log(`"${displayName}" is no longer a member of this album — not re-adding (revoked)`);
+    return c;
+  }
+  if (!alreadyMember) {
+    addedRecord(albumId, c.userId); // record BEFORE the add — see the note above
+    try {
+      await immichJson(
+        `/albums/${albumId}/users`,
+        { ...jsonBody({ albumUsers: [{ userId: c.userId, role: 'editor' }] }), method: 'PUT' },
+        adminKey
+      );
+    } catch (e) {
+      log(`could not add "${displayName}" to the album: ${e.message} — will retry`);
+    }
   }
   return c;
 }

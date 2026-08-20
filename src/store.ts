@@ -58,6 +58,17 @@ export type Contributor = {
   /** That person's user id ON THE PEER, for invite targets — what lets an invitation be routed
    *  to one specific person rather than the whole household. */
   peerUserId?: string;
+  /**
+   * The server this person actually LIVES on, set only by a directory sync — the one source that
+   * proves it.
+   *
+   * Distinct from `peer`, which is merely where we first heard of them. For relayed content those
+   * differ: a photo from someone at D arrives via C, so `peer` is C. Inviting them must route to
+   * D, so invitability tests `homePeer`, never `peer`. An account with no `homePeer` is
+   * attribution-only — it can own photos, but it is not a share destination, because we have no
+   * link over which to deliver one.
+   */
+  homePeer?: string;
 };
 
 export type Collections = {
@@ -93,6 +104,12 @@ export class Store {
       CREATE TABLE IF NOT EXISTS offered (m TEXT NOT NULL, a TEXT NOT NULL);
       CREATE UNIQUE INDEX IF NOT EXISTS offered_ma ON offered (m, a);
       CREATE INDEX IF NOT EXISTS offered_a ON offered (a);
+      -- Album memberships THIS SIDECAR created (album id, user id). See addedRecord: it is the
+      -- difference between "a human invited them" and "we put them there for attribution", and
+      -- getting it wrong in the unsafe direction shares an album nobody offered.
+      CREATE TABLE IF NOT EXISTS added (al TEXT NOT NULL, us TEXT NOT NULL);
+      CREATE UNIQUE INDEX IF NOT EXISTS added_alus ON added (al, us);
+      CREATE INDEX IF NOT EXISTS added_us ON added (us);
     `);
     this.state = {
       keys: this.kvGet('keys'),
@@ -179,6 +196,42 @@ export class Store {
       .prepare(`SELECT 1 FROM offered WHERE a = ? AND m IN (${holes})`)
       .get(assetId, ...mappingIds);
   }
+  /**
+   * Remember that WE added `userId` to `albumId`.
+   *
+   * Security-critical, and the ordering matters: callers must record BEFORE the add lands. A
+   * crash between the two then leaves a row with no membership, which makes us *ignore* a real
+   * invitation — visible, and the human just re-adds. Recording afterwards would leave a
+   * membership with no row, which reads as human intent and shares the album with a server
+   * nobody offered it to. Always fail towards under-sharing.
+   */
+  addedRecord(albumId: string, userId: string) {
+    this.db.prepare('INSERT OR IGNORE INTO added (al, us) VALUES (?, ?)').run(albumId, userId);
+  }
+  /** Is this membership ours rather than a human's? */
+  addedHas(albumId: string, userId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM added WHERE al = ? AND us = ?').get(albumId, userId);
+  }
+  /**
+   * Drop the record once the membership itself is gone.
+   *
+   * This is what keeps the table self-healing rather than sticky: without it, an album we once
+   * added someone to could never afterwards be shared with them by hand, because their fresh
+   * membership would still match an old row and read as ours.
+   */
+  addedForget(albumId: string, userId: string) {
+    this.db.prepare('DELETE FROM added WHERE al = ? AND us = ?').run(albumId, userId);
+  }
+  /** Every album we put this user into — used when unlinking a server. */
+  addedAlbumsFor(userId: string): string[] {
+    return (this.db.prepare('SELECT al FROM added WHERE us = ?').all(userId) as { al: string }[]).map(
+      r => r.al
+    );
+  }
+  addedRemoveUser(userId: string) {
+    this.db.prepare('DELETE FROM added WHERE us = ?').run(userId);
+  }
+
   offeredRemoveMapping(mappingId: string) {
     this.db.prepare('DELETE FROM offered WHERE m = ?').run(mappingId);
   }

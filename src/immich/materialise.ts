@@ -36,13 +36,24 @@ export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
     bytes = Buffer.concat([STUB_JPEG, crypto.randomBytes(8)]);
   }
   const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
+  // On an INVITATION album a human already added the people they chose — their membership IS the
+  // share. So for an invited person we must never add them: if they are missing, that absence is
+  // the revocation, and filling it in would overrule the human and quietly re-create the share.
+  // That, not a ledger, is what removes the revoke-versus-arriving-content race.
+  //
+  // Link-shared albums are the opposite: the link named a household, nobody named a person, so
+  // attribution has no membership to inherit and the sidecar does have to create one.
+  const contributorId = ref.contributor?.originUserId;
+  const wasInvited =
+    mapping.via === 'invite' && !!contributorId && (mapping.forPeerUserIds || []).includes(contributorId);
   const c = await ensureContributor(
     ref.contributor?.displayName || fallbackName,
     mapping.albumId,
     adminKey,
     peerUrl,
-    ref.contributor?.originUserId,
-    mapping.peer
+    contributorId,
+    mapping.peer,
+    { mayAdd: !wasInvited }
   );
   const ext = ref.kind === 'video' ? 'mp4' : 'jpg';
   // base64 checksums contain / and + — never let them into filenames
