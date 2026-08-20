@@ -11,9 +11,11 @@
  *    so no album of dead placeholders is left behind;
  *  - albums we shared TO them lose their mapping and their entitlement, so we stop serving bytes;
  *  - their per-person invite markers are deleted, so they vanish from Immich's album picker;
- *  - attribution contributors are KEPT. They own real photos that local people can see (relayed
- *    contributions land in albums we own), and deleting the user deletes that content. An
- *    unlink must not be a data-loss event, so these are left for the operator to remove.
+ *  - this peer's people are deleted, and their photos go with them. Everything those accounts
+ *    own is a proxy whose bytes stream from the peer on demand, so once the link is gone the
+ *    assets are unreachable — keeping them would only scatter broken thumbnails through albums
+ *    here. Deleting the accounts also takes their album memberships, which is what stops a later
+ *    re-link from misreading a leftover membership as a fresh invitation.
  */
 import { CFG, log, BOT_PREFIX } from '../config.ts';
 import { state, save } from '../state.ts';
@@ -55,10 +57,17 @@ export async function unlinkPeer(pub: string): Promise<UnlinkResult> {
     }
   }
 
-  // Their invite markers exist only so our people could pick them. Once unlinked they are noise
-  // in every picker, so remove them — they own nothing, which is what makes this safe.
+  // Delete this peer's people, and their photos go with them.
+  //
+  // Everything these accounts own is a PROXY: a stub whose real bytes stream from the peer on
+  // demand. Once the link is gone those bytes are unreachable, so keeping the assets would leave
+  // broken thumbnails scattered through albums here. `force: true` removes the user and its
+  // assets together, which is also what `leaveAlbum` already does for a mirror's stubs.
+  //
+  // Deleting them takes their album memberships with them, which is what closes the re-link
+  // hole: nothing is left behind for a future directory sync to misread as a fresh invitation.
   for (const [slug, c] of Object.entries(state.contributors || {})) {
-    if (!slug.startsWith(BOT_PREFIX.invitePerson) || c.peer !== pub) continue;
+    if (!slug.startsWith(BOT_PREFIX.person) || (c.homePeer ?? c.peer) !== pub) continue;
     if (c.userId) {
       try {
         await immichJson(`/admin/users/${c.userId}`, {
@@ -68,7 +77,9 @@ export async function unlinkPeer(pub: string): Promise<UnlinkResult> {
         });
         markersRemoved++;
       } catch (e) {
-        log(`unlink: could not delete marker ${slug}: ${e.message}`);
+        // Left behind: keep the state entry so a re-link reuses it rather than minting a twin.
+        log(`unlink: could not delete ${slug}: ${e.message} — leaving it in place`);
+        continue;
       }
     }
     delete state.contributors[slug];
@@ -78,7 +89,7 @@ export async function unlinkPeer(pub: string): Promise<UnlinkResult> {
   if (pi >= 0) state.peers.splice(pi, 1);
   save();
   log(
-    `unlinked "${household}" — ${mirrorsRemoved} mirror(s) removed, ${sharesRevoked} share(s) revoked, ${markersRemoved} marker(s) deleted`
+    `unlinked "${household}" — ${mirrorsRemoved} mirror(s) removed, ${sharesRevoked} share(s) revoked, ${markersRemoved} account(s) removed with their proxied photos`
   );
   return { household, mirrorsRemoved, sharesRevoked, markersRemoved };
 }
@@ -93,7 +104,7 @@ export const linkedPeers = () =>
     sharedToThem: state.mappings.filter(m => m.peer === p.pub && m.role === 'owner' && !m.dead).length,
     sharedToUs: state.mappings.filter(m => m.peer === p.pub && m.role === 'member' && !m.dead).length,
     people: Object.entries(state.contributors || {}).filter(
-      ([k, c]) => k.startsWith(BOT_PREFIX.invitePerson) && c.peer === p.pub
+      ([k, c]) => k.startsWith(BOT_PREFIX.person) && c.peer === p.pub
     ).length,
   }));
 

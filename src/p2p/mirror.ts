@@ -8,7 +8,7 @@
  * fills it in behind the answer.
  */
 import crypto from 'node:crypto';
-import { CFG, log, isUtilityEmail } from '../config.ts';
+import { CFG, log, isUtilityEmail, BOT_PREFIX, UTILITY_EMAIL_DOMAIN } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
 import { state, save } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
@@ -41,7 +41,22 @@ export type MirrorRequest = {
 export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mapping; created: boolean }> {
   const { peer, album, permissions, forUserIds } = req;
   const ownerName = req.albumOwnerName || peer.name;
-  const host = await ensureUtilityUser(ownerName, { peerPub: peer.pub });
+  // The album's owner is a person on that peer, so key them by their id on THEIR server when we
+  // know it. That makes the account we create here and the one the directory creates the same
+  // human rather than two picker entries for one person. `homePeer` is deliberately NOT set: a
+  // redeem does not prove where they live, only a directory does.
+  const hostSlug = req.albumOwnerId ? `${BOT_PREFIX.person}${req.albumOwnerId}` : slugify(ownerName);
+  const host = await ensureUtilityUser(
+    ownerName,
+    req.albumOwnerId
+      ? {
+          peerPub: peer.pub,
+          peerUserId: req.albumOwnerId,
+          stateKey: hostSlug,
+          email: `${hostSlug}@${UTILITY_EMAIL_DOMAIN}`,
+        }
+      : { peerPub: peer.pub }
+  );
   await syncAvatar(host, peer.url, req.albumOwnerId);
 
   const addMembers = async (albumId: string) => {
@@ -103,7 +118,7 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     remoteAlbumId: album.id,
     remoteMappingId: req.remoteMappingId,
     permissions,
-    adminSlug: slugify(ownerName),
+    adminSlug: hostSlug,
     via: req.via ?? 'link',
   };
   state.mappings.push(mapping);

@@ -60,6 +60,24 @@ const readSidecarKv = (stateDir, name) => {
     return out ? JSON.parse(out) : null;
   } catch { return null; }
 };
+// Rows in the `added` ledger — memberships the sidecar created rather than a human. Security
+// property: after unlinking, the memberships left behind must be recorded here.
+const readSidecarAdded = (stateDir, albumId) => {
+  try {
+    const path = new URL(`../${stateDir}/state.db`, import.meta.url).pathname;
+    const sql = albumId
+      ? `SELECT COUNT(*) FROM added WHERE al='${albumId}'`
+      : 'SELECT COUNT(*) FROM added';
+    const out = execFileSync('sqlite3', [path, sql], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out ? Number(out) : 0;
+  } catch {
+    return null;
+  }
+};
+
 const until = async (fn, timeoutMs = 90000, everyMs = 5000) => {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) { const v = await fn(); if (v) return v; await sleep(everyMs); }
@@ -143,7 +161,11 @@ if (mAssets) {
         `x-cache: ${thumbRes2.headers.get('x-cache')}`);
 }
 
-const bAdminUtility = `${(await api(B, BKEY, '/users/me')).name} (via shared albums)`;
+const bAdminName = (await api(B, BKEY, '/users/me')).name;
+// One account now represents a remote person for BOTH jobs, so its name depends on what we know:
+// "(via <server> server)" once a directory has placed them, "(via shared albums)" until then.
+// Match the person, not one naming form — the point is that the account represents that human.
+const representsBAdmin = name => !!name && name.startsWith(`${bAdminName} (`);
 console.log(`— stage: B admin contributes 2 photos (old capture dates)`);
 const nIds = [];
 for (let i = 1; i <= 2; i++) {
@@ -158,8 +180,9 @@ const aAfter = await until(async () => { const x = await albumAssets(A, AKEY, AL
 check('A album has 6 assets after contribution', !!aAfter, aAfter ? '' : `still ${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
 if (aAfter) {
   const aUsers = await api(A, AKEY, '/admin/users');
-  const nanUser = aUsers.find(u => u.name === bAdminUtility);
-  check('contributor utility user exists on A', !!nanUser, bAdminUtility);
+  const nanUser = aUsers.find(u => isBot(u.email) && representsBAdmin(u.name));
+  check('contributor utility user exists on A', !!nanUser,
+        aUsers.filter(u => isBot(u.email)).map(u => u.name).join(', '));
   const ownerId_A = (await api(A, AKEY, '/users/me')).id;
   const contributed = aAfter.filter(a => !aIds.includes(a.id));
   check('contributions NOT owned by origin admin (timeline clean)', contributed.every(a => a.ownerId !== ownerId_A),
@@ -171,16 +194,19 @@ if (aAfter) {
   check('contribution capture dates preserved', JSON.stringify(cDates) === JSON.stringify(['2026-07-01','2026-07-02']), cDates.join(','));
 
   console.log('— stage: stale utility-user display name heals on next sync');
+  if (!nanUser) console.log('  (skipped: no contributor account found on A)');
+  else {
   await api(A, AKEY, `/admin/users/${nanUser.id}`, { ...j({ name: 'Shared · Legacy Name' }), method: 'PUT' });
   const healId = await upload(B, BKEY, 'heal-e2e.jpg', `hl${Date.now() % 1000}`, '2026-07-03T09:00:00.000Z');
   await ensurePreviews(B, BKEY, [healId]);
   await api(B, BKEY, `/albums/${mirror.id}/assets`, { ...j({ ids: [healId] }), method: 'PUT' });
   const healed = await until(async () => {
     const u = (await api(A, AKEY, '/admin/users')).find(x => x.id === nanUser.id);
-    return u && u.name === bAdminUtility ? u : null;
+    return u && representsBAdmin(u.name) ? u : null;
   }, 60000);
   check('stale utility-user name healed (regression: old "Shared ·" naming)', !!healed,
         healed ? healed.name : 'still stale');
+  }
 }
 
 console.log('— stage: A personal timeline must NOT contain B-contributed photos');
@@ -200,7 +226,7 @@ if (aAfter) {
   // albumUsers is what the app renders under album Options → People
   const albumDetail = await api(A, AKEY, `/albums/${ALBUM_ID}`);
   const memberNames = (albumDetail.albumUsers || []).map(u => u.user?.name).filter(Boolean);
-  check('contributor utility user listed as album member on A', memberNames.includes(bAdminUtility), memberNames.join(', ') || '(none)');
+  check('contributor utility user listed as album member on A', memberNames.some(representsBAdmin), memberNames.join(', ') || '(none)');
 }
 
 console.log('— stage: photo ordering matches capture date (newest-first)');
@@ -386,7 +412,7 @@ if (DKEY) {
   check('D mirror receives all 9 photos incl. B contributions (relay)', !!dAssets,
         dAssets ? '' : `at ${(await albumAssets(D, DKEY, dMirror.id)).length}`);
   const dUtility = (await api(D, DKEY, '/admin/users')).filter(u => isBot(u.email));
-  check('relayed photos attributed to the original contributor on D', dUtility.some(u => u.name === bAdminUtility),
+  check('relayed photos attributed to the original contributor on D', dUtility.some(u => representsBAdmin(u.name)),
         dUtility.map(u => u.name).join(', '));
   if (dAssets) {
     const nanProxy = dAssets.find(a => (a.fileCreatedAt || '').startsWith('2026-07-01'));
@@ -506,12 +532,20 @@ console.log('— stage: native album invitations, per person (no share link)');
     check('origin created a per-person invite marker for each person on the linked server', !!nan,
           nan ? nan.email : `no user named "${bAdmin.name} (via ${bPeer.name} server)"`);
     check('the marker lives in the per-person namespace, not the contributors one',
-          !!nan && nan.email.startsWith('invite-person-'), nan?.email);
+          !!nan && nan.email.startsWith('person-'), nan?.email);
     // Sharing is per person. A server link is not a person, so it must not exist as a pickable
     // user at all — managing the link belongs to the panel (see the unlink stage).
     const households = (await api(A, AKEY, '/admin/users')).filter(u => u.email.startsWith('invite-household-'));
     check('no household-wide stand-in exists — a server link is not a person',
           households.length === 0, households.map(u => u.email).join(', '));
+    // ONE account per remote person: it owns their photos AND is what a human picks to share
+    // with them. Two accounts for one human is the clutter this replaced.
+    {
+      const all = await api(A, AKEY, '/admin/users');
+      const forNan = all.filter(u => isBot(u.email) && (u.name || '').startsWith(bAdmin.name));
+      check('one account per remote person, not two', forNan.length === 1,
+            forNan.map(u => `${u.name} <${u.email}>`).join(' | '));
+    }
     // An invite marker and an attribution contributor can exist for the SAME remote person. If
     // they ever share a display name the two are indistinguishable in the picker.
     {
@@ -638,6 +672,102 @@ console.log('— stage: native album invitations, per person (no share link)');
       const bogus = bMappings.filter(m => m.role === 'owner' && m.via === 'invite');
       check('member never mistakes its own mirror for an invitation (no ping-pong)',
             bogus.length === 0, bogus.map(m => `${m.albumName}`).join(', ') || '');
+    }
+  }
+}
+
+// THE RACE the `added` ledger exists to close. One account now serves both jobs, so after a human
+// revokes, the sidecar may still materialise an arriving photo into that album and re-add the
+// person for attribution. If that re-add were mistaken for a fresh invitation, the revocation
+// would silently never happen — the worst failure mode in this project, because it looks like it
+// worked. Recording our own additions is what makes the human's removal win.
+//
+// A 20s poll race cannot be forced deterministically, so this is built to prove the mechanism and
+// never fail falsely: it drives content at the album immediately after revoking, then asserts the
+// withdrawal happened anyway. If the re-add did land it proves the ledger; if it did not, the
+// withdrawal assertion still holds.
+console.log('— stage: a revocation survives content arriving in the same window');
+{
+  const originPeers = readSidecarKv('household-c/c-sidecar', 'peers');
+  const bPeer = (originPeers || []).find(p => (p.name || '').includes('(B)'));
+  const bAdmin2 = await api(B, BKEY, '/users/me');
+  const nan =
+    bPeer &&
+    (await api(A, AKEY, '/admin/users')).find(
+      u => isBot(u.email) && (u.name || '').startsWith(`${bAdmin2.name} (`)
+    );
+  if (!nan) console.log('  (skipped: no account representing B\'s admin on the origin)');
+  else {
+    const raceAlb = (await api(A, AKEY, '/albums', j({ albumName: 'race album' }))).id;
+    const rAsset = await upload(A, AKEY, 'race.jpg', `rc${Date.now() % 10000}`, '2026-03-01T09:00:00.000Z');
+    await ensurePreviews(A, AKEY, [rAsset]);
+    await api(A, AKEY, `/albums/${raceAlb}/assets`, { ...j({ ids: [rAsset] }), method: 'PUT' });
+    await api(A, AKEY, `/albums/${raceAlb}/users`,
+      { ...j({ albumUsers: [{ userId: nan.id, role: 'editor' }] }), method: 'PUT' });
+
+    const standInKeys = () =>
+      Object.values(readSidecarKv('b-sidecar', 'contributors') || {})
+        .map(c => c && c.key)
+        .filter(Boolean);
+    const mirroredRace = await until(async () => {
+      for (const k of standInKeys()) {
+        const al = await api(B, k, '/albums').catch(() => []);
+        const hit = (al || []).find(a => a.albumName === 'race album');
+        if (hit) return { album: hit, key: k };
+      }
+      return null;
+    }, 150000);
+    check('race setup: the invited album mirrored on the member', !!mirroredRace,
+          mirroredRace ? '' : 'timed out');
+
+    if (mirroredRace) {
+      // Revoke, then IMMEDIATELY give the origin something to materialise into that same album.
+      await fetch(`${A}/api/albums/${raceAlb}/user/${nan.id}`, {
+        method: 'DELETE',
+        headers: { 'x-api-key': AKEY },
+      });
+      const pushId = await upload(B, BKEY, 'race-push.jpg', `rp${Date.now() % 10000}`, '2026-03-02T09:00:00.000Z');
+      await ensurePreviews(B, BKEY, [pushId]);
+      await api(B, mirroredRace.key, `/albums/${mirroredRace.album.id}/assets`,
+        { ...j({ ids: [pushId] }), method: 'PUT' }).catch(() => {});
+
+      const invitations = async () => {
+        const bKeys2 = readSidecarKv('b-sidecar', 'keys');
+        const sig = crypto
+          .sign(null, Buffer.from('invitations'),
+            crypto.createPrivateKey({ key: Buffer.from(bKeys2.priv, 'base64url'), format: 'der', type: 'pkcs8' }))
+          .toString('base64url');
+        const r = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/invitations`,
+          { headers: { 'x-isa-key': bKeys2.pub, 'x-isa-sig': sig } });
+        return r.ok ? ((await r.json()).invitations || []) : null;
+      };
+      const withdrawn = await until(async () => {
+        const list = await invitations();
+        return list && !list.some(i => i.album?.name === 'race album') ? true : null;
+      }, 150000);
+      check('the revocation still wins when a photo arrives in the same window', !!withdrawn,
+            withdrawn ? '' : 'still offered — a sidecar re-add was read as a fresh invitation');
+
+      const raceGone = await until(async () => {
+        for (const k of standInKeys()) {
+          const al = await api(B, k, '/albums').catch(() => []);
+          if ((al || []).some(a => a.albumName === 'race album')) return null;
+        }
+        return true;
+      }, 150000);
+      check('the member tears the mirror down despite the arriving content', !!raceGone,
+            raceGone ? '' : 'stale mirror survived the revocation');
+
+      // Mechanism, not timing: if the sidecar did re-add during the window it must be recorded.
+      // The sidecar no longer writes membership on an invitation album at all — an invited
+      // person's membership is the human's, so a missing one is a revocation, not a gap to fill.
+      // Zero rows here is therefore the CORRECT state, not an unexercised race.
+      const rows = readSidecarAdded('household-c/c-sidecar', raceAlb);
+      check(
+        'the sidecar never wrote membership on the invitation album',
+        rows === null || rows === 0,
+        rows === null ? 'state.db unreadable' : `${rows} row(s) — it should never write here`
+      );
     }
   }
 }
@@ -848,7 +978,8 @@ console.log('— stage: panel manages server links (unlink)');
         `${target?.people} marker(s)`);
 
   if (target) {
-    const before = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('invite-person-')).length;
+    const beforeUsers = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('person-'));
+    const before = beforeUsers.length;
     const res = await fetch(`${BS}/immich-shared-albums/unlink`,
       { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
         body: JSON.stringify({ pub: target.pub }) });
@@ -864,13 +995,26 @@ console.log('— stage: panel manages server links (unlink)');
     check('the server is gone from the panel after unlinking', !!gone, gone ? '' : 'still listed');
 
     // Its people must leave Immich's picker — that is the visible half of unlinking.
-    const after = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('invite-person-')).length;
-    check('unlink deletes that server\'s invite markers so they leave the picker',
-          after < before, `${before} -> ${after}`);
-    // Attribution contributors OWN real photos; deleting them would be a data-loss event.
-    const attrib = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('shared-'));
-    check('unlink keeps attribution contributors (they own real photos)', attrib.length > 0,
-          `${attrib.length} kept`);
+    const afterUsers = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('person-'));
+    check("unlink removed that server's people", afterUsers.length < before,
+          `${before} -> ${afterUsers.length}`);
+    // Their photos leave with them. Everything these accounts owned was a proxy whose bytes
+    // streamed from the peer, so once the link is gone the assets are unreachable and keeping
+    // them would only scatter broken thumbnails through albums here.
+    check('no account for that server survives the unlink',
+          afterUsers.every(u => !/\(via /.test(u.name || '')),
+          afterUsers.map(u => u.name).join(', ') || '(none)');
+    // SECURITY: deleting the accounts takes their album memberships with them, and nothing may be
+    // left behind for a later re-link to misread as a fresh invitation.
+    const leftBehind = [];
+    for (const al of await api(B, BKEY, '/albums').catch(() => [])) {
+      const d = await api(B, BKEY, `/albums/${al.id}?withoutAssets=true`).catch(() => null);
+      for (const au of d?.albumUsers || []) {
+        if ((au.user?.email || '').startsWith('person-')) leftBehind.push(au.user.email);
+      }
+    }
+    check('no membership is left behind for a re-link to misread as an invitation',
+          leftBehind.length === 0, leftBehind.join(', ') || 'none');
     const dead = await fetch(`${BS}/immich-shared-albums/unlink`,
       { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
         body: JSON.stringify({ pub: target.pub }) });

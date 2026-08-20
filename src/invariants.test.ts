@@ -10,6 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { BOT_PREFIX, markerName, isUtilityEmail, UTILITY_EMAIL_DOMAIN, UTILITY_SUFFIX } from './config.ts';
+import { personName } from './config.ts';
 import { permissionFor } from './sync/invites.ts';
 import { diffInvitees } from './sync/invitees.ts';
 
@@ -84,4 +85,18 @@ test('an empty invitee list is never treated as "remove everyone"', () => {
     add: [],
     remove: [],
   });
+});
+
+test('personName recovers the human, however the account was decorated', () => {
+  // Names travel on the wire. Stripping only UTILITY_SUFFIX let a marker's "(via X server)" ride
+  // along as the "true" contributor, and each relay hop appended another layer:
+  // "Nan (via B server) (via shared albums)". Collapse it in one pass, whatever the nesting.
+  assert.equal(personName('Nan'), 'Nan');
+  assert.equal(personName(`Nan${UTILITY_SUFFIX}`), 'Nan');
+  assert.equal(personName('Nan (via The Smiths server)'), 'Nan');
+  // household names contain brackets of their own — the strip must not stop at the inner one
+  assert.equal(personName('Nan (via Demo household (B) server)'), 'Nan');
+  // the compounded form seen in run27, which is what this exists to prevent
+  assert.equal(personName('Nan (via Demo household (B) server) (via shared albums)'), 'Nan');
+  assert.equal(personName(undefined), '');
 });

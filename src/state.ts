@@ -37,5 +37,10 @@ export const seenAdd = (mappingId: string, checksum: string, localAssetId: strin
 // not the local file's checksum (a re-encoded preview), is what travels on the wire.
 export const ledgerByAsset = (assetId: string) => store.ledgerByAsset(assetId);
 export const wireChecksum = (a: { id: string; checksum: string }) => ledgerByAsset(a.id)?.c || a.checksum;
+// Memberships this sidecar created, as opposed to ones a human made. See store.addedRecord —
+// the write order is a security property, not a style choice.
+export const addedRecord = (albumId: string, userId: string) => store.addedRecord(albumId, userId);
+export const addedHas = (albumId: string, userId: string) => store.addedHas(albumId, userId);
+export const addedForget = (albumId: string, userId: string) => store.addedForget(albumId, userId);
 export const seenActHas = (id: string) => store.seenActHas(id);
 export const seenActAdd = (id: string) => store.seenActAdd(id);

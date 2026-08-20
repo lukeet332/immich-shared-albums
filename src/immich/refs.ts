@@ -4,7 +4,7 @@
  * and builds the manifest a member diffs against.
  */
 import type { AssetRef } from '../types.ts';
-import { CFG, UTILITY_SUFFIX } from '../config.ts';
+import { CFG, personName } from '../config.ts';
 import { usersById } from './client.ts';
 import { wireChecksum, ledgerByAsset, seenHas } from '../state.ts';
 
@@ -13,7 +13,7 @@ import { wireChecksum, ledgerByAsset, seenHas } from '../state.ts';
 // append locally is stripped so downstream hops don't stack "Shared by" twice.
 export async function assetToRef(a): Promise<AssetRef> {
   const u = (await usersById())[a.ownerId];
-  const displayName = u?.utility ? u.name.replace(UTILITY_SUFFIX, '') : a.owner?.name || u?.name || CFG.name;
+  const displayName = u?.utility ? personName(u.name) : a.owner?.name || u?.name || CFG.name;
   const description = (a.exifInfo?.description || '').replace(/(?:\n\n)?Shared by [^\n]*$/, '') || undefined;
   return {
     originAsset: a.id,

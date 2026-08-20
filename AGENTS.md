@@ -3,6 +3,34 @@
 This is the contract for changing immich-shared-albums. It applies to everyone, and
 especially to AI coding agents — read it before you make changes.
 
+## The ethos this inherits
+
+Immich exists so people own their photos and host them themselves. Cross-server sharing is the
+easiest place to quietly betray that, so this addon inherits the constraint rather than treating
+it as Immich's problem. Concretely, and these are design rules not sentiments:
+
+- **Originals never leave the owner's server.** A shared photo materialises elsewhere as a stub
+  whose bytes stream from its owner on demand. Nobody accumulates copies of anyone else's
+  library, and the owner can stop serving at any moment.
+- **No third party, ever.** Two servers talk directly, signed with their own ed25519 keys. There
+  is no broker, no account with us, nothing to shut down.
+- **Sharing is per person, and the person is their own server's account.** Not a "household", not
+  an identity this addon invents. Accounts here are keyed by the person's id on *their* server.
+- **Anything shared can be fully withdrawn, and withdrawal reclaims the space.** `leaveAlbum`
+  purges every stub a join created; unlinking deletes a peer's people *and their proxied photos*,
+  because holding someone's content after they have gone is exactly the thing this opposes.
+- **Every sharing ACTION happens in Immich's own UI** (see the product rule below). The addon adds
+  no second way to share, so nobody has to learn our surface to use their own photos.
+- **Minimise the footprint in someone else's instance.** Every user, album, and permission this
+  addon creates is a liability the operator did not ask for.
+
+**Where we currently fall short, honestly:** the sidecar still needs an all-permissions admin API
+key, so its blast radius is the whole instance — the sharpest contradiction of this ethos in the
+codebase, and worth chipping at whenever a change touches key handling. It also creates real user
+accounts in your Immich (one per remote person) that show up in every picker, because Immich has
+no service-account flag. Both are known costs, not oversights; do not make either worse without
+saying so.
+
 ## Golden rules
 
 - **Never touch Immich itself.** This is a sidecar: it only ever adds its own container
@@ -55,6 +83,46 @@ rename; a test pinning one literal name has to be edited whenever behaviour chan
 edited to match new behaviour has stopped being a test. **Print real state on failure** — a
 message showing what was actually found saves a whole debugging cycle, and the e2e suite's
 `check(name, ok, detail)` takes that detail for exactly this reason.
+
+## Store the fact, don't infer it — but only if the fact is safe to hold
+
+Nearly every sync bug in this project came from *deducing* something the code could have
+recorded. Two accounts existed for one person so that "who added this album membership" could be
+inferred from which account it was; a boolean said "we know where this person lives" instead of
+storing *where*; a mapping pointed at an account by a name-derived slug instead of its id, and
+stopped resolving the moment the account was keyed differently. Each inference was correct when
+written and wrong later.
+
+So prefer a column in `state.db` over a rule in someone's head. **With two constraints, because
+a stored fact is also a stored liability:**
+
+- **Only store what is safe to hold.** `state.db` holds this household's ed25519 private key and
+  the bot accounts' API keys, so anything added inherits that blast radius. (The *admin* key is
+  not in there — it comes from `IMMICH_API_KEY` in the environment.) Two rules follow, neither
+  about compliance:
+  - The bot password is rolled to a value nobody keeps (`ensureUtilityUser`), because it existed
+    only to mint one API key and has no purpose afterwards. The concrete gain is small but real:
+    a bot key deliberately lacks `apiKey.create`, so it can do its 22 things and no more, whereas
+    a password logs in interactively and can mint an unrestricted key for that account. Keeping it
+    is pure downside rather than a tradeoff — the bots are non-admin and quota-capped, so this is
+    cheap hygiene, not a critical control. The e2e asserts it.
+  - The user directory sends **names, not emails** — not because storing an email is dangerous,
+    but because an Immich email is a *login identifier*. Sending it gives a linked household, or
+    whoever later compromises it, the first half of a credential for every user here. Names are
+    all a picker needs, so nothing is given up.
+
+  Both scale with exposure: on a single-user LAN-only box they buy little, and on a public domain
+  with several linked households they matter. Default to the cautious side when it is free, and
+  say which it is rather than implying everything is critical.
+- **Order the writes so a crash fails safe.** A stored fact that is missing must lead somewhere
+  harmless. `added` records a membership BEFORE creating it, so a crash in between makes the
+  sidecar *ignore* an invitation rather than treat its own membership as a human's and share an
+  album nobody offered. Work out which way each new record fails before writing it, and say so in
+  a comment.
+
+Corollary: a fact only counts as known if something *proved* it. `Contributor.homePeer` is set
+only by a linked server's directory, never by an incoming photo — a relayed ref names the person
+but not their server, and guessing would route someone's album to the wrong household.
 
 ## Invariants that will bite you
 
