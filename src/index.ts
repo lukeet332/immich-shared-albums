@@ -1,4 +1,4 @@
-/** immich-shared-albums — entry point / composition root. See ARCHITECTURE.md. */
+/** index.ts — composition root: starts the HTTP server and the sync loops. See ARCHITECTURE.md. */
 import { CFG, log } from './config.ts';
 import { server } from './web/server.ts';
 import { proxyUpgrade } from './web/upgrade.ts';

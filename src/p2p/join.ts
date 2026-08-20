@@ -1,4 +1,4 @@
-/** p2p/join.ts — the member side of joining. Redeems a share link against the origin,. See wire-protocol.md. */
+/** p2p/join.ts — the member side of joining: redeem a share link, pin the peer, mirror the album. See wire-protocol.md. */
 import { CFG, SIDECAR_VERSION, log, ROUTE_PREFIX } from '../config.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
 import { state, keys } from '../state.ts';

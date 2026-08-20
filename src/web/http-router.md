@@ -12,7 +12,7 @@ The single process's one HTTP entry point and the HTML it serves.
 | `panel/` | The admin panel as a Preact TSX app, bundled by esbuild to `panel.bundle.js` (committed, so the Dockerfile needs no build step). Client-rendered: it is admin-only and every action it offers was already a JSON call. |
 | `accept/` | The joining page, same shape, its own bundle so the public page carries no admin code. `#who`, `#go`, `#out` and `#openapp` are a **test contract** — the browser lane drives the page through them. |
 | `tags.ts` | `html`/`css` template tags for the server-rendered pages. Two jobs: Prettier formats embedded HTML/CSS only inside tagged literals, and `html` **escapes every interpolation** — peer names arrive from a remote server and are rendered into a page holding an admin session. |
-| `pages.ts` | The two HTML surfaces: the admin **PANEL** (join box, album status, and connected-server management with unlink) and the **ACCEPT_PAGE** that turns a share link into a join (detects sign-in, prompts for an album password when the origin asks, then deeplinks into the app once the album has filled). |
+| `pages.ts` | The two HTML shells, `PANEL_SHELL` and `ACCEPT_SHELL` — markup and mount points only; both UIs are the Preact apps in `panel/` and `accept/`. The joining flow turns a share link into a join (detects sign-in, prompts for an album password when the origin asks, then deeplinks into the app once the album has filled). |
 | `auth.ts` | Who is calling a human-facing route. Forwards the caller's own Immich credentials (session cookie or API key) to Immich's `/users/me` and believes the answer. The sidecar has no accounts of its own and must never invent any. |
 | `banner/` | `banner.js` — injected into an origin's `/share/*` page so a visitor can type their own server address and join. `preview.html` is a local harness for iterating on it. |
 
@@ -24,7 +24,7 @@ There are three tiers, and each is enforced server-side:
 | Tier | Routes | Gate |
 |---|---|---|
 | Public | `/immich-shared-albums/health`, `/immich-shared-albums/banner.js`, `/immich-shared-albums/accept` | none — liveness, a script, and a static page. `health` returns `{ok:true}` and nothing else, because the banner probes it cross-origin to discover a sidecar. |
-| Signed-in human | `/immich-shared-albums/join`, `/immich-shared-albums/leave`, `/immich-shared-albums/peers`, `/immich-shared-albums/unlink`, the panel | `auth.ts` against the caller's Immich session. `join` takes the account from the **session**, not the request body; naming a different user requires admin. `leave`, `peers`, `unlink` and the panel require admin — a server link is an admin-owned object. |
+| Signed-in human | `/immich-shared-albums/join`, `/leave`, `/peers`, `/pairings`, `/pairings/revoke`, `/pair`, `/unlink`, the panel | `auth.ts` against the caller's Immich session. `join` takes the account from the **session**, not the request body; naming a different user requires admin. Everything else here — `leave`, `peers`, all three pairing routes, `unlink`, the panel — requires admin, because a server link is an admin-owned object. |
 | Peer | everything under `/immich-shared-albums/api/v1/*` | ed25519 signature (`peers.callingPeer`) **and**, for byte routes, entitlement (`p2p/entitlement`). |
 
 The accept page's client-side `whoami` is UX only — it tells someone to sign in before

@@ -50,6 +50,21 @@ saying so.
   only works while they track the code, so the further an explanation sits from what it explains,
   the more strictly this rule applies. Moving prose out of a source file and then letting it rot
   is worse than having left it inline.
+
+  Four rules for writing them:
+
+  - **Dense over flowing.** Bullets, tables and short declaratives — not paragraphs of prose. A
+    doc is reference material read under time pressure, usually to answer one question. Maximise
+    facts per line.
+  - **Every claim must be checkable, and checked.** Name the real symbol, the real route, the
+    real env var. Prose that paraphrases behaviour cannot be verified and rots invisibly; a doc
+    saying `handleVersion` answers `…/version` can be grepped in a second.
+  - **State what the code does, not what it should do.** A doc written from a plan and never
+    re-read against the implementation is how `unlink` came to be documented as non-destructive
+    while the code deleted accounts with `force: true`.
+  - **Boy-scout, never batch.** Bring a doc up to these conventions when you touch the code it
+    describes — that is when you can verify it. Mass-rewriting docs you are not otherwise changing
+    is churn with no reader and real risk of dropping a fact you never confirmed.
 - **Never test against a real server.** Use the throwaway mock rig in `demo/`. Never run
   the suite or experiments against anyone's production Immich, and never modify a real
   user's library.
@@ -166,6 +181,11 @@ cannot: **where is the context for this file?** Some files have a doc of their o
 
 It also makes the link machine-followable, which matters because agents work here: open the file,
 read one line, know exactly which doc to load for context before changing anything.
+
+`scripts/check-headers.mjs` enforces the whole shape, not just the pointer: the header must name
+its **own path**, the pointer must resolve, and the description must not end mid-clause — a
+mechanical edit or a bad merge truncates these into something that still reads like a sentence
+(`It is both served at.`), and only the shape gives it away.
 
 Two rules keep it honest:
 

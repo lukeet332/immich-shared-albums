@@ -1,4 +1,4 @@
-/** state.ts — persistent state: the SQLite-backed store, this household's signing keypair,. See store.md. */
+/** state.ts — the SQLite store, this household's signing keypair, and the seen-ledger accessors. See store.md. */
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { Store } from './store.ts';

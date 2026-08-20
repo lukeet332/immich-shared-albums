@@ -1,4 +1,4 @@
-/** Shared values, so colours and spacing are not repeated magic numbers across components. See ../http-router.md. */
+/** web/panel/theme.ts — shared colours and spacing, so components repeat no magic numbers. See ../http-router.md. */
 export const theme = {
   bg: '#101216',
   card: '#1f2229',

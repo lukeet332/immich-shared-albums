@@ -1,4 +1,4 @@
-/** sync/comments.ts — cross-server comment sync. The origin album is the source of truth;. See sync-loops.md. */
+/** sync/comments.ts — cross-server comment sync; the origin album is the source of truth. See sync-loops.md. */
 import { CFG, log, ROUTE_PREFIX, personName } from '../config.ts';
 import { state, save, seenActHas, seenActAdd, keys } from '../state.ts';
 import { sign, signedFetch, nudgePeers, callingPeer, mappingFor } from '../peers.ts';

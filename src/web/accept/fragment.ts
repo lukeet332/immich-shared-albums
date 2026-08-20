@@ -1,4 +1,4 @@
-/** Where the invite details come from. See ../http-router.md. */
+/** web/accept/fragment.ts — where the invite details come from. See ../http-router.md. */
 export type Invite = { host: string; scheme: string; key: string };
 
 export const readInvite = (): Invite | null => {

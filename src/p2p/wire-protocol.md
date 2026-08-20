@@ -9,9 +9,9 @@ folder is the **application** protocol on top of them.
 | `protocol.ts` | Inbound handlers, mostly owner-side. `handleRedeem` turns a share link into a pinned peer + mapping and returns the manifest; `handleRefs` accepts pushed photos; `handleVersion`/`handleManifest` answer the cheap handshake and the full offer set; `handleNudge` reacts to "something moved, pull now". Each returns `[statusCode, jsonBody]` for the router. |
 | `join.ts` | The **member side** of joining. Redeems a share link against the origin, pins the peer, provisions the host utility user, creates the local mirror album, adds the joining user, and kicks off the first reconcile. Idempotent — re-joining just adds the user to the existing mirror. |
 | `mirror.ts` | Creating the local mirror of a remote album — the utility-user owner, local members as editors, the mapping, and the background fill. Shared by `join.ts` (share link) and `sync/invites.ts` (native invitation): two ways to acquire an album, one way to mirror it. |
-| `pair.ts` | Linking two servers as its own act, replacing bearer-based enrolment. Mints a single-use, 15-minute, 32-byte code (the secret rides in the URL **fragment**, not the path), and `handlePair` burns it *before* answering so a replay finds nothing. Signature-bound to the key being enrolled, so the identity cannot be substituted. Pairing conveys **no album access** — what the two servers may see of each other is decided afterwards, per person, in Immich's own picker. |
+| `pair.ts` | Linking two servers as its own act, alongside share links rather than replacing them. Mints a single-use, 15-minute, 32-byte code (the secret rides in the URL **fragment**, not the path), and `handlePair` burns it *before* answering so a replay finds nothing. Signature-bound to the key being enrolled, so the identity cannot be substituted. Pairing conveys **no album access** — what the two servers may see of each other is decided afterwards, per person, in Immich's own picker. |
 | `entitlement.ts` | What a peer may **read**, as distinct from who it is. Records every asset advertised to a mapping, and answers the byte routes' "is this peer allowed this asset". |
-| `unlink.ts` | Cutting a server link, from the panel. Tears down mirrors held from that peer (via `sync/leave.ts`, so their stubs go too), drops the mappings and entitlement for albums shared *to* them, and deletes their per-person invite markers so they leave Immich's picker. Attribution contributors are deliberately **kept**: they own real photos that local people can see, so an unlink must never be a data-loss event. |
+| `unlink.ts` | Cutting a server link, from the panel. Tears down mirrors held from that peer (via `sync/leave.ts`, so their stubs go too), drops the mappings and entitlement for albums shared *to* them, and and deletes that peer's per-person accounts with `force: true` — **assets leave with their owner**, so the photos those accounts owned go with them. Unlinking is therefore destructive by design, and the panel confirms it. |
 
 **The handshake, end to end:** the banner (`../web/banner/`) collects the joiner's own
 server address → their sidecar calls `join()` → which POSTs `handleRedeem` on the origin
@@ -50,9 +50,11 @@ that decides who becomes a peer at all. It requires:
 - **Idempotency.** Re-redeeming reuses the existing mapping rather than minting another,
   so a valid link is not an unbounded state-growth lever.
 
-Known limitation: a share link is still a bearer credential. Anyone holding the link (and
-its password) can enrol. Binding enrolment to a recipient — an owner-issued single-use
-invite plus key pinning — is the intended successor to this.
+Known limitation, and why `pair.ts` exists: a share link is a **bearer** credential — anyone
+holding the link and its password can enrol. Pairing is the non-bearer path (owner-issued,
+single-use, signature-bound to the key being enrolled), so it is the one to prefer for linking a
+server. Share-link redemption stays because it is how a household with no prior relationship gets
+in at all.
 
 ## Nudges are fire-and-forget
 

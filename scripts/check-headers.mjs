@@ -8,7 +8,7 @@
  * useless, and nothing else in the codebase would catch it.
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
-import { join, dirname, resolve, relative } from 'node:path';
+import { join, dirname, resolve, relative, sep } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..', 'src');
 const files = [];
@@ -34,6 +34,17 @@ for (const file of files) {
     problems.push(`${shown}: header names no doc — add "See <doc>.md."`);
     continue;
   }
+  const shape = firstLine.match(/^\/\*\*\s*(\S+) — (.+?)\s*See [^\s]+\.md\.\s*\*\/$/);
+  if (!shape) {
+    problems.push(`${shown}: header must read "<path> — <description>. See <doc>.md."`);
+  } else {
+    if (shape[1] !== shown.split(sep).join('/'))
+      problems.push(`${shown}: header names "${shape[1]}" — it must name its own path.`);
+    // A mechanical strip or a bad merge leaves the description cut off mid-clause. It still
+    // reads like a sentence, so only the shape gives it away.
+    if (/(^|\s)(at|the|of|and|to|a|an|in|for|with|by)\s*[.,;]?$|[,;]$/.test(shape[2].trim()))
+      problems.push(`${shown}: header description ends mid-sentence — "…${shape[2].trim().slice(-40)}"`);
+  }
   const target = resolve(dirname(file), pointer[1]);
   if (!existsSync(target)) {
     problems.push(`${shown}: header points at ${pointer[1]}, which does not exist.`);
@@ -45,4 +56,4 @@ if (problems.length) {
   for (const p of problems) console.error(`  ${p}`);
   process.exit(1);
 }
-console.log(`all ${files.length} source files have a header pointing at a real doc`);
+console.log(`all ${files.length} source file headers are well-formed and point at a real doc`);

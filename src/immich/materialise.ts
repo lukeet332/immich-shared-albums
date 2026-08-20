@@ -1,4 +1,4 @@
-/** immich/materialise.ts — writing (and un-writing) proxy assets. tryMaterialiseRef pulls a. See local-immich-api.md. */
+/** immich/materialise.ts — writing and un-writing proxy assets; only utility-owned proxies are deletable. See local-immich-api.md. */
 import crypto from 'node:crypto';
 import { log, ROUTE_PREFIX } from '../config.ts';
 import { state, seenHas, seenAdd, keys } from '../state.ts';

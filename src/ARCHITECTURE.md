@@ -47,7 +47,7 @@ ordinary data we planted, or a web page we serve.
   (below) makes the common case near-instant, so eventual consistency lands in
   seconds for family albums.
 - **comment sync** — two-way; locally-authored comments are pushed, peer
-  comments are posted via the author's utility user, and a seen-ledger keyed
+  comments are posted via the author's local account, and a seen-ledger keyed
   both directions prevents echo loops.
 - **protocol client/server** — signed ref exchange between households.
   Key pinned at redemption (anchored on the share key, whose password and expiry are
@@ -64,8 +64,9 @@ ordinary data we planted, or a web page we serve.
   mirror albums owned by the local account standing in for the origin's album
   owner, and ONE account per remote person — keyed by their user id on their own
   server, so the same human is one account however we meet them, with their real
-  avatar synced across. What it stores is a ~2KB unique STUB per photo
-  duration) with capture date, GPS, and uploader credit applied — enough for
+  avatar synced across. What it stores is a ~2KB unique STUB per photo (or a short
+  playable prefix for a video, so duration survives) with capture date, GPS,
+  and uploader credit applied — enough for
   the stock app to have real rows. No pixels are stored; the ledger remembers
   which origin asset each stub stands for. Deleting at the source propagates:
   stubs whose refs vanish from the owner's manifest are removed (guarded so
@@ -86,8 +87,9 @@ ordinary data we planted, or a web page we serve.
   joining the same link is added to the existing mirror.
 - **native invitations** — every person on a linked server has a local account, so adding one
   to an album in Immich's own picker shares it with THAT PERSON, and removing them revokes.
-  Sharing never names a household. Detected by listing albums *as that account* (the admin key
-  link-based sharing is broken for non-admins). Members **pull** invitations rather than being
+  Sharing never names a household. Detected by listing albums *as that account*, because `GET /albums` is scoped per user and the
+  admin key only ever sees the admin's own albums — which is also why link-based sharing is still
+  broken for non-admins. Members **pull** invitations rather than being
   pushed them, so a household with no inbound reachability still works. See `sync/invites.ts`.
 - **web** — the panel, the share-page join banner (shadow-DOM, fails silent),
   the accept page, and a transparent proxy for share-page SPA assets when the
@@ -130,10 +132,10 @@ src/
 
 Conventions for this tree:
 
-1. **One doc per helper folder.** Every folder under `src/` carries a single
-   Markdown file explaining what lives there and why. Name it for its contents
-   (e.g. `wire-protocol.md`), not `README.md` — the descriptive name reads better
-   in the file tree and when linked.
+1. **Docs sit as close to the code as they need to.** A folder doc where a concern spans
+   several files (`wire-protocol.md`), a file-level doc where one module earns its own
+   (`config.md`, `store.md`). Not every file needs one. Name it for its contents, never
+   `README.md` — the descriptive name reads better in the tree and when linked.
 2. **Nest when a concern grows.** A concern starts as one file at `src/` root
    (like `peers.ts`); when it needs several files it graduates to a folder with
    its own doc. Sub-folders are fine — each new folder gets its own doc.

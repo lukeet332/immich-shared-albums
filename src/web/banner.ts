@@ -1,4 +1,4 @@
-/** web/banner.ts — loads banner.js once at startup. It is both served at. See http-router.md. */
+/** web/banner.ts — loads banner/banner.js once at startup, for serving and for injection. See http-router.md. */
 import fs from 'node:fs';
 import { log, ROUTE_PREFIX } from '../config.ts';
 

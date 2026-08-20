@@ -1,4 +1,4 @@
-/** The panel's whole server surface. Every route here is admin-only. See ../http-router.md. */
+/** web/panel/api.ts — the panel's whole server surface; every route here is admin-only. See ../http-router.md. */
 const ROUTE_PREFIX = '/immich-shared-albums';
 
 const json = async (path: string, init?: RequestInit) => {
