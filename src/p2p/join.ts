@@ -4,17 +4,25 @@
  * kicks off the first reconcile. Idempotent: re-joining just adds the user to the mirror.
  */
 import { CFG, SIDECAR_VERSION, log, ROUTE_PREFIX } from '../config.ts';
-import { state, save } from '../state.ts';
+import { PROTOCOL_VERSION } from '../types.ts';
+import { state } from '../state.ts';
 import { signedFetch, assertPeerUrlAllowed } from '../peers.ts';
 import { ensureMirror, fillMirrorInBackground } from './mirror.ts';
 
 export async function join(shareUrl, forUserId, password?: string) {
-  const m = String(shareUrl ?? '').trim().match(/^(https?:\/\/[^/]+)\/share\/([A-Za-z0-9_-]+)/);
+  const m = String(shareUrl ?? '')
+    .trim()
+    .match(/^(https?:\/\/[^/]+)\/share\/([A-Za-z0-9_-]+)/);
   if (!m) throw new Error('that does not look like an Immich share link');
   const [, origin, shareKey] = m;
   await assertPeerUrlAllowed(origin);
-  const body = JSON.stringify({ shareKey, protocol: 1, version: SIDECAR_VERSION, password,
-    household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name } });
+  const body = JSON.stringify({
+    shareKey,
+    protocol: PROTOCOL_VERSION,
+    version: SIDECAR_VERSION,
+    password,
+    household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name },
+  });
   const r = await signedFetch(`${origin}${ROUTE_PREFIX}/api/v1/invites/redeem`, body);
   if (!r.ok) {
     // Surface the other sidecar's own message (an expired link, a wrong password) but
@@ -27,9 +35,17 @@ export async function join(shareUrl, forUserId, password?: string) {
     throw err;
   }
   const res = await r.json();
-  if (res.protocol && res.protocol > 1) log(`origin "${res.household?.name}" speaks protocol ${res.protocol} > ours (1) — update the immich-shared-albums sidecar on this server`);
+  if (res.protocol && res.protocol > PROTOCOL_VERSION)
+    log(
+      `origin "${res.household?.name}" speaks protocol ${res.protocol} > ours (${PROTOCOL_VERSION}) — update the immich-shared-albums sidecar on this server`
+    );
   if (!state.peers.some(p => p.pub === res.household.publicKey)) {
-    state.peers.push({ pub: res.household.publicKey, url: res.household.url, name: res.household.name, version: res.version });
+    state.peers.push({
+      pub: res.household.publicKey,
+      url: res.household.url,
+      name: res.household.name,
+      version: res.version,
+    });
   }
   const { mapping, created } = await ensureMirror({
     peer: state.peers.find(pe => pe.pub === res.household.publicKey),
@@ -41,11 +57,19 @@ export async function join(shareUrl, forUserId, password?: string) {
     // A link join is for one account when the panel/accept page names one, else the household.
     forUserIds: forUserId ? [forUserId] : undefined,
   });
-  log(created
-    ? `joined "${res.album.name}" from "${res.household.name}" (${res.manifest.length} photos)`
-    : `re-join: "${mapping.albumName}" already mirrored from "${res.household.name}"`);
+  log(
+    created
+      ? `joined "${res.album.name}" from "${res.household.name}" (${res.manifest.length} photos)`
+      : `re-join: "${mapping.albumName}" already mirrored from "${res.household.name}"`
+  );
   const peerRec = state.peers.find(pe => pe.pub === res.household.publicKey);
   if (created && peerRec) fillMirrorInBackground(mapping, peerRec);
-  return { album: mapping.albumName, albumId: mapping.albumId, photos: res.manifest.length,
-           from: res.household.name, permissions: res.album.permissions, mappingId: mapping.id };
+  return {
+    album: mapping.albumName,
+    albumId: mapping.albumId,
+    photos: res.manifest.length,
+    from: res.household.name,
+    permissions: res.album.permissions,
+    mappingId: mapping.id,
+  };
 }

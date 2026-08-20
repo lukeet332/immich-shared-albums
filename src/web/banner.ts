@@ -10,7 +10,9 @@ export let BANNER_JS = '';
 try {
   // banner.js hardcodes the default prefix so it stays valid standalone (see banner/preview.html);
   // rewriting it here keeps config.ROUTE_PREFIX the single source of truth.
-  BANNER_JS = fs.readFileSync(new URL('./banner/banner.js', import.meta.url), 'utf8')
+  BANNER_JS = fs
+    .readFileSync(new URL('./banner/banner.js', import.meta.url), 'utf8')
     .replaceAll('/immich-shared-albums/', `${ROUTE_PREFIX}/`);
+} catch {
+  log('banner.js not bundled — share pages will be served un-injected');
 }
-catch { log('banner.js not bundled — share pages will be served un-injected'); }

@@ -2,7 +2,6 @@
  * config.ts — process configuration, the shared logger, and small string constants.
  * The single source of truth for env-derived settings; every other module reads CFG here.
  */
-import crypto from 'node:crypto';
 
 export const SIDECAR_VERSION = '0.5.0'; // x-release-please-version
 export const CFG = {
@@ -39,7 +38,10 @@ export const CFG = {
   // at internal services.
   allowPrivatePeers: process.env.ALLOW_PRIVATE_PEERS !== 'false',
 };
-if (!CFG.apiKey) { console.error('IMMICH_API_KEY required'); process.exit(1); }
+if (!CFG.apiKey) {
+  console.error('IMMICH_API_KEY required');
+  process.exit(1);
+}
 export const log = (...a) => console.log(new Date().toISOString(), ...a);
 export const UTILITY_SUFFIX = ' (via shared albums)';
 

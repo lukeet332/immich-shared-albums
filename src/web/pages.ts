@@ -11,7 +11,8 @@ import { CFG, ROUTE_PREFIX } from '../config.ts';
 import { linkedPeers } from '../p2p/unlink.ts';
 import { state } from '../state.ts';
 
-export const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+export const PANEL =
+  () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${CFG.name} — shared albums</title>
 <style>
  body{margin:0;font-family:Inter,-apple-system,sans-serif;background:#101216;color:#e5e7eb;display:grid;place-items:start center;min-height:100vh}
@@ -40,11 +41,17 @@ export const PANEL = () => `<!doctype html><meta charset="utf-8"><meta name="vie
   <p class="muted" style="font-size:13px">Once a server is connected, its people appear in Immich's
    own “share album” picker. Unlinking removes them from the picker, tears down the albums they
    shared with you, and stops serving the albums you shared with them.</p>
-  ${linkedPeers().map(p => `<div class="item">
+  ${
+    linkedPeers()
+      .map(
+        p => `<div class="item">
     <span>${p.name}<br><span class="muted" style="font-size:12px">${p.url}${p.version ? ` · v${p.version}` : ''}</span></span>
     <span style="text-align:right"><span class="muted" style="font-size:12px">${p.people} ${p.people === 1 ? 'person' : 'people'} · ${p.sharedToThem} out · ${p.sharedToUs} in</span><br>
-     <button class="danger" onclick="unlink('${p.pub}','${p.name.replace(/'/g, "\\'")}')">Unlink</button></span></div>`).join('')
-   || '<p class="muted" style="font-size:13px">None yet — join a shared album above to connect one.</p>'}
+     <button class="danger" onclick="unlink('${p.pub}','${p.name.replace(/'/g, "\\'")}')">Unlink</button></span></div>`
+      )
+      .join('') ||
+    '<p class="muted" style="font-size:13px">None yet — join a shared album above to connect one.</p>'
+  }
   <div id="umsg"></div></div>
 </main>
 <script>async function j(e){e.preventDefault();
@@ -66,7 +73,8 @@ async function unlink(pub,name){
  const d=await r.json().catch(()=>({error:'failed'}));
  el.textContent=r.ok?('Unlinked '+d.household+' — '+d.mirrorsRemoved+' album(s) removed, '+d.sharesRevoked+' share(s) revoked.'):('Error: '+(d.error||r.status));
  if(r.ok)setTimeout(()=>location.reload(),1800)}</script>`;
-export const ACCEPT_PAGE = () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+export const ACCEPT_PAGE =
+  () => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Join shared album — ${CFG.name}</title>
 <style>
  body{margin:0;font-family:Overpass,Inter,Roboto,-apple-system,sans-serif;background:#f8f9fa;color:#202124;display:grid;place-items:center;min-height:100vh}

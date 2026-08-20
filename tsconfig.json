@@ -7,7 +7,14 @@
     "noEmit": true,
     "strict": false,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["node"],
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true
   },
   "include": ["src/**/*.ts"]
 }

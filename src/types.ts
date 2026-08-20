@@ -18,15 +18,17 @@ export type Household = {
 
 /** One photo living on its owner's server, referenced into a shared album. */
 export type AssetRef = {
-  originAsset: string;      // asset id on the origin server
-  checksum: string;         // sha1 of the original bytes (Immich native)
-  contributor: {            // person, not server — provenance survives mirroring
+  originAsset: string; // asset id on the origin server
+  checksum: string; // sha1 of the original bytes (Immich native)
+  contributor: {
+    // person, not server — provenance survives mirroring
     displayName: string;
     originUserId: string;
   };
   kind: 'image' | 'video';
   takenAt?: string;
-  exif?: {                  // re-applied to the materialised proxy
+  exif?: {
+    // re-applied to the materialised proxy
     latitude?: number;
     longitude?: number;
     description?: string;
@@ -36,15 +38,15 @@ export type AssetRef = {
 
 /** POST /immich-shared-albums/api/v1/invites/redeem — consume a share link as a household. */
 export type RedeemRequest = {
-  shareKey: string;         // the Immich share-link key IS the capability
-  household: Household;     // joiner introduces itself; key pinned on success
+  shareKey: string; // the Immich share-link key IS the capability
+  household: Household; // joiner introduces itself; key pinned on success
 };
 export type RedeemResponse = {
-  household: Household;     // owner's identity, pinned by the joiner
+  household: Household; // owner's identity, pinned by the joiner
   album: { id: string; name: string; permissions: 'view' | 'contribute' };
   albumOwner: { displayName: string; originUserId: string };
-  manifest: AssetRef[];     // current human-owned photos; previews fetched separately
-  mappingId: string;        // quote this in refs/activity/manifest calls
+  manifest: AssetRef[]; // current human-owned photos; previews fetched separately
+  mappingId: string; // quote this in refs/activity/manifest calls
 };
 
 /** POST /immich-shared-albums/api/v1/albums/:mappingId/refs — offer new refs to a peer. */

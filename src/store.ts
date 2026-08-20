@@ -16,9 +16,15 @@ import path from 'node:path';
 export type SeenEntry = { m: string; c: string; l: string; o?: string };
 
 export type Mapping = {
-  id: string; role: 'owner' | 'member'; albumId: string; albumName: string;
-  peer: string; remoteAlbumId?: string; remoteMappingId?: string;
-  permissions?: 'view' | 'contribute'; adminSlug?: string;
+  id: string;
+  role: 'owner' | 'member';
+  albumId: string;
+  albumName: string;
+  peer: string;
+  remoteAlbumId?: string;
+  remoteMappingId?: string;
+  permissions?: 'view' | 'contribute';
+  adminSlug?: string;
   /** How this share came about. Absent means 'link' (every mapping predating invitations).
    *  Load-bearing: only 'invite' mappings may be retired by sync/invites when a peer's
    *  stand-in disappears from an album — a link-redeemed mapping never had a stand-in added
@@ -33,16 +39,22 @@ export type Mapping = {
    *  learn this from the redeem response instead; without it a mirror would be named after
    *  the household rather than the person who shared it. */
   albumOwnerName?: string;
-  dead?: boolean; failCount?: number;
-  localVersion?: string; remoteVersion?: string;
-  commentCount?: number; remoteCommentCount?: number;
+  dead?: boolean;
+  failCount?: number;
+  localVersion?: string;
+  remoteVersion?: string;
+  commentCount?: number;
+  remoteCommentCount?: number;
 };
 
 export type Peer = { pub: string; url: string; name: string; version?: string };
 // `password` is transient: it exists only while the account is being provisioned, and is
 // rolled to an unheld value once the API key is minted (see immich/contributors.ts).
 export type Contributor = {
-  userId: string; key: string; password?: string; avatarDone?: boolean;
+  userId: string;
+  key: string;
+  password?: string;
+  avatarDone?: boolean;
   /** Public key of the peer household this person belongs to. */
   peer?: string;
   /** That person's user id ON THE PEER, for invite targets — what lets an invitation be routed
@@ -94,7 +106,8 @@ export class Store {
   }
 
   private kvGet(name: string) {
-    const row = this.db.prepare('SELECT value FROM kv WHERE name = ?').get(name) as { value: string } | undefined;
+    const row = this.db.prepare('SELECT value FROM kv WHERE name = ?').get(name) as
+      { value: string } | undefined;
     return row ? JSON.parse(row.value) : null;
   }
 
@@ -119,7 +132,10 @@ export class Store {
       throw e;
     }
     fs.renameSync(legacy, `${legacy}.migrated`);
-    console.log(new Date().toISOString(), `migrated state.json -> state.db (${(old.seen ?? []).length} ledger entries)`);
+    console.log(
+      new Date().toISOString(),
+      `migrated state.json -> state.db (${(old.seen ?? []).length} ledger entries)`
+    );
   }
 
   /** Persist the in-memory collections (small; one transaction). */
@@ -142,22 +158,23 @@ export class Store {
     return !!this.db.prepare('SELECT 1 FROM seen WHERE m = ? AND c = ?').get(mappingId, checksum);
   }
   seenAdd(mappingId: string, checksum: string, localAssetId: string, originAsset?: string) {
-    this.db.prepare('INSERT OR IGNORE INTO seen (m, c, l, o) VALUES (?, ?, ?, ?)')
+    this.db
+      .prepare('INSERT OR IGNORE INTO seen (m, c, l, o) VALUES (?, ?, ?, ?)')
       .run(mappingId, checksum, localAssetId, originAsset ?? null);
   }
   /** The authoritative ledger entry for a local asset. A deduped proxy can carry rows
    *  from several mappings/eras; materialisation rows (with an origin asset) hold the
    *  TRUE wire identity, so they always win over watcher-push bookkeeping rows. */
   ledgerByAsset(assetId: string): SeenEntry | undefined {
-    return this.db.prepare(
-      'SELECT m, c, l, o FROM seen WHERE l = ? ORDER BY (o IS NOT NULL) DESC, rowid DESC LIMIT 1'
-    ).get(assetId) as SeenEntry | undefined;
+    return this.db
+      .prepare('SELECT m, c, l, o FROM seen WHERE l = ? ORDER BY (o IS NOT NULL) DESC, rowid DESC LIMIT 1')
+      .get(assetId) as SeenEntry | undefined;
   }
   /** Ledger entry that can chain to the owner (has an origin asset id). */
   ledgerWithOrigin(assetId: string): SeenEntry | undefined {
-    return this.db.prepare(
-      'SELECT m, c, l, o FROM seen WHERE l = ? AND o IS NOT NULL ORDER BY rowid DESC LIMIT 1'
-    ).get(assetId) as SeenEntry | undefined;
+    return this.db
+      .prepare('SELECT m, c, l, o FROM seen WHERE l = ? AND o IS NOT NULL ORDER BY rowid DESC LIMIT 1')
+      .get(assetId) as SeenEntry | undefined;
   }
   seenRemoveMapping(mappingId: string) {
     this.db.prepare('DELETE FROM seen WHERE m = ?').run(mappingId);
@@ -186,7 +203,8 @@ export class Store {
   offeredAllows(mappingIds: string[], assetId: string): boolean {
     if (!mappingIds.length) return false;
     const holes = mappingIds.map(() => '?').join(',');
-    return !!this.db.prepare(`SELECT 1 FROM offered WHERE a = ? AND m IN (${holes})`)
+    return !!this.db
+      .prepare(`SELECT 1 FROM offered WHERE a = ? AND m IN (${holes})`)
       .get(assetId, ...mappingIds);
   }
   offeredRemoveMapping(mappingId: string) {
@@ -207,13 +225,16 @@ export class Store {
     return !!hit;
   }
   cachePut(key: string, size: number) {
-    this.db.prepare('INSERT OR REPLACE INTO cache (key, size, lastUsed) VALUES (?, ?, ?)').run(key, size, Date.now());
+    this.db
+      .prepare('INSERT OR REPLACE INTO cache (key, size, lastUsed) VALUES (?, ?, ?)')
+      .run(key, size, Date.now());
   }
   cacheTotal(): number {
     return (this.db.prepare('SELECT COALESCE(SUM(size),0) AS n FROM cache').get() as { n: number }).n;
   }
   cacheEvictOldest(): { key: string; size: number } | undefined {
-    const row = this.db.prepare('SELECT key, size FROM cache ORDER BY lastUsed ASC LIMIT 1').get() as { key: string; size: number } | undefined;
+    const row = this.db.prepare('SELECT key, size FROM cache ORDER BY lastUsed ASC LIMIT 1').get() as
+      { key: string; size: number } | undefined;
     if (row) this.db.prepare('DELETE FROM cache WHERE key = ?').run(row.key);
     return row;
   }

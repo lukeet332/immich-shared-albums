@@ -23,8 +23,7 @@ const lastBackfill = new Map<string, number>();
 
 /** Live mappings that face this peer, either role — a member relays its own
  *  contributions back to the origin, so member mappings grant reads too. */
-const mappingsFacing = (peerPub: string) =>
-  state.mappings.filter(m => m.peer === peerPub && !m.dead);
+const mappingsFacing = (peerPub: string) => state.mappings.filter(m => m.peer === peerPub && !m.dead);
 
 /** Record assets we have advertised to a mapping's peer. Safe to call repeatedly. */
 export function recordOffered(mappingId: string, assetIds: (string | undefined)[]) {
@@ -34,7 +33,10 @@ export function recordOffered(mappingId: string, assetIds: (string | undefined)[
 
 /** Record a manifest's worth of refs (each carries the ORIGIN asset id). */
 export function recordOfferedRefs(mappingId: string, manifest: { originAsset?: string }[]) {
-  recordOffered(mappingId, manifest.map(r => r.originAsset));
+  recordOffered(
+    mappingId,
+    manifest.map(r => r.originAsset)
+  );
 }
 
 /**
@@ -56,7 +58,10 @@ export async function peerMayRead(peerPub: string, assetId: string): Promise<boo
     lastBackfill.set(m.id, now);
     try {
       const assets = await getAlbumAssets(m.albumId);
-      recordOffered(m.id, assets.map((a: { id: string }) => a.id));
+      recordOffered(
+        m.id,
+        assets.map((a: { id: string }) => a.id)
+      );
       refreshed = true;
     } catch (e) {
       log(`entitlement backfill failed for "${m.albumName}": ${e.message}`);

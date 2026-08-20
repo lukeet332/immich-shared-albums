@@ -12,6 +12,7 @@
  */
 import crypto from 'node:crypto';
 import { CFG, SIDECAR_VERSION, log } from '../config.ts';
+import { PROTOCOL_VERSION } from '../types.ts';
 import { state, save } from '../state.ts';
 import { verify, nudgePeers, callingPeer, mappingFor } from '../peers.ts';
 import { getSharedLinkByKey, getAlbum, getAlbumAssets, ownerName, immichJson } from '../immich/client.ts';
@@ -25,7 +26,10 @@ import { recordOfferedRefs } from './entitlement.ts';
 function secretEquals(a: string, b: string): boolean {
   const ba = Buffer.from(String(a ?? ''));
   const bb = Buffer.from(String(b ?? ''));
-  if (ba.length !== bb.length) { crypto.timingSafeEqual(ba, ba); return false; }
+  if (ba.length !== bb.length) {
+    crypto.timingSafeEqual(ba, ba);
+    return false;
+  }
   return crypto.timingSafeEqual(ba, bb);
 }
 
@@ -35,10 +39,13 @@ export async function handleRedeem(req, body) {
   // Bind the request to the key being enrolled. This is trust-on-first-use: it proves the
   // caller holds the private half of the key it is asking us to trust, so the enrolled
   // identity cannot be forged or substituted later.
-  if (!verify(body, req.headers['x-isa-sig'] as string || '', household.publicKey)) {
+  if (!verify(body, (req.headers['x-isa-sig'] as string) || '', household.publicKey)) {
     return [403, { error: 'redeem signature does not match the household key' }];
   }
-  if (protocol && protocol > 1) log(`peer "${household?.name}" speaks protocol ${protocol} > ours (1) — update the immich-shared-albums sidecar on this server`);
+  if (protocol && protocol > PROTOCOL_VERSION)
+    log(
+      `peer "${household?.name}" speaks protocol ${protocol} > ours (${PROTOCOL_VERSION}) — update the immich-shared-albums sidecar on this server`
+    );
   const link = await getSharedLinkByKey(shareKey);
   if (!link || link.type !== 'ALBUM') return [404, { error: 'unknown share key' }];
   // A share link's own rules are the owner's stated intent — honour them here exactly as
@@ -63,17 +70,29 @@ export async function handleRedeem(req, body) {
     state.peers.push({ pub: household.publicKey, url: household.url, name: household.name, version });
   } else {
     const pe = state.peers.find(p => p.pub === household.publicKey);
-    if (pe) { pe.url = household.url; pe.name = household.name; if (version) pe.version = version; }
+    if (pe) {
+      pe.url = household.url;
+      pe.name = household.name;
+      if (version) pe.version = version;
+    }
   }
   // Idempotent: re-redeeming the same link must reuse the mapping, not mint another.
   // Otherwise a valid link is an unbounded state-growth lever.
-  let mapping = state.mappings.find(mp => mp.role === 'owner'
-    && mp.peer === household.publicKey && mp.albumId === album.id && !mp.dead);
+  let mapping = state.mappings.find(
+    mp => mp.role === 'owner' && mp.peer === household.publicKey && mp.albumId === album.id && !mp.dead
+  );
   if (mapping) {
     mapping.permissions = link.allowUpload ? 'contribute' : 'view';
   } else {
-    mapping = { id: crypto.randomUUID(), role: 'owner', albumId: album.id, albumName: album.albumName,
-      peer: household.publicKey, permissions: link.allowUpload ? 'contribute' : 'view', via: 'link' };
+    mapping = {
+      id: crypto.randomUUID(),
+      role: 'owner',
+      albumId: album.id,
+      albumName: album.albumName,
+      peer: household.publicKey,
+      permissions: link.allowUpload ? 'contribute' : 'view',
+      via: 'link',
+    };
     state.mappings.push(mapping);
     log(`peer joined: "${household.name}" -> album "${album.albumName}"`);
   }
@@ -84,14 +103,23 @@ export async function handleRedeem(req, body) {
   // exactly "the person who shared this"; majority asset owner is the empty-proof fallback
   const ownerCounts = {};
   for (const a of album.assets) ownerCounts[a.ownerId] = (ownerCounts[a.ownerId] || 0) + 1;
-  const albumOwnerId = link.userId || album.ownerId || Object.keys(ownerCounts).sort((x, y) => ownerCounts[y] - ownerCounts[x])[0];
-  const albumOwner = { displayName: await ownerName(albumOwnerId) || CFG.name, originUserId: albumOwnerId };
-  return [200, {
-    protocol: 1, version: SIDECAR_VERSION,
-    household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name },
-    album: { id: album.id, name: album.albumName, permissions: link.allowUpload ? 'contribute' : 'view' },
-    albumOwner, manifest, mappingId: mapping.id,
-  }];
+  const albumOwnerId =
+    link.userId ||
+    album.ownerId ||
+    Object.keys(ownerCounts).sort((x, y) => ownerCounts[y] - ownerCounts[x])[0];
+  const albumOwner = { displayName: (await ownerName(albumOwnerId)) || CFG.name, originUserId: albumOwnerId };
+  return [
+    200,
+    {
+      protocol: PROTOCOL_VERSION,
+      version: SIDECAR_VERSION,
+      household: { publicKey: state.keys.pub, url: CFG.publicUrl, name: CFG.name },
+      album: { id: album.id, name: album.albumName, permissions: link.allowUpload ? 'contribute' : 'view' },
+      albumOwner,
+      manifest,
+      mappingId: mapping.id,
+    },
+  ];
 }
 export async function handleRefs(req, body, albumMappingId) {
   const peer = callingPeer(req, body);
@@ -103,8 +131,12 @@ export async function handleRefs(req, body, albumMappingId) {
   const { add = [] } = JSON.parse(body);
   const failed = [];
   for (const ref of add) {
-    try { if (!(await materialiseRef(mapping, peer.url, peer.name, ref))) failed.push(ref.checksum); }
-    catch (e) { log(`ref materialise failed (${ref.checksum?.slice(0,10)}): ${e.message}`); failed.push(ref.checksum); }
+    try {
+      if (!(await materialiseRef(mapping, peer.url, peer.name, ref))) failed.push(ref.checksum);
+    } catch (e) {
+      log(`ref materialise failed (${ref.checksum?.slice(0, 10)}): ${e.message}`);
+      failed.push(ref.checksum);
+    }
   }
   if (add.length > failed.length) nudgePeers(mapping.albumId, peer.pub); // relay moved — tell the others
   // partial success: sender re-offers only the failed refs next cycle
@@ -121,7 +153,10 @@ export async function handleVersion(req, albumMappingId) {
   const album = await getAlbum(mapping.albumId);
   // updatedAt alone misses cascade deletions (removing an asset from the library skips
   // the album's timestamp) — fold the asset count in so deletions move the version too
-  return [200, { version: `${album.updatedAt}|${album.assetCount ?? ''}`, comments: stats?.comments ?? null }];
+  return [
+    200,
+    { version: `${album.updatedAt}|${album.assetCount ?? ''}`, comments: stats?.comments ?? null },
+  ];
 }
 export async function handleNudge(req, body, albumMappingId) {
   const caller = callingPeer(req, body);
@@ -136,14 +171,16 @@ export async function handleNudge(req, body, albumMappingId) {
   // household's album at a server of its choosing and materialise whatever it served.
   const origin = state.peers.find(p => p.pub === mapping.peer);
   if (!origin) return [404, { error: 'unknown album mapping' }];
-  // answer fast; do the pull in the background
-  (async () => {
+  // answer fast; do the pull in the background. `void` marks that as intended, not forgotten.
+  void (async () => {
     try {
       if (mapping.role === 'member') {
         await reconcileMapping(mapping, origin);
         await pullCanonicalComments(mapping, origin);
       }
-    } catch (e) { log(`nudge pull error on "${mapping.albumName}": ${e.message}`); }
+    } catch (e) {
+      log(`nudge pull error on "${mapping.albumName}": ${e.message}`);
+    }
   })();
   return [200, { ok: true }];
 }

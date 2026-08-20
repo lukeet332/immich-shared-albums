@@ -1,0 +1,5 @@
+node_modules
+package-lock.json
+# The mock rig is a test harness with its own dense style, and reformatting the 880-line e2e
+# suite would make the history of every future test change unreadable. Kept deliberately out.
+demo/

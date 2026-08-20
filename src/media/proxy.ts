@@ -24,13 +24,19 @@ async function fetchWithHeaderTimeout(url: string, init: RequestInit, ms = 30000
   const timer = setTimeout(() => ac.abort(), ms);
   try {
     return await fetch(url, { ...init, signal: ac.signal });
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Resolve true bytes for any local asset: local file for our own photos; for a proxy
 // (ledger entry with `o`), chain the fetch to the owner's server — how a relayed
 // photo's pixels stream D <- origin <- contributor. Range passes through for players.
-export async function fetchTrueBytes(assetId: string, kind: 'preview' | 'original' | 'playback', range?: string) {
+export async function fetchTrueBytes(
+  assetId: string,
+  kind: 'preview' | 'original' | 'playback',
+  range?: string
+) {
   const entry = store.ledgerWithOrigin(assetId);
   if (entry) {
     const mapping = state.mappings.find(mp => mp.id === entry.m);
@@ -39,15 +45,23 @@ export async function fetchTrueBytes(assetId: string, kind: 'preview' | 'origina
       const headers: Record<string, string> = { 'x-isa-key': state.keys.pub, 'x-isa-sig': sign(entry.o) };
       if (range) headers.Range = range;
       try {
-        const up = await fetchWithHeaderTimeout(`${peer.url}${ROUTE_PREFIX}/api/v1/assets/${entry.o}/${kind}`, { headers });
+        const up = await fetchWithHeaderTimeout(
+          `${peer.url}${ROUTE_PREFIX}/api/v1/assets/${entry.o}/${kind}`,
+          { headers }
+        );
         if (up.ok) return up;
         log(`chained ${kind} fetch failed (${up.status}) — serving local stub`);
-      } catch (e) { log(`chained ${kind} fetch error (${e.message}) — serving local stub`); }
+      } catch (e) {
+        log(`chained ${kind} fetch error (${e.message}) — serving local stub`);
+      }
     }
   }
-  const local = kind === 'original' ? `/assets/${assetId}/original`
-    : kind === 'playback' ? `/assets/${assetId}/video/playback`
-    : `/assets/${assetId}/thumbnail?size=preview`;
+  const local =
+    kind === 'original'
+      ? `/assets/${assetId}/original`
+      : kind === 'playback'
+        ? `/assets/${assetId}/video/playback`
+        : `/assets/${assetId}/thumbnail?size=preview`;
   return immich(local, range ? { headers: { Range: range } } : {});
 }
 

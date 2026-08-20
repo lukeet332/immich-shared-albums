@@ -45,18 +45,23 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
   await syncAvatar(host, peer.url, req.albumOwnerId);
 
   const addMembers = async (albumId: string) => {
-    let members = (await immichJson('/admin/users')).filter((u) => !isUtilityEmail(u.email));
-    if (forUserIds?.length) members = members.filter((u) => forUserIds.includes(u.id));
+    let members = (await immichJson('/admin/users')).filter(u => !isUtilityEmail(u.email));
+    if (forUserIds?.length) members = members.filter(u => forUserIds.includes(u.id));
     const alb = await immichJson(`/albums/${albumId}`, {}, host.key);
-    const already = new Set((alb.albumUsers || []).map((au) => au.user?.id));
-    members = members.filter((u) => !already.has(u.id));
-    if (members.length) await immichJson(`/albums/${albumId}/users`,
-      { ...jsonBody({ albumUsers: members.map((u) => ({ userId: u.id, role: 'editor' })) }), method: 'PUT' }, host.key);
+    const already = new Set((alb.albumUsers || []).map(au => au.user?.id));
+    members = members.filter(u => !already.has(u.id));
+    if (members.length)
+      await immichJson(
+        `/albums/${albumId}/users`,
+        { ...jsonBody({ albumUsers: members.map(u => ({ userId: u.id, role: 'editor' })) }), method: 'PUT' },
+        host.key
+      );
     return members.length;
   };
 
-  const existing = state.mappings.find(mp => mp.role === 'member' && mp.peer === peer.pub
-    && mp.remoteAlbumId === album.id && !mp.dead);
+  const existing = state.mappings.find(
+    mp => mp.role === 'member' && mp.peer === peer.pub && mp.remoteAlbumId === album.id && !mp.dead
+  );
   if (existing) {
     const n = await addMembers(existing.albumId);
     if (n) log(`added ${n} member(s) to existing mirror "${existing.albumName}"`);
@@ -67,8 +72,14 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
   // with backoff and log each attempt so failures are diagnosable from CI logs
   let mirror;
   for (let attempt = 1; ; attempt++) {
-    try { mirror = await immichJson('/albums', jsonBody({ albumName: CFG.template.replace('{name}', album.name) }), host.key); break; }
-    catch (e) {
+    try {
+      mirror = await immichJson(
+        '/albums',
+        jsonBody({ albumName: CFG.template.replace('{name}', album.name) }),
+        host.key
+      );
+      break;
+    } catch (e) {
       log(`mirror album create attempt ${attempt} failed: ${e.message}`);
       if (attempt >= 6) throw e;
       await new Promise(r => setTimeout(r, attempt * 2000));
@@ -76,13 +87,25 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
   }
   try {
     const n = await addMembers(mirror.id);
-    log(`mirror shared with ${forUserIds?.length ? forUserIds.length + ' named user(s)' : n + ' household member(s)'}`);
-  } catch (e) { log(`could not add local members to mirror: ${e.message}`); }
+    log(
+      `mirror shared with ${forUserIds?.length ? forUserIds.length + ' named user(s)' : n + ' household member(s)'}`
+    );
+  } catch (e) {
+    log(`could not add local members to mirror: ${e.message}`);
+  }
 
-  const mapping: Mapping = { id: crypto.randomUUID(), role: 'member', albumId: mirror.id,
-    albumName: mirror.albumName, peer: peer.pub, remoteAlbumId: album.id,
-    remoteMappingId: req.remoteMappingId, permissions, adminSlug: slugify(ownerName),
-    via: req.via ?? 'link' };
+  const mapping: Mapping = {
+    id: crypto.randomUUID(),
+    role: 'member',
+    albumId: mirror.id,
+    albumName: mirror.albumName,
+    peer: peer.pub,
+    remoteAlbumId: album.id,
+    remoteMappingId: req.remoteMappingId,
+    permissions,
+    adminSlug: slugify(ownerName),
+    via: req.via ?? 'link',
+  };
   state.mappings.push(mapping);
   save();
   return { mapping, created: true };
@@ -93,8 +116,13 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
  * album or a video transcode must not hold the accept page (or a poll cycle) hostage.
  */
 export function fillMirrorInBackground(mapping: Mapping, peer: Peer) {
-  (async () => {
-    try { await reconcileMapping(mapping, peer); await pullCanonicalComments(mapping, peer); }
-    catch (e) { log(`post-join sync error: ${e.message} — the loops will retry`); }
+  // `void`: deliberately not awaited — a large album or a transcode must not block the caller.
+  void (async () => {
+    try {
+      await reconcileMapping(mapping, peer);
+      await pullCanonicalComments(mapping, peer);
+    } catch (e) {
+      log(`post-join sync error: ${e.message} — the loops will retry`);
+    }
   })();
 }

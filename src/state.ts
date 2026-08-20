@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { Store } from './store.ts';
-import { CFG, log } from './config.ts';
+import { CFG } from './config.ts';
 
 fs.mkdirSync(CFG.dataDir, { recursive: true });
 export const store = new Store(CFG.dataDir);

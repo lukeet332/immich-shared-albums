@@ -30,7 +30,9 @@ export async function callerIdentity(req): Promise<Caller | null> {
     if (!r.ok) return null;
     const u = await r.json();
     return u?.id ? { id: u.id, name: u.name, isAdmin: !!u.isAdmin } : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 /** 401 body that tells a browser where to go to fix it. */

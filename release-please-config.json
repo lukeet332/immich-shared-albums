@@ -5,9 +5,7 @@
   "packages": {
     ".": {
       "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        "src/config.ts"
-      ]
+      "extra-files": ["src/config.ts"]
     }
   }
 }
