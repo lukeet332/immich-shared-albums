@@ -62,9 +62,8 @@ saying so.
   - **State what the code does, not what it should do.** A doc written from a plan and never
     re-read against the implementation is how `unlink` came to be documented as non-destructive
     while the code deleted accounts with `force: true`.
-  - **Boy-scout, never batch.** Bring a doc up to these conventions when you touch the code it
-    describes — that is when you can verify it. Mass-rewriting docs you are not otherwise changing
-    is churn with no reader and real risk of dropping a fact you never confirmed.
+  - **Boy-scout, never batch** — see the section below. Verify a doc when you touch the code it
+    describes; do not mass-rewrite docs you are not otherwise changing.
 - **Never test against a real server.** Use the throwaway mock rig in `demo/`. Never run
   the suite or experiments against anyone's production Immich, and never modify a real
   user's library.
@@ -195,7 +194,67 @@ Two rules keep it honest:
 - **Do not let it grow.** It is a pointer, not a summary. If you find yourself adding a second
   sentence, that sentence belongs in the doc.
 
+## Boy-scout rule: any file you touch comes up to standard
+
+One refactor brought the whole tree to this standard: 1053 comment lines down to 47, explanation
+moved into 12 paired docs, ~30 symbols renamed so the code says what a comment used to, and a
+one-line header on every file. **Everything that refactor achieved is now the standing standard**,
+maintained per-change rather than re-swept: a file you edit for any reason leaves your change
+compliant.
+
+Six checks, all of them seconds:
+
+| Check | Standard | Where it is written |
+| --- | --- | --- |
+| Header | line 1 is `path — description. See doc.md.`, and a whole sentence | *Every source file opens with one line* |
+| Comments | the header, load-bearing lines and TODOs — nothing else | *Comments: a paired doc is the default* |
+| Names | **rename rather than explain** — a function, const or var needing a comment is misnamed | *A comment explaining a symbol* |
+| Doc placement | one exists at the right level for what you touched | *Where a doc lives* |
+| Doc truth | you re-read it against the code you just changed | *Keep the docs in sync* |
+| Doc style | dense bullets, every claim naming a real symbol | *Keep the docs in sync* |
+
+Two things this rule is deliberately **not**:
+
+- **Not a licence to batch-migrate.** Do not sweep files you are not otherwise changing. The
+  verification is the expensive half, and it is only cheap while you have the code in your head.
+- **Not a blocker on unrelated work.** If a file you touched is far off standard and fixing it
+  would swamp the actual change, bring the part you touched up to standard and say what you left.
+
+**Removing a comment is a move, never a delete.** Its content goes to one of two places, and
+choosing is the whole job:
+
+- **Into the name**, when it explained *what* something is. `mayAdd` needed a comment about
+  revocation; `reAddIfMissing` does not. `WATCH_RUNNING` needed one about stampedes;
+  `watchCycleInFlight` does not. `(cacheMaxMb * 1024 * 1024) / 10` needed one about the cap;
+  `/ MAX_ITEM_SHARE_OF_CACHE` does not. Renaming a parameter, extracting a named constant, or
+  splitting a condition into a named boolean are all in scope of the change that deleted the
+  comment — do not stop at deletion and leave the name as it was.
+- **Into the doc**, when it explained *why* — design reasoning, an Immich quirk, history.
+
+If neither fits and the line is a hazard at its trigger point, it stays inline as one line.
+
+`npm run verify` enforces the header mechanically. The other five are judgement, which is why they
+are written down.
+
+## Where a doc lives: as close to the code as it needs to be, and no closer
+
+Granular on purpose. Pick the nearest level that earns one:
+
+- **File-level** (`config.md`, `store.md`, `types.md`) — one module with dense reasoning of its own.
+- **Folder-level** (`wire-protocol.md`, `sync-loops.md`) — a concern spanning several files, where
+  the useful explanation is how they fit together.
+- **Neither** — most files. A module whose names already say what it does needs no doc; it still
+  carries a header pointing at whichever doc covers it.
+- **Both** is fine. A file-level doc for the hard module, a folder doc for the concern around it.
+
+A concern starts as one file at `src/` root, and graduates to a folder with its own doc when it
+needs several files. `src/ARCHITECTURE.md` describes the whole tree.
+
 ## Comments: a paired doc is the default, inline is the exception
+
+**The target state: the one-line header, plus load-bearing lines and TODOs. Nothing else.** This
+codebase went from 1053 comment lines to 47 across 46 files; if a file you are working in carries
+more than a couple, the explanation belongs in its doc and the rest belongs in better names.
 
 Explanation belongs in a Markdown doc beside the code, not in the code. Naming carries the *what*;
 the doc carries the *why*. Code that reads cleanly and a doc that explains fully beats a file where
