@@ -956,6 +956,66 @@ console.log('— stage: security (utility accounts cannot be signed into)');
   } else console.log('  (skipped password-retention check: cannot read demo/b-sidecar/state.db)');
 }
 
+// Server pairing: linking two servers as its own act, with no album involved. This replaces
+// bearer-based enrolment, where anyone holding an album share link could attach their server.
+// Runs LAST, alongside unlink, because it mutates the peer list.
+console.log('— stage: pairing links two servers on its own (no album)');
+{
+  const anonMint = await fetch(`${BS}/immich-shared-albums/pairings`, { method: 'POST' });
+  check('minting a pairing link needs a session', anonMint.status === 401, `status ${anonMint.status}`);
+  const anonPeer = await fetch(`${BS}/immich-shared-albums/pairings`);
+  check('listing pairing links needs a session', anonPeer.status === 401, `status ${anonPeer.status}`);
+
+  const res = await fetch(`${BS}/immich-shared-albums/pairings`,
+    { method: 'POST', headers: { 'x-api-key': BKEY } });
+  const minted = await res.json().catch(() => ({}));
+  check('an admin can mint a pairing link', res.ok && !!minted.link, JSON.stringify(minted).slice(0, 120));
+
+  if (minted.link) {
+    check('the link carries a secret in the fragment, not the path',
+          /#[A-Za-z0-9_-]{20,}$/.test(minted.link), minted.link.replace(/#.*/, '#<redacted>'));
+    check('the link expires within the hour', minted.expiresAt - Date.now() < 3600000,
+          `${Math.round((minted.expiresAt - Date.now()) / 60000)} min`);
+    // survives being pasted into a messenger: one line, no spaces
+    check('the link is a single line with no whitespace', !/\s/.test(minted.link));
+
+    // D redeems B's link. Neither has ever shared an album with the other.
+    const before = (await (await fetch(`${DS}/immich-shared-albums/peers`, { headers: { 'x-api-key': DKEY } })).json()).peers || [];
+    const rd = await fetch(`${DS}/immich-shared-albums/pair`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': DKEY },
+        body: JSON.stringify({ link: minted.link }) });
+    const rdOut = await rd.json().catch(() => ({}));
+    check('another server can redeem it and the two are linked', rd.ok && !!rdOut.linked,
+          JSON.stringify(rdOut).slice(0, 140));
+
+    const after = (await (await fetch(`${DS}/immich-shared-albums/peers`, { headers: { 'x-api-key': DKEY } })).json()).peers || [];
+    check('the redeeming side now lists the other server', after.length > before.length,
+          `${before.length} -> ${after.length}`);
+    const bPeers = (await (await fetch(`${BS}/immich-shared-albums/peers`, { headers: { 'x-api-key': BKEY } })).json()).peers || [];
+    check('the minting side lists it too (one round trip pairs both)',
+          bPeers.some(p => (p.name || '').includes('(D)')), bPeers.map(p => p.name).join(', '));
+
+    // SECURITY: single-use. A forwarded copy must be inert.
+    const replay = await fetch(`${DS}/immich-shared-albums/pair`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': DKEY },
+        body: JSON.stringify({ link: minted.link }) });
+    check('a pairing link cannot be redeemed twice', !replay.ok, `status ${replay.status}`);
+
+    // SECURITY: pairing conveys no access to any photo. The newly linked peer must carry zero
+    // albums in either direction — what they may see is decided afterwards, per person.
+    const linked = after.find(p => !before.some(b => b.pub === p.pub));
+    check('pairing on its own shares no albums in either direction',
+          !!linked && linked.sharedToUs === 0 && linked.sharedToThem === 0,
+          linked ? `${linked.name}: ${linked.sharedToUs} in, ${linked.sharedToThem} out` : 'new peer not found');
+
+    // SECURITY: a made-up code must be refused.
+    const bogus = await fetch(`${DS}/immich-shared-albums/pair`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': DKEY },
+        body: JSON.stringify({ link: minted.link.replace(/#.*/, '#' + 'x'.repeat(43)) }) });
+    check('an invented pairing code is refused', !bogus.ok, `status ${bogus.status}`);
+  }
+}
+
 // LAST STAGE, deliberately: unlinking is destructive, so it runs after everything that needs
 // the B<->C link. Server links are admin-owned objects managed from the panel — not something
 // expressed by removing a bot from an album.
