@@ -1,17 +1,11 @@
 #!/bin/sh
-# Fast gate on every commit: seconds, no containers. The e2e suite stays in CI and in
-# `bash demo/run-mock-e2e.sh` — putting a seven-minute run in a hook is how hooks get bypassed.
-#
-# Enable once per clone:  git config core.hooksPath .githooks
+# Fast gate on every commit: seconds, no containers. The e2e suite stays in CI —
+# a seven-minute hook is a hook people bypass.
+# Enabled automatically by `npm install` (the prepare script sets core.hooksPath).
 set -e
-echo "pre-commit: panel bundle, format check, lint, typecheck, cycles"
-# Rebuild the committed panel bundle, then stage it: it is generated from src/web/panel/**, and a
-# stale copy would silently ship different UI than the source says.
-npm run --silent build:panel >/dev/null || { echo "  ✗ panel build failed"; exit 1; }
-git add src/web/panel.bundle.js
-npx prettier --check "src/**/*.ts" "scripts/**/*.mjs" >/dev/null || {
-  echo "  ✗ formatting — run: npm run format"; exit 1; }
-npx eslint src || exit 1
-npx tsc --noEmit || exit 1
-node scripts/check-cycles.mjs >/dev/null || exit 1
+echo "pre-commit: verify:fast (bundles, format, lint, types, cycles)"
+npm run --silent verify:fast || exit 1
+# The bundles are generated from src/web/{panel,accept}/** — stage what the build refreshed,
+# or the commit ships UI that differs from its source.
+git add src/web/panel.bundle.js src/web/accept.bundle.js
 echo "pre-commit: ok"

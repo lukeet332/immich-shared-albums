@@ -1,17 +1,4 @@
-/**
- * immich-shared-albums — entry point / composition root.
- * One process: an HTTP server (protocol + panel + byte proxies) plus two sync loops.
- * State is SQLite via node:sqlite (see store.ts). TypeScript is run natively by Node's
- * type stripping — no build step. Node >= 23.6, zero dependencies.
- *
- * The code is split by concern — see each folder's .md:
- *   config.ts / state.ts / peers.ts   core: settings, persistence, P2P signing
- *   immich/                           local Immich API, refs, contributors, proxy writes
- *   p2p/                              wire protocol + join
- *   sync/                             reconcile + comment loops
- *   media/                            hotlink byte path + LRU cache
- *   web/                              HTML pages + HTTP router
- */
+/** index.ts — composition root: starts the HTTP server and the three sync loops. See ARCHITECTURE.md. */
 import { CFG, log } from './config.ts';
 import { server } from './web/server.ts';
 import { proxyUpgrade } from './web/upgrade.ts';
