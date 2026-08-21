@@ -77,9 +77,14 @@ every decision.
   - Mirror albums owned by the local account standing in for the origin's album owner.
   - **One account per remote person**, keyed by their user id on their own server, so the same human
     is one account however we meet them — with their real avatar synced across.
-  - Stores a **~2 KB unique stub** per photo (or a short playable prefix for a video, so duration
-    survives) with capture date, GPS and uploader credit applied — enough for the stock app to have
-    real rows. No pixels are stored; the ledger remembers which origin asset each stub stands for.
+  - Stores a **~2 KB unique stub** per photo, with capture date, GPS and uploader credit applied —
+    enough for the stock app to have real rows. No pixels are stored; the ledger remembers which
+    origin asset each stub stands for.
+  - For a video the stub is a **playable 2 MiB prefix** of the owner's rendition
+    (`Range: bytes=0-2097151`), so the tile carries a real poster and duration.
+  - A stub whose ledger row has **no origin link** cannot be resolved to a source, so the byte
+    routes fall through to it: such proxies are excluded from relay and on-demand originals
+    (`store.ledgerWithOrigin` gates both).
   - Deletion at the source propagates, and only utility-owned assets are ever deletable. Leaving an
     album purges its stubs, mirror and ledger entirely.
 - **byte interceptors** — the app's own asset URLs (`/api/assets/:id/thumbnail`, `/original`,
