@@ -24,13 +24,10 @@ it as Immich's problem. Concretely, and these are design rules not sentiments:
 - **Minimise the footprint in someone else's instance.** Every user, album, and permission this
   addon creates is a liability the operator did not ask for.
 
-**Where this falls short today** — known costs, not oversights. Do not make either worse without
-saying so:
-
-- **An all-permissions admin API key**, so the blast radius is the whole instance. The sharpest
-  contradiction of this ethos in the codebase; worth chipping at whenever a change touches keys.
-- **Real user accounts in your Immich**, one per remote person, appearing in every picker — Immich
-  has no service-account flag.
+Two known costs contradict this today — an all-permissions admin key, and one real Immich account
+per remote person. They are listed in
+[src/ARCHITECTURE.md](./src/ARCHITECTURE.md) "Where this falls short today". **Do not make either
+worse without saying so**, and chip at the key one whenever a change touches key handling.
 
 ## Golden rules
 
@@ -39,20 +36,16 @@ saying so:
   services, database, or upload folders. Everything must fail open — Immich has to work
   perfectly with the sidecar dead. (Design invariants: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md)
   "Iron rules".)
-- **Keep the docs in sync — and this rule is load-bearing, not housekeeping.** `src/` carries
-  Markdown docs at whatever level earns one: a folder doc where modules are small and cohesive, a
-  file-level doc next to anything with dense reasoning of its own, and neither where a file needs
-  no explaining. `src/ARCHITECTURE.md` describes the whole.
+- **Keep the docs in sync — and this rule is load-bearing, not housekeeping.** Any behaviour change
+  updates the relevant doc(s) **in the same change**. A doc that lies is worse than no doc: treat
+  drift as a bug and fix it with the code that caused it. Which doc, and at what level, is *Where a
+  doc lives* below.
 
-  Any behaviour change updates the relevant doc(s) **in the same change**. A doc that lies is
-  worse than no doc: treat drift as a bug and fix it with the code that caused it.
+  This is load-bearing because explanation deliberately lives in those docs rather than in
+  comments. The further an explanation sits from what it explains, the more strictly the rule
+  applies: moving prose out of a file and then letting it rot is worse than leaving it inline.
 
-  Explanation lives in these docs, not in comments: naming carries the *what*, docs carry the
-  *why*. That only holds while they track the code, so the further an explanation sits from what it
-  explains, the more strictly this rule applies. Moving prose out of a file and letting it rot is
-  worse than leaving it inline.
-
-  Four rules for writing them:
+  Five rules for writing them:
 
   - **Dense over flowing.** Bullets, tables and short declaratives — not paragraphs of prose. A
     doc is reference material read under time pressure, usually to answer one question. Maximise
@@ -121,6 +114,8 @@ Two lanes, and the right one depends on whether Immich is involved.
   - `GET /albums` is scoped **per user** — the admin key sees only the admin's own albums.
   - Adding a user who is already the owner returns **200**, silently ignored.
   - Album responses carry **no `ownerId`** — the owner is inside `albumUsers`.
+
+Either lane:
 
 - **Assert invariants, not strings.** "No two users share a display name" survives every future
   rename. A test pinning one literal name gets edited whenever behaviour changes — and a test
@@ -254,13 +249,13 @@ needs several files. `src/ARCHITECTURE.md` describes the whole tree.
 else.** If a file you are working in carries more than a couple of comments, the explanation
 belongs in its doc and the rest belongs in better names.
 
-Explanation belongs in a Markdown doc beside the code, not in the code. Naming carries the *what*;
-the doc carries the *why*. Code that reads cleanly and a doc that explains fully beats a file where
-both are tangled — and a doc can hold far more context than anyone would tolerate inline.
+Naming carries the *what*; the doc carries the *why*. Code that reads cleanly plus a doc that
+explains fully beats a file where both are tangled — and a doc holds far more context than anyone
+would tolerate inline.
 
 **The test for keeping a comment inline: would moving it to the doc stop it doing its job?**
 
-Almost always the answer is no, so it moves. Two cases where it is yes, and they are the only ones:
+Almost always the answer is no, so it moves. Three cases where it is yes:
 
 - **A hazard at the trigger line.** `record BEFORE the add`, `splice, never reassign`,
   `ORDER IS LOAD-BEARING`. The person editing that exact statement must see the warning without
@@ -271,8 +266,8 @@ Almost always the answer is no, so it moves. Two cases where it is yes, and they
   it is looking at the assertion, so it cannot live anywhere else.
 
 - **A one-line JSDoc on an exported type field or function.** Editors surface it on hover at every
-  use site, which no doc can do. `/** Mutable hint — where to reach them right now. */` on
-  `Household.url` earns its place; a paragraph above the type does not.
+  use site, which no doc can do. `/** Mutable hint — where to reach the sidecar right now. */`
+  on `Household.url` earns its place; a paragraph above the type does not.
 
 Everything else goes: background, design reasoning, Immich quirks, "why this shape", history. The
 reader who needs those is trying to understand the module and will be reading its doc. Inline, they
@@ -307,62 +302,48 @@ instructions. Re-read every comment you touch, in full.
 
 ## A name that needs a comment is the wrong name
 
-This is the default, and it comes before every other rule about comments: **if you have to explain
-a name, the name is not descriptive enough. Rename it.** The comment is a symptom; fix the cause.
+The default, and it comes before every other rule about comments: **if you have to explain a name,
+the name is not descriptive enough. Rename it.** The comment is a symptom; fix the cause. This is
+not style policing — **bad names hide bugs.** A cleanup returned from inside a `.then()` rather than
+from the effect itself is dead code, because Preact honours only what the effect returns; in a body
+of `tick`/`u`/`iv`/`stop` that is invisible, and in one named for what it holds it is obvious.
 
-It applies to everything you get to name — functions, variables, constants, parameters, type
-fields, files, routes, env vars, test titles, doc headings. Nothing is exempt for being small or
-local.
+Applies to everything you get to name — functions, variables, constants, parameters, type fields,
+files, routes, env vars, test titles, doc headings. Nothing is exempt for being small or local, test
+code included: an assertion whose message does not say what broke costs a debugging cycle every time
+it fires.
 
-The test is whether a reader who has never seen the code guesses right from the name alone:
+**The test:** would a reader who has never seen the code guess right from the name alone?
 
-- `/** How often to re-check whether they have signed in. */` above `POLL` → `SIGN_IN_POLL_MS`.
-- `/** The server this person actually lives on. */` above `peer` → `homePeer`.
-- `(CFG.cacheMaxMb * 1024 * 1024) / 10` with `// no single item >10% of cap` →
-  `/ MAX_ITEM_SHARE_OF_CACHE`.
-- `mayAdd`, with a comment about revoked members — **still wrong**, which is the point: it says
-  permission where the real meaning is "if they are missing, put them back". Renamed to
-  `reAddIfMissing`, and its two comments went with it. Getting one rename in and still needing the
-  comment means go again, not settle.
+| Name, with the comment it needs | Should be |
+| --- | --- |
+| `POLL` — *"how often to re-check whether they have signed in"* | `SIGN_IN_POLL_MS` |
+| `peer` — *"the server this person actually lives on"* | `homePeer` |
+| `(cacheMaxMb * 1024 * 1024) / 10` — *"no single item past 10% of cap"* | a named divisor |
+| `mayAdd` — *"missing members are revoked, do not re-add"* | `reAddIfMissing` |
 
-Reach for a longer name before reaching for a comment. `startPollingUntilSignedIn` needs no
-explanation; `tick` needs a paragraph. A name is read every time it is used; a comment is read
-once, if at all, and then rots.
+`mayAdd` is the instructive one: already renamed once, and still needing a comment because it says
+*permission* where the meaning is "if they are missing, put them back". Needing a comment after one
+rename means go again, not settle.
 
-What survives this rule is only what a name **cannot** carry:
+How to choose the name:
 
-- a hazard about ORDER or CONCURRENCY at the exact line it applies to
-- a reference to an external behaviour that is not in this codebase — an Immich quirk, a browser
-  constraint — and even then prefer the paired doc unless the reader of that line needs it
-- a `TODO` with enough context to act on
-
-If you find yourself writing "this is needed because…", that is doc material, not a comment. If you
-find yourself writing "this does X", the name should have said X.
-
-## Name things so the next reader does not have to decode them
-
-Not style policing — **bad names hide bugs.** Terse names conceal control-flow errors. A cleanup
-returned from inside a `.then()` rather than from the effect itself is dead code — Preact honours
-only what the effect returns — and in a body of `tick`/`u`/`iv`/`stop` that is invisible. Named for
-what they hold, it is obvious on sight.
-
-- **Name a variable for what it holds, not its type or its position.** `signedInUser`, not `u`.
+- **Name a variable for what it holds**, not its type or position. `signedInUser`, not `u`.
   `pollTimer`, not `iv`. `outcome`, not `d`. `minutesLeft`, not `minutes`.
 - **Name a function for what it does to the world**, and make the verb match: `acceptInvite`,
   `startPollingUntilSignedIn`, `copyToClipboard` — not `accept`, `tick`, `copy`.
-- **Single letters only for a genuinely anonymous, one-line scope** — `xs.map(x => x.id)`. Never
-  for anything that lives more than a couple of lines, and never for a caught error you go on to
-  inspect.
-- **Magic numbers get a named constant with a unit**: `SIGN_IN_POLL_MS`, `SYNC_WAIT_LIMIT_MS`.
-  `2500` in the middle of an effect tells the reader nothing about whether it is safe to change.
+- **Single letters only in a genuinely anonymous one-line scope** — `xs.map(x => x.id)`. Never for
+  anything living more than a couple of lines, and never for a caught error you go on to inspect.
+- **Magic numbers get a named constant with a unit**: `SIGN_IN_POLL_MS`, `SYNC_WAIT_LIMIT_MS`. A
+  bare `2500` tells the reader nothing about whether it is safe to change.
 - **Extract the condition rather than commenting it.** `const waitedTooLong = Date.now() - since >
-  LIMIT_MS` reads better than the inequality inline, and it puts the reasoning in the name.
-- **Comments say WHY, names say WHAT.** If a comment is needed to explain what a line does, the
-  names are wrong. Reserve comments for the reason: which Immich quirk forced this, which failure
-  it protects against, which direction it fails in.
+  LIMIT_MS` beats the inequality inline, and puts the reasoning in the name.
+- **Reach for a longer name before reaching for a comment.** A name is read every time it is used;
+  a comment is read once, if at all, and then rots.
 
-This applies to test code too. An assertion whose message does not say what broke costs a
-debugging cycle every time it fires.
+If you are writing "this does X", the name should have said X. If you are writing "this is needed
+because…", that is doc material. What may stay inline regardless is only what a name cannot carry —
+the categories in *What survives, concretely* above.
 
 ## Invariants that will bite you
 
