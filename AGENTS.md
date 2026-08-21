@@ -63,6 +63,12 @@ saying so:
   - **State what the code does, not what it should do.** Re-read the doc against the
     implementation before you land it. A doc written from a plan describes the design you may
     have since rejected, and reads as authoritative while doing it.
+  - **No narrative.** A doc states the design as it is. It is not a changelog, a diary or a
+    post-mortem: no "used to", no "we found", no retelling the bug that motivated a rule, no
+    before/after counts. Git history already records how the code got here, and prose about the
+    past is the first thing to become false — the sentence stays true of a version nobody runs.
+    A one-clause reason is fine where it makes a rule followable; a retold incident is not.
+    Applies to this file as much as to any other.
   - **Boy-scout, never batch** — see the section below. Verify a doc when you touch the code it
     describes; do not mass-rewrite docs you are not otherwise changing.
 - **Never test against a real server.** Use the throwaway mock rig in `demo/`. Never run
