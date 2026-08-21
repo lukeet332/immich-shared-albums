@@ -73,7 +73,9 @@ worse without saying so**, and chip at the key one whenever a change touches key
   the suite or experiments against anyone's production Immich, and never modify a real
   user's library.
 - **No secrets in the repo.** No API keys, passwords, tokens, or personal data in commits,
-  logs, or committed files. Ever.
+  logs, or committed files. Ever. GitHub push protection blocks known credential patterns; it
+  does not recognise personal data, home-grown tokens or infrastructure details — those are on
+  you, so check the diff before every push.
 
 ## How changes land
 
@@ -81,6 +83,8 @@ worse without saying so**, and chip at the key one whenever a change touches key
   Branch protection enforces it; merges are squash-only.
 - **Conventional commits** decide the version automatically via release-please
   (`fix:` → patch, `feat:` → minor, `feat!:` → major). Don't hand-edit version numbers.
+  Squash-merge makes the **PR title** the commit release-please reads; CI rejects a
+  non-conventional title.
 - **CI runs the fast checks and both e2e lanes on every PR**; the pre-commit hook (enabled by
   `npm install`) runs `verify:fast` on every commit. To get the same result locally before pushing:
   `npm run verify`, `bash demo/run-mock-e2e.sh` (API lane, purges its rig first), and
@@ -176,8 +180,8 @@ it fires.
 | `WATCH_RUNNING` — *"overlapping cycles stampede the host"* | `watchCycleInFlight` |
 | `mayAdd` — *"missing members are revoked, do not re-add"* | `reAddIfMissing` |
 
-`mayAdd` is the instructive one: already renamed once, and still needing a comment because it says
-*permission* where the meaning is "if they are missing, put them back". Needing a comment after one
+`mayAdd` is the instructive one: a name can survive a rename and still be wrong — it says
+*permission* where the meaning is "if they are missing, put them back". Needing a comment after a
 rename means go again, not settle.
 
 How to choose the name:
@@ -261,7 +265,7 @@ instructions. Re-read every comment you touch, in full.
 Granular on purpose. Pick the nearest level that earns one:
 
 - **File-level** — one module carrying dense reasoning of its own, e.g. a `store.md` next to
-  `store.ts`. None exist yet; create one the first time a module earns it.
+  `store.ts`, created the first time a module earns it.
 - **Folder-level** (`wire-protocol.md`, `sync-loops.md`) — a concern spanning several files, where
   the useful explanation is how they fit together.
 - **Neither** — most files. A module whose names already say what it does needs no doc; it still
@@ -360,6 +364,7 @@ Enforced by lint or tests wherever that is possible.
 
 ## Layout
 
-Code is grouped by concern under `src/` (a `config`/`state`/`peers` core, then `immich/`,
-`p2p/`, `sync/`, `media/`, `web/`). See [src/ARCHITECTURE.md](./src/ARCHITECTURE.md) for the
-module map and the data flow.
+One principle: **group by concern, and let the shape evolve.** New files, new folders and
+reshaped boundaries are expected as the project grows — nothing here freezes the tree. The
+*current* module map and data flow live in [src/ARCHITECTURE.md](./src/ARCHITECTURE.md); when a
+change moves the shape, it moves that map in the same change.

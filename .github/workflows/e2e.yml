@@ -8,6 +8,17 @@ on:
     - cron: '0 6 * * 1' # weekly: catch breakage in immich-server:release before users do
 
 jobs:
+  pr-title:
+    # The squashed PR title is what release-please parses. See ../../AGENTS.md ("How changes land").
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR title is a conventional commit
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          echo "$TITLE" | grep -qE '^(feat|fix|chore|docs|refactor|perf|test|build|ci|revert)(\([a-z0-9-]+\))?!?: .+' \
+            || { echo "::error::PR title must be conventional (feat:/fix:/chore:/…) — it becomes the release commit"; exit 1; }
   # Its own job, not a step in e2e: a lint failure should report as "checks", not as a
   # confusing e2e failure, and it finishes in ~1 minute instead of waiting on Immich to boot.
   # Worth marking as a required status check in branch protection alongside e2e.

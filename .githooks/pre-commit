@@ -1,11 +1,8 @@
 #!/bin/sh
-# Fast gate on every commit: seconds, no containers. The e2e suite stays in CI —
-# a seven-minute hook is a hook people bypass.
-# Enabled automatically by `npm install` (the prepare script sets core.hooksPath).
+# .githooks/pre-commit — fast gate on every commit. See ../AGENTS.md ("How changes land").
 set -e
 echo "pre-commit: verify:fast (bundles, format, lint, types, cycles)"
 npm run --silent verify:fast || exit 1
-# The bundles are generated from src/web/{panel,accept}/** — stage what the build refreshed,
-# or the commit ships UI that differs from its source.
+# build:panel regenerated both bundles; stage them or the commit ships stale UI.
 git add src/web/panel.bundle.js src/web/accept.bundle.js
 echo "pre-commit: ok"
