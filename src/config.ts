@@ -3,7 +3,7 @@
  * The single source of truth for env-derived settings; every other module reads CFG here.
  */
 
-export const SIDECAR_VERSION = '0.5.0'; // x-release-please-version
+export const SIDECAR_VERSION = '1.0.0'; // x-release-please-version
 // Read and check this first: the process cannot run without it, so proving that here once
 // means `CFG.apiKey` is a plain `string` everywhere instead of `string | undefined`.
 const apiKey = process.env.IMMICH_API_KEY;
