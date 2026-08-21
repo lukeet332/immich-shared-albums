@@ -124,13 +124,13 @@ Two lanes, and the right one depends on whether Immich is involved.
 
 ## Store the fact, don't infer it — but only if the fact is safe to hold
 
-**Prefer a column in `state.db` over a rule in someone's head.** Nearly every sync bug here came
-from deducing what the code could have recorded — each inference correct when written, wrong later:
+**Prefer a column in `state.db` over a rule in someone's head.** An inference is correct when
+written and wrong later. Three shapes to avoid:
 
-- two accounts per person, so "who added this membership" could be inferred from which one it was
-- a boolean saying "we know where this person lives" instead of storing *where*
-- a mapping pointing at an account by a name-derived slug instead of its id — it stopped resolving
-  the moment the account was keyed differently
+- deriving "who added this membership" from *which account* it is, instead of recording it
+- a boolean saying "we know where this person lives" instead of storing **where**
+- pointing at an account by a name-derived slug instead of its id — it stops resolving the moment
+  the account is keyed differently
 
 Two constraints, because a stored fact is also a stored liability:
 
@@ -335,10 +335,10 @@ find yourself writing "this does X", the name should have said X.
 
 ## Name things so the next reader does not have to decode them
 
-Not style policing — **bad names hide bugs.** A `useEffect` named `tick`/`u`/`iv`/`stop` concealed
-a `return () => clearInterval(iv)` inside a `.then()`: dead code, because Preact honours only the
-value the effect itself returns, so the poll outlived the page. Named for what they held, the
-missing cleanup was obvious on sight.
+Not style policing — **bad names hide bugs.** Terse names conceal control-flow errors. A cleanup
+returned from inside a `.then()` rather than from the effect itself is dead code — Preact honours
+only what the effect returns — and in a body of `tick`/`u`/`iv`/`stop` that is invisible. Named for
+what they hold, it is obvious on sight.
 
 - **Name a variable for what it holds, not its type or its position.** `signedInUser`, not `u`.
   `pollTimer`, not `iv`. `outcome`, not `d`. `minutesLeft`, not `minutes`.
@@ -360,7 +360,7 @@ debugging cycle every time it fires.
 
 ## Invariants that will bite you
 
-These are enforced by lint or tests where possible, because each one has already caused a bug.
+Enforced by lint or tests wherever that is possible.
 
 - **Bot namespaces stay disjoint** — no `BOT_PREFIX` may prefix another (`invariants.test.ts`
   asserts it).
@@ -376,8 +376,7 @@ These are enforced by lint or tests where possible, because each one has already
 - **Never reassign shared state arrays.** `state.mappings = state.mappings.filter(...)` discards
   whatever a concurrent loop pushed onto the old reference. Splice in place. (ESLint enforces it.)
 - **Never inline a single-source-of-truth constant** — the bot email domain, `PROTOCOL_VERSION`.
-  The last naming bug was one predicate inlined in eleven places that drifted apart. (ESLint
-  enforces both.)
+  An inlined predicate drifts the moment one copy changes. (ESLint enforces both.)
 - **Owner and member mappings are not interchangeable.** Origin-side logic must filter
   `role === 'owner'`; a member's mirror always looks "withdrawn" to origin-side checks, and
   retiring it kills a live album one poll after it was created.
