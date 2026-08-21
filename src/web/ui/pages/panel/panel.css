@@ -1,0 +1,28 @@
+body {
+  margin: 0;
+  font-family:
+    Inter,
+    -apple-system,
+    sans-serif;
+  background: #101216;
+  color: #e5e7eb;
+  display: grid;
+  place-items: start center;
+  min-height: 100vh;
+}
+main {
+  width: min(560px, 92vw);
+  padding: 40px 0;
+}
+input:focus {
+  border-color: #4250af;
+  box-shadow: 0 0 0 3px rgba(66, 80, 175, 0.25);
+}
+button:hover {
+  filter: brightness(1.08);
+}
+noscript {
+  color: #9aa0a6;
+  font-size: 14px;
+  line-height: 1.55;
+}

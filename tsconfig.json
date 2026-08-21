@@ -18,5 +18,5 @@
     "strictNullChecks": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/web/panel"]
+  "exclude": ["src/web/ui", "src/web/dist"]
 }

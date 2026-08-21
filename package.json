@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit && tsc -p src/web/panel && tsc -p src/web/accept",
+    "typecheck": "tsc --noEmit && tsc -p src/web/ui",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"scripts/**/*.mjs\" \"*.json\"",
@@ -11,16 +11,17 @@
     "cycles": "node scripts/check-cycles.mjs",
     "test": "docker run --rm -e IMMICH_API_KEY=test-only -v \"$PWD/src\":/app/src -w /app node:24-alpine node --test \"src/**/*.test.ts\"",
     "verify": "npm run verify:fast && npm run check:runtime && npm test",
-    "build:panel": "node scripts/build-panel.mjs",
     "check:runtime": "docker run --rm -v \"$PWD/src\":/app/src -v \"$PWD/scripts\":/app/scripts -w /app node:24-alpine node scripts/check-runtime.mjs",
-    "verify:fast": "npm run build:panel && npm run format:check && npm run lint && npm run typecheck && npm run cycles",
-    "prepare": "git config core.hooksPath .githooks"
+    "verify:fast": "npm run build:web && npm run format:check && npm run lint && npm run typecheck && npm run cycles",
+    "prepare": "git config core.hooksPath .githooks",
+    "build:web": "node scripts/build-web.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "esbuild": "^0.28.2",
     "eslint": "^10.8.1",
     "preact": "^10.29.8",
+    "preact-render-to-string": "^6.7.0",
     "prettier": "^3.9.6",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.67.0"

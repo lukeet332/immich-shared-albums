@@ -28,7 +28,7 @@ One process, **zero runtime dependencies**:
             │        seen ledger, activity, contributors  │
             │                                             │
             │  web: panel (/immich-shared-albums/)        │
-            │       banner (/share/*) · accept page       │
+            │       share document (/share/*) · accept   │
             └─────────────────────────────────────────────┘
 ```
 
@@ -106,8 +106,9 @@ every decision.
     broken for non-admins.
   - Members **pull** invitations rather than being pushed them, so a household with no inbound
     reachability still works. See [`sync/sync-loops.md`](./sync/sync-loops.md).
-- **web** — the panel, the share-page join banner (shadow DOM, fails silent), the accept page, and a
-  transparent proxy for share-page assets when the sidecar fronts Immich. All fail open.
+- **web** — the panel, the accept page, and the share document: the native share page framed under
+  a join card, dismissible to the untouched `?native=1` page, toggleable from the panel's Settings.
+  Plus a transparent proxy for everything else when the sidecar fronts Immich. All fail open.
 - **nudges** — when the origin materialises a member's contribution or comment it pings the other
   member households (a signed POST to `…/nudge`, no payload beyond the album id) so they pull
   immediately. A latency hint, never a source of truth.
@@ -133,9 +134,9 @@ src/
   sync/               reconcile, comment + invite loops → sync-loops.md
   media/              the hotlink byte path + LRU cache → hotlink-bytes.md
   web/                HTTP router + pages               → http-router.md
-    panel/            admin panel  (Preact TSX → panel.bundle.js)
-    accept/           joining page (Preact TSX → accept.bundle.js)
-    banner/           banner.js, injected into /share/* pages
+    ui/               the front-end workspace: lib/Document.tsx + lib/theme.ts,
+                      pages/{panel,accept,share,sign-in} — Preact TSX + real .css
+    dist/             committed build output: <page>.js/.css + prerendered <page>.html
 ```
 
 **Dependencies point downward.** Core (`config`/`state`/`peers`) depends on nothing else here;

@@ -26,8 +26,8 @@ const files = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
     if (e.isDirectory()) {
-      // the panel is compiled by esbuild for browsers, not loaded by node
-      if (e.name !== 'panel') walk(p);
+      // ui/ is compiled by esbuild for browsers and dist/ is its output — neither loads under node
+      if (e.name !== 'ui' && e.name !== 'dist') walk(p);
     } else if (e.name.endsWith('.ts') && !e.name.endsWith('.test.ts')) {
       // index.ts starts the server and the sync loops; everything it imports is checked anyway
       if (e.name !== 'index.ts') files.push(p);

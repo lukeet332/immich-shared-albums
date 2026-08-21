@@ -1,0 +1,218 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+iframe.native-album {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+#immich-shared-albums-banner .card {
+  position: fixed;
+  z-index: 2147483000;
+  right: 24px;
+  bottom: 24px;
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  font-family: 'Overpass', 'Inter', Roboto, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #ffffff;
+  color: #202124;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 28px;
+  box-shadow: 0 1px 3px rgba(60, 64, 67, 0.15), 0 8px 28px rgba(60, 64, 67, 0.22);
+  padding: 22px 22px 18px;
+  animation: isa-in 0.35s cubic-bezier(0.21, 1.02, 0.73, 1) both;
+}
+@media (max-width: 560px) {
+  #immich-shared-albums-banner .card {
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    max-width: none;
+    border-radius: 28px 28px 0 0;
+    padding-bottom: max(18px, env(safe-area-inset-bottom));
+    animation-name: isa-in-sheet;
+  }
+}
+@keyframes isa-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes isa-in-sheet {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #immich-shared-albums-banner .card {
+    animation: none;
+  }
+}
+#immich-shared-albums-banner .row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding-right: 26px;
+}
+#immich-shared-albums-banner .logo {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #4250af, #7c3aed);
+  box-shadow: 0 2px 8px rgba(66, 80, 175, 0.35);
+}
+#immich-shared-albums-banner .logo svg {
+  width: 22px;
+  height: 22px;
+}
+#immich-shared-albums-banner h2 {
+  margin: 2px 0 5px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+#immich-shared-albums-banner .sub {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #5f6368;
+}
+#immich-shared-albums-banner form {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+#immich-shared-albums-banner input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 14px;
+  padding: 11px 18px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: #f1f3f4;
+  color: inherit;
+  outline: none;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+#immich-shared-albums-banner input:focus {
+  background: #fff;
+  border-color: #4250af;
+  box-shadow: 0 0 0 3px rgba(66, 80, 175, 0.15);
+}
+#immich-shared-albums-banner button.join {
+  flex: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 22px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  background: #4250af;
+  color: #fff;
+  transition: filter 0.15s, box-shadow 0.15s, transform 0.05s;
+}
+#immich-shared-albums-banner button.join:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 2px 10px rgba(66, 80, 175, 0.4);
+}
+#immich-shared-albums-banner button.join:active {
+  transform: scale(0.97);
+}
+#immich-shared-albums-banner .dismiss {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 32px;
+  height: 32px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: #5f6368;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s;
+}
+#immich-shared-albums-banner .dismiss:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+#immich-shared-albums-banner .err {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: #d93025;
+}
+#immich-shared-albums-banner .hint {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #80868b;
+}
+#immich-shared-albums-banner .hint a {
+  color: #4250af;
+  text-decoration: none;
+}
+#immich-shared-albums-banner .hint a:hover {
+  text-decoration: underline;
+}
+@media (prefers-color-scheme: dark) {
+  #immich-shared-albums-banner .card {
+    background: #1b1f26;
+    color: #e8eaed;
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 10px 32px rgba(0, 0, 0, 0.5);
+  }
+  #immich-shared-albums-banner .sub {
+    color: #9aa0a6;
+  }
+  #immich-shared-albums-banner input {
+    background: #262b33;
+    color: #e8eaed;
+  }
+  #immich-shared-albums-banner input::placeholder {
+    color: #7d8590;
+  }
+  #immich-shared-albums-banner input:focus {
+    background: #2a3038;
+  }
+  #immich-shared-albums-banner .dismiss {
+    color: #9aa0a6;
+  }
+  #immich-shared-albums-banner .dismiss:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  #immich-shared-albums-banner .hint {
+    color: #7d8590;
+  }
+  #immich-shared-albums-banner .hint a {
+    color: #a8c7fa;
+  }
+  #immich-shared-albums-banner button.join {
+    background: #a8c7fa;
+    color: #0d1b3d;
+  }
+}
+  
