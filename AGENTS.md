@@ -19,7 +19,7 @@ it as Immich's problem. Concretely, and these are design rules not sentiments:
 - **Anything shared can be fully withdrawn, and withdrawal reclaims the space.** `leaveAlbum`
   purges every stub a join created; unlinking deletes a peer's people *and their proxied photos*,
   because holding someone's content after they have gone is exactly the thing this opposes.
-- **Every sharing ACTION happens in Immich's own UI** (see the product rule below). The addon adds
+- **Every sharing ACTION happens in Immich's own UI.** The addon adds
   no second way to share, so nobody has to learn our surface to use their own photos.
 - **Minimise the footprint in someone else's instance.** Every user, album, and permission this
   addon creates is a liability the operator did not ask for.
@@ -153,89 +153,51 @@ Corollary: a fact only counts as known if something *proved* it. `Contributor.ho
 only by a linked server's directory, never by an incoming photo — a relayed ref names the person
 but not their server, and guessing would route someone's album to the wrong household.
 
-## Every source file opens with one line: what it is, and where its doc is
+## A name that needs a comment is the wrong name
 
-A single line, first line, no exceptions:
+The default, and it comes before every other rule about comments: **if you have to explain a name,
+the name is not descriptive enough. Rename it.** The comment is a symptom; fix the cause. This is
+not style policing — **bad names hide bugs.** A cleanup returned from inside a `.then()` rather than
+from the effect itself is dead code, because Preact honours only what the effect returns; in a body
+of `tick`/`u`/`iv`/`stop` that is invisible, and in one named for what it holds it is obvious.
 
-```ts
-/** sync/invites.ts — sharing an album by inviting a PERSON in Immich's own picker. See sync-loops.md. */
-/** sync/leave.ts — undoing a join. See sync-loops.md. */
-```
+Applies to everything you get to name — functions, variables, constants, parameters, type fields,
+files, routes, env vars, test titles, doc headings. Nothing is exempt for being small or local, test
+code included: an assertion whose message does not say what broke costs a debugging cycle every time
+it fires.
 
-Format: `path — brief description. See <doc>.md.`
+**The test:** would a reader who has never seen the code guess right from the name alone?
 
-The one comment naming cannot replace, because it answers a question the code cannot: **where is
-the context for this file?**
+| Name, with the comment it needs | Should be |
+| --- | --- |
+| `POLL` — *"how often to re-check whether they have signed in"* | `SIGN_IN_POLL_MS` |
+| `peer` — *"the server this person actually lives on"* | `homePeer` |
+| `(cacheMaxMb * 1024 * 1024) / 10` — *"no single item past 10% of cap"* | a named divisor |
+| `WATCH_RUNNING` — *"overlapping cycles stampede the host"* | `watchCycleInFlight` |
+| `mayAdd` — *"missing members are revoked, do not re-add"* | `reAddIfMissing` |
 
-- A doc may sit beside the file (a `config.md` next to `config.ts`, once one earns it) or cover the
-  folder under a different name (`p2p/protocol.ts` → `wire-protocol.md`). Without the pointer you
-  would guess or grep.
-- It is machine-followable, which matters because agents work here: open the file, read one line,
-  load exactly the right doc before changing anything.
+`mayAdd` is the instructive one: already renamed once, and still needing a comment because it says
+*permission* where the meaning is "if they are missing, put them back". Needing a comment after one
+rename means go again, not settle.
 
-Two rules keep it honest:
+How to choose the name:
 
-- **Keep the pointer accurate.** A header pointing at a doc that no longer exists, or at the wrong
-  one, is worse than none — it sends the next reader somewhere useless. Renaming or moving a doc
-  means updating every header that references it.
-- **Do not let it grow.** It is a pointer, not a summary. If you find yourself adding a second
-  sentence, that sentence belongs in the doc.
+- **Name a variable for what it holds**, not its type or position. `signedInUser`, not `u`.
+  `pollTimer`, not `iv`. `outcome`, not `d`. `minutesLeft`, not `minutes`.
+- **Name a function for what it does to the world**, and make the verb match: `acceptInvite`,
+  `startPollingUntilSignedIn`, `copyToClipboard` — not `accept`, `tick`, `copy`.
+- **Single letters only in a genuinely anonymous one-line scope** — `xs.map(x => x.id)`. Never for
+  anything living more than a couple of lines, and never for a caught error you go on to inspect.
+- **Magic numbers get a named constant with a unit**: `SIGN_IN_POLL_MS`, `SYNC_WAIT_LIMIT_MS`. A
+  bare `2500` tells the reader nothing about whether it is safe to change.
+- **Extract the condition rather than commenting it.** `const waitedTooLong = Date.now() - since >
+  LIMIT_MS` beats the inequality inline, and puts the reasoning in the name.
+- **Reach for a longer name before reaching for a comment.** A name is read every time it is used;
+  a comment is read once, if at all, and then rots.
 
-## Boy-scout rule: any file you touch comes up to standard
-
-**A file you edit for any reason leaves your change compliant.** The conventions below are applied
-per-change, not by sweeping the tree, so the codebase converges as work moves through it.
-
-Six checks, all of them seconds:
-
-| Check | Standard | Where it is written |
-| --- | --- | --- |
-| Header | line 1 is `path — description. See doc.md.`, and a whole sentence | *Every source file opens with one line* |
-| Comments | the header, load-bearing lines and TODOs — nothing else | *Comments: a paired doc is the default* |
-| Names | **rename rather than explain** — any name you must explain is not descriptive enough | *A name that needs a comment* |
-| Doc placement | one exists at the right level for what you touched | *Where a doc lives* |
-| Doc truth | you re-read it against the code you just changed | *Keep the docs in sync* |
-| Doc style | dense bullets, every claim naming a real symbol | *Keep the docs in sync* |
-
-Two things this rule is deliberately **not**:
-
-- **Not a licence to batch-migrate.** Do not sweep files you are not otherwise changing. The
-  verification is the expensive half, and it is only cheap while you have the code in your head.
-- **Not a blocker on unrelated work.** If a file you touched is far off standard and fixing it
-  would swamp the actual change, bring the part you touched up to standard and say what you left.
-
-**Removing a comment is a move, never a delete.** Its content goes to one of two places, and
-choosing is the whole job:
-
-- **Into the name**, when it explained *what* something is. Renaming a parameter, extracting a
-  named constant and splitting a condition into a named boolean are all in scope of the change that
-  deleted the comment. Three waiting in this tree, as worked examples:
-
-  | Today | Its comment says | Should be |
-  |---|---|---|
-  | `mayAdd` | missing members are revoked, do not re-add | `reAddIfMissing` |
-  | `WATCH_RUNNING` | overlapping cycles stampede the host | `watchCycleInFlight` |
-  | `(cacheMaxMb * 1024 * 1024) / 10` | no single item past 10% of the cap | a named divisor |
-- **Into the doc**, when it explained *why* — design reasoning, an Immich quirk, history.
-
-If neither fits and the line is a hazard at its trigger point, it stays inline as one line.
-
-All six are judgement calls, which is why they are written down rather than left implied.
-
-## Where a doc lives: as close to the code as it needs to be, and no closer
-
-Granular on purpose. Pick the nearest level that earns one:
-
-- **File-level** — one module carrying dense reasoning of its own, e.g. a `store.md` next to
-  `store.ts`. None exist yet; create one the first time a module earns it.
-- **Folder-level** (`wire-protocol.md`, `sync-loops.md`) — a concern spanning several files, where
-  the useful explanation is how they fit together.
-- **Neither** — most files. A module whose names already say what it does needs no doc; it still
-  carries a header pointing at whichever doc covers it.
-- **Both** is fine. A file-level doc for the hard module, a folder doc for the concern around it.
-
-A concern starts as one file at `src/` root, and graduates to a folder with its own doc when it
-needs several files. `src/ARCHITECTURE.md` describes the whole tree.
+If you are writing "this does X", the name should have said X. If you are writing "this is needed
+because…", that is doc material. What may stay inline regardless is only what a name cannot carry —
+the categories in *What survives, concretely* below.
 
 ## Comments: a paired doc is the default, inline is the exception
 
@@ -294,50 +256,82 @@ Two traps when doing this work. **Judge each comment; never keyword-match it** �
 **a mechanical strip truncates**: it leaves fragments that end mid-clause but still read like
 instructions. Re-read every comment you touch, in full.
 
-## A name that needs a comment is the wrong name
+## Where a doc lives: as close to the code as it needs to be, and no closer
 
-The default, and it comes before every other rule about comments: **if you have to explain a name,
-the name is not descriptive enough. Rename it.** The comment is a symptom; fix the cause. This is
-not style policing — **bad names hide bugs.** A cleanup returned from inside a `.then()` rather than
-from the effect itself is dead code, because Preact honours only what the effect returns; in a body
-of `tick`/`u`/`iv`/`stop` that is invisible, and in one named for what it holds it is obvious.
+Granular on purpose. Pick the nearest level that earns one:
 
-Applies to everything you get to name — functions, variables, constants, parameters, type fields,
-files, routes, env vars, test titles, doc headings. Nothing is exempt for being small or local, test
-code included: an assertion whose message does not say what broke costs a debugging cycle every time
-it fires.
+- **File-level** — one module carrying dense reasoning of its own, e.g. a `store.md` next to
+  `store.ts`. None exist yet; create one the first time a module earns it.
+- **Folder-level** (`wire-protocol.md`, `sync-loops.md`) — a concern spanning several files, where
+  the useful explanation is how they fit together.
+- **Neither** — most files. A module whose names already say what it does needs no doc; it still
+  carries a header pointing at whichever doc covers it.
+- **Both** is fine. A file-level doc for the hard module, a folder doc for the concern around it.
 
-**The test:** would a reader who has never seen the code guess right from the name alone?
+A concern starts as one file at `src/` root, and graduates to a folder with its own doc when it
+needs several files. `src/ARCHITECTURE.md` describes the whole tree.
 
-| Name, with the comment it needs | Should be |
-| --- | --- |
-| `POLL` — *"how often to re-check whether they have signed in"* | `SIGN_IN_POLL_MS` |
-| `peer` — *"the server this person actually lives on"* | `homePeer` |
-| `(cacheMaxMb * 1024 * 1024) / 10` — *"no single item past 10% of cap"* | a named divisor |
-| `mayAdd` — *"missing members are revoked, do not re-add"* | `reAddIfMissing` |
+## Every source file opens with one line: what it is, and where its doc is
 
-`mayAdd` is the instructive one: already renamed once, and still needing a comment because it says
-*permission* where the meaning is "if they are missing, put them back". Needing a comment after one
-rename means go again, not settle.
+A single line, first line, no exceptions:
 
-How to choose the name:
+```ts
+/** sync/invites.ts — sharing an album by inviting a PERSON in Immich's own picker. See sync-loops.md. */
+/** sync/leave.ts — undoing a join. See sync-loops.md. */
+```
 
-- **Name a variable for what it holds**, not its type or position. `signedInUser`, not `u`.
-  `pollTimer`, not `iv`. `outcome`, not `d`. `minutesLeft`, not `minutes`.
-- **Name a function for what it does to the world**, and make the verb match: `acceptInvite`,
-  `startPollingUntilSignedIn`, `copyToClipboard` — not `accept`, `tick`, `copy`.
-- **Single letters only in a genuinely anonymous one-line scope** — `xs.map(x => x.id)`. Never for
-  anything living more than a couple of lines, and never for a caught error you go on to inspect.
-- **Magic numbers get a named constant with a unit**: `SIGN_IN_POLL_MS`, `SYNC_WAIT_LIMIT_MS`. A
-  bare `2500` tells the reader nothing about whether it is safe to change.
-- **Extract the condition rather than commenting it.** `const waitedTooLong = Date.now() - since >
-  LIMIT_MS` beats the inequality inline, and puts the reasoning in the name.
-- **Reach for a longer name before reaching for a comment.** A name is read every time it is used;
-  a comment is read once, if at all, and then rots.
+Format: `path — brief description. See <doc>.md.`
 
-If you are writing "this does X", the name should have said X. If you are writing "this is needed
-because…", that is doc material. What may stay inline regardless is only what a name cannot carry —
-the categories in *What survives, concretely* above.
+The one comment naming cannot replace, because it answers a question the code cannot: **where is
+the context for this file?**
+
+- A doc may sit beside the file (a `config.md` next to `config.ts`, once one earns it) or cover the
+  folder under a different name (`p2p/protocol.ts` → `wire-protocol.md`). Without the pointer you
+  would guess or grep.
+- It is machine-followable, which matters because agents work here: open the file, read one line,
+  load exactly the right doc before changing anything.
+
+Two rules keep it honest:
+
+- **Keep the pointer accurate.** A header pointing at a doc that no longer exists, or at the wrong
+  one, is worse than none — it sends the next reader somewhere useless. Renaming or moving a doc
+  means updating every header that references it.
+- **Do not let it grow.** It is a pointer, not a summary. If you find yourself adding a second
+  sentence, that sentence belongs in the doc.
+
+## Boy-scout rule: any file you touch comes up to standard
+
+**A file you edit for any reason leaves your change compliant.** The conventions above are applied
+per-change, not by sweeping the tree, so the codebase converges as work moves through it. This
+checklist is the recap:
+
+| Check | Standard | Where it is written |
+| --- | --- | --- |
+| Header | line 1 is `path — description. See doc.md.`, and a whole sentence | *Every source file opens with one line* |
+| Comments | the header, load-bearing lines and TODOs — nothing else | *Comments: a paired doc is the default* |
+| Names | **rename rather than explain** — any name you must explain is not descriptive enough | *A name that needs a comment* |
+| Doc placement | one exists at the right level for what you touched | *Where a doc lives* |
+| Doc truth | you re-read it against the code you just changed | *Keep the docs in sync* |
+| Doc style | dense bullets, every claim naming a real symbol | *Keep the docs in sync* |
+
+Two things this rule is deliberately **not**:
+
+- **Not a licence to batch-migrate.** Do not sweep files you are not otherwise changing. The
+  verification is the expensive half, and it is only cheap while you have the code in your head.
+- **Not a blocker on unrelated work.** If a file you touched is far off standard and fixing it
+  would swamp the actual change, bring the part you touched up to standard and say what you left.
+
+**Removing a comment is a move, never a delete.** Its content goes to one of two places, and
+choosing is the whole job:
+
+- **Into the name**, when it explained *what* something is. Renaming a parameter, extracting a
+  named constant and splitting a condition into a named boolean are all in scope of the change that
+  deleted the comment — worked examples are the table in *A name that needs a comment* above.
+- **Into the doc**, when it explained *why* — design reasoning, an Immich quirk, history.
+
+If neither fits and the line is a hazard at its trigger point, it stays inline as one line.
+
+All six are judgement calls, which is why they are written down rather than left implied.
 
 ## Invariants that will bite you
 
@@ -368,4 +362,4 @@ Enforced by lint or tests wherever that is possible.
 
 Code is grouped by concern under `src/` (a `config`/`state`/`peers` core, then `immich/`,
 `p2p/`, `sync/`, `media/`, `web/`). See [src/ARCHITECTURE.md](./src/ARCHITECTURE.md) for the
-module map, the data flow, and the doc conventions.
+module map and the data flow.
