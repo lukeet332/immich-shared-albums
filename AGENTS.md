@@ -64,6 +64,11 @@ worse without saying so**, and chip at the key one whenever a change touches key
     Applies to this file as much as to any other.
   - **Boy-scout, never batch** — see the section below. Verify a doc when you touch the code it
     describes; do not mass-rewrite docs you are not otherwise changing.
+- **Never enforce in prose what code can enforce.** An instruction in this file relies on being
+  read, remembered and obeyed every time; a hook, a lint rule, a test or an npm script does not.
+  Before adding a "remember to…" here, try to make it impossible to forget instead — and when a
+  rule below says something is enforced, that is a property to preserve, not decoration. This file
+  is for judgement calls code cannot make.
 - **Never test against a real server.** Use the throwaway mock rig in `demo/`. Never run
   the suite or experiments against anyone's production Immich, and never modify a real
   user's library.
@@ -76,8 +81,8 @@ worse without saying so**, and chip at the key one whenever a change touches key
   Branch protection enforces it; merges are squash-only.
 - **Conventional commits** decide the version automatically via release-please
   (`fix:` → patch, `feat:` → minor, `feat!:` → major). Don't hand-edit version numbers.
-- **Before pushing:** `npm run verify` clean (format, lint, types, runtime load, import cycles,
-  unit tests — seconds), then BOTH e2e lanes:
+- **CI gates every PR** on the fast checks and both e2e lanes — passing locally first is a
+  time-saver, not the enforcement. `npm run verify`, then:
 
   ```
   bash demo/run-mock-e2e.sh                       # API suite
@@ -93,9 +98,9 @@ worse without saying so**, and chip at the key one whenever a change touches key
   Run against a FRESHLY PURGED rig. `run-mock-e2e.sh` purges; recreating containers by hand does
   not, and stale bot keys in `state.db` produce `Invalid API key` failures that look like product
   bugs and are not.
-- **Enable the hook once per clone:** `git config core.hooksPath .githooks`. It runs the fast
-  gate on commit. The e2e suite is deliberately NOT in the hook — a seven-minute hook is a hook
-  people bypass.
+- **The pre-commit hook runs the fast gate** (`verify:fast`) and is enabled by `npm install`
+  (the `prepare` script sets `core.hooksPath`). The e2e suite is deliberately NOT in the hook —
+  a seven-minute hook is a hook people bypass.
 - **Formatting is Prettier's, correctness is ESLint's.** They do not overlap: `eslint.config.mjs`
   contains zero formatting rules, and that is a property to preserve. Never add
   `tseslint.configs.stylistic`/`recommended` or a whitespace rule there.
