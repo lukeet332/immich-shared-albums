@@ -24,19 +24,21 @@ it as Immich's problem. Concretely, and these are design rules not sentiments:
 - **Minimise the footprint in someone else's instance.** Every user, album, and permission this
   addon creates is a liability the operator did not ask for.
 
-**Where we currently fall short, honestly:** the sidecar still needs an all-permissions admin API
-key, so its blast radius is the whole instance — the sharpest contradiction of this ethos in the
-codebase, and worth chipping at whenever a change touches key handling. It also creates real user
-accounts in your Immich (one per remote person) that show up in every picker, because Immich has
-no service-account flag. Both are known costs, not oversights; do not make either worse without
-saying so.
+**Where this falls short today** — known costs, not oversights. Do not make either worse without
+saying so:
+
+- **An all-permissions admin API key**, so the blast radius is the whole instance. The sharpest
+  contradiction of this ethos in the codebase; worth chipping at whenever a change touches keys.
+- **Real user accounts in your Immich**, one per remote person, appearing in every picker — Immich
+  has no service-account flag.
 
 ## Golden rules
 
 - **Never touch Immich itself.** This is a sidecar: it only ever adds its own container
   and talks to Immich over the public API. Never modify Immich's source, compose
   services, database, or upload folders. Everything must fail open — Immich has to work
-  perfectly with the sidecar dead. (Design invariants: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md) "Iron rules".)
+  perfectly with the sidecar dead. (Design invariants: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md)
+  "Iron rules".)
 - **Keep the docs in sync — and this rule is load-bearing, not housekeeping.** `src/` carries
   Markdown docs at whatever level earns one: a folder doc where modules are small and cohesive, a
   file-level doc next to anything with dense reasoning of its own, and neither where a file needs
@@ -45,10 +47,10 @@ saying so.
   Any behaviour change updates the relevant doc(s) **in the same change**. A doc that lies is
   worse than no doc: treat drift as a bug and fix it with the code that caused it.
 
-  Explanation lives in these docs rather than in comments — naming carries the *what*, docs carry the *why* (see the naming section below). That
-  only works while they track the code, so the further an explanation sits from what it explains,
-  the more strictly this rule applies. Moving prose out of a source file and then letting it rot
-  is worse than having left it inline.
+  Explanation lives in these docs, not in comments: naming carries the *what*, docs carry the
+  *why*. That only holds while they track the code, so the further an explanation sits from what it
+  explains, the more strictly this rule applies. Moving prose out of a file and letting it rot is
+  worse than leaving it inline.
 
   Four rules for writing them:
 
@@ -71,7 +73,8 @@ saying so.
 
 ## How changes land
 
-- **Everything goes through a pull request**, gated on both e2e lanes and the fast gate below. Branch protection enforces it; merges are squash-only.
+- **Everything goes through a pull request**, gated on both e2e lanes and the fast gate below.
+  Branch protection enforces it; merges are squash-only.
 - **Conventional commits** decide the version automatically via release-please
   (`fix:` → patch, `feat:` → minor, `feat!:` → major). Don't hand-edit version numbers.
 - **Before pushing:** `npm run verify` clean (format, lint, types, runtime load, import cycles,
@@ -103,57 +106,53 @@ saying so.
 Two lanes, and the right one depends on whether Immich is involved.
 
 - **Pure logic → strict TDD.** Add the case to `src/*.test.ts`, watch it fail, then implement.
-  The loop is sub-second (`npm test`), so there is no excuse to skip it. Anything that can be a
-  pure function should be one, precisely so it can be tested this way — see `sync/invitees.ts`,
-  which was extracted from the one code path that removes a real person from a real album.
-- **Immich-facing behaviour → discover, then pin, then implement.** You cannot write a correct
-  test against an API whose behaviour you are guessing at, and guessing has caused real bugs
-  here: `GET /albums` is scoped per user, adding a user who is already the owner returns 200 and
-  is silently ignored, and album responses carry no `ownerId`. So probe the real thing on the
-  mock rig first, write the e2e assertion, then implement. The test still precedes the
-  implementation — it just follows the discovery.
+  Sub-second loop (`npm test`), so there is no excuse to skip it. Anything that can be a pure
+  function should be one, precisely so it can be tested this way — see `sync/invitees.ts`.
+- **Immich-facing behaviour → discover, then pin, then implement.** Probe the real thing on the
+  mock rig, write the e2e assertion, then implement. The test still precedes the implementation; it
+  just follows the discovery. You cannot write a correct test against an API you are guessing at,
+  and these three all caused real bugs here:
+  - `GET /albums` is scoped **per user** — the admin key sees only the admin's own albums.
+  - Adding a user who is already the owner returns **200**, silently ignored.
+  - Album responses carry **no `ownerId`** — the owner is inside `albumUsers`.
 
-**Assert invariants, not strings.** "No two users share a display name" survives every future
-rename; a test pinning one literal name has to be edited whenever behaviour changes, and a test
-edited to match new behaviour has stopped being a test. **Print real state on failure** — a
-message showing what was actually found saves a whole debugging cycle, and the e2e suite's
-`check(name, ok, detail)` takes that detail for exactly this reason.
+- **Assert invariants, not strings.** "No two users share a display name" survives every future
+  rename. A test pinning one literal name gets edited whenever behaviour changes — and a test
+  edited to match new behaviour has stopped being a test.
+- **Print real state on failure.** Showing what was actually found saves a debugging cycle; the e2e
+  `check(name, ok, detail)` takes that detail for exactly this reason.
 
 ## Store the fact, don't infer it — but only if the fact is safe to hold
 
-Nearly every sync bug in this project came from *deducing* something the code could have
-recorded. Two accounts existed for one person so that "who added this album membership" could be
-inferred from which account it was; a boolean said "we know where this person lives" instead of
-storing *where*; a mapping pointed at an account by a name-derived slug instead of its id, and
-stopped resolving the moment the account was keyed differently. Each inference was correct when
-written and wrong later.
+**Prefer a column in `state.db` over a rule in someone's head.** Nearly every sync bug here came
+from deducing what the code could have recorded — each inference correct when written, wrong later:
 
-So prefer a column in `state.db` over a rule in someone's head. **With two constraints, because
-a stored fact is also a stored liability:**
+- two accounts per person, so "who added this membership" could be inferred from which one it was
+- a boolean saying "we know where this person lives" instead of storing *where*
+- a mapping pointing at an account by a name-derived slug instead of its id — it stopped resolving
+  the moment the account was keyed differently
+
+Two constraints, because a stored fact is also a stored liability:
 
 - **Only store what is safe to hold.** `state.db` holds this household's ed25519 private key and
   the bot accounts' API keys, so anything added inherits that blast radius. (The *admin* key is
   not in there — it comes from `IMMICH_API_KEY` in the environment.) Two rules follow, neither
   about compliance:
-  - The bot password is rolled to a value nobody keeps (`ensureLocalAccountFor`), because it existed
-    only to mint one API key and has no purpose afterwards. The concrete gain is small but real:
-    a bot key deliberately lacks `apiKey.create`, so it can do its 22 things and no more, whereas
-    a password logs in interactively and can mint an unrestricted key for that account. Keeping it
-    is pure downside rather than a tradeoff — the bots are non-admin and quota-capped, so this is
-    cheap hygiene, not a critical control. The e2e asserts it.
-  - The user directory sends **names, not emails** — not because storing an email is dangerous,
-    but because an Immich email is a *login identifier*. Sending it gives a linked household, or
-    whoever later compromises it, the first half of a credential for every user here. Names are
-    all a picker needs, so nothing is given up.
-
-  Both scale with exposure: on a single-user LAN-only box they buy little, and on a public domain
-  with several linked households they matter. Default to the cautious side when it is free, and
-  say which it is rather than implying everything is critical.
-- **Order the writes so a crash fails safe.** A stored fact that is missing must lead somewhere
-  harmless. `added` records a membership BEFORE creating it, so a crash in between makes the
-  sidecar *ignore* an invitation rather than treat its own membership as a human's and share an
-  album nobody offered. Work out which way each new record fails before writing it, and say so in
-  a comment.
+  - **No retained bot password.** Rolled to a value nobody keeps (`ensureLocalAccountFor`) once the
+    API key is minted. A bot key deliberately lacks `apiKey.create`, so it can do its listed
+    actions and no more; a password logs in interactively and can mint an unrestricted key for that
+    account. Pure downside rather than a tradeoff. The e2e asserts it.
+  - **The directory sends names, not emails.** Not because an email is dangerous to store, but
+    because an Immich email is a *login identifier* — sending it hands a linked household, or
+    whoever later compromises it, the first half of a credential for every user here. A picker
+    needs only names, so nothing is given up.
+  - Both scale with exposure: little on a single-user LAN box, more on a public domain with several
+    linked households. Default to caution when it is free, and say which it is rather than
+    implying everything is critical.
+- **Order the writes so a crash fails safe.** A missing stored fact must lead somewhere harmless.
+  `added` records a membership *before* creating it, so a crash in between makes the sidecar ignore
+  an invitation rather than read its own membership as a human's. Work out which way each new
+  record fails before writing it, and say so in a one-line comment.
 
 Corollary: a fact only counts as known if something *proved* it. `Contributor.homePeer` is set
 only by a linked server's directory, never by an incoming photo — a relayed ref names the person
@@ -170,14 +169,14 @@ A single line, first line, no exceptions:
 
 Format: `path — brief description. See <doc>.md.`
 
-This is the one comment whose job cannot be done by naming, because it answers a question the code
-cannot: **where is the context for this file?** Some files have a doc of their own beside them
-(a `config.md` beside `config.ts`, once one earns it); others are covered by a folder doc under a
-different name
-(`p2p/protocol.ts` → `wire-protocol.md`). Without the pointer you would have to guess or grep.
+The one comment naming cannot replace, because it answers a question the code cannot: **where is
+the context for this file?**
 
-It also makes the link machine-followable, which matters because agents work here: open the file,
-read one line, know exactly which doc to load for context before changing anything.
+- A doc may sit beside the file (a `config.md` next to `config.ts`, once one earns it) or cover the
+  folder under a different name (`p2p/protocol.ts` → `wire-protocol.md`). Without the pointer you
+  would guess or grep.
+- It is machine-followable, which matters because agents work here: open the file, read one line,
+  load exactly the right doc before changing anything.
 
 Two rules keep it honest:
 
@@ -213,14 +212,15 @@ Two things this rule is deliberately **not**:
 **Removing a comment is a move, never a delete.** Its content goes to one of two places, and
 choosing is the whole job:
 
-- **Into the name**, when it explained *what* something is. Three that are waiting in this tree,
-  as worked examples: `mayAdd` carries a comment about revoked members — it should be
-  `reAddIfMissing`, and the comment goes with the rename. `WATCH_RUNNING` carries one about
-  stampeding the host — it should be `watchCycleInFlight`. `(cacheMaxMb * 1024 * 1024) / 10`
-  carries one about the per-item cap — the divisor should be a named constant. Renaming a
-  parameter, extracting a named constant and splitting a condition into a named boolean are all in
-  scope of the change that deleted the comment; do not stop at deletion and leave the name as it
-  was.
+- **Into the name**, when it explained *what* something is. Renaming a parameter, extracting a
+  named constant and splitting a condition into a named boolean are all in scope of the change that
+  deleted the comment. Three waiting in this tree, as worked examples:
+
+  | Today | Its comment says | Should be |
+  |---|---|---|
+  | `mayAdd` | missing members are revoked, do not re-add | `reAddIfMissing` |
+  | `WATCH_RUNNING` | overlapping cycles stampede the host | `watchCycleInFlight` |
+  | `(cacheMaxMb * 1024 * 1024) / 10` | no single item past 10% of the cap | a named divisor |
 - **Into the doc**, when it explained *why* — design reasoning, an Immich quirk, history.
 
 If neither fits and the line is a hazard at its trigger point, it stays inline as one line.
@@ -335,11 +335,10 @@ find yourself writing "this does X", the name should have said X.
 
 ## Name things so the next reader does not have to decode them
 
-Not style policing — bad names hide bugs. A `useEffect` in the accept page used `tick`, `u`, `iv`
-and `stop`, and buried in that soup was a `return () => clearInterval(iv)` inside a `.then()`,
-which is dead code: Preact only honours the value the effect itself returns, so the poll kept
-running after the page navigated away. With the pieces named for what they hold, the missing
-cleanup was obvious on sight.
+Not style policing — **bad names hide bugs.** A `useEffect` named `tick`/`u`/`iv`/`stop` concealed
+a `return () => clearInterval(iv)` inside a `.then()`: dead code, because Preact honours only the
+value the effect itself returns, so the poll outlived the page. Named for what they held, the
+missing cleanup was obvious on sight.
 
 - **Name a variable for what it holds, not its type or its position.** `signedInUser`, not `u`.
   `pollTimer`, not `iv`. `outcome`, not `d`. `minutesLeft`, not `minutes`.
@@ -363,11 +362,17 @@ debugging cycle every time it fires.
 
 These are enforced by lint or tests where possible, because each one has already caused a bug.
 
-- **Bot users live in disjoint namespaces** (`BOT_PREFIX` in `config.ts`). Invitation detection
-  reads "this bot is an album member" as a human's intent to share, which is only sound for bots
-  the sidecar *never* adds itself. Attribution contributors are the opposite — the sidecar adds
-  those. One user once served both roles, and origin and member ping-ponged mirror/withdraw every
-  poll, each offering the other a mirror of the other's album.
+- **Bot namespaces stay disjoint** — no `BOT_PREFIX` may prefix another (`invariants.test.ts`
+  asserts it).
+- **Album membership is not intent.** One account per remote person does both jobs: it owns their
+  mirrored photos *and* is what a human picks to share with them, so the sidecar adds these
+  accounts to albums itself. Two records carry the distinction instead of the namespace:
+  - `added` (`store.addedRecord`) — memberships **we** created, so only a human's reads as an
+    invitation. Record before the add.
+  - `Contributor.homePeer` — set only by a linked server's directory, which is the one thing that
+    proves where a person lives. Without it an account is attribution-only.
+
+  Getting this wrong in the unsafe direction shares an album nobody offered.
 - **Never reassign shared state arrays.** `state.mappings = state.mappings.filter(...)` discards
   whatever a concurrent loop pushed onto the old reference. Splice in place. (ESLint enforces it.)
 - **Never inline a single-source-of-truth constant** — the bot email domain, `PROTOCOL_VERSION`.
