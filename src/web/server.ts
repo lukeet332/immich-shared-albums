@@ -15,14 +15,15 @@
 import http from 'node:http';
 import { Readable } from 'node:stream';
 import { CFG, log, ROUTE_PREFIX } from '../config.ts';
-import { state } from '../state.ts';
-import { immich } from '../immich/client.ts';
+import { state, store } from '../state.ts';
+import { immich, publicShareLinkMeta } from '../immich/client.ts';
 import { verify, callingPeer } from '../peers.ts';
 import { handlePreview, handleOriginal, handlePlayback } from '../media/proxy.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
+import { sharePage, signInPage } from './assets.ts';
 import { proxyToImmich } from './passthrough.ts';
-import { callerIdentity, signInRequired, SIGN_IN_PAGE } from './auth.ts';
+import { callerIdentity, signInRequired } from './auth.ts';
 import { handleRedeem, handleRefs, handleVersion, handleNudge, handleManifest } from '../p2p/protocol.ts';
 import { join } from '../p2p/join.ts';
 import { leaveAlbum } from '../sync/leave.ts';
@@ -58,6 +59,10 @@ async function readCappedBody(req): Promise<string | null> {
   }
   return Buffer.concat(chunks).toString();
 }
+
+// Default ON. Off refuses redemption itself, not just the join card — the label promises it.
+const shareLinkJoiningEnabled = () =>
+  (store.kv('settings') as { shareLinkJoin?: boolean } | null)?.shareLinkJoin !== false;
 
 export const server = http.createServer(async (req, res) => {
   const send = (code, obj) => {
@@ -95,20 +100,37 @@ export const server = http.createServer(async (req, res) => {
         const caller = await callerIdentity(req);
         if (!caller?.isAdmin) {
           res.writeHead(caller ? 403 : 401, { 'Content-Type': 'text/html' });
-          return res.end(SIGN_IN_PAGE(surface.action ?? 'use this page'));
+          return res.end(signInPage(surface.action ?? 'use this page'));
         }
       }
       res.writeHead(200, { 'Content-Type': surface.type, 'Cache-Control': 'no-cache' });
       return res.end(surface.body());
+    }
+    // The share shell: the native share page framed under the join card. ?native=1 is the
+    // passthrough escape hatch (what the iframe loads, and where dismiss navigates).
+    const shareHit = u.pathname.match(/^\/share\/([^/]+)$/);
+    if (shareHit && req.method === 'GET' && shareLinkJoiningEnabled() && !u.searchParams.has('native')) {
+      const meta = await publicShareLinkMeta(shareHit[1]);
+      res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' });
+      return res.end(
+        sharePage(
+          meta && {
+            albumName: meta.albumName,
+            coverUrl: meta.coverAssetId
+              ? `/api/assets/${meta.coverAssetId}/thumbnail?key=${encodeURIComponent(shareHit[1])}`
+              : undefined,
+          }
+        )
+      );
     }
     // Byte interceptors (hotlink model): the app's own asset URLs are served with true
     // bytes streamed live from the owner's server for proxy assets. See media/interceptor.
     const assetHit = u.pathname.match(/^\/api\/assets\/([^/]+)\/(thumbnail|original|video\/playback)$/);
     if (assetHit && req.method === 'GET' && (await serveInterceptedBytes(req, res, assetHit[1], assetHit[2])))
       return;
-    // Everything that isn't a sidecar route -> transparent proxy to Immich (banner-injected
-    // on /share pages). Streams both ways: uploads must not be buffered here.
-    if (!path.startsWith(ROUTE_PREFIX)) return proxyToImmich(req, res, u.pathname);
+    // Everything that isn't a sidecar route -> transparent proxy to Immich.
+    // Streams both ways: uploads must not be buffered here.
+    if (!path.startsWith(ROUTE_PREFIX)) return proxyToImmich(req, res);
 
     // ---- the sidecar's own routes: cap the body, then authorise ----
     const body = await readCappedBody(req);
@@ -151,6 +173,27 @@ export const server = http.createServer(async (req, res) => {
       if (!caller) return send(401, signInRequired('see connected servers'));
       if (!caller.isAdmin) return send(403, { error: 'only an admin can see connected servers' });
       return send(200, { household: localHousehold(), peers: linkedPeers(), albums: sharedAlbums() });
+    }
+    if (path === `${ROUTE_PREFIX}/settings` && req.method === 'GET') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('change settings'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can change settings' });
+      return send(200, { shareLinkJoin: shareLinkJoiningEnabled() });
+    }
+    if (path === `${ROUTE_PREFIX}/settings` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('change settings'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can change settings' });
+      try {
+        const b = JSON.parse(body);
+        store.kvSet('settings', {
+          ...(store.kv('settings') ?? {}),
+          shareLinkJoin: b.shareLinkJoin !== false,
+        });
+        return send(200, { shareLinkJoin: shareLinkJoiningEnabled() });
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
     }
     if (path === `${ROUTE_PREFIX}/pairings` && req.method === 'GET') {
       const caller = await callerIdentity(req);
@@ -216,6 +259,8 @@ export const server = http.createServer(async (req, res) => {
       return send(code, obj);
     }
     if (path === `${ROUTE_PREFIX}/api/v1/invites/redeem` && req.method === 'POST') {
+      if (!shareLinkJoiningEnabled())
+        return send(403, { error: 'this server does not accept album joins via shared links' });
       const [code, obj] = await handleRedeem(req, body);
       return send(code, obj);
     }

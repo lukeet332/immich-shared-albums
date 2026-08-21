@@ -13,12 +13,11 @@
  * authenticates on its own.
  */
 import { ROUTE_PREFIX } from '../config.ts';
-import { PANEL, ACCEPT_PAGE } from './pages.ts';
-import { BANNER_JS } from './banner.ts';
-import { PANEL_BUNDLE, ACCEPT_BUNDLE } from './panel-bundle.ts';
+import { DIST, panelPage, acceptPage } from './assets.ts';
 
 const HTML = 'text/html';
 const JS = 'application/javascript';
+const CSS_TYPE = 'text/css';
 
 export type Surface = {
   /** Content-Type to send. */
@@ -32,16 +31,15 @@ export type Surface = {
 };
 
 export const SURFACES: Record<string, Surface> = {
-  // The admin panel. A shell that mounts the Preact app in panel.bundle.js.
-  [ROUTE_PREFIX]: { type: HTML, body: PANEL, admin: true, action: 'manage shared albums' },
-  [`${ROUTE_PREFIX}/`]: { type: HTML, body: PANEL, admin: true, action: 'manage shared albums' },
-  // Turns a share link into a join. Must be reachable while signed out.
-  [`${ROUTE_PREFIX}/accept`]: { type: HTML, body: ACCEPT_PAGE },
-  // Injected into another server's share page so a visitor can type their own server address.
-  [`${ROUTE_PREFIX}/banner.js`]: { type: JS, body: () => BANNER_JS },
-  // The two compiled apps. Separate bundles so the public joining page carries no admin code.
-  [`${ROUTE_PREFIX}/panel.bundle.js`]: { type: JS, body: () => PANEL_BUNDLE },
-  [`${ROUTE_PREFIX}/accept.bundle.js`]: { type: JS, body: () => ACCEPT_BUNDLE },
+  [ROUTE_PREFIX]: { type: HTML, body: panelPage, admin: true, action: 'manage shared albums' },
+  [`${ROUTE_PREFIX}/`]: { type: HTML, body: panelPage, admin: true, action: 'manage shared albums' },
+  [`${ROUTE_PREFIX}/accept`]: { type: HTML, body: acceptPage },
+  ...Object.fromEntries(
+    Object.entries(DIST).map(([name, content]) => [
+      `${ROUTE_PREFIX}/assets/${name}`,
+      { type: name.endsWith('.js') ? JS : CSS_TYPE, body: () => content },
+    ])
+  ),
 };
 
 export const surfaceFor = (path: string): Surface | undefined => SURFACES[path];

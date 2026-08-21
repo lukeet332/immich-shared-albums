@@ -1,0 +1,17 @@
+{
+  "// why this lives here": [
+    "The UI is a browser Preact workspace: it needs the JSX transform and DOM types, which the",
+    "sidecar deliberately does not have. Editors resolve a file against the NEAREST tsconfig, so",
+    "one config here covers every page and keeps VS Code agreeing with `npm run typecheck`."
+  ],
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["./**/*.ts", "./**/*.tsx"],
+  "exclude": []
+}

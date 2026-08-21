@@ -809,12 +809,19 @@ console.log('— stage: route prefix rename + legacy compatibility');
   check('join is gated on the new prefix',
         await code(`${BS}/immich-shared-albums/join`, j2({ url: 'x' }, '')) === 401);
 
-  // the injected banner must reference the NEW prefix, or discovery breaks
-  const bannerJs = await (await fetch(`${BS}/immich-shared-albums/banner.js`)).text();
-  const bannerOk = bannerJs.includes('/immich-shared-albums/health');
-  check('served banner.js points at the new prefix', bannerOk,
-        bannerOk ? '' : (bannerJs.includes('/sidecar/health') ? 'still says /sidecar/health' : 'no health probe found'));
-  check('served banner.js has no stale /sidecar/ paths', !bannerJs.includes('/sidecar/'));
+  // the share page serves OUR document (join card over the framed native page) — the discovery surface
+  const shell = await (await fetch(`${BS}/share/e2e-any-key`)).text();
+  check('share page serves the join document', shell.includes('/immich-shared-albums/assets/share.js'),
+        shell.slice(0, 120));
+  check('settings are not readable without a session',
+        (await fetch(`${BS}/immich-shared-albums/settings`)).status === 401);
+  check('settings are not writable without a session',
+        (await fetch(`${BS}/immich-shared-albums/settings`, { method: 'POST', body: '{}' })).status === 401);
+  check('the join app probes the typed server via the prefixed health route',
+        (await (await fetch(`${BS}/immich-shared-albums/assets/share.js`)).text()).includes('/immich-shared-albums/health'));
+  const native = await (await fetch(`${BS}/share/e2e-any-key?native=1`)).text();
+  check('?native=1 passes the share page through untouched', !native.includes('/immich-shared-albums/assets/share.js'),
+        native.slice(0, 120));
 }
 
 console.log('— stage: websocket upgrades pass through the sidecar');
