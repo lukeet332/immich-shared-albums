@@ -81,26 +81,15 @@ worse without saying so**, and chip at the key one whenever a change touches key
   Branch protection enforces it; merges are squash-only.
 - **Conventional commits** decide the version automatically via release-please
   (`fix:` → patch, `feat:` → minor, `feat!:` → major). Don't hand-edit version numbers.
-- **CI gates every PR** on the fast checks and both e2e lanes — passing locally first is a
-  time-saver, not the enforcement. `npm run verify`, then:
-
-  ```
-  bash demo/run-mock-e2e.sh                       # API suite
-  cd demo/e2e && CKEY=<origin key> \
-    HOST_RESOLVER_RULES="MAP host.docker.internal 127.0.0.1" node browser-test.mjs
-  ```
-
-  **Run the browser lane whenever you touch a page.** It is the only coverage of the banner and
-  accept flows — nothing in the API suite loads a page in a browser, so a page can break with that
-  suite fully green. The resolver rule exists so this runs on a dev machine without editing
-  /etc/hosts.
-
-  Run against a FRESHLY PURGED rig. `run-mock-e2e.sh` purges; recreating containers by hand does
-  not, and stale bot keys in `state.db` produce `Invalid API key` failures that look like product
-  bugs and are not.
-- **The pre-commit hook runs the fast gate** (`verify:fast`) and is enabled by `npm install`
-  (the `prepare` script sets `core.hooksPath`). The e2e suite is deliberately NOT in the hook —
-  a seven-minute hook is a hook people bypass.
+- **CI runs the fast checks and both e2e lanes on every PR**; the pre-commit hook (enabled by
+  `npm install`) runs `verify:fast` on every commit. To get the same result locally before pushing:
+  `npm run verify`, `bash demo/run-mock-e2e.sh` (API lane, purges its rig first), and
+  `demo/e2e/browser-test.mjs` (browser lane — the only coverage that loads a page).
+  The e2e suite is deliberately NOT in the hook: a seven-minute hook is a hook people bypass.
+- **Two traps code cannot catch for you:** a rig recreated by hand instead of via
+  `run-mock-e2e.sh` keeps stale bot keys in `state.db`, and the resulting `Invalid API key`
+  failures look like product bugs; and a browser-lane run on a dev machine needs
+  `HOST_RESOLVER_RULES="MAP host.docker.internal 127.0.0.1"` rather than an /etc/hosts edit.
 - **Formatting is Prettier's, correctness is ESLint's.** They do not overlap: `eslint.config.mjs`
   contains zero formatting rules, and that is a property to preserve. Never add
   `tseslint.configs.stylistic`/`recommended` or a whitespace rule there.
