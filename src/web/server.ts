@@ -60,9 +60,9 @@ async function readCappedBody(req): Promise<string | null> {
   return Buffer.concat(chunks).toString();
 }
 
-// Default ON: the share page is the discovery surface. kv so the panel can flip it without a restart.
-const shareShellEnabled = () =>
-  (store.kv('settings') as { shareShell?: boolean } | null)?.shareShell !== false;
+// Default ON. Off refuses redemption itself, not just the join card — the label promises it.
+const shareLinkJoiningEnabled = () =>
+  (store.kv('settings') as { shareLinkJoin?: boolean } | null)?.shareLinkJoin !== false;
 
 export const server = http.createServer(async (req, res) => {
   const send = (code, obj) => {
@@ -109,7 +109,7 @@ export const server = http.createServer(async (req, res) => {
     // The share shell: the native share page framed under the join card. ?native=1 is the
     // passthrough escape hatch (what the iframe loads, and where dismiss navigates).
     const shareHit = u.pathname.match(/^\/share\/([^/]+)$/);
-    if (shareHit && req.method === 'GET' && shareShellEnabled() && !u.searchParams.has('native')) {
+    if (shareHit && req.method === 'GET' && shareLinkJoiningEnabled() && !u.searchParams.has('native')) {
       const meta = await publicShareLinkMeta(shareHit[1]);
       res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' });
       return res.end(
@@ -178,7 +178,7 @@ export const server = http.createServer(async (req, res) => {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('change settings'));
       if (!caller.isAdmin) return send(403, { error: 'only an admin can change settings' });
-      return send(200, { shareShell: shareShellEnabled() });
+      return send(200, { shareLinkJoin: shareLinkJoiningEnabled() });
     }
     if (path === `${ROUTE_PREFIX}/settings` && req.method === 'POST') {
       const caller = await callerIdentity(req);
@@ -186,8 +186,11 @@ export const server = http.createServer(async (req, res) => {
       if (!caller.isAdmin) return send(403, { error: 'only an admin can change settings' });
       try {
         const b = JSON.parse(body);
-        store.kvSet('settings', { ...(store.kv('settings') ?? {}), shareShell: b.shareShell !== false });
-        return send(200, { shareShell: shareShellEnabled() });
+        store.kvSet('settings', {
+          ...(store.kv('settings') ?? {}),
+          shareLinkJoin: b.shareLinkJoin !== false,
+        });
+        return send(200, { shareLinkJoin: shareLinkJoiningEnabled() });
       } catch (e) {
         return send(400, { error: e.message });
       }
@@ -256,6 +259,8 @@ export const server = http.createServer(async (req, res) => {
       return send(code, obj);
     }
     if (path === `${ROUTE_PREFIX}/api/v1/invites/redeem` && req.method === 'POST') {
+      if (!shareLinkJoiningEnabled())
+        return send(403, { error: 'this server does not accept album joins via shared links' });
       const [code, obj] = await handleRedeem(req, body);
       return send(code, obj);
     }
