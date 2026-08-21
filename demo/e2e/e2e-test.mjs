@@ -1,4 +1,4 @@
-// Full-cycle E2E assertion harness: reseed A, reset B, join, contribute, verify.
+/** e2e/e2e-test.mjs — full-cycle assertion harness: reseed A, reset B, join, contribute, verify. See README.md. */
 // Usage: node e2e-test.mjs  (env: AKEY, BKEY, A_URL, B_URL, B_SIDECAR)
 const A = process.env.A_URL || 'http://localhost:2285';
 const B = process.env.B_URL || 'http://localhost:2284';
@@ -124,27 +124,39 @@ const bAlbums = await api(B, BKEY, '/albums');
 const mirror = bAlbums.find(a => a.albumName === joinRes.album && a.assetCount > 0) || bAlbums.find(a => a.albumName === joinRes.album);
 check('mirror exists', !!mirror);
 const bUsers = await api(B, BKEY, '/admin/users');
-const bUtility = bUsers.filter(u => isBot(u.email));
-const originOwnerName = (await api(A, AKEY, '/users/me')).name;
-check(`mirror owner is ${originOwnerName} (via shared albums)`, bUtility.some(u => u.name === `${originOwnerName} (via shared albums)`), bUtility.map(u => u.name).join(', '));
-const mAssets = await until(async () => { const x = await albumAssets(B, BKEY, mirror.id); return x.length === 4 ? x : null; });
-check('mirror has 4 assets', !!mAssets, mAssets ? '' : 'timed out');
-if (mAssets) {
+const bBotUsers = bUsers.filter(u => isBot(u.email));
+const originOwner = await api(A, AKEY, '/users/me');
+const originOwnerName = originOwner.name;
+// One account per remote person is both the mirror owner and the picker entry, so its display
+// name changes when the directory sync lands. Asserting a name here raced; assert the id keying.
+const originOwnerEmail = `person-${originOwner.id}@immich-shared-albums.local`;
+const ownerUtility = bBotUsers.find(u => u.email === originOwnerEmail);
+check('an account exists for the origin album owner, keyed by their id on their own server',
+      !!ownerUtility, bBotUsers.map(u => u.email).join(', '));
+check('that account is named for the person', !!ownerUtility && ownerUtility.name.startsWith(originOwnerName),
+      ownerUtility?.name || 'no account');
+const mirrorAssets = await until(async () => { const x = await albumAssets(B, BKEY, mirror.id); return x.length === 4 ? x : null; });
+check('mirror has 4 assets', !!mirrorAssets, mirrorAssets ? '' : 'timed out');
+if (mirrorAssets) {
   const humanIds = bUsers.filter(u => !isBot(u.email)).map(u => u.id);
-  check('no mirror asset owned by a human on B', mAssets.every(a => !humanIds.includes(a.ownerId)));
-  const dates = mAssets.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
+  check('no mirror asset owned by a human on B', mirrorAssets.every(a => !humanIds.includes(a.ownerId)));
+  const dates = mirrorAssets.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
   check('capture dates preserved (order fix)', JSON.stringify(dates) === JSON.stringify(['2026-08-11','2026-08-12','2026-08-13','2026-08-14']), dates.join(','));
-  const withGps = mAssets.find(a => a.exifInfo?.latitude);
+  const withGps = mirrorAssets.find(a => a.exifInfo?.latitude);
   check('GPS location preserved on mirrored photo', !!withGps && Math.abs(withGps.exifInfo.latitude - 51.5074) < 0.001,
         withGps ? `lat=${withGps.exifInfo.latitude}` : 'no GPS on any mirror asset');
-  const ownerUtility = bUtility.find(u => u.name === `${originOwnerName} (via shared albums)`);
-  check('origin avatar synced onto utility user', !!(ownerUtility && ownerUtility.profileImagePath), ownerUtility?.profileImagePath ? 'has avatar' : 'no avatar');
+  // Avatar sync is best-effort and retried, so a single sample races the retry loop.
+  const avatarLanded = await until(async () => {
+    const u = (await api(B, BKEY, '/admin/users')).find(x => x.email === originOwnerEmail);
+    return u?.profileImagePath ? u : null;
+  }, 30000);
+  check('origin avatar synced onto utility user', !!avatarLanded, avatarLanded ? 'has avatar' : 'no avatar');
   const originSums = new Set((await albumAssets(A, AKEY, ALBUM_ID)).map(a => a.checksum));
-  check('mirrors are light renditions, not byte copies (reference model)', mAssets.every(a => !originSums.has(a.checksum)));
-  const stubSizes = mAssets.map(a => (a.exifInfo || {}).fileSizeInByte || 0);
+  check('mirrors are light renditions, not byte copies (reference model)', mirrorAssets.every(a => !originSums.has(a.checksum)));
+  const stubSizes = mirrorAssets.map(a => (a.exifInfo || {}).fileSizeInByte || 0);
   check('mirrors are kilobyte stubs — hotlink model stores no pixels', stubSizes.every(n => n > 0 && n < 20000),
         stubSizes.join(','));
-  const gpsProxy = withGps || mAssets[0];
+  const gpsProxy = withGps || mirrorAssets[0];
   const viaProxy = await fetchBytes(`${BS}/api/assets/${gpsProxy.id}/original`, BKEY);
   const originOrig = await fetchBytes(`${A}/api/assets/${aIds[0]}/original`, AKEY);
   check('on-demand original streams byte-identical from the owner server', sha1(viaProxy) === sha1(originOrig),
