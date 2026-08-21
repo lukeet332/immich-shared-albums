@@ -138,19 +138,13 @@ src/
     banner/           banner.js, injected into /share/* pages
 ```
 
-Conventions for this tree:
+**Dependencies point downward.** Core (`config`/`state`/`peers`) depends on nothing else here;
+feature folders depend on core and at most on layers below them. `p2p` and `sync` reference each
+other only through runtime calls (join → reconcile, watcher → nudge), never at module load.
 
-1. **Docs sit as close to the code as they need to.** A folder doc where a concern spans several
-   files; a file-level doc beside a module carrying dense reasoning of its own; neither where the
-   names already say enough. Name it for its contents, never `README.md`.
-2. **Nest when a concern grows.** A concern starts as one file at `src/` root (like `peers.ts`) and
-   graduates to a folder with its own doc once it needs several files.
-3. **Dependencies point downward.** Core (`config`/`state`/`peers`) depends on nothing else here;
-   feature folders depend on core and at most on layers below them. `p2p` and `sync` reference each
-   other only through runtime calls (join → reconcile, watcher → nudge), never at module load.
-
-Keeping these docs accurate is a rule for every contributor, human or agent — see
-[AGENTS.md](../AGENTS.md).
+**A concern graduates.** It starts as one file at `src/` root (like `peers.ts`) and becomes a folder
+once it needs several. Where its doc then lives, and the rule that keeps these docs accurate, are in
+[AGENTS.md](../AGENTS.md) — *Where a doc lives* and *Keep the docs in sync*.
 
 ## Iron rules
 
