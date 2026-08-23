@@ -4,10 +4,10 @@
  * attribution). Provisions/heals them, mints their API keys, and syncs their avatars.
  */
 import crypto from 'node:crypto';
-import { CFG, log, UTILITY_SUFFIX, ROUTE_PREFIX, UTILITY_EMAIL_DOMAIN, BOT_PREFIX } from '../config.ts';
-import { state, save, keys, addedRecord } from '../state.ts';
+import { CFG, log, UTILITY_SUFFIX, UTILITY_EMAIL_DOMAIN, BOT_PREFIX } from '../config.ts';
+import { state, save, addedRecord } from '../state.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
-import { sign } from '../peers.ts';
+import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 
 export const slugify = s =>
   (s || 'peer')
@@ -210,19 +210,18 @@ export async function ensureUtilityUser(
   );
   return c;
 }
-export async function syncAvatar(c, peerUrl, originUserId) {
-  if (!peerUrl || !originUserId || c.avatarDone) return;
+export async function syncAvatar(c, peer, originUserId) {
+  if (!peer || !originUserId || c.avatarDone) return;
   try {
-    const av = await fetch(`${peerUrl}${ROUTE_PREFIX}/api/v1/users/${originUserId}/avatar`, {
-      headers: { 'x-isa-key': keys.pub, 'x-isa-sig': sign(originUserId) },
-      signal: AbortSignal.timeout(30000),
-    });
-    if (av.ok) {
+    const av = await peerByteRequest(peer, `/users/${originUserId}/avatar`);
+    if (av.status < 400) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of recvIterable(av.recv)) chunks.push(chunk);
       const fd = new FormData();
       fd.set(
         'file',
-        new Blob([Buffer.from(await av.arrayBuffer())], {
-          type: av.headers.get('content-type') || 'image/jpeg',
+        new Blob([Buffer.concat(chunks)], {
+          type: av.headers['content-type'] || 'image/jpeg',
         }),
         'avatar.jpg'
       );
@@ -265,10 +264,10 @@ export async function ensureContributor(
   displayName,
   albumId,
   adminKey,
-  peerUrl,
+  peer,
   originUserId,
   peerPub?: string,
-  opts: { mayAdd?: boolean } = {}
+  opts: { reAddIfMissing?: boolean } = {}
 ) {
   // Key on the person's id on their OWN server when the ref carries it, so this is the same
   // account the directory creates rather than a second entry for one human. No `fullName` and no
@@ -285,7 +284,7 @@ export async function ensureContributor(
       : { peerPub, peerUserId: originUserId }
   );
   if (!c.key) throw new Error(`contributor "${displayName}" has no API key yet — will retry`);
-  await syncAvatar(c, peerUrl, originUserId);
+  await syncAvatar(c, peer, originUserId);
 
   let alreadyMember = false;
   try {
@@ -296,7 +295,7 @@ export async function ensureContributor(
     // add: a blind add here could later be misread as an invitation. The next cycle retries.
     return c;
   }
-  if (!alreadyMember && opts.mayAdd === false) {
+  if (!alreadyMember && opts.reAddIfMissing === false) {
     // An invited person who is not a member has been REVOKED. Do not put them back: the human's
     // removal is the authority here, and the withdrawal sweep will retire the mapping shortly.
     log(`"${displayName}" is no longer a member of this album — not re-adding (revoked)`);

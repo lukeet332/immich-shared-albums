@@ -1,6 +1,6 @@
 /** p2p/transport.ts — the iroh peer transport: endpoint lifecycle, dial-by-key, request framing. See wire-protocol.md. */
 import crypto from 'node:crypto';
-import { Endpoint, EndpointAddr, EndpointId, presetMinimal } from '@number0/iroh';
+import { Endpoint, EndpointAddr, EndpointId, RelayMode, presetMinimal } from '@number0/iroh';
 import { CFG, log } from '../config.ts';
 import { keys, save } from '../state.ts';
 import type { Peer } from '../store.ts';
@@ -37,7 +37,10 @@ const lenPrefixed = (payload: Buffer): number[] => {
   return Array.from(Buffer.concat([len, payload]));
 };
 
-const readPrefixed = async (recv: { readExact(size: number): Promise<number[]> }, limit: number): Promise<Buffer> => {
+const readPrefixed = async (
+  recv: { readExact(size: number): Promise<number[]> },
+  limit: number
+): Promise<Buffer> => {
   const len = Buffer.from(await recv.readExact(4)).readUInt32LE();
   if (len > limit) throw new Error(`frame of ${len} bytes exceeds the ${limit}-byte limit`);
   return len === 0 ? Buffer.alloc(0) : Buffer.from(await recv.readExact(len));
@@ -60,6 +63,9 @@ export const localAddr = () => {
 export async function startTransport(handler: PeerHandler): Promise<void> {
   const builder = Endpoint.builder();
   presetMinimal(builder);
+  // Relays assist hole-punching and carry end-to-end-encrypted traffic when a direct path
+  // fails — the one disclosed third party, and only ever a fallback. RELAY=off runs dark.
+  if (process.env.RELAY !== 'off') builder.relayMode(RelayMode.defaultMode());
   builder.alpns([PROTOCOL_ALPN]);
   builder.secretKey(secretSeed());
   endpoint = await builder.bind();
@@ -81,7 +87,10 @@ async function acceptLoop(handler: PeerHandler): Promise<void> {
   }
 }
 
-async function serveConnection(incoming: { accept(): Promise<{ connect(): Promise<any> }> }, handler: PeerHandler) {
+async function serveConnection(
+  incoming: { accept(): Promise<{ connect(): Promise<any> }> },
+  handler: PeerHandler
+) {
   const conn = await (await incoming.accept()).connect();
   const callerPub = rawToPub(conn.remoteId().toBytes());
   for (;;) {
@@ -165,7 +174,11 @@ export async function peerRequest(
   path: string,
   jsonBody?: unknown
 ): Promise<{ status: number; json: any }> {
-  const bi = await roundTrip(peer, { path }, jsonBody === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(jsonBody)));
+  const bi = await roundTrip(
+    peer,
+    { path },
+    jsonBody === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(jsonBody))
+  );
   const head = JSON.parse((await readPrefixed(bi.recv, 64 * 1024)).toString()) as ResponseHeader;
   const raw = Buffer.from(await bi.recv.readToEnd(64 * 1024 * 1024));
   return { status: head.status, json: raw.length ? JSON.parse(raw.toString()) : null };
@@ -176,10 +189,23 @@ export async function peerByteRequest(
   peer: Peer,
   path: string,
   range?: string
-): Promise<{ status: number; headers: Record<string, string>; recv: { read(size: number): Promise<number[]> } }> {
+): Promise<{
+  status: number;
+  headers: Record<string, string>;
+  recv: { read(size: number): Promise<number[]> };
+}> {
   const bi = await roundTrip(peer, { path, range }, Buffer.alloc(0));
   const head = JSON.parse((await readPrefixed(bi.recv, 64 * 1024)).toString()) as ResponseHeader;
   return { status: head.status, headers: head.headers ?? {}, recv: bi.recv };
+}
+
+/** Adapt a peer recv stream into chunks; read() returns an empty array at FIN (spiked). */
+export async function* recvIterable(recv: { read(size: number): Promise<number[]> }): AsyncIterable<Buffer> {
+  for (;;) {
+    const chunk = await recv.read(256 * 1024);
+    if (!chunk || chunk.length === 0) return;
+    yield Buffer.from(chunk);
+  }
 }
 
 export function stopTransport(): void {

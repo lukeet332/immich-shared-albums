@@ -5,10 +5,10 @@
  * runs it all on an overlap-guarded interval.
  */
 import type { AssetRef } from '../types.ts';
-import { CFG, log, ROUTE_PREFIX } from '../config.ts';
+import { CFG, log } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
-import { state, store, save, seenHas, seenAdd, wireChecksum, keys } from '../state.ts';
-import { sign, signedFetch } from '../peers.ts';
+import { state, store, save, seenHas, seenAdd, wireChecksum } from '../state.ts';
+import { peerRequest } from '../p2p/transport.ts';
 import { getAlbum, getAlbumAssets, usersById } from '../immich/client.ts';
 import { shareableAssets, assetToRef } from '../immich/refs.ts';
 import { materialiseRef, deleteProxyAsset } from '../immich/materialise.ts';
@@ -48,17 +48,14 @@ export async function watchOnce() {
         continue;
       }
       const peer = state.peers.find(p => p.pub === mapping.peer);
-      // No peer record: nothing to push to. The reconcile loop below already did this;
-      // without it, peer.url below throws instead of skipping.
-      if (!peer) continue;
+      if (!peer) continue; // no peer record: nothing to push to
       const targetMapping =
         mapping.role === 'member' ? mapping.remoteMappingId || mapping.remoteAlbumId : mapping.albumId;
       const add: AssetRef[] = [];
       for (const a of fresh) add.push(await assetToRef(a));
-      const body = JSON.stringify({ add });
-      const r = await signedFetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${targetMapping}/refs`, body);
-      if (r.ok) {
-        const failed = new Set((await r.json().catch(() => ({}))).failed || []);
+      const r = await peerRequest(peer, `/albums/${targetMapping}/refs`, { add });
+      if (r.status < 400) {
+        const failed = new Set(r.json?.failed || []);
         const landed = fresh.filter(a => !failed.has(wireChecksum(a)));
         landed.forEach(a => seenAdd(mapping.id, wireChecksum(a), a.id));
         // pushed to this peer => this peer may read their bytes (see p2p/entitlement)
@@ -109,24 +106,17 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
   RECONCILING.add(mapping.id);
   try {
     const target = mapping.remoteMappingId || mapping.remoteAlbumId;
-    const sig = { headers: { 'x-isa-key': keys.pub, 'x-isa-sig': sign(target) } };
     // handshake first: only pull the full manifest when the origin's version moved.
     // remoteVersion is only stored after a CLEAN pass so failures keep retrying.
     let version = null;
-    const vr = await fetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${target}/version`, {
-      ...sig,
-      signal: AbortSignal.timeout(15000),
-    });
-    if (vr.ok) {
-      version = (await vr.json().catch(() => ({}))).version || null;
+    const vr = await peerRequest(peer, `/albums/${target}/version`).catch(() => null);
+    if (vr && vr.status < 400) {
+      version = vr.json?.version || null;
       if (version && version === mapping.remoteVersion) return;
     }
-    const r = await fetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${target}/manifest`, {
-      ...sig,
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!r.ok) return;
-    const { manifest = [] } = await r.json();
+    const r = await peerRequest(peer, `/albums/${target}/manifest`).catch(() => null);
+    if (!r || r.status >= 400) return;
+    const { manifest = [] } = r.json ?? {};
     // The version's asset count comes from the album table (instant); the manifest
     // comes from the search index (which lags behind deletes). Only trust a read
     // where the two agree — dirty reads retry next cycle instead of poisoning the cursor.
@@ -155,7 +145,7 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
     let allOk = true;
     for (const ref of missing) {
       try {
-        if (await materialiseRef(mapping, peer.url, peer.name, ref))
+        if (await materialiseRef(mapping, peer, ref))
           log(`reconciled missed ref into "${mapping.albumName}"`);
         else allOk = false;
       } catch (e) {

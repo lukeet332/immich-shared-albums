@@ -39,8 +39,10 @@ export const acceptPage = () => ACCEPT_HTML.replaceAll('%%HOUSEHOLD%%', escapeHt
 export const signInPage = (what: string) =>
   SIGN_IN_HTML.replaceAll('%%HOUSEHOLD%%', escapeHtml(CFG.name)).replaceAll('%%WHAT%%', escapeHtml(what));
 
-export const sharePage = (meta: { albumName?: string; coverUrl?: string } | null) =>
-  SHARE_HTML.replaceAll('%%ALBUM%%', escapeHtml(meta?.albumName || 'Shared album')).replace(
-    /<meta property="og:image" content="%%COVER%%"\s*\/?>/,
-    meta?.coverUrl ? `<meta property="og:image" content="${escapeHtml(meta.coverUrl)}"/>` : ''
-  );
+export const sharePage = (endpointToken: string, meta: { albumName?: string; coverUrl?: string } | null) =>
+  SHARE_HTML.replaceAll('%%ENDPOINT%%', escapeHtml(endpointToken))
+    .replaceAll('%%ALBUM%%', escapeHtml(meta?.albumName || 'Shared album'))
+    .replace(
+      /<meta property="og:image" content="%%COVER%%"\s*\/?>/,
+      meta?.coverUrl ? `<meta property="og:image" content="${escapeHtml(meta.coverUrl)}"/>` : ''
+    );

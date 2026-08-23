@@ -39,8 +39,16 @@ services:
       PUBLIC_URL: ${D_PUBLIC_URL:-http://host.docker.internal:8303}
       HOUSEHOLD_NAME: "Mock household (D)"
       POLL_MS: "8000"
+    networks:
+      - default
+      - isa-demo
     volumes:
       - ./d-sidecar:/data
     ports:
       - 8303:8300
     restart: unless-stopped
+
+# iroh direct addresses are container IPs; one shared network makes them route across the rig
+networks:
+  isa-demo:
+    external: true

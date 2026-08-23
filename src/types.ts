@@ -5,14 +5,12 @@
  * (headers x-isa-key / x-isa-sig); signed GETs sign the path parameter.
  */
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** A household = one Immich server + one sidecar + one keypair. */
 export type Household = {
-  /** Stable identity: base64url ed25519 public key. */
+  /** Stable identity: base64url ed25519 public key — also the iroh endpoint it answers on. */
   publicKey: string;
-  /** Mutable hint — where to reach the sidecar right now. */
-  url: string;
   name: string;
 };
 

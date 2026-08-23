@@ -3,9 +3,10 @@
  * members pull the canonical list and push their own, gated by a cheap activity-count
  * statistic so messages land in seconds without heavy polling. startCommentLoop runs it.
  */
-import { CFG, log, ROUTE_PREFIX, personName } from '../config.ts';
-import { state, save, seenActHas, seenActAdd, keys } from '../state.ts';
-import { sign, signedFetch, nudgePeers, callingPeer, mappingFor } from '../peers.ts';
+import { CFG, log, personName } from '../config.ts';
+import { state, save, seenActHas, seenActAdd } from '../state.ts';
+import { nudgePeers, peerByPub, mappingFor } from '../peers.ts';
+import { peerRequest } from '../p2p/transport.ts';
 import { immichJson, jsonBody, usersById } from '../immich/client.ts';
 import { ensureContributor } from '../immich/contributors.ts';
 
@@ -27,7 +28,7 @@ export const postComment = (albumId, comment, key) =>
 // Materialise foreign comments locally via the author's utility user. Skips ids already
 // seen AND (author, text) pairs already present locally — the latter guards legacy comments
 // synced before canonical ids existed.
-export async function materialiseComments(mapping, peerUrl, peerName, comments) {
+export async function materialiseComments(mapping, peer, comments) {
   const users = await usersById();
   const local = await getComments(mapping.albumId, albumReaderKey(mapping));
   const localPairs = new Set(
@@ -46,10 +47,10 @@ export async function materialiseComments(mapping, peerUrl, peerName, comments) 
     }
     const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
     const c = await ensureContributor(
-      cm.author || peerName,
+      cm.author || peer.name,
       mapping.albumId,
       adminKey,
-      peerUrl,
+      peer,
       cm.authorUserId,
       mapping.peer
     );
@@ -61,21 +62,21 @@ export async function materialiseComments(mapping, peerUrl, peerName, comments) 
   }
   return ids;
 }
-export async function handleActivity(req, body, albumMappingId) {
-  const peer = callingPeer(req, body);
-  if (!peer) return [403, { error: 'unknown or unverified peer' }];
+export async function handleActivity(callerPub: string, body: string, albumMappingId: string) {
+  const peer = peerByPub(callerPub);
+  if (!peer) return [403, { error: 'unknown peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId);
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const { comments = [] } = JSON.parse(body);
-  const ids = await materialiseComments(mapping, peer.url, peer.name, comments);
+  const ids = await materialiseComments(mapping, peer, comments);
   if (Object.keys(ids).length) nudgePeers(mapping.albumId, peer.pub); // new messages — tell the others
   return [200, { ok: true, ids }];
 }
 // Canonical comment list for an album — the origin is the source of truth for messages.
 // Utility-authored entries resolve back to the true contributor's name.
-export async function handleComments(req, albumMappingId) {
-  const peer = callingPeer(req, albumMappingId);
-  if (!peer) return [403, { error: 'unknown or unverified peer' }];
+export async function handleComments(callerPub: string, albumMappingId: string) {
+  const peer = peerByPub(callerPub);
+  if (!peer) return [403, { error: 'unknown peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const users = await usersById();
@@ -139,15 +140,12 @@ export async function syncCommentsOnce() {
         author: a.user?.name || CFG.name,
         authorUserId: a.user?.id,
       }));
-      const r = await signedFetch(
-        `${peer.url}${ROUTE_PREFIX}/api/v1/albums/${targetMapping}/activity`,
-        JSON.stringify({ comments: payload })
-      );
-      if (r.ok) {
+      const r = await peerRequest(peer, `/albums/${targetMapping}/activity`, { comments: payload });
+      if (r.status < 400) {
         comments.forEach(a => seenActAdd(`local:${a.id}`));
         // the origin answers with canonical ids for our comments — remember them so the
         // canonical pull can never hand us our own comments back
-        const { ids = {} } = await r.json().catch(() => ({}));
+        const { ids = {} } = r.json ?? {};
         for (const originId of Object.values(ids)) seenActAdd(`remote:${originId}`);
         if (stats) {
           mapping.commentCount = stats.comments;
@@ -165,21 +163,14 @@ export async function syncCommentsOnce() {
 // This is also what relays member comments onward to other member households.
 export async function pullCanonicalComments(mapping, peer) {
   const target = mapping.remoteMappingId || mapping.remoteAlbumId;
-  const sig = { headers: { 'x-isa-key': keys.pub, 'x-isa-sig': sign(target) } };
-  const vr = await fetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${target}/version`, {
-    ...sig,
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!vr.ok) return;
-  const v = await vr.json().catch(() => ({}));
+  const vr = await peerRequest(peer, `/albums/${target}/version`).catch(() => null);
+  if (!vr || vr.status >= 400) return;
+  const v = vr.json ?? {};
   if (v.comments == null || v.comments === mapping.remoteCommentCount) return;
-  const cr = await fetch(`${peer.url}${ROUTE_PREFIX}/api/v1/albums/${target}/comments`, {
-    ...sig,
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!cr.ok) return;
-  const { comments = [] } = await cr.json().catch(() => ({}));
-  await materialiseComments(mapping, peer.url, peer.name, comments);
+  const cr = await peerRequest(peer, `/albums/${target}/comments`).catch(() => null);
+  if (!cr || cr.status >= 400) return;
+  const { comments = [] } = cr.json ?? {};
+  await materialiseComments(mapping, peer, comments);
   mapping.remoteCommentCount = v.comments;
   save();
 }

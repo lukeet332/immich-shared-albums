@@ -5,10 +5,9 @@
  * cache), falling through to Immich — which holds only a stub — on any failure (fail-open).
  * Returns true iff it wrote the response; false tells the router to fall through.
  */
-import { Readable } from 'node:stream';
-import { CFG, log, ROUTE_PREFIX } from '../config.ts';
-import { state, store, keys } from '../state.ts';
-import { sign } from '../peers.ts';
+import { CFG, log } from '../config.ts';
+import { state, store } from '../state.ts';
+import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 import { immich } from '../immich/client.ts';
 import { fetchTrueBytes } from './proxy.ts';
 import { cacheRead, cacheWrite } from './cache.ts';
@@ -46,16 +45,15 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
     const peer2 = mapping2 && state.peers.find(pe => pe.pub === mapping2.peer);
     if (peer2) {
       try {
-        const up = await fetch(`${peer2.url}${ROUTE_PREFIX}/api/v1/assets/${entry.o}/preview`, {
-          headers: { 'x-isa-key': keys.pub, 'x-isa-sig': sign(entry.o) },
-          signal: AbortSignal.timeout(30000),
-        });
-        if (up.ok) {
-          const buf = Buffer.from(await up.arrayBuffer());
+        const up = await peerByteRequest(peer2, `/assets/${entry.o}/preview`);
+        if (up.status < 400) {
+          const chunks: Buffer[] = [];
+          for await (const chunk of recvIterable(up.recv)) chunks.push(chunk);
+          const buf = Buffer.concat(chunks);
           cacheWrite(entry.o, buf);
           res.writeHead(200, {
             ...baseHeaders,
-            'Content-Type': up.headers.get('content-type') || 'image/jpeg',
+            'Content-Type': up.headers['content-type'] || 'image/jpeg',
             'X-Cache': 'MISS',
             'Content-Length': String(buf.length),
           });
@@ -83,20 +81,16 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
   }
   try {
     const out = await fetchTrueBytes(assetId, kind, req.headers.range as string | undefined);
-    if (!Array.isArray(out)) {
-      const headers: Record<string, string> = {
-        'Content-Type': out.headers.get('content-type') || 'application/octet-stream',
-        // per-asset bytes never change: let every device cache them hard
-        'Cache-Control': 'private, max-age=604800, immutable',
-      };
-      for (const h of ['content-length', 'content-range', 'accept-ranges']) {
-        const v = out.headers.get(h);
-        if (v) headers[h] = v;
-      }
-      res.writeHead(out.status || 200, headers);
-      Readable.fromWeb(out.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
-      return true;
-    }
+    const headers: Record<string, string> = {
+      ...out.headers,
+      'Content-Type': out.headers['content-type'] || 'application/octet-stream',
+      // per-asset bytes never change: let every device cache them hard
+      'Cache-Control': 'private, max-age=604800, immutable',
+    };
+    res.writeHead(out.status || 200, headers);
+    for await (const chunk of out.body) res.write(chunk);
+    res.end();
+    return true;
   } catch (e) {
     log(`byte interceptor fell through (${kind}): ${e.message}`);
   }

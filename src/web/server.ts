@@ -13,24 +13,20 @@
  *    Being able to reach a route is never permission to use it.
  */
 import http from 'node:http';
-import { Readable } from 'node:stream';
 import { CFG, log, ROUTE_PREFIX } from '../config.ts';
-import { state, store } from '../state.ts';
-import { immich, publicShareLinkMeta } from '../immich/client.ts';
-import { verify, callingPeer } from '../peers.ts';
-import { handlePreview, handleOriginal, handlePlayback } from '../media/proxy.ts';
+import { store } from '../state.ts';
+import { publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
 import { sharePage, signInPage } from './assets.ts';
+import { localAddr } from '../p2p/transport.ts';
+import { keys } from '../state.ts';
 import { proxyToImmich } from './passthrough.ts';
 import { callerIdentity, signInRequired } from './auth.ts';
-import { handleRedeem, handleRefs, handleVersion, handleNudge, handleManifest } from '../p2p/protocol.ts';
 import { join } from '../p2p/join.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
-import { handlePair, mintPairing, pendingPairings, revokePairing, redeemPairing } from '../p2p/pair.ts';
-import { handleActivity, handleComments } from '../sync/comments.ts';
-import { invitationsFor, localDirectory } from '../sync/invites.ts';
+import { mintPairing, pendingPairings, revokePairing, redeemPairing } from '../p2p/pair.ts';
 
 /**
  * Read a JSON-route body under a hard cap, or null if it is too big.
@@ -72,25 +68,6 @@ export const server = http.createServer(async (req, res) => {
   try {
     const u = new URL(req.url ?? '/', 'http://x');
     const path = u.pathname;
-    let m;
-    // Peer-facing avatar read. Signed like every other peer route — a bare public key is
-    // not a credential, it is published in every redeem response.
-    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/users\/([^/]+)\/avatar$/))) {
-      if (req.method !== 'GET') return send(405, { error: 'method not allowed' });
-      const peerKey = req.headers['x-isa-key'] as string;
-      const peer = state.peers.find(pp => pp.pub === peerKey);
-      const related = peer && state.mappings.some(mp => mp.peer === peerKey && !mp.dead);
-      if (!peer || !related || !verify(m[1], (req.headers['x-isa-sig'] as string) || '', peerKey)) {
-        return send(403, { error: 'unknown or unverified peer' });
-      }
-      try {
-        const av = await immich(`/users/${m[1]}/profile-image`);
-        res.writeHead(200, { 'Content-Type': av.headers.get('content-type') || 'image/jpeg' });
-        return res.end(Buffer.from(await av.arrayBuffer()));
-      } catch {
-        return send(404, { error: 'no avatar' });
-      }
-    }
     // Human-facing surfaces — pages and scripts — come from ONE table, so "what exists and who
     // may see it" is answerable by reading web/frontend.ts rather than tracing this file. Served
     // before the body cap because none of them has a body to read.
@@ -111,9 +88,14 @@ export const server = http.createServer(async (req, res) => {
     const shareHit = u.pathname.match(/^\/share\/([^/]+)$/);
     if (shareHit && req.method === 'GET' && shareLinkJoiningEnabled() && !u.searchParams.has('native')) {
       const meta = await publicShareLinkMeta(shareHit[1]);
+      const addr = localAddr();
+      const endpointToken = Buffer.from(
+        JSON.stringify({ pub: keys.pub, relay: addr.relayUrl() ?? undefined, addrs: addr.directAddresses() })
+      ).toString('base64url');
       res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' });
       return res.end(
         sharePage(
+          endpointToken,
           meta && {
             albumName: meta.albumName,
             coverUrl: meta.coverAssetId
@@ -147,7 +129,10 @@ export const server = http.createServer(async (req, res) => {
         if (forUserId !== caller.id && !caller.isAdmin) {
           return send(403, { error: 'you can only join an album for your own account' });
         }
-        return send(200, await join(b.url, forUserId, b.password));
+        const endpoint = JSON.parse(
+          Buffer.from(String(b.invite?.endpointToken ?? ''), 'base64url').toString()
+        );
+        return send(200, await join({ endpoint, key: b.invite?.key }, forUserId, b.password));
       } catch (e) {
         return send(
           e.passwordRequired ? 401 : 400,
@@ -199,7 +184,7 @@ export const server = http.createServer(async (req, res) => {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('link a server'));
       if (!caller.isAdmin) return send(403, { error: 'only an admin can link a server' });
-      return send(200, { pairings: pendingPairings(), publicUrl: CFG.publicUrl });
+      return send(200, { pairings: pendingPairings() });
     }
     if (path === `${ROUTE_PREFIX}/pairings` && req.method === 'POST') {
       const caller = await callerIdentity(req);
@@ -251,97 +236,6 @@ export const server = http.createServer(async (req, res) => {
       } catch (e) {
         return send(400, { error: e.message });
       }
-    }
-    // Another server redeeming a code we minted. Signature-bound to the key being enrolled, and
-    // deliberately NOT session-authed: the caller is a server, not a person.
-    if (path === `${ROUTE_PREFIX}/api/v1/pair` && req.method === 'POST') {
-      const [code, obj] = await handlePair(req, body);
-      return send(code, obj);
-    }
-    if (path === `${ROUTE_PREFIX}/api/v1/invites/redeem` && req.method === 'POST') {
-      if (!shareLinkJoiningEnabled())
-        return send(403, { error: 'this server does not accept album joins via shared links' });
-      const [code, obj] = await handleRedeem(req, body);
-      return send(code, obj);
-    }
-    if (
-      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/activity$/)) &&
-      req.method === 'POST'
-    ) {
-      const [code, obj] = await handleActivity(req, body, m[1]);
-      return send(code, obj);
-    }
-    if (
-      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/refs$/)) &&
-      req.method === 'POST'
-    ) {
-      const [code, obj] = await handleRefs(req, body, m[1]);
-      return send(code, obj);
-    }
-    if (
-      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/version$/)) &&
-      req.method === 'GET'
-    ) {
-      const [code, obj] = await handleVersion(req, m[1]);
-      return send(code, obj);
-    }
-    if (
-      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/manifest$/)) &&
-      req.method === 'GET'
-    ) {
-      const [code, obj] = await handleManifest(req, m[1]);
-      return send(code, obj);
-    }
-    if (
-      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/comments$/)) &&
-      req.method === 'GET'
-    ) {
-      const [code, obj] = await handleComments(req, m[1]);
-      return send(code, obj);
-    }
-    // Our people, so a paired household can invite one of us specifically. Names only.
-    if (path === `${ROUTE_PREFIX}/api/v1/directory` && req.method === 'GET') {
-      const peer = callingPeer(req, 'directory');
-      if (!peer) return send(403, { error: 'unknown or unverified peer' });
-      return send(200, { users: await localDirectory() });
-    }
-    // What has this peer been invited to? Pull-only by design — see sync/invites.
-    if (path === `${ROUTE_PREFIX}/api/v1/invitations` && req.method === 'GET') {
-      const peer = callingPeer(req, 'invitations');
-      if (!peer) return send(403, { error: 'unknown or unverified peer' });
-      return send(200, { invitations: invitationsFor(peer.pub) });
-    }
-    if (
-      (m = path.match(/^\/immich-shared-albums\/api\/v1\/albums\/([^/]+)\/nudge$/)) &&
-      req.method === 'POST'
-    ) {
-      const [code, obj] = await handleNudge(req, body, m[1]);
-      return send(code, obj);
-    }
-    const streamOut = out => {
-      // stream byte responses through — never buffer (Pi-friendly)
-      if (Array.isArray(out)) return send(out[0], out[1]);
-      const headers: Record<string, string> = {
-        'Content-Type': out.headers.get('content-type') || 'application/octet-stream',
-      };
-      for (const h of ['content-length', 'content-range', 'accept-ranges']) {
-        const v = out.headers.get(h);
-        if (v) headers[h] = v;
-      }
-      res.writeHead(out.status || 200, headers);
-      Readable.fromWeb(out.body).pipe(res);
-    };
-    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/assets\/([^/]+)\/original$/))) {
-      return streamOut(await handleOriginal(req, m[1]));
-    }
-    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/assets\/([^/]+)\/playback$/))) {
-      return streamOut(await handlePlayback(req, m[1]));
-    }
-    if ((m = path.match(/^\/immich-shared-albums\/api\/v1\/assets\/([^/]+)\/preview$/))) {
-      const out = await handlePreview(req, m[1]);
-      if (Array.isArray(out)) return send(out[0], out[1]);
-      res.writeHead(200, { 'Content-Type': out.headers.get('content-type') || 'image/jpeg' });
-      return res.end(Buffer.from(await out.arrayBuffer()));
     }
     // Liveness only. The join banner probes this cross-origin to discover a sidecar, so
     // it stays open — which is exactly why it must not name the household or count peers.
