@@ -3,6 +3,6 @@
 set -e
 echo "pre-commit: verify:fast (bundles, format, lint, types, cycles)"
 npm run --silent verify:fast || exit 1
-# build:panel regenerated both bundles; stage them or the commit ships stale UI.
-git add src/web/panel.bundle.js src/web/accept.bundle.js
+# build:web regenerated dist; stage it or the commit ships stale UI.
+git add src/web/dist
 echo "pre-commit: ok"

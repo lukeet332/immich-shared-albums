@@ -121,3 +121,19 @@ export async function applyRefMetadata(assetId: string, ref: AssetRef, key: stri
     }
   }
 }
+
+/** Album name + cover for a share key, via the unauthenticated public route — works whoever owns the link. */
+export async function publicShareLinkMeta(
+  key: string
+): Promise<{ albumName?: string; coverAssetId?: string } | null> {
+  try {
+    const r = await fetch(`${CFG.immichUrl}/api/shared-links/me?key=${encodeURIComponent(key)}`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!r.ok) return null;
+    const link = await r.json();
+    return { albumName: link.album?.albumName, coverAssetId: link.album?.albumThumbnailAssetId ?? undefined };
+  } catch {
+    return null;
+  }
+}

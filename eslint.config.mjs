@@ -17,7 +17,7 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['node_modules/**', 'demo/**', 'scripts/**', 'eslint.config.mjs', 'src/web/panel.bundle.js', 'src/web/accept.bundle.js'],
+    ignores: ['src/web/dist/**', 'node_modules/**', 'demo/**', 'scripts/**', 'eslint.config.mjs'],
   },
   {
     files: ['src/**/*.ts'],
@@ -60,10 +60,10 @@ export default tseslint.config(
   {
     // The panel is a browser Preact app: its own tsconfig gives it DOM types and the JSX
     // transform, which the server deliberately does not have.
-    files: ['src/web/panel/**/*.{ts,tsx}', 'src/web/accept/**/*.{ts,tsx}'],
+    files: ['src/web/ui/**/*.{ts,tsx}'],
     extends: [tseslint.configs.base],
     languageOptions: {
-      parserOptions: { project: ['./src/web/panel/tsconfig.json', './src/web/accept/tsconfig.json'], tsconfigRootDir: import.meta.dirname },
+      parserOptions: { project: ['./src/web/ui/tsconfig.json'], tsconfigRootDir: import.meta.dirname },
     },
     rules: {
       '@typescript-eslint/no-floating-promises': 'error',

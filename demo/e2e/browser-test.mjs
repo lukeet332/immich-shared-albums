@@ -37,10 +37,20 @@ const browser = await chromium.launch({ args: launchArgs });
 const ctx = await browser.newContext();
 const page = await ctx.newPage();
 
-// 1. banner renders over the share page
+// 1. our share document: the join card floats over the framed native album
 await page.goto(`${SHARE_HOST}${SHARE_PATH}`, { waitUntil: 'networkidle' });
 const banner = page.locator('#immich-shared-albums-banner .card');
-check('banner renders on the share page', await banner.isVisible().catch(() => false));
+check('join card renders on the share page', await banner.isVisible().catch(() => false));
+check('the native album is framed behind it',
+  await page.locator('iframe.native-album').isVisible().catch(() => false));
+
+// 1b. dismiss -> clean handoff to the untouched native page
+await page.locator('#immich-shared-albums-banner .dismiss').click();
+const wentNative = await page.waitForURL('**native=1**', { timeout: 10000 }).then(() => true).catch(() => false);
+check('dismiss hands over to the native share page', wentNative, page.url());
+check('nothing of ours is on the native page',
+  !(await page.locator('#immich-shared-albums-banner').count()));
+await page.goto(`${SHARE_HOST}${SHARE_PATH}`, { waitUntil: 'networkidle' });
 
 // 2. bad address -> inline error, no navigation
 const input = page.locator('#immich-shared-albums-banner input');
