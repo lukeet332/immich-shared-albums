@@ -16,12 +16,13 @@ Questions, suggestions and PRs are all welcome.
 
 ## What you get
 
-- 🔗 **Simple link sharing.** Open a link, join, done. Works in the stock Immich apps, nothing to install on your phone.
+- 🔒 **Nothing exposed.** Servers find each other through an encrypted peer-to-peer tunnel — no domain, no port forwarding, no VPN sharing. Pair once with a code; nothing on your server is reachable from the internet.
+- 🔗 **Sharing feels native.** Pick the person in Immich's own share menu — that's it. (Public share links work too, if you host publicly.) Stock apps, nothing to install on your phone.
 - 👤 **Joins your account, not the whole server.** So your parents won't see your antics from that lads' holiday.
 - 💾 **Your storage stays yours.** Photos stream from whoever owns them. All that lands on your disk is a tiny ~2KB placeholder per photo, whatever the album size, with full quality on demand.
 - 💬 **Cross-server comments.** Both ways, near-instant, credited to whoever wrote them.
 - 🎬 **Videos too.** Playable versions sync, originals stream on demand.
-- 📦 **Isolated and self-hosted.** One small container, no forks, no patched Immich, no runtime dependencies. Runs fine on a Pi.
+- 📦 **Isolated and self-hosted.** One small container, no forks, no patched Immich, one pinned dependency (the connection library). Runs fine on a Pi.
 
 ## See it in action
 
