@@ -37,7 +37,7 @@ INSTALL:
 2. Either run `bash deploy/install.sh` interactively with me, or replicate what
    it does: build the image, write a compose file joining the sidecar to the
    Immich docker network with env IMMICH_URL, IMMICH_API_KEY (in a chmod-600
-   .env file, never in the yml), PUBLIC_URL, HOUSEHOLD_NAME, and a ./data
+   .env file, never in the yml), HOUSEHOLD_NAME, and a ./data
    volume for /data. Start it with docker compose up -d.
 3. Add these three routes to my reverse proxy BEFORE the catch-all Immich route,
    then reload the proxy:
@@ -72,9 +72,11 @@ Notes for you, the agent:
   mappings, ledgers). Losing it breaks existing cross-server links.
 - The API key is a live credential: keep it out of shell history, logs, and
   world-readable files.
-- All three routes are safe to expose publicly — the sidecar authenticates
+- The three routes only need to be reachable by this household's own devices; exposing
+  them publicly is optional (it enables join-able share links). Either way they are safe —
+  the sidecar authenticates
   human routes against the user's own Immich session and peer routes by
-  signature plus entitlement. Do NOT add source-IP restrictions to /immich-shared-albums/*:
+  mutually authenticated iroh connections plus an entitlement check (no peer routes exist over HTTP). Do NOT add source-IP restrictions to /immich-shared-albums/*:
   it would break joining from mobile data, because someone's accept page calls
   their own server's /immich-shared-albums/join.
 ```

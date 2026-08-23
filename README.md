@@ -40,9 +40,9 @@ Sharing albums with another family does **not** need your server to be reachable
 - **Keep Immich and the addon private** — home network only. Use Tailscale (or any VPN) if *you* want to reach your own photos while out, same as you would without this addon. That part's optional.
 - **Link with the other family once.** In the admin panel, click **Create pairing link**, send the code over WhatsApp (or anything), and the other family's admin pastes it into *their* panel. That's the whole setup — no domain, no port forwarding, no certificates, no shared VPN.
 - **Then share like normal.** Open an album in Immich, tap share, pick the person. They're in your picker now. Their copy appears on their server automatically.
-- **Want to send view-only links to people who don't run a server?** (Grandma just wants to *look*.) Add [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) as the one small public piece — it shows share links as a read-only gallery and exposes nothing else. In the addon's panel you can then switch **"Allow other Immich users to join albums via shared links"** off, so links are strictly for viewing.
+- **Want to send view-only links to people who don't run a server?** (Grandma just wants to *look*.) Add [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) as the one small public piece — it shows share links as a read-only gallery and exposes nothing else. Point it at the addon instead of Immich (its standard `IMMICH_URL` setting; nothing about it is modified) and albums containing photos shared from other servers render fully too — we verified the bytes are identical to the owner's, streamed live. In the addon's panel you can then switch **"Allow other Immich users to join albums via shared links"** off, so links are strictly for viewing.
 
-One honest limit: if you send a view-only link to an album that contains *other people's* shared photos, those tiles show placeholders through immich-public-proxy — full-quality pixels for shared photos only ever stream through this addon. Links to your **own** albums (the normal case) look perfect.
+**Step-by-step walkthrough: [deploy/SETUP.md](./deploy/SETUP.md).**
 
 ### The alternative: Immich on the internet, joinable share links
 

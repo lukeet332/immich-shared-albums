@@ -5,8 +5,9 @@
 # That file also has the recommended hardening (access log, rate limiting, headers).
 #
 # All of /immich-shared-albums/* is safe to expose publicly: the panel and the join/leave routes
-# require a signed-in Immich session (checked against your own Immich, server-side), and
-# the server-to-server routes require a signature plus an entitlement check. You do NOT
+# require a signed-in Immich session (checked against your own Immich, server-side).
+# Server-to-server traffic does not use HTTP at all — it rides an encrypted peer-to-peer
+# connection (iroh) that only paired servers can open. You do NOT
 # need to restrict these by source IP — doing so would break joining from mobile data,
 # since someone's accept page calls their own server's /immich-shared-albums/join.
 handle /immich-shared-albums/* {
