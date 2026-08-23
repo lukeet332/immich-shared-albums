@@ -57,7 +57,7 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
         }
       : { peerPub: peer.pub }
   );
-  await syncAvatar(host, peer.url, req.albumOwnerId);
+  await syncAvatar(host, peer, req.albumOwnerId);
 
   const addMembers = async (albumId: string) => {
     let members = (await immichJson('/admin/users')).filter(u => !isUtilityEmail(u.email));

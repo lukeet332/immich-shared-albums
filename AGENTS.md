@@ -12,8 +12,13 @@ it as Immich's problem. Concretely, and these are design rules not sentiments:
 - **Originals never leave the owner's server.** A shared photo materialises elsewhere as a stub
   whose bytes stream from its owner on demand. Nobody accumulates copies of anyone else's
   library, and the owner can stop serving at any moment.
-- **No third party, ever.** Two servers talk directly, signed with their own ed25519 keys. There
-  is no broker, no account with us, nothing to shut down.
+- **No third party in the data or trust path.** Two servers talk directly over mutually
+  authenticated QUIC on their own ed25519 keys; no broker holds content, keys, accounts, or your
+  topology. One narrow, disclosed exception: when a direct connection cannot be hole-punched,
+  traffic falls back to a **relay** (n0's public map by default; `RELAY=off` runs dark) that
+  carries only end-to-end-encrypted bytes and learns only that two endpoints spoke. Discovery
+  stays off — the pairing string itself carries the address, so no registry learns a server
+  exists.
 - **Sharing is per person, and the person is their own server's account.** Not a "household", not
   an identity this addon invents. Accounts here are keyed by the person's id on *their* server.
 - **Anything shared can be fully withdrawn, and withdrawal reclaims the space.** `leaveAlbum`

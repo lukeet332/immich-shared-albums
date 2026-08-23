@@ -8,7 +8,8 @@ BKEY=$(grep -m1 B_API_KEY "$DIR/demo/.env" | cut -d= -f2-)
 CKEY=$(grep -m1 C_API_KEY "$DIR/demo/household-c/.env" | cut -d= -f2-)
 
 if [ -z "${SKIP_BUILD:-}" ]; then
-  echo "== build image =="
+  docker network inspect isa-demo >/dev/null 2>&1 || docker network create isa-demo
+echo "== build image =="
   cd "$DIR" && docker build -q -t immich-shared-albums:demo . >/dev/null
 else
   echo "== SKIP_BUILD set: testing against the existing image =="

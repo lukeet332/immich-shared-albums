@@ -64,8 +64,7 @@ export const Accept = ({ household }: { household: string }) => {
     setJoinInProgress(true);
     setMessage('');
 
-    const shareUrl = `${invite.scheme}://${invite.host}/share/${invite.key}`;
-    const outcome = await join(shareUrl, signedInUser.id, albumNeedsPassword ? password : undefined);
+    const outcome = await join(invite, signedInUser.id, albumNeedsPassword ? password : undefined);
 
     // The session went away between page load and click — send them to sign in and back.
     if (outcome.needsAuth) {

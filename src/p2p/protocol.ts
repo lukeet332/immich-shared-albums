@@ -1,12 +1,12 @@
 /**
  * p2p/protocol.ts — inbound wire-protocol handlers (owner side mostly): redeem an invite,
  * accept pushed refs, answer the version/manifest/comment handshakes, and act on a nudge.
- * Each returns [statusCode, jsonBody] for the HTTP router to send.
+ * Each returns [statusCode, jsonBody] for p2p/routes.ts to frame.
  *
  * Two invariants every handler here keeps:
- *  - A signature identifies a peer; it does not select one. Mappings are always looked up
- *    WITH the caller's key, so a peer can only ever act on the albums it was invited to —
- *    never on a mapping belonging to a different household.
+ *  - The transport proves WHO is calling (mutual TLS on the household keys); it never
+ *    selects anything. Mappings are always looked up WITH the caller's key, so a peer can
+ *    only ever act on the albums it was invited to — never on another household's mapping.
  *  - A nudge is a hint, never a source. It can say "something changed"; it can never say
  *    where to fetch the change from. See handleNudge.
  */
@@ -14,7 +14,7 @@ import crypto from 'node:crypto';
 import { CFG, SIDECAR_VERSION, log } from '../config.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
 import { state, save, keys } from '../state.ts';
-import { verify, nudgePeers, callingPeer, mappingFor } from '../peers.ts';
+import { nudgePeers, peerByPub, mappingFor } from '../peers.ts';
 import { getSharedLinkByKey, getAlbum, getAlbumAssets, ownerName, immichJson } from '../immich/client.ts';
 import { buildManifest } from '../immich/refs.ts';
 import { materialiseRef } from '../immich/materialise.ts';
@@ -33,15 +33,11 @@ function secretEquals(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ba, bb);
 }
 
-export async function handleRedeem(req, body) {
+export async function handleRedeem(callerPub: string, body: string) {
   const { shareKey, household, protocol, version, password } = JSON.parse(body);
-  if (!household?.publicKey || !household?.url) return [400, { error: 'malformed household' }];
-  // Bind the request to the key being enrolled. This is trust-on-first-use: it proves the
-  // caller holds the private half of the key it is asking us to trust, so the enrolled
-  // identity cannot be forged or substituted later.
-  if (!verify(body, (req.headers['x-isa-sig'] as string) || '', household.publicKey)) {
-    return [403, { error: 'redeem signature does not match the household key' }];
-  }
+  // The connection already proved possession of the caller's key, so the enrolled identity
+  // IS callerPub — the payload only names the household. Nothing to verify, nothing to forge.
+  if (!household?.name) return [400, { error: 'malformed household' }];
   if (protocol && protocol > PROTOCOL_VERSION)
     log(
       `peer "${household?.name}" speaks protocol ${protocol} > ours (${PROTOCOL_VERSION}) — update the immich-shared-albums sidecar on this server`
@@ -66,12 +62,11 @@ export async function handleRedeem(req, body) {
   }
   const album = await getAlbum(link.album.id);
   album.assets = await getAlbumAssets(album.id);
-  if (!state.peers.some(p => p.pub === household.publicKey)) {
-    state.peers.push({ pub: household.publicKey, url: household.url, name: household.name, version });
+  if (!state.peers.some(p => p.pub === callerPub)) {
+    state.peers.push({ pub: callerPub, name: household.name, version });
   } else {
-    const pe = state.peers.find(p => p.pub === household.publicKey);
+    const pe = peerByPub(callerPub);
     if (pe) {
-      pe.url = household.url;
       pe.name = household.name;
       if (version) pe.version = version;
     }
@@ -79,7 +74,7 @@ export async function handleRedeem(req, body) {
   // Idempotent: re-redeeming the same link must reuse the mapping, not mint another.
   // Otherwise a valid link is an unbounded state-growth lever.
   let mapping = state.mappings.find(
-    mp => mp.role === 'owner' && mp.peer === household.publicKey && mp.albumId === album.id && !mp.dead
+    mp => mp.role === 'owner' && mp.peer === callerPub && mp.albumId === album.id && !mp.dead
   );
   if (mapping) {
     mapping.permissions = link.allowUpload ? 'contribute' : 'view';
@@ -89,7 +84,7 @@ export async function handleRedeem(req, body) {
       role: 'owner',
       albumId: album.id,
       albumName: album.albumName,
-      peer: household.publicKey,
+      peer: callerPub,
       permissions: link.allowUpload ? 'contribute' : 'view',
       via: 'link',
     };
@@ -113,7 +108,7 @@ export async function handleRedeem(req, body) {
     {
       protocol: PROTOCOL_VERSION,
       version: SIDECAR_VERSION,
-      household: { publicKey: keys.pub, url: CFG.publicUrl, name: CFG.name },
+      household: { publicKey: keys.pub, name: CFG.name },
       album: { id: album.id, name: album.albumName, permissions: link.allowUpload ? 'contribute' : 'view' },
       albumOwner,
       manifest,
@@ -121,9 +116,9 @@ export async function handleRedeem(req, body) {
     },
   ];
 }
-export async function handleRefs(req, body, albumMappingId) {
-  const peer = callingPeer(req, body);
-  if (!peer) return [403, { error: 'unknown or unverified peer' }];
+export async function handleRefs(callerPub: string, body: string, albumMappingId: string) {
+  const peer = peerByPub(callerPub);
+  if (!peer) return [403, { error: 'unknown peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId);
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   // the share link's "allow public user to upload" switch, honoured cross-server
@@ -132,7 +127,7 @@ export async function handleRefs(req, body, albumMappingId) {
   const failed: string[] = [];
   for (const ref of add) {
     try {
-      if (!(await materialiseRef(mapping, peer.url, peer.name, ref))) failed.push(ref.checksum);
+      if (!(await materialiseRef(mapping, peer, ref))) failed.push(ref.checksum);
     } catch (e) {
       log(`ref materialise failed (${ref.checksum?.slice(0, 10)}): ${e.message}`);
       failed.push(ref.checksum);
@@ -144,9 +139,9 @@ export async function handleRefs(req, body, albumMappingId) {
 }
 // Version handshake: one cheap album read instead of a full manifest scan. Members
 // compare this against their stored version and only pull the manifest on mismatch.
-export async function handleVersion(req, albumMappingId) {
-  const peer = callingPeer(req, albumMappingId);
-  if (!peer) return [403, { error: 'unknown or unverified peer' }];
+export async function handleVersion(callerPub: string, albumMappingId: string) {
+  const peer = peerByPub(callerPub);
+  if (!peer) return [403, { error: 'unknown peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const stats = await immichJson(`/activities/statistics?albumId=${mapping.albumId}`).catch(() => null);
@@ -158,9 +153,9 @@ export async function handleVersion(req, albumMappingId) {
     { version: `${album.updatedAt}|${album.assetCount ?? ''}`, comments: stats?.comments ?? null },
   ];
 }
-export async function handleNudge(req, body, albumMappingId) {
-  const caller = callingPeer(req, body);
-  if (!caller) return [403, { error: 'unknown or unverified peer' }];
+export async function handleNudge(callerPub: string, albumMappingId: string) {
+  const caller = peerByPub(callerPub);
+  if (!caller) return [403, { error: 'unknown peer' }];
   const mapping = mappingFor(caller.pub, albumMappingId);
   if (!mapping || mapping.dead) return [404, { error: 'unknown album mapping' }];
   // A nudge only means "look again"; it must never get to say where to look. Scoping the
@@ -169,7 +164,7 @@ export async function handleNudge(req, body, albumMappingId) {
   // from the mapping anyway keeps that true if the lookup is ever loosened: previously the
   // caller was passed straight to the reconciler, which let any peer point another
   // household's album at a server of its choosing and materialise whatever it served.
-  const origin = state.peers.find(p => p.pub === mapping.peer);
+  const origin = peerByPub(mapping.peer);
   if (!origin) return [404, { error: 'unknown album mapping' }];
   // answer fast; do the pull in the background. `void` marks that as intended, not forgotten.
   void (async () => {
@@ -185,9 +180,9 @@ export async function handleNudge(req, body, albumMappingId) {
   return [200, { ok: true }];
 }
 // Members re-pull this to heal refs missed at join time (e.g. preview not yet generated).
-export async function handleManifest(req, albumMappingId) {
-  const peer = callingPeer(req, albumMappingId);
-  if (!peer) return [403, { error: 'unknown or unverified peer' }];
+export async function handleManifest(callerPub: string, albumMappingId: string) {
+  const peer = peerByPub(callerPub);
+  if (!peer) return [403, { error: 'unknown peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const manifest = await buildManifest(await getAlbumAssets(mapping.albumId));

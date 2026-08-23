@@ -1,6 +1,6 @@
 # `web/` — HTTP surface
 
-The single process's one HTTP entry point and the HTML it serves.
+The single process's one HTTP entry point and the HTML it serves — for humans and the stock app only; peer traffic rides iroh (`p2p/`).
 
 | File | What it does |
 |---|---|
@@ -22,7 +22,7 @@ There are three tiers, and each is enforced server-side:
 |---|---|---|
 | Public | `/immich-shared-albums/health`, `/immich-shared-albums/accept`, `/immich-shared-albums/assets/*`, `/share/:key` (the join document; `?native=1` passes through) | none — liveness, static pages and their assets. `health` returns `{ok:true}` and nothing else, because the join card probes it cross-origin to discover a sidecar. |
 | Signed-in human | `/immich-shared-albums/join`, `/leave`, `/peers`, `/pairings`, `/pairings/revoke`, `/pair`, `/settings`, `/unlink`, the panel | `auth.ts` against the caller's Immich session. `join` takes the account from the **session**, not the request body; naming a different user requires admin. Everything else here requires admin — server links and settings are admin-owned objects. |
-| Peer | everything under `/immich-shared-albums/api/v1/*` | ed25519 signature (`peers.callingPeer`) **and**, for byte routes, entitlement (`p2p/entitlement`). |
+| Peers | **nothing** — peer operations left HTTP entirely and ride mutually authenticated iroh QUIC; see [`../p2p/wire-protocol.md`](../p2p/wire-protocol.md). The router serves humans and the app, full stop. |
 
 The accept page's client-side `whoami` is UX only — it tells someone to sign in before
 they fill a form. The server never trusts it.

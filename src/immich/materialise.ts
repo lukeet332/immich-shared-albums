@@ -4,17 +4,16 @@
  * hard-guarded so only utility-owned proxies are ever deleted.
  */
 import crypto from 'node:crypto';
-import { log, ROUTE_PREFIX } from '../config.ts';
-import { state, seenHas, seenAdd, keys } from '../state.ts';
-import { sign } from '../peers.ts';
+import { log } from '../config.ts';
+import { state, seenHas, seenAdd } from '../state.ts';
+import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 import { STUB_JPEG, immichJson, jsonBody, uploadAsset, addToAlbum, applyRefMetadata } from './client.ts';
 import { ensureContributor } from './contributors.ts';
 
 // Fetch a ref's preview from the peer and create the local proxy copy. Returns
 // false (without marking seen) on failure so reconciliation can retry later.
-export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
+export async function materialiseRef(mapping, peer, ref) {
   if (seenHas(mapping.id, ref.checksum)) return true;
-  const sigHeaders = v => ({ headers: { 'x-isa-key': keys.pub, 'x-isa-sig': sign(v) } });
   // Hotlink model: nothing of the photo is stored here. The mirror asset is a ~2KB
   // unique stub that exists so the stock app has a row to render; every actual pixel
   // (thumbnails, previews, playback, originals) streams live from the owner's server
@@ -22,16 +21,14 @@ export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   // the owner's rendition so the tile carries a real poster and duration.
   let bytes: Buffer;
   if (ref.kind === 'video') {
-    const pr = await fetch(`${peerUrl}${ROUTE_PREFIX}/api/v1/assets/${ref.originAsset}/playback`, {
-      ...sigHeaders(ref.originAsset),
-      headers: { ...sigHeaders(ref.originAsset).headers, Range: 'bytes=0-2097151' },
-      signal: AbortSignal.timeout(120000),
-    });
-    if (!pr.ok) {
+    const pr = await peerByteRequest(peer, `/assets/${ref.originAsset}/playback`, 'bytes=0-2097151');
+    if (pr.status >= 400) {
       log(`playback stub fetch failed for ${ref.originAsset}: ${pr.status}`);
       return false;
     }
-    bytes = Buffer.concat([Buffer.from(await pr.arrayBuffer()), crypto.randomBytes(8)]);
+    const prefix: Buffer[] = [];
+    for await (const chunk of recvIterable(pr.recv)) prefix.push(chunk);
+    bytes = Buffer.concat([...prefix, crypto.randomBytes(8)]);
   } else {
     bytes = Buffer.concat([STUB_JPEG, crypto.randomBytes(8)]);
   }
@@ -44,16 +41,16 @@ export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   // Link-shared albums are the opposite: the link named a household, nobody named a person, so
   // attribution has no membership to inherit and the sidecar does have to create one.
   const contributorId = ref.contributor?.originUserId;
-  const wasInvited =
+  const missingMemberMeansRevoked =
     mapping.via === 'invite' && !!contributorId && (mapping.forPeerUserIds || []).includes(contributorId);
   const c = await ensureContributor(
-    ref.contributor?.displayName || fallbackName,
+    ref.contributor?.displayName || peer.name,
     mapping.albumId,
     adminKey,
-    peerUrl,
+    peer,
     contributorId,
     mapping.peer,
-    { mayAdd: !wasInvited }
+    { reAddIfMissing: !missingMemberMeansRevoked }
   );
   const ext = ref.kind === 'video' ? 'mp4' : 'jpg';
   // base64 checksums contain / and + — never let them into filenames
@@ -62,7 +59,7 @@ export async function materialiseRef(mapping, peerUrl, fallbackName, ref) {
   await addToAlbum(mapping.albumId, [up.id], c.key);
   await applyRefMetadata(up.id, ref, c.key);
   seenAdd(mapping.id, ref.checksum, up.id, ref.originAsset);
-  log(`materialised ref from "${ref.contributor?.displayName || fallbackName}" into "${mapping.albumName}"`);
+  log(`materialised ref from "${ref.contributor?.displayName || peer.name}" into "${mapping.albumName}"`);
   return true;
 }
 // Delete a materialised proxy asset. Hard guard: only utility-owned assets are ever

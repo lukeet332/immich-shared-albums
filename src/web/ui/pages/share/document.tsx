@@ -11,6 +11,6 @@ export const ShareDocument = () => (
       matchImmichViewport: true,
     }}
   >
-    <div id="share-app"></div>
+    <div id="share-app" data-origin-endpoint="%%ENDPOINT%%"></div>
   </Document>
 );

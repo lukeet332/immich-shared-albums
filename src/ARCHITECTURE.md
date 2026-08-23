@@ -2,11 +2,12 @@
 
 > 🎬 The end-user experience this produces: [video demo](https://www.youtube.com/watch?v=c3GO-YFchYo).
 
-One process, **zero runtime dependencies**:
+One process, **zero JavaScript dependencies and one native one** (`@number0/iroh`, the peer
+transport — lockfile-pinned, installed by the Dockerfile):
 
 - **No build step to run it.** TypeScript is executed natively by Node's type stripping —
-  `node index.ts`, Node ≥ 23.6. The two front-end pages are Preact TSX bundled by esbuild, but the
-  bundles are **committed**, so deploying still builds nothing.
+  `node index.ts`, Node ≥ 23.6. The front-end pages are Preact TSX bundled by esbuild, but the
+  bundles are **committed**, so deploying builds nothing.
 - **State is SQLite** via the built-in `node:sqlite` — WAL, crash-safe, indexed ledgers.
 - **Sync is nudge-driven with a timed backstop.** A signed HTTP nudge makes the common case
   near-instant; three timers are the fail-open safety net. No websockets, no push channel to keep
@@ -18,9 +19,9 @@ One process, **zero runtime dependencies**:
             ┌─────────────────────────────────────────────┐
             │                  sidecar                    │
             │                                             │
- Immich API │  watcher ──► protocol client ──► peers      │  signed HTTPS
- (API key)  │     ▲                              │        │  to other
- ◄──────────┤     │                              ▼        │  households
+ Immich API │  watcher ──► protocol client ──► peers      │  iroh QUIC
+ (API key)  │     ▲                              │        │  dial-by-key to
+ ◄──────────┤     │                              ▼        │  other households
             │  materialiser ◄── inbound refs ── server    │◄──────────────
             │     │                                       │
             │     ▼                                       │
@@ -63,11 +64,12 @@ every decision.
 - **comment sync** — the origin album is the source of truth. Local comments are pushed; peer
   comments are posted via **the author's own local account**, and a seen-ledger keyed in both
   directions prevents echo loops.
-- **protocol client/server** — signed ref exchange between households.
-  - Key pinned at redemption, anchored on the share key, whose password and expiry are honoured.
-  - URLs are hints; the key is the identity.
-  - Identity is *only* identity: every mapping lookup filters on the calling peer, so a signature
-    can never select someone else's album. See [`p2p/wire-protocol.md`](./p2p/wire-protocol.md).
+- **protocol client/server** — ref exchange between households over iroh: mutually authenticated
+  QUIC dialing the household's key itself.
+  - The key IS the address; relay/address hints refresh themselves after every dial.
+  - Enrolment is proven by the connection (pairing ticket or share key names the grant).
+  - Identity is *only* identity: every mapping lookup filters on the calling peer, so a valid
+    connection can never select someone else's album. See [`p2p/wire-protocol.md`](./p2p/wire-protocol.md).
 - **entitlement** — "may this peer read these bytes", kept separate from "who is this peer".
   Everything advertised to a mapping (redeem response, manifest, ref push) lands in an `offered`
   index, and the byte routes serve only what is on it, falling back to album membership (throttled)

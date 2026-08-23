@@ -115,7 +115,33 @@ const ORIGIN_SIDECAR = process.env.ORIGIN_SIDECAR || A;
 // ORIGIN_SIDECAR is resolved by B's sidecar from INSIDE its container (host.docker.internal).
 // The security stage calls the origin directly from this process, so it needs a host route.
 const ORIGIN_DIRECT = process.env.ORIGIN_SIDECAR_DIRECT || 'http://localhost:8302';
-const joinRes = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${shareKey}` }, BKEY))).json();
+
+// v2 join body: the origin's share page carries its endpoint token; the invite forwards it.
+const inviteFor = async (pageBase, key, extra = {}) => {
+  const html = await (await fetch(`${pageBase}/share/${key}`)).text();
+  const tok = (html.match(/data-origin-endpoint="([^"]+)"/) || [])[1];
+  if (!tok) throw new Error(`share page at ${pageBase} carries no endpoint token`);
+  return { invite: { endpointToken: tok, key }, ...extra };
+};
+const endpointOf = async pageBase => {
+  const { invite } = await inviteFor(pageBase, 'probe');
+  return JSON.parse(Buffer.from(invite.endpointToken, 'base64url').toString());
+};
+// One iroh request from INSIDE the rig's network (the host cannot dial container IPs).
+const { execSync } = await import('node:child_process');
+const REPO = new URL('../..', import.meta.url).pathname.replace(/\/$/, '');
+const irohProbe = (keys, endpoint, path, opts = {}) => {
+  const job = JSON.stringify({ keys, peerPub: endpoint.pub, addrs: endpoint.addrs, path, ...opts });
+  const out = execSync(
+    `docker run --rm --network isa-demo -e ISA_ROOT=/repo -e RELAY=off ` +
+      `-v "${REPO}":/repo -v isa-node-modules:/repo/node_modules node:24-alpine ` +
+      `sh -c 'cd /repo && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1; ` +
+      `node demo/e2e/probe.mjs ${JSON.stringify(job).replace(/'/g, String.raw`'\''`)}'`,
+    { timeout: 120000 }
+  ).toString().trim().split('\n').pop();
+  return JSON.parse(out);
+};
+const joinRes = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, shareKey), BKEY))).json();
 check('join succeeded', !!joinRes.album, JSON.stringify(joinRes));
 check('join manifest = 4 photos', joinRes.photos === 4, `got ${joinRes.photos}`);
 
@@ -288,7 +314,7 @@ if (aAfter) {
   await api(A, AKEY, `/albums/${alb2}/assets`, { ...j({ ids: [aIds[0]] }), method: 'PUT' });
   const share2 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb2, allowUpload: true }))).key;
   const nanId = (await api(B, BKEY, '/users/me')).id;
-  const join2 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share2}`, forUserId: nanId }, BKEY))).json();
+  const join2 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, share2, { forUserId: nanId }), BKEY))).json();
   check('second album join ok', join2.photos === 1, JSON.stringify(join2));
   const mirror2 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'second album');
   const m2assets = await until(async () => { const x = await albumAssets(B, BKEY, mirror2.id); return x.length === 1 ? x : null; }, 40000);
@@ -300,7 +326,7 @@ if (aAfter) {
   console.log('— stage: re-join by a second user attaches to the existing mirror');
   let second = (await api(B, BKEY, '/admin/users')).find(u => u.email === 'second-e2e@demo.local');
   if (!second) second = await api(B, BKEY, '/admin/users', j({ email: 'second-e2e@demo.local', name: 'Second Human', password: 'e2e-pass-123' }));
-  const join2b = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share2}`, forUserId: second.id }, BKEY))).json();
+  const join2b = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, share2, { forUserId: second.id }), BKEY))).json();
   check('re-join returns the existing mirror (no duplicate album)', join2b.albumId === mirror2.id, JSON.stringify(join2b).slice(0, 100));
   const dupCount = (await api(B, BKEY, '/albums')).filter(a => a.albumName === 'second album').length;
   check('only one "second album" mirror exists', dupCount === 1, `${dupCount} album(s)`);
@@ -340,7 +366,7 @@ console.log('— stage: instant join (no preview wait) heals via reconciliation'
   await api(A, AKEY, `/albums/${alb3}/assets`, { ...j({ ids: [fresh] }), method: 'PUT' });
   const share3 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb3, allowUpload: true }))).key;
   const meB = (await api(B, BKEY, '/users/me')).id;
-  const join3 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share3}`, forUserId: meB }, BKEY))).json();
+  const join3 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, share3, { forUserId: meB }), BKEY))).json();
   check('instant join accepted', !!join3.albumId, JSON.stringify(join3).slice(0, 100));
   const m3 = await until(async () => {
     const mirror3 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'instant album');
@@ -356,7 +382,7 @@ console.log('— stage: share link created before any photos (empty album) still
   const alb5 = (await api(A, AKEY, '/albums', j({ albumName: 'born empty' }))).id;
   const share5 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb5, allowUpload: true }))).key;
   const meB5 = (await api(B, BKEY, '/users/me')).id;
-  const join5 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share5}`, forUserId: meB5 }, BKEY))).json();
+  const join5 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, share5, { forUserId: meB5 }), BKEY))).json();
   check('empty-album join succeeds', !!join5.albumId, JSON.stringify(join5).slice(0, 100));
   // Assert the property directly, via the mirror's actual owner. The old form asserted that no
   // household-named utility user existed anywhere, which stopped being a valid proxy once peer
@@ -378,7 +404,7 @@ console.log('— stage: view-only share link (allowUpload off) rejects cross-ser
   await api(A, AKEY, `/albums/${alb6}/assets`, { ...j({ ids: [voId] }), method: 'PUT' });
   const share6 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb6, allowUpload: false }))).key;
   const meB6 = (await api(B, BKEY, '/users/me')).id;
-  const join6 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${share6}`, forUserId: meB6 }, BKEY))).json();
+  const join6 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, share6, { forUserId: meB6 }), BKEY))).json();
   const mirror6 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'view only album');
   const m6 = await until(async () => { const x = await albumAssets(B, BKEY, mirror6.id); return x.length === 1 ? x : null; }, 60000);
   check('view-only album still syncs for viewing', !!m6, m6 ? '' : 'timed out');
@@ -401,7 +427,7 @@ console.log('— stage: reverse-direction share — member-owned album with an a
   await api(B, BKEY, `/albums/${albR}/assets`, { ...j({ ids: [nIds[0]] }), method: 'PUT' });
   const shareR = (await api(B, BKEY, '/shared-links', j({ type: 'ALBUM', albumId: albR, allowUpload: true }))).key;
   const meC = (await api(A, AKEY, '/users/me')).id;
-  const joinR = await (await fetch(`${CS}/immich-shared-albums/join`, jAuth({ url: `${REV}/share/${shareR}`, forUserId: meC }, AKEY))).json();
+  const joinR = await (await fetch(`${CS}/immich-shared-albums/join`, jAuth(await inviteFor(BS, shareR, { forUserId: meC }), AKEY))).json();
   check('reverse join: C joins a B-owned album', !!joinR.albumId, JSON.stringify(joinR).slice(0, 100));
   const mirrorR = (await api(A, AKEY, '/albums')).find(a => a.albumName === 'reverse album');
   const mR = mirrorR && await until(async () => { const x = await albumAssets(A, AKEY, mirrorR.id); return x.length === 1 ? x : null; }, 180000);
@@ -417,7 +443,7 @@ const DS = process.env.D_SIDECAR || 'http://localhost:8303';
 const DKEY = process.env.DKEY;
 let dMirror = null;
 if (DKEY) {
-  const joinD = await (await fetch(`${DS}/immich-shared-albums/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${shareKey}` }, DKEY))).json();
+  const joinD = await (await fetch(`${DS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, shareKey), DKEY))).json();
   check('D join succeeded', !!joinD.albumId, JSON.stringify(joinD).slice(0, 100));
   dMirror = (await api(D, DKEY, '/albums')).find(a => a.albumName === joinD.album);
   const dAssets = await until(async () => { const x = await albumAssets(D, DKEY, dMirror.id); return x.length === 9 ? x : null; }, 150000);
@@ -457,7 +483,7 @@ console.log('— stage: deletion propagation + leave-&-purge (reversible joins)'
   await api(A, AKEY, `/albums/${albD}/assets`, { ...j({ ids: [d1, d2] }), method: 'PUT' });
   const shareD = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albD, allowUpload: true }))).key;
   const meBD = (await api(B, BKEY, '/users/me')).id;
-  const joinD2 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth({ url: `${ORIGIN_SIDECAR}/share/${shareD}`, forUserId: meBD }, BKEY))).json();
+  const joinD2 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, shareD, { forUserId: meBD }), BKEY))).json();
   const mirrorD = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'delete test');
   const mD = await until(async () => { const x = await albumAssets(B, BKEY, mirrorD.id); return x.length === 2 ? x : null; }, 60000);
   check('delete-test album joined and mirrored (2 stubs)', !!mD, mD ? '' : 'timed out');
@@ -534,8 +560,6 @@ console.log('— stage: native album invitations, per person (no share link)');
   if (!bPeer) console.log('  (skipped: cannot read the origin\'s peer record for B)');
   else {
     const bKeys = readSidecarKv('b-sidecar', 'keys');
-    const signAsB = (v) => crypto.sign(null, Buffer.from(v),
-      crypto.createPrivateKey({ key: Buffer.from(bKeys.priv, 'base64url'), format: 'der', type: 'pkcs8' })).toString('base64url');
     const bAdmin = await api(B, BKEY, '/users/me');
     // Markers are identified by display name — exactly how a human picks one in Immich.
     const markerFor = async (person) => (await api(A, AKEY, '/admin/users'))
@@ -613,10 +637,10 @@ console.log('— stage: native album invitations, per person (no share link)');
       // Withdrawal is asserted against the /invitations CONTRACT rather than state.db: the running
       // process is the authoritative view, and the runner deletes state.db from under a live
       // sidecar during purge, so a host-side file read is not a reliable oracle here.
+      const originEp = await endpointOf(ORIGIN_DIRECT);
       const invitations = async () => {
-        const r = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/invitations`,
-          { headers: { 'x-isa-key': bKeys.pub, 'x-isa-sig': signAsB('invitations') } });
-        return r.ok ? ((await r.json()).invitations || []) : null;
+        const r = irohProbe(bKeys, originEp, '/invitations');
+        return r.status === 200 ? (r.json?.invitations || []) : null;
       };
       const listedBefore = await invitations();
       check('the invited album is offered on /invitations',
@@ -743,15 +767,11 @@ console.log('— stage: a revocation survives content arriving in the same windo
       await api(B, mirroredRace.key, `/albums/${mirroredRace.album.id}/assets`,
         { ...j({ ids: [pushId] }), method: 'PUT' }).catch(() => {});
 
+      const originEp2 = await endpointOf(ORIGIN_DIRECT);
       const invitations = async () => {
         const bKeys2 = readSidecarKv('b-sidecar', 'keys');
-        const sig = crypto
-          .sign(null, Buffer.from('invitations'),
-            crypto.createPrivateKey({ key: Buffer.from(bKeys2.priv, 'base64url'), format: 'der', type: 'pkcs8' }))
-          .toString('base64url');
-        const r = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/invitations`,
-          { headers: { 'x-isa-key': bKeys2.pub, 'x-isa-sig': sig } });
-        return r.ok ? ((await r.json()).invitations || []) : null;
+        const r = irohProbe(bKeys2, originEp2, '/invitations');
+        return r.status === 200 ? (r.json?.invitations || []) : null;
       };
       const withdrawn = await until(async () => {
         const list = await invitations();
@@ -870,13 +890,12 @@ console.log('— stage: security (unauthenticated surface)');
         await status(`${BS}/immich-shared-albums/join`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                              body: 'x'.repeat(2 * 1024 * 1024) }) === 413);
 
-  check('redeem refuses an unsigned caller',
+  // Peer operations left HTTP entirely — the router must not even know these paths.
+  check('the HTTP surface carries no peer routes any more (redeem)',
         await status(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/invites/redeem`,
-                     j({ shareKey, protocol: 1, household: { publicKey: 'AAAA', url: 'http://x', name: 'imposter' } })) === 403);
-
-  check('avatar route refuses a bare public key with no signature',
-        [403, 405].includes(await status(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/users/${(await api(A, AKEY, '/users/me')).id}/avatar`,
-                                         { headers: { 'x-isa-key': 'AAAA' } })));
+                     j({ shareKey, protocol: 2, household: { name: 'imposter' } })) === 404);
+  check('the HTTP surface carries no peer routes any more (bytes)',
+        await status(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/assets/x/original`) === 404);
 }
 
 console.log('— stage: security (entitlement — a signed peer is not entitled to everything)');
@@ -888,10 +907,7 @@ console.log('— stage: security (entitlement — a signed peer is not entitled 
   if (!bKeys) console.log('  (skipped: cannot read B\'s keypair from demo/b-sidecar/state.db)');
 
   if (bKeys) {
-    const signAs = (v) => crypto.sign(null, Buffer.from(v),
-      crypto.createPrivateKey({ key: Buffer.from(bKeys.priv, 'base64url'), format: 'der', type: 'pkcs8' })).toString('base64url');
-    const asB = (v) => ({ headers: { 'x-isa-key': bKeys.pub, 'x-isa-sig': signAs(v) } });
-
+    const originEp = await endpointOf(ORIGIN_DIRECT);
     // A private album on the origin that was never shared with anyone. Before the fix, any
     // enrolled peer could pull its originals with the admin key just by naming the asset.
     const privAlbum = (await api(A, AKEY, '/albums', j({ albumName: 'not shared with anyone' }))).id;
@@ -899,19 +915,19 @@ console.log('— stage: security (entitlement — a signed peer is not entitled 
     await ensurePreviews(A, AKEY, [privAsset]);
     await api(A, AKEY, `/albums/${privAlbum}/assets`, { ...j({ ids: [privAsset] }), method: 'PUT' });
 
-    const privStatus = (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/assets/${privAsset}/original`, asB(privAsset))).status;
+    const priv = irohProbe(bKeys, originEp, `/assets/${privAsset}/original`, { wantBytes: true });
     check('a valid peer CANNOT read an asset that was never shared with it (F-05)',
-          privStatus === 403, `got ${privStatus}`);
+          priv.status === 403, JSON.stringify(priv));
 
-    // Control: the same signature on an asset B genuinely was offered must still work,
+    // Control: the same identity on an asset B genuinely was offered must still work,
     // otherwise the check above would pass simply by breaking all byte reads.
-    const okStatus = (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/assets/${aIds[0]}/original`, asB(aIds[0]))).status;
+    const ok = irohProbe(bKeys, originEp, `/assets/${aIds[0]}/original`, { wantBytes: true });
     check('the same peer CAN still read an asset it was offered (no over-blocking)',
-          okStatus === 200, `got ${okStatus}`);
+          ok.status === 200 && ok.bytesLength > 0, JSON.stringify(ok));
 
-    const manifestStatus = (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/albums/${privAlbum}/manifest`, asB(privAlbum))).status;
+    const man = irohProbe(bKeys, originEp, `/albums/${privAlbum}/manifest`);
     check('a valid peer CANNOT read the manifest of an album not mapped to it (F-06)',
-          [403, 404].includes(manifestStatus), `got ${manifestStatus}`);
+          [403, 404].includes(man.status), JSON.stringify(man));
 
     await api(A, AKEY, '/assets', { ...j({ ids: [privAsset], force: true }), method: 'DELETE' }).catch(() => {});
     await api(A, AKEY, `/albums/${privAlbum}`, { method: 'DELETE' }).catch(() => {});
@@ -929,7 +945,7 @@ console.log('— stage: security (album password gates enrolment)');
   const meP = (await api(B, BKEY, '/users/me')).id;
   const tryJoin = async (password) => {
     const r = await fetch(`${BS}/immich-shared-albums/join`,
-      jAuth({ url: `${ORIGIN_SIDECAR}/share/${pwKey}`, forUserId: meP, password }, BKEY));
+      jAuth(await inviteFor(ORIGIN_DIRECT, pwKey, { forUserId: meP, password }), BKEY));
     return { status: r.status, body: await r.json().catch(() => ({})) };
   };
   const noPw = await tryJoin(undefined);
@@ -991,8 +1007,13 @@ console.log('— stage: pairing links two servers on its own (no album)');
   check('an admin can mint a pairing link', res.ok && !!minted.link, JSON.stringify(minted).slice(0, 120));
 
   if (minted.link) {
-    check('the link carries a secret in the fragment, not the path',
-          /#[A-Za-z0-9_-]{20,}$/.test(minted.link), minted.link.replace(/#.*/, '#<redacted>'));
+    // The ticket never touches an HTTP server, so the secret cannot reach any log at all —
+    // stronger than the old fragment rule it replaces. Assert its shape instead.
+    const ticket = minted.link.match(/^isa2-([A-Za-z0-9_-]+)$/);
+    const decoded = ticket ? JSON.parse(Buffer.from(ticket[1], 'base64url').toString()) : null;
+    check('the pairing string is a self-contained ticket (endpoint + single-use secret, no URL)',
+          !!decoded?.pub && !!decoded?.secret && (decoded?.secret || '').length >= 20,
+          minted.link.slice(0, 24) + '…');
     check('the link expires within the hour', minted.expiresAt - Date.now() < 3600000,
           `${Math.round((minted.expiresAt - Date.now()) / 60000)} min`);
     // survives being pasted into a messenger: one line, no spaces
