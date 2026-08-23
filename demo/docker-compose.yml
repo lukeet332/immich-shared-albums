@@ -33,15 +33,12 @@ services:
 
   sidecar-b:
     image: immich-shared-albums:demo
-    # host.docker.internal reaches the host on Docker Desktop natively and on
-    # Linux via the host-gateway mapping below — override B_PUBLIC_URL with a
     # LAN address when testing from a phone.
     extra_hosts:
       - host.docker.internal:host-gateway
     environment:
       IMMICH_URL: http://immich-b:2283
       IMMICH_API_KEY: ${B_API_KEY}
-      PUBLIC_URL: ${B_PUBLIC_URL:-http://host.docker.internal:8301}
       HOUSEHOLD_NAME: "Demo household (B)"
       POLL_MS: "15000"
     networks:

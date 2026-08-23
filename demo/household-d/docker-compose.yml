@@ -36,7 +36,6 @@ services:
     environment:
       IMMICH_URL: http://immich-d:2283
       IMMICH_API_KEY: ${D_API_KEY}
-      PUBLIC_URL: ${D_PUBLIC_URL:-http://host.docker.internal:8303}
       HOUSEHOLD_NAME: "Mock household (D)"
       POLL_MS: "8000"
     networks:
