@@ -25,5 +25,8 @@
     "prettier": "^3.9.6",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.67.0"
+  },
+  "dependencies": {
+    "@number0/iroh": "1.1.0"
   }
 }
