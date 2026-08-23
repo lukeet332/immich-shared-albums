@@ -16,11 +16,17 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
   const kind = rawKind === 'thumbnail' ? 'preview' : rawKind === 'original' ? 'original' : 'playback';
   const entry = store.ledgerWithOrigin(assetId);
   if (!entry) return false; // not a proxy asset -> Immich serves it
-  // authorise with the caller's OWN credentials: they must be able to see the asset
+  // authorise with the caller's OWN credentials: they must be able to see the asset. A share-page
+  // visitor's credential is the link's ?key= — forward it too, so Immich decides with the share
+  // link's own authority (expiry, password) instead of 401ing anonymous viewers of stub assets.
   const authHeaders: Record<string, string> = {};
   for (const h of ['cookie', 'x-api-key', 'authorization'])
     if (req.headers[h]) authHeaders[h] = req.headers[h] as string;
-  const probe = await fetch(`${CFG.immichUrl}/api/assets/${assetId}`, { headers: authHeaders });
+  const shareKey = new URL(req.url ?? '/', 'http://x').searchParams.get('key');
+  const probe = await fetch(
+    `${CFG.immichUrl}/api/assets/${assetId}${shareKey ? `?key=${encodeURIComponent(shareKey)}` : ''}`,
+    { headers: authHeaders }
+  );
   if (!probe.ok) {
     res.writeHead(probe.status);
     res.end();
