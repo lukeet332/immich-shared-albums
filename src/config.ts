@@ -15,7 +15,6 @@ if (!apiKey) {
 export const CFG = {
   immichUrl: process.env.IMMICH_URL || 'http://immich-server:2283',
   apiKey,
-  publicUrl: (process.env.PUBLIC_URL || '').replace(/\/$/, ''),
   name: process.env.HOUSEHOLD_NAME || 'Unnamed household',
   port: Number(process.env.PORT || 8300),
   dataDir: process.env.DATA_DIR || '/data',
@@ -41,10 +40,6 @@ export const CFG = {
   // because sharing is per person, that disables native invitations from that server entirely
   // (there is nobody to name) and leaves share links as the way in.
   shareUserDirectory: process.env.SHARE_USER_DIRECTORY !== 'false',
-  // Peer URLs on private ranges are normal for LAN and tailnet deployments, so they are
-  // allowed by default. Set false on a public-facing host to stop a peer URL being aimed
-  // at internal services.
-  allowPrivatePeers: process.env.ALLOW_PRIVATE_PEERS !== 'false',
 };
 export const log = (...a) => console.log(new Date().toISOString(), ...a);
 export const UTILITY_SUFFIX = ' (via shared albums)';

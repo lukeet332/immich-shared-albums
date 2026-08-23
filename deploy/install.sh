@@ -30,8 +30,6 @@ docker network inspect "$IMMICH_NETWORK" >/dev/null 2>&1 || {
   echo "network '$IMMICH_NETWORK' not found. Existing networks:"; docker network ls --format '  {{.Name}}'; exit 1; }
 
 IMMICH_URL=$(ask "Immich server URL as reachable from that network [http://immich-server:2283]:" http://immich-server:2283)
-PUBLIC_URL=$(ask "Public URL of your Immich (what family types in a browser), e.g. https://photos.example.com:" "")
-[ -n "$PUBLIC_URL" ] || { echo "public URL is required — peers redeem invites against it"; exit 1; }
 HOUSEHOLD_NAME=$(ask "Household name shown to peers [My household]:" "My household")
 HOST_PORT=$(ask "Host port to expose the sidecar on (your reverse proxy points here) [8300]:" 8300)
 printf 'Immich admin API key (input hidden): '
@@ -55,7 +53,6 @@ services:
     environment:
       IMMICH_URL: $IMMICH_URL
       IMMICH_API_KEY: \${SIDECAR_API_KEY}
-      PUBLIC_URL: $PUBLIC_URL
       HOUSEHOLD_NAME: "$HOUSEHOLD_NAME"
     volumes:
       - ./data:/data
@@ -112,7 +109,7 @@ Add to your existing site config, BEFORE the catch-all Immich route:
 
 Then reload the proxy and open any Immich share link — you should see the
 "Join shared album with your server?" banner. Verify the panel at:
-  $PUBLIC_URL/immich-shared-albums/
+  https://<your-immich>/immich-shared-albums/
 
 To uninstall: cd $INSTALL_DIR && docker compose down && remove the proxy lines.
 EOF

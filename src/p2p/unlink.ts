@@ -99,7 +99,6 @@ export const linkedPeers = () =>
   state.peers.map(p => ({
     pub: p.pub,
     name: p.name,
-    url: p.url,
     version: p.version,
     sharedToThem: state.mappings.filter(m => m.peer === p.pub && m.role === 'owner' && !m.dead).length,
     sharedToUs: state.mappings.filter(m => m.peer === p.pub && m.role === 'member' && !m.dead).length,
@@ -120,4 +119,4 @@ export const sharedAlbums = () =>
     }));
 
 /** Our own household identity, for the panel header. */
-export const localHousehold = () => ({ name: CFG.name, url: CFG.publicUrl });
+export const localHousehold = () => ({ name: CFG.name });

@@ -28,8 +28,7 @@ import type { Mapping, Peer } from '../store.ts';
 import { state, save, store, addedHas, addedForget } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
 import { ensureUtilityUser } from '../immich/contributors.ts';
-import { signedGet } from '../peers.ts';
-import { ROUTE_PREFIX } from '../config.ts';
+import { peerRequest } from '../p2p/transport.ts';
 import { ensureMirror, fillMirrorInBackground } from '../p2p/mirror.ts';
 import { leaveAlbum } from './leave.ts';
 import { diffInvitees } from './invitees.ts';
@@ -58,9 +57,9 @@ export async function localDirectory() {
 async function syncPeerDirectory(peer: Peer) {
   let people;
   try {
-    const r = await signedGet(`${peer.url}${ROUTE_PREFIX}/api/v1/directory`, 'directory');
-    if (!r.ok) return; // peer too old, or sharing disabled
-    people = (await r.json()).users || [];
+    const r = await peerRequest(peer, '/directory');
+    if (r.status >= 400) return; // peer too old, or sharing disabled
+    people = r.json?.users || [];
   } catch {
     return;
   } // unreachable: next cycle
@@ -348,9 +347,9 @@ export async function pullInvitationsOnce() {
   for (const peer of state.peers) {
     let invitations;
     try {
-      const r = await signedGet(`${peer.url}${ROUTE_PREFIX}/api/v1/invitations`, 'invitations');
-      if (!r.ok) continue; // old peer, or not sharing anything with us
-      invitations = (await r.json()).invitations || [];
+      const r = await peerRequest(peer, '/invitations');
+      if (r.status >= 400) continue; // old peer, or not sharing anything with us
+      invitations = r.json?.invitations || [];
     } catch {
       continue;
     } // unreachable: try again next cycle

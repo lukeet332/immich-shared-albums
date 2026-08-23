@@ -39,10 +39,7 @@ export const ConnectedServers = ({ peers, onChange }: { peers: Peer[]; onChange:
         <div key={p.pub} style={{ ...s.item, ...s.row }}>
           <span>
             {p.name}
-            <div style={s.sub}>
-              {p.url}
-              {p.version ? ` · v${p.version}` : ''}
-            </div>
+            <div style={s.sub}>{p.version ? `v${p.version}` : 'linked'}</div>
           </span>
           <span style={{ textAlign: 'right' }}>
             <div style={s.sub}>

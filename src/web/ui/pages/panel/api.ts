@@ -17,14 +17,13 @@ const post = (path: string, body?: unknown) =>
 export type Peer = {
   pub: string;
   name: string;
-  url: string;
   version?: string;
   people: number;
   sharedToThem: number;
   sharedToUs: number;
 };
 export type Album = { name: string; role: string; via: string; peer: string };
-export type Overview = { household: { name: string; url: string }; peers: Peer[]; albums: Album[] };
+export type Overview = { household: { name: string }; peers: Peer[]; albums: Album[] };
 
 export const overview = () => json('/peers') as Promise<Overview>;
 export const mintLink = () => post('/pairings') as Promise<{ link: string; expiresAt: number }>;

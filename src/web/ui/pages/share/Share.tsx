@@ -64,14 +64,8 @@ export const Share = () => {
     }
     localStorage.setItem(REMEMBERED_SERVER, raw);
     // The invite rides the fragment so it never appears in any server's logs.
-    const invite = encodeURIComponent(
-      JSON.stringify({
-        v: 1,
-        host: location.host,
-        scheme: location.protocol.replace(':', ''),
-        key: shareKeyFromPath(),
-      })
-    );
+    const endpoint = document.getElementById('immich-shared-albums-banner')?.dataset.originEndpoint ?? '';
+    const invite = encodeURIComponent(JSON.stringify({ v: 2, e: endpoint, key: shareKeyFromPath() }));
     location.href = `${scheme}://${domain}/immich-shared-albums/accept#${invite}`;
   };
 

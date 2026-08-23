@@ -1,50 +1,56 @@
 /**
- * p2p/join.ts — the member side of joining. Redeems a share link against the origin,
- * pins the peer, provisions the host utility user, creates the local mirror album, and
- * kicks off the first reconcile. Idempotent: re-joining just adds the user to the mirror.
+ * p2p/join.ts — the member side of joining. Dials the origin's endpoint (carried by the
+ * invite), redeems the share key, pins the peer, provisions the host utility user, creates
+ * the local mirror album, and kicks off the first reconcile. Idempotent: re-joining just
+ * adds the user to the mirror.
  */
-import { CFG, SIDECAR_VERSION, log, ROUTE_PREFIX } from '../config.ts';
+import { CFG, SIDECAR_VERSION, log } from '../config.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
-import { state, keys } from '../state.ts';
-import { signedFetch, assertPeerUrlAllowed } from '../peers.ts';
+import { state } from '../state.ts';
+import { peerRequest } from './transport.ts';
 import { ensureMirror, fillMirrorInBackground } from './mirror.ts';
 
-export async function join(shareUrl, forUserId, password?: string) {
-  const m = String(shareUrl ?? '')
-    .trim()
-    .match(/^(https?:\/\/[^/]+)\/share\/([A-Za-z0-9_-]+)/);
-  if (!m) throw new Error('that does not look like an Immich share link');
-  const [, origin, shareKey] = m;
-  await assertPeerUrlAllowed(origin);
-  const body = JSON.stringify({
-    shareKey,
+export type JoinInvite = {
+  /** The origin's endpoint: its public key plus dial hints. Carried by the share page. */
+  endpoint: { pub: string; relay?: string; addrs?: string[] };
+  key: string;
+};
+
+export async function join(invite: JoinInvite, forUserId, password?: string) {
+  if (!invite?.endpoint?.pub || !invite?.key) throw new Error('that does not look like a share invite');
+  const origin = {
+    pub: invite.endpoint.pub,
+    name: 'origin',
+    relayHint: invite.endpoint.relay,
+    lastAddrs: invite.endpoint.addrs,
+  };
+  const r = await peerRequest(origin, '/invites/redeem', {
+    shareKey: invite.key,
     protocol: PROTOCOL_VERSION,
     version: SIDECAR_VERSION,
     password,
-    household: { publicKey: keys.pub, url: CFG.publicUrl, name: CFG.name },
+    household: { name: CFG.name },
   });
-  const r = await signedFetch(`${origin}${ROUTE_PREFIX}/api/v1/invites/redeem`, body);
-  if (!r.ok) {
-    // Surface the other sidecar's own message (an expired link, a wrong password) but
-    // never an arbitrary upstream body — that would make this a read primitive for
-    // whatever the URL actually pointed at.
-    const reply = await r.json().catch(() => null);
-    const clean = typeof reply?.error === 'string' ? reply.error.slice(0, 200) : null;
+  if (r.status >= 400) {
+    const clean = typeof r.json?.error === 'string' ? r.json.error.slice(0, 200) : null;
     const err = new Error(clean || `the other server refused the join (${r.status})`);
-    if (reply?.passwordRequired) (err as Error & { passwordRequired?: boolean }).passwordRequired = true;
+    if (r.json?.passwordRequired) (err as Error & { passwordRequired?: boolean }).passwordRequired = true;
     throw err;
   }
-  const res = await r.json();
+  const res = r.json;
   if (res.protocol && res.protocol > PROTOCOL_VERSION)
     log(
       `origin "${res.household?.name}" speaks protocol ${res.protocol} > ours (${PROTOCOL_VERSION}) — update the immich-shared-albums sidecar on this server`
     );
+  if (res.household.publicKey !== invite.endpoint.pub)
+    throw new Error('the origin answered with a different identity than the invite named');
   if (!state.peers.some(p => p.pub === res.household.publicKey)) {
     state.peers.push({
       pub: res.household.publicKey,
-      url: res.household.url,
       name: res.household.name,
       version: res.version,
+      relayHint: invite.endpoint.relay,
+      lastAddrs: invite.endpoint.addrs,
     });
   }
   // Pinned just above if it was missing, so this cannot be undefined — but find it once and

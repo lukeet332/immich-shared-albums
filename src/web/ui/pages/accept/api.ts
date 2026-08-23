@@ -26,11 +26,15 @@ export type JoinResult = {
   passwordRequired?: boolean;
 };
 
-export const join = async (url: string, forUserId: string, password?: string): Promise<JoinResult> => {
+export const join = async (
+  invite: { endpointToken: string; key: string },
+  forUserId: string,
+  password?: string
+): Promise<JoinResult> => {
   const r = await fetch(`${ROUTE_PREFIX}/join`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, forUserId, ...(password ? { password } : {}) }),
+    body: JSON.stringify({ invite, forUserId, ...(password ? { password } : {}) }),
   });
   const body = await r.json().catch(() => ({ error: 'failed' }));
   return { ok: r.ok, ...body };

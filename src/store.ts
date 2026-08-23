@@ -45,7 +45,14 @@ export type Mapping = {
   remoteCommentCount?: number;
 };
 
-export type Peer = { pub: string; url: string; name: string; version?: string };
+export type Peer = {
+  pub: string;
+  name: string;
+  version?: string;
+  /** Where they were last reachable — hints for the next dial, never identity. */
+  relayHint?: string;
+  lastAddrs?: string[];
+};
 // `password` is transient: it exists only while the account is being provisioned, and is
 // rolled to an unheld value once the API key is minted (see immich/contributors.ts).
 export type Contributor = {
