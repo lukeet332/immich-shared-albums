@@ -31,7 +31,27 @@ Two households, one shared album, created and shared and joined and commented on
 
 ## Install
 
-Every method needs Docker, an admin API key, and **a reverse proxy in front of Immich**. Shared photos and the join banner reach your server through three small routes (`/immich-shared-albums/*`, `/share/*`, and the GET byte routes) placed ahead of your normal Immich route. Pick one, easiest first:
+Every method needs Docker, an admin API key, and a reverse proxy in front of Immich **on your own network** — shared photos reach the stock app through three small routes (`/immich-shared-albums/*`, `/share/*`, and the GET byte routes) placed ahead of your normal Immich route. Whether any of it is *publicly* reachable is a separate choice, and the recommended answer is no:
+
+### Recommended: nothing exposed
+
+Cross-server sharing needs **no public exposure at all** — server-to-server traffic rides [iroh](https://www.iroh.computer), an encrypted peer-to-peer connection that dials the other server's key and hole-punches through NATs. The recommended shape:
+
+| Piece | Reachable from | Job |
+|---|---|---|
+| Immich + this addon | your LAN (Tailscale etc. optional, for your own devices away from home) | everything your household does |
+| Cross-server sharing | nowhere — outbound iroh only | pair once with a string, then share by **inviting the person to the album in Immich's own picker** |
+| [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) *(optional)* | the one public thing, if you want share links for people without a server | view-only galleries; point Immich's external share domain at it |
+
+Link two households: panel → **Create pairing link** → send the string over any chat → the other admin pastes it into their panel. Done — their people appear in your album picker and vice versa. No domain, no port forwarding, no certificates, no shared VPN. With this shape you can also flip **Settings → "Allow other Immich users to join albums via shared links"** off: share links (via IPP) stay view-only for humans, and server enrolment is pairing-only.
+
+One honest limit: albums containing *mirrored* (cross-server) photos render placeholder tiles through IPP — real pixels for shared photos only stream through this addon, which is the point of the model. Share your own albums via IPP and everything is perfect.
+
+### Exposing Immich anyway (the share-link join flow)
+
+If your Immich **is** publicly reachable, share links become a discovery surface: any share page carries a join card, and a visitor with their own server can join the album from it. Both shapes work with the same install; the panel setting decides whether link-joining is on.
+
+Pick an install method, easiest first:
 
 - **Preferred: let an AI agent install it.** If you use an AI coding agent (Claude Code, Cursor, Copilot CLI, etc.), either on the server or on your own machine with SSH access to it, paste [deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md). It discovers your setup, installs the sidecar, adds the proxy routes adapted to *your* reverse proxy, and verifies the result. It's the most hands-off option and the only one that adapts to any proxy (Caddy, nginx, NPM, Traefik, tunnels).
 - **Guided script.** No agent? Clone next to your Immich and run `bash deploy/install.sh`. It auto-detects your Immich network, builds and starts the sidecar, health-checks it, and prints the proxy routes for you to add.

@@ -560,6 +560,37 @@ console.log('— stage: native album invitations, per person (no share link)');
   if (!bPeer) console.log('  (skipped: cannot read the origin\'s peer record for B)');
   else {
     const bKeys = readSidecarKv('b-sidecar', 'keys');
+    const bAdmin = await api(B, BKEY, '/users/me');
+    // Markers are identified by display name — exactly how a human picks one in Immich.
+    const markerFor = async (person) => (await api(A, AKEY, '/admin/users'))
+      .find(u => u.name === `${person} (via ${bPeer.name} server)`);
+    const nan = await until(async () => (await markerFor(bAdmin.name)) || null, 90000);
+    check('origin created a per-person invite marker for each person on the linked server', !!nan,
+          nan ? nan.email : `no user named "${bAdmin.name} (via ${bPeer.name} server)"`);
+    check('the marker lives in the per-person namespace, not the contributors one',
+          !!nan && nan.email.startsWith('person-'), nan?.email);
+    // Sharing is per person. A server link is not a person, so it must not exist as a pickable
+    // user at all — managing the link belongs to the panel (see the unlink stage).
+    const households = (await api(A, AKEY, '/admin/users')).filter(u => u.email.startsWith('invite-household-'));
+    check('no household-wide stand-in exists — a server link is not a person',
+          households.length === 0, households.map(u => u.email).join(', '));
+    // ONE account per remote person: it owns their photos AND is what a human picks to share
+    // with them. Two accounts for one human is the clutter this replaced.
+    {
+      const all = await api(A, AKEY, '/admin/users');
+      const forNan = all.filter(u => isBot(u.email) && (u.name || '').startsWith(bAdmin.name));
+      check('one account per remote person, not two', forNan.length === 1,
+            forNan.map(u => `${u.name} <${u.email}>`).join(' | '));
+    }
+    // An invite marker and an attribution contributor can exist for the SAME remote person. If
+    // they ever share a display name the two are indistinguishable in the picker.
+    {
+      const counts = {};
+      for (const u of await api(A, AKEY, '/admin/users')) counts[u.name] = (counts[u.name] || 0) + 1;
+      const dupes = Object.entries(counts).filter(([, n]) => n > 1);
+      check('no two users share a display name (unpickable picker entries)', dupes.length === 0,
+            dupes.map(([n, c]) => `${n} x${c}`).join(', '));
+    }
 
     // A narrowed mirror excludes B's admin, so GET /albums as BKEY cannot see it. Look with the
     // stand-in keys that OWN the mirrors — asserting via the admin only proves it was excluded.
