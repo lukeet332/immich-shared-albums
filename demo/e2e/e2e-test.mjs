@@ -945,7 +945,7 @@ console.log('— stage: security (album password gates enrolment)');
   const meP = (await api(B, BKEY, '/users/me')).id;
   const tryJoin = async (password) => {
     const r = await fetch(`${BS}/immich-shared-albums/join`,
-      jAuth({ url: `${ORIGIN_SIDECAR}/share/${pwKey}`, forUserId: meP, password }, BKEY));
+      jAuth(await inviteFor(ORIGIN_DIRECT, pwKey, { forUserId: meP, password }), BKEY));
     return { status: r.status, body: await r.json().catch(() => ({})) };
   };
   const noPw = await tryJoin(undefined);
@@ -1007,8 +1007,13 @@ console.log('— stage: pairing links two servers on its own (no album)');
   check('an admin can mint a pairing link', res.ok && !!minted.link, JSON.stringify(minted).slice(0, 120));
 
   if (minted.link) {
-    check('the link carries a secret in the fragment, not the path',
-          /#[A-Za-z0-9_-]{20,}$/.test(minted.link), minted.link.replace(/#.*/, '#<redacted>'));
+    // The ticket never touches an HTTP server, so the secret cannot reach any log at all —
+    // stronger than the old fragment rule it replaces. Assert its shape instead.
+    const ticket = minted.link.match(/^isa2-([A-Za-z0-9_-]+)$/);
+    const decoded = ticket ? JSON.parse(Buffer.from(ticket[1], 'base64url').toString()) : null;
+    check('the pairing string is a self-contained ticket (endpoint + single-use secret, no URL)',
+          !!decoded?.pub && !!decoded?.secret && (decoded?.secret || '').length >= 20,
+          minted.link.slice(0, 24) + '…');
     check('the link expires within the hour', minted.expiresAt - Date.now() < 3600000,
           `${Math.round((minted.expiresAt - Date.now()) / 60000)} min`);
     // survives being pasted into a messenger: one line, no spaces
