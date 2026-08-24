@@ -1115,9 +1115,11 @@ console.log('— stage: panel manages server links (unlink)');
     // Their photos leave with them. Everything these accounts owned was a proxy whose bytes
     // streamed from the peer, so once the link is gone the assets are unreachable and keeping
     // them would only scatter broken thumbnails through albums here.
-    check('no account for that server survives the unlink',
-          afterUsers.every(u => !/\(via /.test(u.name || '')),
-          afterUsers.map(u => u.name).join(', ') || '(none)');
+    // Scoped to the unlinked server: B may hold other live links (it pairs with D two stages
+    // up), and their people are allowed to appear here whenever the directory poll ticks.
+    const survivors = afterUsers.filter(u => (u.name || '').includes(`(via ${target.name}`));
+    check('no account for that server survives the unlink', survivors.length === 0,
+          survivors.map(u => u.name).join(', ') || '(none)');
     // SECURITY: deleting the accounts takes their album memberships with them, and nothing may be
     // left behind for a later re-link to misread as a fresh invitation.
     const leftBehind = [];
