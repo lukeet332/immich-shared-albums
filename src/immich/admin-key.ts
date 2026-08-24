@@ -44,7 +44,7 @@ export async function verifyAdminKeyAtBoot(): Promise<void> {
   if (admin === 403) {
     log('ADMIN KEY IS MISSING REQUIRED PERMISSIONS — cross-server sharing will not work.');
     log(`Create the key on an admin account with exactly: ${REQUIRED_ADMIN_PERMISSIONS.join(', ')}`);
-    log('(README "Permissions & security" has the same list. "all" also works, with a wider blast radius.)');
+    log('(deploy/api-key.md explains each permission. "all" also works, with a wider blast radius.)');
     return;
   }
   const sysCfg = await probe('/system-config');
