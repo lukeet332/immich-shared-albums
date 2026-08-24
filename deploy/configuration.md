@@ -5,7 +5,7 @@ need to. For the key's permission list, see [api-key.md](./api-key.md).
 
 | Variable | Default | What it does |
 |---|---|---|
-| `IMMICH_API_KEY` | — | **Required.** A key on an admin account, created with the permission list in the README. The addon checks the key when it starts and tells you if something is missing. `all` works too. |
+| `IMMICH_API_KEY` | — | **Required.** A key on an admin account, created with the permission list in [api-key.md](./api-key.md). The addon checks the key when it starts and tells you if something is missing. `all` works too. |
 | `HOUSEHOLD_NAME` | `Unnamed household` | The name other servers see. |
 | `IMMICH_URL` | `http://immich-server:2283` | Your Immich, from inside the container. |
 | `PORT` | `8300` | Port the addon listens on. |
