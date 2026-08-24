@@ -34,7 +34,8 @@ Whichever route you take, the step-by-step walkthrough with screenshots-level de
    - **Single front (simplest):** point your apps — or your reverse proxy — at the addon's
      port instead of Immich's. It passes everything that isn't shared-album traffic straight
      through, websockets included, and Immich stays reachable directly as an escape hatch.
-     The Caddy version of this is in [exposure.md §2](./exposure.md).
+     Any Immich hosting guide applies as written — just use the addon's port where it says
+     Immich's ([exposure.md](./exposure.md) has the full story).
    - **Three routes:** keep your proxy pointed at Immich and add the routes in
      [Caddyfile.snippet](./Caddyfile.snippet) (they translate 1:1 to nginx/Traefik/NPM).
 

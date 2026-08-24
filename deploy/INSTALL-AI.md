@@ -74,11 +74,11 @@ diff, reload the proxy — Immich itself is untouched throughout.
 
 AFTER INSTALL:
 1. If my Immich is reachable from the public internet, set
-   REQUIRE_SHARE_PASSWORD=true in the sidecar env and tell me what it changes;
-   then read deploy/exposure.md and offer me its posture-C hardening (access
-   log, rate limiting, security headers) as a diff I can approve. Do not apply
-   anything without showing me first. If nothing of mine is public, say so and
-   skip this.
+   REQUIRE_SHARE_PASSWORD=true in the sidecar env and tell me what it changes,
+   and point me at Immich's own hardening guidance — hosting is theirs to
+   document, and the sidecar adds no public surface beyond its own routes
+   (deploy/exposure.md has the details). If nothing of mine is public, say so
+   and skip this.
 
 Notes for you, the agent:
 - The sidecar is additive and fail-open: if it dies, only the share-page join card and
