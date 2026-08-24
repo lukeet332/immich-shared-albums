@@ -40,9 +40,27 @@
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
 - [Security](#security)
-- [Architecture](./src/ARCHITECTURE.md)
+- [Documentation](#documentation)
+- [Contributing](./AGENTS.md)
 - [Changelog](./CHANGELOG.md)
 - [The design discussion it was born in](https://github.com/immich-app/immich/discussions/30794)
+
+## Documentation
+
+| Doc | What it answers |
+| :--- | :--- |
+| [Setup guide](./deploy/SETUP.md) | the recommended install, step by step, nothing on the internet |
+| [AI-agent install](./deploy/INSTALL-AI.md) | paste-into-your-agent instructions that adapt to any reverse proxy |
+| [Manual install](./deploy/) | compose example, Caddy snippet, the three proxy routes |
+| [Hardening guide](./deploy/exposure.md) | if you host publicly: pick an exposure level, paste one block |
+| [Architecture](./src/ARCHITECTURE.md) | the whole design on one page — components, data flow, iron rules |
+| [Wire protocol](./src/p2p/wire-protocol.md) | how two servers pair, share and stream, and what the connection proves |
+| [Sync loops](./src/sync/sync-loops.md) | how albums, invitations and withdrawals reconcile |
+| [Byte path](./src/media/hotlink-bytes.md) | where the actual pixels come from when you view a shared photo |
+| [HTTP surface](./src/web/http-router.md) | every route the addon serves, and who may call it |
+| [Immich API layer](./src/immich/local-immich-api.md) | the accounts the addon creates and the Immich quirks it absorbs |
+| [Contributing](./AGENTS.md) | the working contract for humans and AI agents — conventions, tests, invariants |
+| [Demo rig](./demo/) | three complete households in Docker, plus the e2e suites that gate every change |
 
 ## Demo
 
