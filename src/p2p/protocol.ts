@@ -174,8 +174,12 @@ export async function handleRefs(callerPub: string, body: string, albumMappingId
   if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId);
   if (!mapping || mapping.dead) return goneOr404(peer.pub, albumMappingId);
-  // the share link's "allow public user to upload" switch, honoured cross-server
-  if (mapping.permissions === 'view')
+  // The share link's "allow public user to upload" switch, honoured cross-server — but the
+  // check applies to MEMBER CONTRIBUTIONS only (our owner mapping's permissions say what the
+  // link granted them). On a member mapping, `permissions` means what WE may do at the
+  // origin; gating on it here 403'd the origin's own downward pushes to view-only mirrors,
+  // which re-pushed every cycle forever (content only ever arrived via the manifest pull).
+  if (mapping.role === 'owner' && mapping.permissions === 'view')
     return [403, { error: 'view-only album — uploads not allowed', code: 'view_only' }];
   const { add = [] } = JSON.parse(body);
   const failed: string[] = [];
