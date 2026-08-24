@@ -5,6 +5,8 @@
 import { bindAs, request } from './iroh-client.mjs';
 
 const job = JSON.parse(process.argv[2]);
+// Large test bodies are synthesized HERE: passing megabytes through docker's argv hits E2BIG.
+if (job.bodyPad) job.body = { pad: 'x'.repeat(job.bodyPad) };
 const ep = await bindAs(job.keys);
 try {
   const res = await request(ep, job.peerPub, job.addrs, job.path, {

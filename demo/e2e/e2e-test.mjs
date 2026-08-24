@@ -964,7 +964,7 @@ console.log('— stage: security (entitlement — a signed peer is not entitled 
     check('/hello names the protocol and a feature list',
           hello.status === 200 && hello.json?.protocol === 2 && Array.isArray(hello.json?.features),
           JSON.stringify(hello.json));
-    const fat = irohProbe(bKeys, originEp, '/pair', { body: { pad: 'x'.repeat(1200 * 1024) } });
+    const fat = irohProbe(bKeys, originEp, '/pair', { bodyPad: 1200 * 1024 });
     check('an over-limit body is ANSWERED with 413, not abandoned mid-stream',
           fat.status === 413 && fat.json?.code === 'body_too_large', JSON.stringify(fat));
     const health = await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`)).json();
