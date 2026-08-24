@@ -11,23 +11,25 @@ whatever you pick.
 
 | | What's on the internet | Trade-off |
 |---|---|---|
-| **A. Nothing** *(recommended)* | Nothing. Optionally [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) for view-only share links. | Your own devices need a VPN (Tailscale etc.) to reach your photos away from home. Share links can't be *joined* by strangers' servers — linking is by pairing code. |
-| **B. Immich public** | All of Immich | Your sign-in page is reachable. Rate-limit it — see §2. Share links become joinable. |
-| **C. Immich public, sign-in closed** | All of Immich except sign-in | You sign in once at home. New devices need to be home (or on VPN) the first time. |
+| **A. Nothing** *(recommended)* | Nothing at all. | Your own devices need a VPN (Tailscale etc.) to reach your photos away from home. Share links only work at home or on the VPN. |
+| **B. Link sharing with immich-public-proxy** | Only [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) — a read-only gallery for share links. | Same VPN story as A for your own devices. Anyone with a link can view it (plus its password, if set). |
+| **C. Fully public** | All of Immich. | Your sign-in page is reachable from the internet — rate-limit it (§2). Share links become joinable by other servers. |
 
-**Posture A needs almost nothing from this page** — there's nothing exposed to harden. Two
-things to know:
+Whatever you pick: **your Immich apps must point at the addon**, not at Immich directly, or
+shared photos render as blank placeholders — the byte interceptors live in the addon.
 
-- **Your Immich apps must point at the sidecar**, not at Immich directly, or shared photos
-  render as blank placeholders. The byte interceptors live in the sidecar.
-- If you run immich-public-proxy, point its `IMMICH_URL` at the sidecar too, and it's the only
-  thing your reverse proxy publishes.
+**Posture A needs nothing else from this page** — there's nothing exposed to harden.
 
-The rest of this page is for postures B and C.
+**Posture B** publishes exactly one thing. Point immich-public-proxy's `IMMICH_URL` at the
+addon (`http://immich-shared-albums:8300`), put your reverse proxy in front of **only** the
+proxy's port, and you're done — Immich, the addon and the panel all stay private. The §3
+server checklist still applies; §2's Caddy config does not (there's no Immich to front).
+
+The rest of this page is for posture C.
 
 ---
 
-## 2. Recommended Caddy config (postures B and C)
+## 2. Recommended Caddy config (posture C)
 
 One route sends everything to the sidecar, which passes non-shared traffic through to Immich.
 Immich is listed second so a dead sidecar **fails open** — your library keeps working.
@@ -128,10 +130,11 @@ the header lines need their equivalents.
 
 ---
 
-## 4. Posture C: close sign-in
+## 4. Optional extra for posture C: close sign-in
 
-Add this to your site block. Existing sessions keep working, so phones already signed in
-carry on; only *new* sign-ins are blocked from the internet.
+If you want Immich public but not its sign-in page, add this to your site block. Existing
+sessions keep working, so phones already signed in carry on; only *new* sign-ins are blocked
+from the internet — new devices sign in at home (or on VPN) the first time.
 
 ```caddy
 @newlogin path /api/auth/login /api/auth/admin-sign-up /auth/login
@@ -143,7 +146,7 @@ handle @newlogin {
 Do **not** block all of `/api/auth/*` — `status`, `session` and `logout` all need to work for
 signed-in clients, and blocking them logs everyone out.
 
-## 5. Joining albums from a share link, in posture A
+## 5. Joining albums from a share link, in postures A and B
 
 Share links can still be *viewed* publicly through immich-public-proxy, but a stranger's
 server can't *join* from one — the join card lives on your (private) share page. In posture A,
