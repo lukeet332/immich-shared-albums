@@ -34,9 +34,22 @@ export async function join(invite: JoinInvite, forUserId, password?: string) {
     household: { name: CFG.name },
   });
   if (r.status >= 400) {
-    const clean = typeof r.json?.error === 'string' ? r.json.error.slice(0, 200) : null;
-    const err = new Error(clean || `the other server refused the join (${r.status})`);
-    if (r.json?.passwordRequired) (err as Error & { passwordRequired?: boolean }).passwordRequired = true;
+    // Known machine codes render OUR words; unknown answers get a generic message with the
+    // peer's prose demoted to a parenthetical — a peer must not compose the joiner's UI.
+    const CODE_TEXT: Record<string, string> = {
+      unknown_share_key: 'the other server does not recognise this share link',
+      link_expired: 'this share link has expired',
+      password_required: 'this album needs its share password to join',
+      wrong_password: 'that password is not right',
+      gone: 'this share has ended',
+    };
+    const code = typeof r.json?.code === 'string' ? r.json.code : '';
+    const detail = typeof r.json?.error === 'string' ? ` (${r.json.error.slice(0, 120)})` : '';
+    const err = new Error(
+      CODE_TEXT[code] || `the other server refused the join (${r.status})${code ? '' : detail}`
+    );
+    if (r.json?.passwordRequired || code === 'password_required')
+      (err as Error & { passwordRequired?: boolean }).passwordRequired = true;
     throw err;
   }
   const res = r.json;

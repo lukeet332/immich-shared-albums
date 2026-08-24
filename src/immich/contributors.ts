@@ -214,7 +214,12 @@ export async function syncAvatar(c, peer, originUserId) {
     const av = await peerByteRequest(peer, `/users/${originUserId}/avatar`);
     if (av.status < 400) {
       const chunks: Buffer[] = [];
-      for await (const chunk of recvIterable(av.recv)) chunks.push(chunk);
+      let got = 0;
+      for await (const chunk of recvIterable(av.recv)) {
+        got += chunk.length;
+        if (got > 8 * 1024 * 1024) return; // an avatar is not 8MB — refuse, retry never
+        chunks.push(chunk);
+      }
       const fd = new FormData();
       fd.set(
         'file',

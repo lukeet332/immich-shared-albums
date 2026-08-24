@@ -1,5 +1,5 @@
 /** peers.ts — peer lookups and the fire-and-forget nudge, on the iroh transport. See peers.md. */
-import { state } from './state.ts';
+import { state, save } from './state.ts';
 import { peerRequest } from './p2p/transport.ts';
 import type { Peer } from './store.ts';
 
@@ -10,6 +10,30 @@ export const peerByPub = (pub: string): Peer | undefined => state.peers.find(p =
  * without it a mapping id alone selects an album, and any enrolled peer can act on a
  * relationship that belongs to a different household.
  */
+/**
+ * Ask every linked peer who it is, protocol-wise, and remember the answer. Once per boot:
+ * capabilities change on upgrade, and upgrades restart the process. A peer that 404s the
+ * route is a protocol-2 build from before /hello existed — remembered as exactly that.
+ */
+export async function helloPeers() {
+  for (const peer of state.peers) {
+    try {
+      const r = await peerRequest(peer, '/hello');
+      if (r.status < 400 && typeof r.json?.protocol === 'number') {
+        peer.protocol = r.json.protocol;
+        peer.features = Array.isArray(r.json.features) ? r.json.features : [];
+        if (typeof r.json.version === 'string') peer.version = r.json.version;
+      } else if (r.status === 404) {
+        peer.protocol = 2;
+        peer.features = [];
+      }
+      save();
+    } catch {
+      /* unreachable — next boot retries */
+    }
+  }
+}
+
 export function mappingFor(peerPub: string, ref: string, role?: 'owner' | 'member') {
   return state.mappings.find(
     m =>

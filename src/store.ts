@@ -85,6 +85,10 @@ export type Peer = {
   pub: string;
   name: string;
   version?: string;
+  /** What the peer answered on /hello, refreshed at boot. Absent = never answered (a
+   *  protocol-2 peer without the route) — treat as protocol 2, no features. */
+  protocol?: number;
+  features?: string[];
   /** How this peer got in: an admin-approved pairing code, or a share-link redemption.
    *  Recorded at enrolment because it can never be recovered later — and it is what any
    *  future policy that treats the two differently (e.g. directory access) must gate on. */
@@ -222,6 +226,8 @@ export class Store {
         pub TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         version TEXT,
+        protocol INTEGER,
+        features TEXT,
         via TEXT NOT NULL,
         firstSeenAt TEXT NOT NULL,
         relayHint TEXT,
@@ -370,6 +376,7 @@ export class Store {
     return (this.db.prepare('SELECT * FROM peers').all() as Record<string, unknown>[]).map(r => {
       const p = compact<Peer>(r);
       if (r.lastAddrs) p.lastAddrs = JSON.parse(r.lastAddrs as string);
+      if (r.features) p.features = JSON.parse(r.features as string);
       return p;
     });
   }
@@ -412,13 +419,15 @@ export class Store {
     {
       this.db.exec('DELETE FROM peers');
       const insPeer = this.db.prepare(
-        'INSERT INTO peers (pub, name, version, via, firstSeenAt, relayHint, lastAddrs) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO peers (pub, name, version, protocol, features, via, firstSeenAt, relayHint, lastAddrs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       );
       for (const p of cols.peers)
         insPeer.run(
           p.pub,
           p.name,
           orNull(p.version),
+          orNull(p.protocol),
+          jsonOrNull(p.features),
           p.via,
           p.firstSeenAt,
           orNull(p.relayHint),

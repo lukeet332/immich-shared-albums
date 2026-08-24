@@ -27,6 +27,7 @@ import { join } from '../p2p/join.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
 import { mintPairing, pendingPairings, revokePairing, redeemPairing, parseTicket } from '../p2p/pair.ts';
+import { PROTOCOL_VERSION } from '../types.ts';
 
 /**
  * Read a JSON-route body under a hard cap, or null if it is too big.
@@ -239,7 +240,7 @@ export const server = http.createServer(async (req, res) => {
     // it stays open — which is exactly why it must not name the household or count peers.
     if (path === `${ROUTE_PREFIX}/health`) {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-      return res.end(JSON.stringify({ ok: true }));
+      return res.end(JSON.stringify({ ok: true, protocol: PROTOCOL_VERSION }));
     }
     send(404, { error: 'not found' });
   } catch (e) {

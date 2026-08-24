@@ -68,9 +68,32 @@ export async function watchOnce() {
         mapping.id,
         fresh.map(a => a.id)
       );
-      const r = await peerRequest(peer, `/albums/${targetMapping}/refs`, { add });
-      if (r.status < 400) {
-        const failed = new Set(r.json?.failed || []);
+      // Chunked: one giant frame would trip the receiver's ISA_MAX_BODY_KB on big albums
+      // (~3k refs at the default) and protocol 2 has no way to signal "split and resend".
+      const BATCH = 400;
+      const failed = new Set<string>();
+      let pushFailed = false;
+      for (let at = 0; at < add.length; at += BATCH) {
+        const r = await peerRequest(peer, `/albums/${targetMapping}/refs`, {
+          add: add.slice(at, at + BATCH),
+        });
+        if (r.status === 410) {
+          mapping.dead = true;
+          mapping.deadAt = new Date().toISOString();
+          mapping.deadReason = 'peer answered 410 gone';
+          save();
+          log(`"${peer.name}" says "${mapping.albumName}" has ended (410) — no longer pushing it`);
+          pushFailed = true;
+          break;
+        }
+        if (r.status >= 400) {
+          log(`ref push failed: ${r.status}`);
+          pushFailed = true;
+          break;
+        }
+        for (const c of r.json?.failed || []) failed.add(c);
+      }
+      if (!pushFailed) {
         const landed = fresh.filter(a => !failed.has(wireChecksum(a)));
         landed.forEach(a => seenAdd(mapping.id, wireChecksum(a), a.id));
         if (!failed.size) {
@@ -80,7 +103,7 @@ export async function watchOnce() {
         log(
           `pushed ${landed.length}/${fresh.length} ref(s) to "${peer.name}"${failed.size ? ` (${failed.size} deferred)` : ''}`
         );
-      } else log(`ref push failed: ${r.status}`);
+      }
     } catch (e) {
       mapping.failCount = (mapping.failCount || 0) + 1;
       if (/album.read access|Not found/i.test(e.message) && mapping.failCount >= 5) {
@@ -121,10 +144,24 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
     // handshake first: only pull the full manifest when the origin's version moved.
     // remoteVersion is only stored after a CLEAN pass so failures keep retrying.
     let version = null;
+    let expectedCount = NaN;
     const vr = await peerRequest(peer, `/albums/${target}/version`).catch(() => null);
+    if (vr && vr.status === 410) {
+      // The origin says this relationship is over: tear our side down instead of retrying
+      // a dead mapping forever with a mirror full of placeholders.
+      log(`"${peer.name}" says "${mapping.albumName}" has ended (410) — leaving the mirror`);
+      await leaveAlbum(mapping.id).catch(e => log(`teardown after 410 failed: ${e.message}`));
+      return;
+    }
     if (vr && vr.status < 400) {
       version = vr.json?.version || null;
       if (version && version === mapping.remoteVersion) return;
+      // structured field preferred; the packed-string parse remains for protocol-2 peers
+      expectedCount = Number.isFinite(vr.json?.assetCount)
+        ? Number(vr.json.assetCount)
+        : version
+          ? Number(String(version).split('|')[1])
+          : NaN;
     }
     const r = await peerRequest(peer, `/albums/${target}/manifest`).catch(() => null);
     if (!r || r.status >= 400) return;
@@ -132,7 +169,6 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
     // The version's asset count comes from the album table (instant); the manifest
     // comes from the search index (which lags behind deletes). Only trust a read
     // where the two agree — dirty reads retry next cycle instead of poisoning the cursor.
-    const expectedCount = version ? Number(String(version).split('|')[1]) : NaN;
     const consistent = !Number.isFinite(expectedCount) || manifest.length === expectedCount;
     if (CFG.reconcileDebug)
       log(

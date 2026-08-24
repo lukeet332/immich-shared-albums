@@ -37,13 +37,28 @@ async function materialiseRefLocked(mapping, peer, ref) {
   // the owner's rendition so the tile carries a real poster and duration.
   let bytes: Buffer;
   if (ref.kind === 'video') {
-    const pr = await peerByteRequest(peer, `/assets/${ref.originAsset}/playback`, 'bytes=0-2097151');
+    const pr = await peerByteRequest(
+      peer,
+      `/assets/${ref.originAsset}/playback`,
+      'bytes=0-2097151',
+      mapping.id
+    );
     if (pr.status >= 400) {
       log(`playback stub fetch failed for ${ref.originAsset}: ${pr.status}`);
       return false;
     }
+    // Cap what we accumulate: we ASKED for 2MB, and a peer answering with the whole
+    // original must cost a failed ref, not our heap.
     const prefix: Buffer[] = [];
-    for await (const chunk of recvIterable(pr.recv)) prefix.push(chunk);
+    let got = 0;
+    for await (const chunk of recvIterable(pr.recv)) {
+      got += chunk.length;
+      if (got > 4 * 1024 * 1024) {
+        log(`playback stub for ${ref.originAsset} ignored the range (>4MB) — deferring`);
+        return false;
+      }
+      prefix.push(chunk);
+    }
     bytes = Buffer.concat([...prefix, crypto.randomBytes(8)]);
   } else {
     bytes = Buffer.concat([STUB_JPEG, crypto.randomBytes(8)]);

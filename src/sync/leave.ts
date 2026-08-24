@@ -11,6 +11,7 @@ import { state, store, save } from '../state.ts';
 import { immichJson } from '../immich/client.ts';
 import { deleteProxyAsset } from '../immich/materialise.ts';
 import { forgetOffered } from '../p2p/entitlement.ts';
+import { peerRequest } from '../p2p/transport.ts';
 
 // Leave & purge: the reverse of joining. Removes every stub this album materialised
 // (utility-owner-guarded), the mirror album, the mapping and its ledger — a join is
@@ -40,6 +41,15 @@ export async function leaveAlbum(mappingId: string) {
   const at = state.mappings.findIndex(mp => mp.id === mapping.id);
   if (at >= 0) state.mappings.splice(at, 1);
   save();
+  // Courtesy signal so the origin stops pushing to a household that left. Best-effort and
+  // unawaited: leaving must never block on the origin being reachable, and a peer too old
+  // to know the route just 404s — the old one-sided behaviour.
+  const origin = state.peers.find(p => p.pub === mapping.peer);
+  const target = mapping.remoteMappingId || mapping.remoteAlbumId;
+  if (origin && target)
+    void peerRequest(origin, `/albums/${target}/leave`).catch(() => {
+      /* unreachable or too old — their next 410 handling or manual unshare covers it */
+    });
   log(`left "${mapping.albumName}" — ${removed} stub(s) purged`);
   return { left: mapping.albumName, purged: removed };
 }
