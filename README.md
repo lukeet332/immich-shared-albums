@@ -100,7 +100,7 @@ You need Docker, an Immich admin API key, and a reverse proxy in front of Immich
    - Point an AI coding agent (Claude Code, Cursor, etc.) at [deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md). It adapts the proxy routes to whatever reverse proxy you run.
    - Run `bash deploy/install.sh`. It detects your Immich, starts the addon and prints the routes to add.
    - Or do it by hand: see [deploy/](./deploy/).
-2. **Link the two servers.** Open the admin panel, click *Create pairing link*, and send the code to the other family over WhatsApp or wherever. Their admin pastes it into their panel.
+2. **Link the two servers.** Open the admin panel at `https://<your-immich>/immich-shared-albums/` (signed in to Immich as an admin), click *Create pairing link*, and send the code to the other family over WhatsApp or wherever. Their admin pastes it into their own panel at the same address.
 3. **Share an album.** Open it in Immich, tap share, pick the person. Done. Remove them from the album to unshare, or unlink the whole server from the panel.
 
 ### Public share links (optional)

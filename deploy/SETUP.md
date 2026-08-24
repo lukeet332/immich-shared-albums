@@ -26,7 +26,7 @@ Both households install the addon, then:
 1. You: open the admin panel (`https://<your-immich>/immich-shared-albums/`) → **Create pairing link**.
 2. Send the code to the other family's admin — WhatsApp, text, anything. It's one line, expires in
    15 minutes, and works once.
-3. They paste it into **their** panel's "Link a server" box. Done — linked both ways.
+3. They paste it into the "Link a server" box on **their** panel (same address, on their server: `https://<their-immich>/immich-shared-albums/`). Done — linked both ways.
 
 The two servers now talk to each other directly through their own encrypted tunnel, wherever they
 are, with nothing exposed. (Behind the scenes this is [iroh](https://www.iroh.computer); if the
