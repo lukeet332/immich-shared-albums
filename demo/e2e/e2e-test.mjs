@@ -967,9 +967,14 @@ console.log('— stage: security (entitlement — a signed peer is not entitled 
     const fat = irohProbe(bKeys, originEp, '/pair', { bodyPad: 1200 * 1024 });
     check('an over-limit body is ANSWERED with 413, not abandoned mid-stream',
           fat.status === 413 && fat.json?.code === 'body_too_large', JSON.stringify(fat));
-    const health = await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`)).json();
+    // The fat-frame probe spins up a docker container in the same instant; on Docker Desktop the
+    // host->port-proxy connection can hiccup for one request, so retry rather than flake.
+    const health = await until(async () => {
+      try { return await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`)).json(); }
+      catch { return null; }
+    }, 10000, 1000);
     check('the health probe names the protocol, so join cards can diagnose version skew',
-          health.ok === true && health.protocol === 2, JSON.stringify(health));
+          health?.ok === true && health.protocol === 2, JSON.stringify(health));
 
     await api(A, AKEY, '/assets', { ...j({ ids: [privAsset], force: true }), method: 'DELETE' }).catch(() => {});
     await api(A, AKEY, `/albums/${privAlbum}`, { method: 'DELETE' }).catch(() => {});

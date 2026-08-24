@@ -10,6 +10,16 @@ import { startWatchLoop } from './sync/engine.ts';
 import { startCommentLoop } from './sync/comments.ts';
 import { startInviteLoop } from './sync/invites.ts';
 
+// A sidecar must never die silently: an unhandled async error should be logged and swallowed
+// (the loops are all independently retrying), not take the process down with no trace. A truly
+// fatal state still exits, but only after saying why.
+process.on('unhandledRejection', reason => {
+  log('UNHANDLED REJECTION (kept alive):', reason instanceof Error ? reason.stack : String(reason));
+});
+process.on('uncaughtException', err => {
+  log('UNCAUGHT EXCEPTION (kept alive):', err.stack || String(err));
+});
+
 // Protocol upgrades bypass the request router entirely — see web/upgrade.ts. Without this
 // the sidecar cannot front Immich on its own, because live web updates break.
 server.on('upgrade', proxyUpgrade);
