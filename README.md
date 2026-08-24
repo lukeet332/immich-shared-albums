@@ -70,7 +70,7 @@ Two households, one shared album. Created, shared, joined and commented on, all 
 
 | Features                                                      | Stock apps | Notes                                    |
 | :------------------------------------------------------------ | ---------- | ---------------------------------------- |
-| Share an album with a person on another Immich server         | Yes        | picked in Immich's own share menu         |
+| Share an album with a person on another Immich server or instance         | Yes        | picked in Immich's own share menu         |
 | Albums join a person, not a whole server                      | Yes        | your parents won't see the lads' holiday  |
 | Nothing exposed to the internet                               | Yes        | servers connect directly, dialling out    |
 | Link two servers with a one-line pairing code                 | Yes        | works once, expires in 15 minutes         |
