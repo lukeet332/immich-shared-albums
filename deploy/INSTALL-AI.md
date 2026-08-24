@@ -36,9 +36,10 @@ ASK ME (only these):
    immich-public-proxy in the same compose file, with
    IMMICH_URL: http://immich-shared-albums:8300 (the addon, NOT immich-server —
    that is what makes photos shared from other servers render full quality),
-   and tell me the two follow-ups: put my public HTTPS in front of only the
-   proxy's port, and set Immich's Administration -> Settings -> Server ->
-   External domain to that public address.
+   and tell me the two follow-ups: make only the proxy's port publicly
+   reachable (my choice how — its own README covers the common setups), and set
+   Immich's Administration -> Settings -> Server -> External domain to that
+   public address.
 
 INSTALL:
 1. git clone https://github.com/lukeet332/immich-shared-albums

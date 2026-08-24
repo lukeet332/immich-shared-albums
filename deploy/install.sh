@@ -161,8 +161,10 @@ cat <<EOF
 
 immich-public-proxy is running on port $IPP_PORT. Two follow-ups it can't do for you:
 
-  1. Put your public HTTPS in front of it — and ONLY it, if you're keeping Immich private:
-       share.example.com { reverse_proxy immich-public-proxy:$IPP_PORT }
+  1. Make port $IPP_PORT reachable at your public address — and ONLY that port, if
+     you're keeping Immich private. However you host things is up to you; the
+     proxy's own docs cover the common setups:
+       https://github.com/alangrainger/immich-public-proxy
   2. In Immich: Administration -> Settings -> Server -> External domain
      -> set it to that public address, so the share links Immich creates point at the proxy.
 
