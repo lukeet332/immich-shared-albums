@@ -30,7 +30,6 @@ docker network inspect "$IMMICH_NETWORK" >/dev/null 2>&1 || {
   echo "network '$IMMICH_NETWORK' not found. Existing networks:"; docker network ls --format '  {{.Name}}'; exit 1; }
 
 IMMICH_URL=$(ask "Immich server URL as reachable from that network [http://immich-server:2283]:" http://immich-server:2283)
-IMMICH_UPSTREAM_HOST=$(echo "$IMMICH_URL" | sed 's|https\?://||')
 HOUSEHOLD_NAME=$(ask "Household name shown to peers [My household]:" "My household")
 HOST_PORT=$(ask "Host port to expose the sidecar on (your reverse proxy points here) [8300]:" 8300)
 echo "API key: create it in Immich web -> Account Settings -> API Keys -> New API Key,"
@@ -40,20 +39,10 @@ printf 'Immich admin API key (input hidden): '
 read -rs SIDECAR_API_KEY; echo
 [ -n "$SIDECAR_API_KEY" ] || { echo "API key is required"; exit 1; }
 
-echo "How should your Immich apps reach the addon?"
-echo "  1) I already run a reverse proxy (Caddy/nginx/Traefik/NPM) — print the routes for me to add"
-echo "  2) No proxy — the addon itself becomes the front; I'll point my apps at its port"
-echo "  3) Set up a new Caddy container for me, fronting everything"
-PROXY_MODE=$(ask "Pick 1, 2 or 3 [2]:" "2")
-case "$PROXY_MODE" in 1|2|3) ;; *) PROXY_MODE=2;; esac
-if [ "$PROXY_MODE" = "3" ]; then
-  CADDY_SITE=$(ask "Domain for HTTPS (blank = plain HTTP on a port, fine for LAN):" "")
-  if [ -n "$CADDY_SITE" ]; then CADDY_PORTS="80:80
-      - 443:443"; else
-    CADDY_HTTP_PORT=$(ask "Host port for Caddy [8080]:" 8080)
-    CADDY_PORTS="$CADDY_HTTP_PORT:80"
-  fi
-fi
+# No proxy is the default and needs nothing extra: the addon itself is the front,
+# passing everything that isn't shared-album traffic through to Immich.
+HAVE_PROXY=$(ask "Do you already run a reverse proxy in front of Immich (Caddy/nginx/Traefik/NPM)? [y/N]:" "n")
+case "$HAVE_PROXY" in y|Y|yes|YES) PROXY_MODE=1;; *) PROXY_MODE=2;; esac
 
 WANT_IPP=$(ask "Also set up public view-only share links via immich-public-proxy? [y/N]:" "n")
 case "$WANT_IPP" in y|Y|yes|YES) WANT_IPP=1;; *) WANT_IPP="";; esac
@@ -83,30 +72,6 @@ services:
       - $HOST_PORT:8300
     networks: [immich]
 EOF
-if [ "$PROXY_MODE" = "3" ]; then
-cat > "$INSTALL_DIR/Caddyfile" <<EOF
-${CADDY_SITE:-:80} {
-	# single front: the addon passes everything that isn't shared-album traffic to Immich,
-	# and Immich is the fallback so a dead addon fails open
-	reverse_proxy immich-shared-albums:8300 $IMMICH_UPSTREAM_HOST {
-		lb_policy first
-		fail_duration 10s
-	}
-}
-EOF
-cat >> "$INSTALL_DIR/docker-compose.yml" <<EOF
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-    ports:
-      - $CADDY_PORTS
-    networks: [immich]
-EOF
-NEED_CADDY_VOLUME=1
-fi
 if [ -n "$WANT_IPP" ]; then
 cat >> "$INSTALL_DIR/docker-compose.yml" <<EOF
   immich-public-proxy:
@@ -126,12 +91,6 @@ networks:
     external: true
     name: $IMMICH_NETWORK
 EOF
-if [ -n "${NEED_CADDY_VOLUME:-}" ]; then
-cat >> "$INSTALL_DIR/docker-compose.yml" <<EOF
-volumes:
-  caddy-data:
-EOF
-fi
 # key lives in an env file next to the compose, chmod 600, never in the yml
 umask 177
 echo "SIDECAR_API_KEY=$SIDECAR_API_KEY" > "$INSTALL_DIR/.env"
@@ -164,19 +123,6 @@ Immich directly — your library is never behind it hostage.
 
 Verify the panel (signed in to Immich as an admin):
   http://<this-host>:$HOST_PORT/immich-shared-albums/
-
-To uninstall: cd $INSTALL_DIR && docker compose down.
-EOF
-elif [ "$PROXY_MODE" = "3" ]; then
-say "Done — Caddy is fronting everything"
-cat <<EOF
-Point your Immich apps and browser at:  ${CADDY_SITE:-http://<this-host>:${CADDY_HTTP_PORT:-8080}}
-(Caddy -> addon -> Immich, with Immich as fallback so a dead addon fails open.
-If you gave a domain, Caddy fetches its own HTTPS certificate — make sure the
-domain's DNS points here and ports 80/443 reach this machine.)
-
-Verify the panel (signed in to Immich as an admin):
-  ${CADDY_SITE:-http://<this-host>:${CADDY_HTTP_PORT:-8080}}/immich-shared-albums/
 
 To uninstall: cd $INSTALL_DIR && docker compose down.
 EOF

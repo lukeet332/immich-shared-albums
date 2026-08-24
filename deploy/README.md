@@ -7,7 +7,7 @@ Three ways in, easiest first:
 - **Script** — `bash deploy/install.sh` from a clone of this repo. It detects your Immich,
   asks a handful of questions and starts the addon. It can also set up
   [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) for public
-  share links, and a Caddy front if you don't run a reverse proxy yet.
+  share links.
 - **By hand** — the rest of this page.
 
 Whichever route you take, the step-by-step walkthrough with screenshots-level detail is

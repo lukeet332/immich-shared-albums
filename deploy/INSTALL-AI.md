@@ -47,8 +47,12 @@ INSTALL:
    Immich docker network with env IMMICH_URL, IMMICH_API_KEY (in a chmod-600
    .env file, never in the yml), HOUSEHOLD_NAME, and a ./data
    volume for /data. Start it with docker compose up -d.
-3. Add these three routes to my reverse proxy BEFORE the catch-all Immich route,
-   then reload the proxy:
+3. If I have NO reverse proxy, skip the routes entirely: the sidecar is itself a
+   front for Immich — everything that isn't shared-album traffic passes through,
+   websockets included. Just tell me to point my Immich apps and browser at the
+   sidecar's port instead of Immich's.
+   Otherwise, add these three routes to my reverse proxy BEFORE the catch-all
+   Immich route, then reload the proxy:
      /immich-shared-albums/*                                       -> sidecar :8300
      /share/*                                         -> sidecar :8300 (fallback: immich)
      GET /api/assets/*/{thumbnail,original,video/playback} -> sidecar :8300 (fallback: immich)
