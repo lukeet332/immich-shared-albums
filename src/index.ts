@@ -2,6 +2,7 @@
 import { CFG, log } from './config.ts';
 import { server } from './web/server.ts';
 import { proxyUpgrade } from './web/upgrade.ts';
+import { verifyAdminKeyAtBoot } from './immich/admin-key.ts';
 import { startTransport } from './p2p/transport.ts';
 import { peerRoutes } from './p2p/routes.ts';
 import { startWatchLoop } from './sync/engine.ts';
@@ -12,6 +13,7 @@ import { startInviteLoop } from './sync/invites.ts';
 // the sidecar cannot front Immich on its own, because live web updates break.
 server.on('upgrade', proxyUpgrade);
 // The transport binds first: the share page mints endpoint tokens from it on every request.
+void verifyAdminKeyAtBoot();
 await startTransport(peerRoutes);
 server.listen(CFG.port, () => log(`sidecar "${CFG.name}" listening :${CFG.port} — immich: ${CFG.immichUrl}`));
 startWatchLoop();

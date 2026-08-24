@@ -35,7 +35,7 @@ services:
       - host.docker.internal:host-gateway
     environment:
       IMMICH_URL: http://immich-d:2283
-      IMMICH_API_KEY: ${D_API_KEY}
+      IMMICH_API_KEY: ${D_SIDECAR_API_KEY:-${D_API_KEY}}
       HOUSEHOLD_NAME: "Mock household (D)"
       POLL_MS: "8000"
     networks:

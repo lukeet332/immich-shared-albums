@@ -4,8 +4,9 @@
 set -uo pipefail
 export PATH="$PATH:/Applications/Docker.app/Contents/Resources/bin"
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-BKEY=$(grep -m1 B_API_KEY "$DIR/demo/.env" | cut -d= -f2-)
-CKEY=$(grep -m1 C_API_KEY "$DIR/demo/household-c/.env" | cut -d= -f2-)
+BKEY=$(grep -m1 "^B_API_KEY=" "$DIR/demo/.env" | cut -d= -f2-)
+B_SIDECAR_API_KEY=$(grep -m1 "^B_SIDECAR_API_KEY=" "$DIR/demo/.env" | cut -d= -f2-)
+CKEY=$(grep -m1 "^C_API_KEY=" "$DIR/demo/household-c/.env" | cut -d= -f2-)
 
 if [ -z "${SKIP_BUILD:-}" ]; then
   docker network inspect isa-demo >/dev/null 2>&1 || docker network create isa-demo
@@ -49,7 +50,7 @@ if [ ! -f .env ]; then
   docker compose up -d immich-d db-d redis-d >/dev/null 2>&1
   echo "D_API_KEY=$("$DIR/demo/ci/provision-mock.sh" http://localhost:2286 "Demo Dave")" > .env
 fi
-DKEY=$(grep -m1 D_API_KEY .env | cut -d= -f2-)
+DKEY=$(grep -m1 "^D_API_KEY=" .env | cut -d= -f2-)
 docker compose up -d --force-recreate sidecar-d >/dev/null 2>&1
 purge http://localhost:2286 "$DKEY" d-sidecar; docker compose exec -T sidecar-d rm -f /data/state.db /data/state.db-wal /data/state.db-shm 2>/dev/null; docker compose restart sidecar-d >/dev/null 2>&1
 sleep 4
@@ -62,6 +63,7 @@ echo "== E2E (C origin -> B joiner) =="
 cd "$DIR/demo/e2e"
 A_URL=http://localhost:2285 AKEY=$CKEY A_ALBUM=__CREATE__ \
 B_URL=http://localhost:2284 BKEY=$BKEY B_SIDECAR=http://localhost:8301 \
+B_SIDECAR_API_KEY=${B_SIDECAR_API_KEY:-} \
 D_URL=http://localhost:2286 DKEY=$DKEY D_SIDECAR=http://localhost:8303 \
 ORIGIN_SIDECAR=${ORIGIN_SIDECAR:-http://host.docker.internal:8302} \
 node e2e-test.mjs

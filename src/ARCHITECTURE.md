@@ -167,7 +167,8 @@ once it needs several. Where its doc then lives, and the rule that keeps these d
    is an Immich one. The accounts that own stubs get a narrowly-scoped API key and no retained
    password, so they cannot be signed into at all.
 
-**Where this falls short today:** the sidecar needs an all-permissions admin API key, so its blast
-radius is the whole instance. It also creates real user accounts — one per remote person — that
-appear in every picker, because Immich has no service-account flag. Both are known costs; do not
-make either worse without saying so.
+**Where this falls short today:** the sidecar needs a key on an admin **account** (user CRUD is
+admin-only; Immich has no service accounts), scoped to the enumerated list in
+`immich/admin-key.ts` — a leaked key cannot touch photos, settings, or mint a broader key, but it
+can still manage users. It also creates real user accounts — one per remote person — that appear
+in every picker, for the same reason. Known costs; do not make either worse without saying so.
