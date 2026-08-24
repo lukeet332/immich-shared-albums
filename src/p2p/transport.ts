@@ -127,7 +127,15 @@ async function serveRequest(
     body = await readPrefixed(bi.recv, CFG.maxBodyKb * 1024);
   } catch (e) {
     // Answer over-limit bodies instead of abandoning the stream — an unanswered frame
-    // leaves the sender waiting for its deadline with nothing to act on.
+    // leaves the sender waiting for its deadline with nothing to act on. STOP the receive
+    // side first: answering with megabytes still unread and letting the peer's close tear
+    // the stream down took out the whole process in the native layer (found by the e2e's
+    // 413 check — the probed sidecar died and restarted mid-suite).
+    try {
+      await bi.recv.stop(0n);
+    } catch {
+      /* already stopped or reset — the answer below is what matters */
+    }
     const head = { status: 413, headers: {} };
     await bi.send.writeAll(lenPrefixed(Buffer.from(JSON.stringify(head))));
     await bi.send.writeAll(
