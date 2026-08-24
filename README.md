@@ -43,7 +43,6 @@
 - [Documentation](#documentation)
 - [Contributing](./AGENTS.md)
 - [Changelog](./CHANGELOG.md)
-- [The design discussion it was born in](https://github.com/immich-app/immich/discussions/30794)
 
 ## Documentation
 
