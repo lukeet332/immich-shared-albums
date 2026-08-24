@@ -58,6 +58,33 @@ const readPrefixed = async (
   return len === 0 ? Buffer.alloc(0) : Buffer.from(await recv.readExact(len));
 };
 
+/**
+ * Read a length-prefixed frame, or CONSUME an over-limit one and report it. The stream must
+ * be fully drained before we answer: tearing down a half-read stream (with or without an
+ * explicit stop) has killed the whole process inside the native layer. The drain is capped —
+ * a hostile multi-GB declaration costs us the capped read, then the connection.
+ */
+const DRAIN_MAX = 64 * 1024 * 1024;
+const readFrameOrDrain = async (
+  recv: { read(size: number): Promise<number[]>; readExact(size: number): Promise<number[]> },
+  limit: number
+): Promise<{ ok: true; data: Buffer } | { ok: false; declared: number }> => {
+  const len = Buffer.from(await recv.readExact(4)).readUInt32LE();
+  if (len <= limit)
+    return { ok: true, data: len === 0 ? Buffer.alloc(0) : Buffer.from(await recv.readExact(len)) };
+  let left = Math.min(len, DRAIN_MAX);
+  try {
+    while (left > 0) {
+      const chunk = await recv.read(Math.min(left, 256 * 1024));
+      if (!chunk || chunk.length === 0) break;
+      left -= chunk.length;
+    }
+  } catch {
+    /* sender reset their side — equally fully closed, which is all the drain is for */
+  }
+  return { ok: false, declared: len };
+};
+
 export type PeerHandler = (
   callerPub: string,
   path: string,
@@ -121,30 +148,24 @@ async function serveRequest(
   callerPub: string,
   handler: PeerHandler
 ): Promise<void> {
-  const header = JSON.parse((await readPrefixed(bi.recv, 64 * 1024)).toString()) as FrameHeader;
-  let body: Buffer;
-  try {
-    body = await readPrefixed(bi.recv, CFG.maxBodyKb * 1024);
-  } catch (e) {
-    // Answer over-limit bodies instead of abandoning the stream — an unanswered frame
-    // leaves the sender waiting for its deadline with nothing to act on. STOP the receive
-    // side first: answering with megabytes still unread and letting the peer's close tear
-    // the stream down took out the whole process in the native layer (found by the e2e's
-    // 413 check — the probed sidecar died and restarted mid-suite).
-    try {
-      await bi.recv.stop(0n);
-    } catch {
-      /* already stopped or reset — the answer below is what matters */
-    }
-    const head = { status: 413, headers: {} };
-    await bi.send.writeAll(lenPrefixed(Buffer.from(JSON.stringify(head))));
-    await bi.send.writeAll(
-      Array.from(Buffer.from(JSON.stringify({ error: (e as Error).message, code: 'body_too_large' })))
-    );
+  // Over-limit frames are DRAINED and ANSWERED — never abandoned (the sender would wait out
+  // its deadline with nothing to act on) and never left half-read (see readFrameOrDrain).
+  const answer = async (status: number, obj: unknown) => {
+    await bi.send.writeAll(lenPrefixed(Buffer.from(JSON.stringify({ status, headers: {} }))));
+    await bi.send.writeAll(Array.from(Buffer.from(JSON.stringify(obj))));
     await bi.send.finish();
-    return;
-  }
-  const res = await handler(callerPub, header.path, body, header.range);
+  };
+  const rawHeader = await readFrameOrDrain(bi.recv, 64 * 1024);
+  if (!rawHeader.ok)
+    return answer(431, { error: `${rawHeader.declared}-byte header`, code: 'header_too_large' });
+  const header = JSON.parse(rawHeader.data.toString()) as FrameHeader;
+  const rawBody = await readFrameOrDrain(bi.recv, CFG.maxBodyKb * 1024);
+  if (!rawBody.ok)
+    return answer(413, {
+      error: `frame of ${rawBody.declared} bytes exceeds the ${CFG.maxBodyKb * 1024}-byte limit`,
+      code: 'body_too_large',
+    });
+  const res = await handler(callerPub, header.path, rawBody.data, header.range);
   const head: ResponseHeader = { status: res.status, headers: res.headers };
   await bi.send.writeAll(lenPrefixed(Buffer.from(JSON.stringify(head))));
   if (res.body) {
