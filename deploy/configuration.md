@@ -1,7 +1,7 @@
 # Configuration reference
 
 Only `IMMICH_API_KEY` is required. Everything else has a working default — set these only if you
-need to. For the key's permission list, see the table in the [README](../README.md#the-api-key).
+need to. For the key's permission list, see [api-key.md](./api-key.md).
 
 | Variable | Default | What it does |
 |---|---|---|

@@ -40,6 +40,7 @@
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
 - [Security](#security)
+- [Required API-key permissions](./deploy/api-key.md)
 - [Documentation](#documentation)
 - [Contributing](./AGENTS.md)
 - [Changelog](./CHANGELOG.md)
@@ -58,6 +59,7 @@
 | [Byte path](./src/media/hotlink-bytes.md) | where the actual pixels come from when you view a shared photo |
 | [HTTP surface](./src/web/http-router.md) | every route the addon serves, and who may call it |
 | [Immich API layer](./src/immich/local-immich-api.md) | the accounts the addon creates and the Immich quirks it absorbs |
+| [API key guide](./deploy/api-key.md) | the exact permissions to tick, and why each one |
 | [Configuration reference](./deploy/configuration.md) | every setting, its default, and when to change it |
 | [Contributing](./AGENTS.md) | the working contract for humans and AI agents — conventions, tests, invariants |
 | [Demo rig](./demo/) | three complete households in Docker, plus the e2e suites that gate every change |
@@ -119,22 +121,10 @@ Two settings matter when you install; everything else has a working default (ful
 
 ### The API key
 
-In Immich: *Account settings → API keys → New API key*, then tick exactly these permissions.
-The addon checks the key when it starts and tells you if anything is missing. (`all` also works,
-but then a leaked key could do anything — this list can't touch your photos or settings.)
-
-| Permission | Why the addon needs it |
-| :--- | :--- |
-| `adminUser.create` / `read` / `update` / `delete` | creates and manages the bot accounts that hold shared photos, so they stay out of your own timeline |
-| `album.read` | reads the albums it syncs |
-| `albumUser.create` / `update` / `delete` | adds those bot accounts to albums, so shared photos show the right owner |
-| `asset.read` | lists what's in an album |
-| `asset.view` / `asset.download` | streams your photos to the family you shared them with |
-| `activity.read` / `activity.statistics` | syncs comments both ways |
-| `user.read` | shows the right names |
-| `userProfileImage.read` | syncs avatars, so shared photos show the right face |
-| `sharedLink.read` | resolves a share link when someone joins with one |
-| `systemConfig.read` / `update` | **only if your Immich is OAuth-only** — briefly toggles password login to set up the bot accounts |
+In Immich: *Account settings → API keys → New API key*, ticking the permissions in
+**[the API key guide](./deploy/api-key.md)** — it lists each one and why the addon needs it.
+Scoped like that, a leaked key can't touch your photos or settings. The addon checks its key at
+startup and tells you if anything is missing.
 
 ## Security
 
@@ -143,7 +133,7 @@ Your server stays as private as it is today, the two servers prove their identit
 - Server-to-server traffic only ever flows between servers that were deliberately paired, over an end-to-end encrypted connection. There is no server-to-server HTTP at all.
 - The pages you use (panel, joining) require you to be signed in to your own Immich. The addon has no accounts or passwords of its own.
 - Every photo request from another server is checked against what was actually shared with them. Reaching an endpoint is never permission to use it.
-- The API key doesn't need `all` — see [the permission table](#the-api-key). Scoped like that, a leaked key can't delete or edit photos, can't change settings, and can't create a broader key.
+- The API key doesn't need `all` — see [the API key guide](./deploy/api-key.md). Scoped like that, a leaked key can't delete or edit photos, can't change settings, and can't create a broader key.
 - The addon can't touch your photos. The only assets it ever deletes are the placeholder stubs it created itself, and the delete code refuses anything it doesn't own.
 - Share links are bearer credentials, same as in stock Immich: whoever has the link (and its password, if set) can use it. Treat them accordingly, or keep link-joining switched off.
 - Small surface: plain Node, the built-in `node:sqlite`, one pinned dependency, a codebase you can read. [deploy/exposure.md](./deploy/exposure.md) covers hardening if you host publicly.
