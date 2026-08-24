@@ -47,6 +47,8 @@
 
 ## Documentation
 
+### Using the addon
+
 | Doc | What it answers |
 | :--- | :--- |
 | [Setup guide](./deploy/SETUP.md) | the recommended install, step by step, nothing on the internet |
@@ -54,9 +56,20 @@
 | [Manual install](./deploy/) | compose example, Caddy snippet, the three proxy routes |
 | [API key guide](./deploy/api-key.md) | the exact permissions to tick, and why each one |
 | [Configuration reference](./deploy/configuration.md) | every setting, its default, and when to change it |
-| [Hardening guide](./deploy/exposure.md) | if you host publicly: pick an exposure level, paste one block |
+| [Hardening guide](./deploy/exposure.md) | how exposed to be, and how to lock down whatever you pick |
 
-(Developers: the internals are documented next to the code — start at [src/ARCHITECTURE.md](./src/ARCHITECTURE.md), and every source file's first line points at its doc.)
+### Under the hood
+
+| Doc | What it answers |
+| :--- | :--- |
+| [Architecture](./src/ARCHITECTURE.md) | the whole design on one page — components, data flow, iron rules |
+| [Wire protocol](./src/p2p/wire-protocol.md) | how two servers pair, share and stream, and what the connection proves |
+| [Sync loops](./src/sync/sync-loops.md) | how albums, invitations and withdrawals reconcile |
+| [Byte path](./src/media/hotlink-bytes.md) | where the actual pixels come from when you view a shared photo |
+| [HTTP surface](./src/web/http-router.md) | every route the addon serves, and who may call it |
+| [Immich API layer](./src/immich/local-immich-api.md) | the accounts the addon creates and the Immich quirks it absorbs |
+| [Contributing](./AGENTS.md) | the working contract for humans and AI agents — conventions, tests, invariants |
+| [Demo rig](./demo/) | three complete households in Docker, plus the e2e suites that gate every change |
 
 ## Demo
 
