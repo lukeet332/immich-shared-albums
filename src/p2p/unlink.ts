@@ -18,7 +18,7 @@
  *    re-link from misreading a leftover membership as a fresh invitation.
  */
 import { CFG, log, BOT_PREFIX } from '../config.ts';
-import { state, save } from '../state.ts';
+import { state, save, store } from '../state.ts';
 import { immichJson } from '../immich/client.ts';
 import { forgetOffered } from './entitlement.ts';
 import { leaveAlbum } from '../sync/leave.ts';
@@ -50,6 +50,7 @@ export async function unlinkPeer(pub: string): Promise<UnlinkResult> {
       continue;
     }
     forgetOffered(mp.id);
+    store.seenActRemoveMapping(mp.id);
     const at = state.mappings.findIndex(x => x.id === mp.id);
     if (at >= 0) {
       state.mappings.splice(at, 1);
@@ -66,8 +67,8 @@ export async function unlinkPeer(pub: string): Promise<UnlinkResult> {
   //
   // Deleting them takes their album memberships with them, which is what closes the re-link
   // hole: nothing is left behind for a future directory sync to misread as a fresh invitation.
-  for (const [slug, c] of Object.entries(state.contributors || {})) {
-    if (!slug.startsWith(BOT_PREFIX.person) || (c.homePeer ?? c.peer) !== pub) continue;
+  for (const [slug, c] of Object.entries(state.contributors)) {
+    if (!slug.startsWith(BOT_PREFIX.person) || (c.homePeer ?? c.viaPeer) !== pub) continue;
     if (c.userId) {
       try {
         await immichJson(`/admin/users/${c.userId}`, {
@@ -102,8 +103,8 @@ export const linkedPeers = () =>
     version: p.version,
     sharedToThem: state.mappings.filter(m => m.peer === p.pub && m.role === 'owner' && !m.dead).length,
     sharedToUs: state.mappings.filter(m => m.peer === p.pub && m.role === 'member' && !m.dead).length,
-    people: Object.entries(state.contributors || {}).filter(
-      ([k, c]) => k.startsWith(BOT_PREFIX.person) && c.peer === p.pub
+    people: Object.entries(state.contributors).filter(
+      ([k, c]) => k.startsWith(BOT_PREFIX.person) && (c.homePeer ?? c.viaPeer) === p.pub
     ).length,
   }));
 
@@ -114,7 +115,7 @@ export const sharedAlbums = () =>
     .map(m => ({
       name: m.albumName,
       role: m.role,
-      via: m.via ?? 'link',
+      via: m.via,
       peer: state.peers.find(p => p.pub === m.peer)?.name ?? '',
     }));
 

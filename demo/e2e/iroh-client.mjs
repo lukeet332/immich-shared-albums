@@ -5,15 +5,8 @@ const require = createRequire(process.env.ISA_ROOT + '/package.json');
 const { Endpoint, EndpointAddr, EndpointId, RelayMode, presetMinimal } = require('@number0/iroh');
 
 const ALPN = Array.from(Buffer.from('isa/2'));
-const SPKI = Buffer.from('302a300506032b6570032100', 'hex');
-const pubToRaw = pubB64 => Array.from(Buffer.from(pubB64, 'base64url').subarray(SPKI.length));
-const seedFromPkcs8 = privB64 => {
-  const { createPrivateKey } = require('node:crypto');
-  const jwk = createPrivateKey({ key: Buffer.from(privB64, 'base64url'), format: 'der', type: 'pkcs8' }).export({
-    format: 'jwk',
-  });
-  return Array.from(Buffer.from(jwk.d, 'base64url'));
-};
+// Identity strings are RAW ed25519 keys, base64url (schema v1) — encoding shifts only.
+const pubToRaw = pubB64 => Array.from(Buffer.from(pubB64, 'base64url'));
 
 const framed = payload => {
   const len = Buffer.alloc(4);
@@ -25,13 +18,13 @@ const readFramed = async recv => {
   return len === 0 ? Buffer.alloc(0) : Buffer.from(await recv.readExact(len));
 };
 
-/** Bind an endpoint from a household's stored keypair ({pub, priv} base64url DER). */
+/** Bind an endpoint from a household's stored identity ({pub, priv} base64url raw 32B). */
 export async function bindAs(keys) {
   const b = Endpoint.builder();
   presetMinimal(b);
   if (process.env.RELAY !== 'off') b.relayMode(RelayMode.defaultMode());
   b.alpns([ALPN]);
-  b.secretKey(seedFromPkcs8(keys.priv));
+  b.secretKey(Array.from(Buffer.from(keys.priv, 'base64url')));
   return b.bind();
 }
 

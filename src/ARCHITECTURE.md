@@ -25,7 +25,7 @@ transport — lockfile-pinned, installed by the Dockerfile):
             │  materialiser ◄── inbound refs ── server    │◄──────────────
             │     │                                       │
             │     ▼                                       │
-            │  state.db (SQLite): keys, peers, mappings,  │
+            │  state.db (SQLite): identity, peers, mappings,  │
             │        seen ledger, activity, contributors  │
             │                                             │
             │  web: panel (/immich-shared-albums/)        │
@@ -72,9 +72,10 @@ every decision.
     connection can never select someone else's album. See [`p2p/wire-protocol.md`](./p2p/wire-protocol.md).
 - **entitlement** — "may this peer read these bytes", kept separate from "who is this peer".
   Everything advertised to a mapping (redeem response, manifest, ref push) lands in an `offered`
-  index, and the byte routes serve only what is on it, falling back to album membership (throttled)
-  so upgrades self-heal. Without it an asset id — which manifests hand out by design — would let any
-  enrolled peer read anything the admin key can reach.
+  index — recorded before it is advertised — and the byte routes serve exactly what is on it,
+  nothing else. Removal is real revocation: assets that leave the album lose their rows. Without
+  the index an asset id — which manifests hand out by design — would let any enrolled peer read
+  anything the admin key can reach.
 - **materialiser** — makes shared state look like ordinary Immich data.
   - Mirror albums owned by the local account standing in for the origin's album owner.
   - **One account per remote person**, keyed by their user id on their own server, so the same human
@@ -160,8 +161,8 @@ once it needs several. Where its doc then lives, and the rule that keeps these d
    it to their own library.
 5. **Default-closed.** No uninvited server reaches anything.
 6. **Reachability is never permission.** Every route assumes it is published to the open internet.
-   Human routes authenticate against the caller's own Immich session; peer routes require a
-   signature *and* an entitlement check. Nothing is protected by being hard to find, on a private
+   Human routes authenticate against the caller's own Immich session; peer routes require the
+   mutual-TLS connection's identity *and* an entitlement check. Nothing is protected by being hard to find, on a private
    network, or behind a URL nobody has guessed.
 7. **The sidecar invents no identities and holds no logins.** The only identity that means anything
    is an Immich one. The accounts that own stubs get a narrowly-scoped API key and no retained

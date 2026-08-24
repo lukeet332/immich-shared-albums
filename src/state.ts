@@ -1,33 +1,36 @@
 /**
- * state.ts — persistent state: the SQLite-backed store, this household's signing keypair,
+ * state.ts — persistent state: the SQLite-backed store, this household's transport identity,
  * and thin typed accessors over the seen-ledger / cache tables. Owns `save()`.
  */
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { Store } from './store.ts';
+import { Store, type Identity } from './store.ts';
 import { CFG } from './config.ts';
 
-fs.mkdirSync(CFG.dataDir, { recursive: true });
+// 0700: this directory holds the identity key and every bot account's API key.
+fs.mkdirSync(CFG.dataDir, { recursive: true, mode: 0o700 });
 export const store = new Store(CFG.dataDir);
 export const state = store.state;
 /**
- * This household's signing keypair — the sidecar's whole identity on the wire.
+ * This household's transport identity — the sidecar's whole identity on the wire.
  *
- * Exported non-null on purpose. `Store.state.keys` is legitimately nullable (nothing exists
- * before first boot), but it is generated here the moment this module loads and then persisted,
- * so every consumer downstream can rely on it. Reading `keys` rather than `state.keys` is what
- * keeps eleven call sites free of null checks that could never fire.
+ * Stored RAW (32 bytes each side, base64url): `pub` is byte-for-byte the iroh endpoint id,
+ * so the boot log, the database, every ticket and every peer's record all show the same
+ * string. The DER envelopes the signing era needed are gone with it.
+ *
+ * Exported non-null on purpose. `Store.state.identity` is legitimately nullable (nothing
+ * exists before first boot), but it is generated here the moment this module loads and then
+ * persisted, so every consumer downstream can rely on it.
  */
-function ensureKeys(): { pub: string; priv: string } {
-  if (state.keys) return state.keys;
+function ensureIdentity(): Identity {
+  if (state.identity) return state.identity;
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-  state.keys = {
-    pub: publicKey.export({ type: 'spki', format: 'der' }).toString('base64url'),
-    priv: privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64url'),
-  };
-  return state.keys;
+  const pub = (publicKey.export({ format: 'jwk' }) as { x: string }).x;
+  const priv = (privateKey.export({ format: 'jwk' }) as { d: string }).d;
+  state.identity = { v: 1, alg: 'ed25519', pub, priv, createdAt: new Date().toISOString() };
+  return state.identity;
 }
-export const keys = ensureKeys();
+export const keys = ensureIdentity();
 export const save = () => store.save();
 save();
 export const seenHas = (mappingId: string, checksum: string) => store.seenHas(mappingId, checksum);
@@ -36,11 +39,12 @@ export const seenAdd = (mappingId: string, checksum: string, localAssetId: strin
 // materialised proxies keep their SOURCE photo's checksum in the ledger — that identity,
 // not the local file's checksum (a re-encoded preview), is what travels on the wire.
 export const ledgerByAsset = (assetId: string) => store.ledgerByAsset(assetId);
-export const wireChecksum = (a: { id: string; checksum: string }) => ledgerByAsset(a.id)?.c || a.checksum;
+export const wireChecksum = (a: { id: string; checksum: string }) =>
+  ledgerByAsset(a.id)?.checksum || a.checksum;
 // Memberships this sidecar created, as opposed to ones a human made. See store.addedRecord —
 // the write order is a security property, not a style choice.
 export const addedRecord = (albumId: string, userId: string) => store.addedRecord(albumId, userId);
 export const addedHas = (albumId: string, userId: string) => store.addedHas(albumId, userId);
 export const addedForget = (albumId: string, userId: string) => store.addedForget(albumId, userId);
-export const seenActHas = (id: string) => store.seenActHas(id);
-export const seenActAdd = (id: string) => store.seenActAdd(id);
+export const seenActHas = (tag: string) => store.seenActHas(tag);
+export const seenActAdd = (tag: string, mappingId: string) => store.seenActAdd(tag, mappingId);

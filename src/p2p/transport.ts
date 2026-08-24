@@ -1,5 +1,4 @@
 /** p2p/transport.ts — the iroh peer transport: endpoint lifecycle, dial-by-key, request framing. See wire-protocol.md. */
-import crypto from 'node:crypto';
 import { Endpoint, EndpointAddr, EndpointId, RelayMode, presetMinimal } from '@number0/iroh';
 import { CFG, log } from '../config.ts';
 import { keys, save } from '../state.ts';
@@ -7,23 +6,13 @@ import type { Peer } from '../store.ts';
 
 export const PROTOCOL_ALPN = Array.from(Buffer.from('isa/2'));
 
-// Our stored keys are DER (spki/pkcs8) base64url; iroh speaks raw 32-byte ed25519. The spki
-// prefix is a constant, so the two are the same key in different envelopes.
-const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-export const pubToRaw = (pubDerB64: string): number[] =>
-  Array.from(Buffer.from(pubDerB64, 'base64url').subarray(SPKI_PREFIX.length));
+// Identity strings are RAW ed25519 keys, base64url — byte-for-byte what iroh speaks, so
+// these two are pure encoding shifts, not format conversions.
+export const pubToRaw = (pubB64: string): number[] => Array.from(Buffer.from(pubB64, 'base64url'));
 export const rawToPub = (raw: number[] | Uint8Array): string =>
-  Buffer.concat([SPKI_PREFIX, Buffer.from(raw)]).toString('base64url');
+  Buffer.from(raw as Uint8Array).toString('base64url');
 
-const secretSeed = (): number[] => {
-  const privateKey = crypto.createPrivateKey({
-    key: Buffer.from(keys.priv, 'base64url'),
-    format: 'der',
-    type: 'pkcs8',
-  });
-  const jwk = privateKey.export({ format: 'jwk' }) as { d: string };
-  return Array.from(Buffer.from(jwk.d, 'base64url'));
-};
+const secretSeed = (): number[] => Array.from(Buffer.from(keys.priv, 'base64url'));
 
 // ---- framing: one bi-stream per request ----
 // request  = u32-LE header length, JSON { path, range? }, u32-LE body length, body bytes

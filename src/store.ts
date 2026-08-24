@@ -1,17 +1,46 @@
 /**
  * SQLite-backed state store (node:sqlite — built into Node, still zero dependencies).
  *
- * Hot ledgers (seen, seenActivity) live as indexed tables: lookups that were O(n)
- * array scans per photo per cycle become indexed SELECTs, and appends stop rewriting
- * the whole state file. Small collections (keys, peers, mappings, contributors) stay
- * as an in-memory object persisted to a kv table in one transaction — same ergonomics
- * as before, now crash-safe (WAL).
+ * Hot ledgers (seen, seen_activity, offered, added) are indexed tables. The three core
+ * collections (peers, mappings, contributors) are real tables too — every row a row,
+ * every column named — but they are still held in memory as plain arrays/objects and
+ * rewritten wholesale on save(): the collections are tiny (a handful of peers, tens of
+ * mappings) and the shared-array ergonomics are load-bearing for the sync loops. What
+ * the tables buy is a schema that PRAGMA user_version can migrate: post-1.0, a change
+ * here is a numbered migration, never blob archaeology.
  *
+ * SCHEMA_VERSION marks the shape this code writes. Bump it WITH a migration branch in
+ * the constructor — never silently.
  */
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
-export type SeenEntry = { m: string; c: string; l: string; o?: string };
+export const SCHEMA_VERSION = 1;
+
+// The pre-v1 store kept identity keys as DER (spki/pkcs8) base64url. The envelopes are
+// constant, so v0 -> v1 key conversion is a deterministic re-encoding of the same key —
+// which is what lets a migration preserve every pairing.
+const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const derToRawPub = (derB64: string): string => {
+  const buf = Buffer.from(derB64, 'base64url');
+  return (buf.length > 32 ? buf.subarray(SPKI_PREFIX.length) : buf).toString('base64url');
+};
+const pkcs8ToSeed = (derB64: string): string => {
+  const key = crypto.createPrivateKey({
+    key: Buffer.from(derB64, 'base64url'),
+    format: 'der',
+    type: 'pkcs8',
+  });
+  return (key.export({ format: 'jwk' }) as { d: string }).d;
+};
+
+export type SeenEntry = {
+  mapping: string;
+  checksum: string;
+  localAsset: string;
+  originAsset?: string;
+};
 
 export type Mapping = {
   id: string;
@@ -21,13 +50,15 @@ export type Mapping = {
   peer: string;
   remoteAlbumId?: string;
   remoteMappingId?: string;
-  permissions?: 'view' | 'contribute';
-  adminSlug?: string;
-  /** How this share came about. Absent means 'link' (every mapping predating invitations).
-   *  Load-bearing: only 'invite' mappings may be retired by sync/invites when a peer's
-   *  stand-in disappears from an album — a link-redeemed mapping never had a stand-in added
-   *  to its album, so retiring those there would silently unshare every link-based album. */
-  via?: 'link' | 'invite';
+  permissions: 'view' | 'contribute';
+  /** State key of the utility user that OWNS the mirror album (the "host" stand-in).
+   *  Its API key curates the mirror; it is never the admin key. */
+  hostSlug?: string;
+  /** How this share came about. Load-bearing: only 'invite' mappings may be retired by
+   *  sync/invites when a peer's stand-in disappears from an album — a link-redeemed mapping
+   *  never had a stand-in added to its album, so retiring those there would silently unshare
+   *  every link-based album. */
+  via: 'link' | 'invite';
   /** Which people at the peer this invitation names, by their user id on their own server.
    *  Sharing is per person, so an invitation always names at least one; there is no
    *  household-wide form. The member mirrors for exactly these users and follows the list as it
@@ -37,7 +68,12 @@ export type Mapping = {
    *  learn this from the redeem response instead; without it a mirror would be named after
    *  the household rather than the person who shared it. */
   albumOwnerName?: string;
+  /** The album owner's user id ON THE ORIGIN — what keys their stand-in account here and on
+   *  every member, so one human never becomes two picker entries. */
+  albumOwnerId?: string;
   dead?: boolean;
+  deadAt?: string;
+  deadReason?: string;
   failCount?: number;
   localVersion?: string;
   remoteVersion?: string;
@@ -49,19 +85,27 @@ export type Peer = {
   pub: string;
   name: string;
   version?: string;
+  /** How this peer got in: an admin-approved pairing code, or a share-link redemption.
+   *  Recorded at enrolment because it can never be recovered later — and it is what any
+   *  future policy that treats the two differently (e.g. directory access) must gate on. */
+  via: 'pair' | 'link';
+  firstSeenAt: string;
   /** Where they were last reachable — hints for the next dial, never identity. */
   relayHint?: string;
   lastAddrs?: string[];
 };
+
 // `password` is transient: it exists only while the account is being provisioned, and is
 // rolled to an unheld value once the API key is minted (see immich/contributors.ts).
 export type Contributor = {
   userId: string;
-  key: string;
+  /** The Immich API key minted for this bot account — scoped, never the admin key. */
+  apiKey: string;
   password?: string;
   avatarDone?: boolean;
-  /** Public key of the peer household this person belongs to. */
-  peer?: string;
+  /** Public key of the peer we FIRST heard of this person through — for relayed content
+   *  that is the hop, not their home. Never a routing decision; see homePeer. */
+  viaPeer?: string;
   /** That person's user id ON THE PEER, for invite targets — what lets an invitation be routed
    *  to one specific person rather than the whole household. */
   peerUserId?: string;
@@ -69,21 +113,43 @@ export type Contributor = {
    * The server this person actually LIVES on, set only by a directory sync — the one source that
    * proves it.
    *
-   * Distinct from `peer`, which is merely where we first heard of them. For relayed content those
-   * differ: a photo from someone at D arrives via C, so `peer` is C. Inviting them must route to
-   * D, so invitability tests `homePeer`, never `peer`. An account with no `homePeer` is
-   * attribution-only — it can own photos, but it is not a share destination, because we have no
-   * link over which to deliver one.
+   * Distinct from `viaPeer`, which is merely where we first heard of them. For relayed content
+   * those differ: a photo from someone at D arrives via C, so `viaPeer` is C. Inviting them must
+   * route to D, so invitability tests `homePeer`, never `viaPeer`. An account with no `homePeer`
+   * is attribution-only — it can own photos, but it is not a share destination, because we have
+   * no link over which to deliver one.
    */
   homePeer?: string;
 };
 
+/** This server's transport identity: a raw ed25519 keypair, base64url, 32 bytes each side.
+ *  `pub` IS the iroh endpoint id and the peer-visible identity string. The envelope fields
+ *  exist so a future second key type is distinguishable without sniffing byte lengths. */
+export type Identity = {
+  v: 1;
+  alg: 'ed25519';
+  pub: string;
+  priv: string;
+  createdAt: string;
+};
+
 export type Collections = {
-  keys: { pub: string; priv: string } | null;
+  identity: Identity | null;
   peers: Peer[];
   mappings: Mapping[];
   contributors: Record<string, Contributor>;
 };
+
+const bool = (v: unknown) => (v ? 1 : 0);
+const orNull = <T extends string | number>(v: T | undefined): T | null => (v === undefined ? null : v);
+const jsonOrNull = (v: unknown) => (v === undefined || v === null ? null : JSON.stringify(v));
+
+/** Rebuild an object from a row, dropping SQL NULLs so optional fields stay absent. */
+function compact<T>(row: Record<string, unknown>): T {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) if (v !== null) out[k] = v;
+  return out as T;
+}
 
 export class Store {
   db: DatabaseSync;
@@ -94,42 +160,198 @@ export class Store {
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS seen (m TEXT NOT NULL, c TEXT NOT NULL, l TEXT NOT NULL, o TEXT);
-      CREATE UNIQUE INDEX IF NOT EXISTS seen_mc ON seen (m, c);
-      CREATE INDEX IF NOT EXISTS seen_l ON seen (l);
-      CREATE TABLE IF NOT EXISTS seen_activity (tag TEXT PRIMARY KEY);
+    `);
+    // A pre-v1 store is recognisable by its identity blob under the old kv name. Migrate it
+    // BEFORE creating the v1 tables — the old ledgers share table names with different columns.
+    const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+    if (version === 0 && this.kvGet('keys')) this.migrateV0();
+    this.createSchema();
+    const current = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+    if (current === 0) this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    else if (current !== SCHEMA_VERSION)
+      throw new Error(
+        `state.db is schema v${current}, this build writes v${SCHEMA_VERSION} — no migration exists for that jump`
+      );
+    this.state = {
+      identity: this.kvGet('identity'),
+      peers: this.loadPeers(),
+      mappings: this.loadMappings(),
+      contributors: this.loadContributors(),
+    };
+  }
+
+  private createSchema() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS seen (
+        id INTEGER PRIMARY KEY,
+        mapping TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        localAsset TEXT NOT NULL,
+        originAsset TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS seen_mapping_checksum ON seen (mapping, checksum);
+      CREATE INDEX IF NOT EXISTS seen_localAsset ON seen (localAsset);
+      CREATE TABLE IF NOT EXISTS seen_activity (tag TEXT PRIMARY KEY, mapping TEXT);
+      CREATE INDEX IF NOT EXISTS seen_activity_mapping ON seen_activity (mapping);
     `);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, size INTEGER NOT NULL, lastUsed INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS cache_lru ON cache (lastUsed);
     `);
-    // What we have ADVERTISED to each mapping's peer. A signature proves which peer is
+    // What we have ADVERTISED to each mapping's peer. The connection proves which peer is
     // calling; this table is what decides whether that peer may read a given asset's
     // bytes. Without it the byte routes authorise identity but not entitlement, and any
     // peer that learns an asset id can read anything in the library.
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS offered (m TEXT NOT NULL, a TEXT NOT NULL);
-      CREATE UNIQUE INDEX IF NOT EXISTS offered_ma ON offered (m, a);
-      CREATE INDEX IF NOT EXISTS offered_a ON offered (a);
+      CREATE TABLE IF NOT EXISTS offered (
+        id INTEGER PRIMARY KEY,
+        mapping TEXT NOT NULL,
+        asset TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS offered_mapping_asset ON offered (mapping, asset);
+      CREATE INDEX IF NOT EXISTS offered_asset ON offered (asset);
       -- Album memberships THIS SIDECAR created (album id, user id). See addedRecord: it is the
       -- difference between "a human invited them" and "we put them there for attribution", and
       -- getting it wrong in the unsafe direction shares an album nobody offered.
-      CREATE TABLE IF NOT EXISTS added (al TEXT NOT NULL, us TEXT NOT NULL);
-      CREATE UNIQUE INDEX IF NOT EXISTS added_alus ON added (al, us);
-      CREATE INDEX IF NOT EXISTS added_us ON added (us);
+      CREATE TABLE IF NOT EXISTS added (album TEXT NOT NULL, user TEXT NOT NULL);
+      CREATE UNIQUE INDEX IF NOT EXISTS added_album_user ON added (album, user);
+      CREATE INDEX IF NOT EXISTS added_user ON added (user);
     `);
-    this.state = {
-      keys: this.kvGet('keys'),
-      peers: this.kvGet('peers') ?? [],
-      mappings: this.kvGet('mappings') ?? [],
-      contributors: this.kvGet('contributors') ?? {},
-    };
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS peers (
+        pub TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        version TEXT,
+        via TEXT NOT NULL,
+        firstSeenAt TEXT NOT NULL,
+        relayHint TEXT,
+        lastAddrs TEXT
+      );
+      CREATE TABLE IF NOT EXISTS mappings (
+        id TEXT PRIMARY KEY,
+        role TEXT NOT NULL,
+        albumId TEXT NOT NULL,
+        albumName TEXT NOT NULL,
+        peer TEXT NOT NULL,
+        remoteAlbumId TEXT,
+        remoteMappingId TEXT,
+        permissions TEXT NOT NULL,
+        hostSlug TEXT,
+        via TEXT NOT NULL,
+        forPeerUserIds TEXT,
+        albumOwnerName TEXT,
+        albumOwnerId TEXT,
+        dead INTEGER NOT NULL DEFAULT 0,
+        deadAt TEXT,
+        deadReason TEXT,
+        failCount INTEGER,
+        localVersion TEXT,
+        remoteVersion TEXT,
+        commentCount INTEGER,
+        remoteCommentCount INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS mappings_peer ON mappings (peer);
+      CREATE TABLE IF NOT EXISTS contributors (
+        slug TEXT PRIMARY KEY,
+        userId TEXT NOT NULL UNIQUE,
+        apiKey TEXT NOT NULL,
+        password TEXT,
+        avatarDone INTEGER NOT NULL DEFAULT 0,
+        viaPeer TEXT,
+        peerUserId TEXT,
+        homePeer TEXT
+      );
+    `);
+  }
+
+  /**
+   * v0 -> v1: kv-blob collections become tables, ledger columns get real names, DER key
+   * envelopes become raw — the SAME keys re-encoded, so every pairing survives and nothing
+   * needs re-linking. Field-level conversions mirror the type renames (key->apiKey,
+   * peer->viaPeer, adminSlug->hostSlug). Migrated peers are stamped via:'pair': the entire
+   * v0 install base consists of admin-paired servers, and the label is what any future
+   * pair-only policy would gate on.
+   */
+  private migrateV0() {
+    const hasTable = (name: string) =>
+      !!this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name);
+    this.db.exec('BEGIN');
+    try {
+      for (const t of ['seen', 'offered', 'added', 'seen_activity'])
+        if (hasTable(t)) this.db.exec(`ALTER TABLE ${t} RENAME TO ${t}_v0`);
+      this.createSchema();
+      if (hasTable('seen_v0'))
+        this.db.exec(
+          'INSERT INTO seen (mapping, checksum, localAsset, originAsset) SELECT m, c, l, o FROM seen_v0'
+        );
+      if (hasTable('offered_v0'))
+        this.db.exec('INSERT INTO offered (mapping, asset) SELECT m, a FROM offered_v0');
+      if (hasTable('added_v0')) this.db.exec('INSERT INTO added (album, user) SELECT al, us FROM added_v0');
+      if (hasTable('seen_activity_v0'))
+        this.db.exec('INSERT INTO seen_activity (tag, mapping) SELECT tag, NULL FROM seen_activity_v0');
+      for (const t of ['seen_v0', 'offered_v0', 'added_v0', 'seen_activity_v0'])
+        if (hasTable(t)) this.db.exec(`DROP TABLE ${t}`);
+
+      const now = new Date().toISOString();
+      const oldKeys = this.kvGet('keys') as { pub: string; priv: string } | null;
+      if (oldKeys)
+        this.kvSet('identity', {
+          v: 1,
+          alg: 'ed25519',
+          pub: derToRawPub(oldKeys.pub),
+          priv: pkcs8ToSeed(oldKeys.priv),
+          createdAt: now,
+        } satisfies Identity);
+      const migrated: Collections = {
+        identity: null, // written above via kv; putCollections skips it
+        peers: ((this.kvGet('peers') ?? []) as Record<string, unknown>[]).map(p => ({
+          ...(p as unknown as Peer),
+          pub: derToRawPub(p.pub as string),
+          via: 'pair',
+          firstSeenAt: now,
+        })),
+        mappings: ((this.kvGet('mappings') ?? []) as Record<string, unknown>[]).map(m => {
+          const { adminSlug, ...rest } = m as Record<string, unknown>;
+          return {
+            ...(rest as unknown as Mapping),
+            peer: derToRawPub(m.peer as string),
+            hostSlug: (adminSlug as string) ?? undefined,
+            via: (m.via as 'link' | 'invite') ?? 'link',
+            permissions: (m.permissions as 'view' | 'contribute') ?? 'view',
+          };
+        }),
+        contributors: Object.fromEntries(
+          Object.entries((this.kvGet('contributors') ?? {}) as Record<string, Record<string, unknown>>).map(
+            ([slug, c]) => {
+              const { key, peer, ...rest } = c;
+              return [
+                slug,
+                {
+                  ...(rest as unknown as Contributor),
+                  apiKey: key as string,
+                  viaPeer: peer ? derToRawPub(peer as string) : undefined,
+                  homePeer: c.homePeer ? derToRawPub(c.homePeer as string) : undefined,
+                },
+              ];
+            }
+          )
+        ),
+      };
+      this.putCollections(migrated);
+      this.db.prepare(`DELETE FROM kv WHERE name IN ('keys', 'peers', 'mappings', 'contributors')`).run();
+      this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
   }
 
   /**
    * Generic kv access, for small side-tables that do not deserve a typed field on `state` —
-   * currently just unredeemed pairing codes. Deliberately narrow: the four main collections have
-   * their own fields and their own save path, and this must not become a second way to write them.
+   * the identity record, unredeemed pairing codes, and the panel settings. Deliberately
+   * narrow: the three main collections have their own tables and their own save path, and
+   * this must not become a second way to write them.
    */
   kv(name: string) {
     return this.kvGet(name);
@@ -144,15 +366,40 @@ export class Store {
     return row ? JSON.parse(row.value) : null;
   }
 
-  /** Persist the in-memory collections (small; one transaction). */
+  private loadPeers(): Peer[] {
+    return (this.db.prepare('SELECT * FROM peers').all() as Record<string, unknown>[]).map(r => {
+      const p = compact<Peer>(r);
+      if (r.lastAddrs) p.lastAddrs = JSON.parse(r.lastAddrs as string);
+      return p;
+    });
+  }
+  private loadMappings(): Mapping[] {
+    return (this.db.prepare('SELECT * FROM mappings').all() as Record<string, unknown>[]).map(r => {
+      const m = compact<Mapping>(r);
+      m.dead = !!r.dead;
+      if (!r.dead) delete m.dead;
+      if (r.forPeerUserIds) m.forPeerUserIds = JSON.parse(r.forPeerUserIds as string);
+      return m;
+    });
+  }
+  private loadContributors(): Record<string, Contributor> {
+    const out: Record<string, Contributor> = {};
+    for (const r of this.db.prepare('SELECT * FROM contributors').all() as Record<string, unknown>[]) {
+      const c = compact<Contributor & { slug: string }>(r);
+      c.avatarDone = !!r.avatarDone;
+      if (!r.avatarDone) delete c.avatarDone;
+      const { slug, ...rest } = c;
+      out[slug] = rest;
+    }
+    return out;
+  }
+
+  /** Persist the in-memory collections (small; one transaction, whole-collection rewrite). */
   save() {
-    const put = this.db.prepare('INSERT OR REPLACE INTO kv (name, value) VALUES (?, ?)');
     this.db.exec('BEGIN');
     try {
-      put.run('keys', JSON.stringify(this.state.keys));
-      put.run('peers', JSON.stringify(this.state.peers));
-      put.run('mappings', JSON.stringify(this.state.mappings));
-      put.run('contributors', JSON.stringify(this.state.contributors));
+      this.kvSet('identity', this.state.identity);
+      this.putCollections(this.state);
       this.db.exec('COMMIT');
     } catch (e) {
       this.db.exec('ROLLBACK');
@@ -160,12 +407,81 @@ export class Store {
     }
   }
 
+  /** Row writes shared by save() and the v0 migration. Runs inside the caller's transaction. */
+  private putCollections(cols: Collections) {
+    {
+      this.db.exec('DELETE FROM peers');
+      const insPeer = this.db.prepare(
+        'INSERT INTO peers (pub, name, version, via, firstSeenAt, relayHint, lastAddrs) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      );
+      for (const p of cols.peers)
+        insPeer.run(
+          p.pub,
+          p.name,
+          orNull(p.version),
+          p.via,
+          p.firstSeenAt,
+          orNull(p.relayHint),
+          jsonOrNull(p.lastAddrs)
+        );
+      this.db.exec('DELETE FROM mappings');
+      const insMap = this.db.prepare(
+        `INSERT INTO mappings (id, role, albumId, albumName, peer, remoteAlbumId, remoteMappingId,
+           permissions, hostSlug, via, forPeerUserIds, albumOwnerName, albumOwnerId,
+           dead, deadAt, deadReason, failCount, localVersion, remoteVersion, commentCount, remoteCommentCount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const m of cols.mappings)
+        insMap.run(
+          m.id,
+          m.role,
+          m.albumId,
+          m.albumName,
+          m.peer,
+          orNull(m.remoteAlbumId),
+          orNull(m.remoteMappingId),
+          m.permissions,
+          orNull(m.hostSlug),
+          m.via,
+          jsonOrNull(m.forPeerUserIds),
+          orNull(m.albumOwnerName),
+          orNull(m.albumOwnerId),
+          bool(m.dead),
+          orNull(m.deadAt),
+          orNull(m.deadReason),
+          orNull(m.failCount),
+          orNull(m.localVersion),
+          orNull(m.remoteVersion),
+          orNull(m.commentCount),
+          orNull(m.remoteCommentCount)
+        );
+      this.db.exec('DELETE FROM contributors');
+      const insCon = this.db.prepare(
+        `INSERT INTO contributors (slug, userId, apiKey, password, avatarDone, viaPeer, peerUserId, homePeer)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const [slug, c] of Object.entries(cols.contributors))
+        insCon.run(
+          slug,
+          c.userId,
+          c.apiKey,
+          orNull(c.password),
+          bool(c.avatarDone),
+          orNull(c.viaPeer),
+          orNull(c.peerUserId),
+          orNull(c.homePeer)
+        );
+    }
+  }
+
   seenHas(mappingId: string, checksum: string): boolean {
-    return !!this.db.prepare('SELECT 1 FROM seen WHERE m = ? AND c = ?').get(mappingId, checksum);
+    return !!this.db
+      .prepare('SELECT 1 FROM seen WHERE mapping = ? AND checksum = ?')
+      .get(mappingId, checksum);
   }
   seenAdd(mappingId: string, checksum: string, localAssetId: string, originAsset?: string) {
     this.db
-      .prepare('INSERT OR IGNORE INTO seen (m, c, l, o) VALUES (?, ?, ?, ?)')
+      .prepare('INSERT OR IGNORE INTO seen (mapping, checksum, localAsset, originAsset) VALUES (?, ?, ?, ?)')
       .run(mappingId, checksum, localAssetId, originAsset ?? null);
   }
   /** The authoritative ledger entry for a local asset. A deduped proxy can carry rows
@@ -173,31 +489,38 @@ export class Store {
    *  TRUE wire identity, so they always win over watcher-push bookkeeping rows. */
   ledgerByAsset(assetId: string): SeenEntry | undefined {
     return this.db
-      .prepare('SELECT m, c, l, o FROM seen WHERE l = ? ORDER BY (o IS NOT NULL) DESC, rowid DESC LIMIT 1')
-      .get(assetId) as (SeenEntry & { o: string }) | undefined;
+      .prepare(
+        `SELECT mapping, checksum, localAsset, originAsset FROM seen
+         WHERE localAsset = ? ORDER BY (originAsset IS NOT NULL) DESC, id DESC LIMIT 1`
+      )
+      .get(assetId) as SeenEntry | undefined;
   }
-  /** Ledger entry that can chain to the owner (has an origin asset id). */
-  /** A ledger row that definitely has an origin asset: the SQL filters `o IS NOT NULL`,
-   *  so the type says so and callers stop re-checking what the query already guaranteed. */
-  ledgerWithOrigin(assetId: string): (SeenEntry & { o: string }) | undefined {
+  /** A ledger row that definitely has an origin asset: the SQL filters `originAsset IS NOT
+   *  NULL`, so the type says so and callers stop re-checking what the query already guaranteed. */
+  ledgerWithOrigin(assetId: string): (SeenEntry & { originAsset: string }) | undefined {
     return this.db
-      .prepare('SELECT m, c, l, o FROM seen WHERE l = ? AND o IS NOT NULL ORDER BY rowid DESC LIMIT 1')
-      .get(assetId) as (SeenEntry & { o: string }) | undefined;
+      .prepare(
+        `SELECT mapping, checksum, localAsset, originAsset FROM seen
+         WHERE localAsset = ? AND originAsset IS NOT NULL ORDER BY id DESC LIMIT 1`
+      )
+      .get(assetId) as (SeenEntry & { originAsset: string }) | undefined;
   }
   seenRemoveMapping(mappingId: string) {
-    this.db.prepare('DELETE FROM seen WHERE m = ?').run(mappingId);
+    this.db.prepare('DELETE FROM seen WHERE mapping = ?').run(mappingId);
   }
   seenForMapping(mappingId: string): SeenEntry[] {
-    return this.db.prepare('SELECT m, c, l, o FROM seen WHERE m = ?').all(mappingId) as SeenEntry[];
+    return this.db
+      .prepare('SELECT mapping, checksum, localAsset, originAsset FROM seen WHERE mapping = ?')
+      .all(mappingId) as SeenEntry[];
   }
   seenRemoveEntry(mappingId: string, checksum: string) {
-    this.db.prepare('DELETE FROM seen WHERE m = ? AND c = ?').run(mappingId, checksum);
+    this.db.prepare('DELETE FROM seen WHERE mapping = ? AND checksum = ?').run(mappingId, checksum);
   }
 
   // ---- offered index: which assets each mapping's peer is entitled to read ----
   offeredAdd(mappingId: string, assetIds: string[]) {
     if (!assetIds.length) return;
-    const ins = this.db.prepare('INSERT OR IGNORE INTO offered (m, a) VALUES (?, ?)');
+    const ins = this.db.prepare('INSERT OR IGNORE INTO offered (mapping, asset) VALUES (?, ?)');
     this.db.exec('BEGIN');
     try {
       for (const a of assetIds) ins.run(mappingId, a);
@@ -212,9 +535,36 @@ export class Store {
     if (!mappingIds.length) return false;
     const holes = mappingIds.map(() => '?').join(',');
     return !!this.db
-      .prepare(`SELECT 1 FROM offered WHERE a = ? AND m IN (${holes})`)
+      .prepare(`SELECT 1 FROM offered WHERE asset = ? AND mapping IN (${holes})`)
       .get(assetId, ...mappingIds);
   }
+  /**
+   * Revocation, per photo: drop entitlement rows for assets no longer in the album. Runs
+   * whenever the watcher has the album's current contents in hand — removing a photo from a
+   * shared album must also stop serving its bytes, not just stop advertising it.
+   */
+  offeredReconcile(mappingId: string, currentAssetIds: string[]) {
+    const have = (
+      this.db.prepare('SELECT asset FROM offered WHERE mapping = ?').all(mappingId) as { asset: string }[]
+    ).map(r => r.asset);
+    const keep = new Set(currentAssetIds);
+    const gone = have.filter(a => !keep.has(a));
+    if (!gone.length) return 0;
+    const del = this.db.prepare('DELETE FROM offered WHERE mapping = ? AND asset = ?');
+    this.db.exec('BEGIN');
+    try {
+      for (const a of gone) del.run(mappingId, a);
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+    return gone.length;
+  }
+  offeredRemoveMapping(mappingId: string) {
+    this.db.prepare('DELETE FROM offered WHERE mapping = ?').run(mappingId);
+  }
+
   /**
    * Remember that WE added `userId` to `albumId`.
    *
@@ -225,11 +575,11 @@ export class Store {
    * nobody offered it to. Always fail towards under-sharing.
    */
   addedRecord(albumId: string, userId: string) {
-    this.db.prepare('INSERT OR IGNORE INTO added (al, us) VALUES (?, ?)').run(albumId, userId);
+    this.db.prepare('INSERT OR IGNORE INTO added (album, user) VALUES (?, ?)').run(albumId, userId);
   }
   /** Is this membership ours rather than a human's? */
   addedHas(albumId: string, userId: string): boolean {
-    return !!this.db.prepare('SELECT 1 FROM added WHERE al = ? AND us = ?').get(albumId, userId);
+    return !!this.db.prepare('SELECT 1 FROM added WHERE album = ? AND user = ?').get(albumId, userId);
   }
   /**
    * Drop the record once the membership itself is gone.
@@ -239,27 +589,27 @@ export class Store {
    * membership would still match an old row and read as ours.
    */
   addedForget(albumId: string, userId: string) {
-    this.db.prepare('DELETE FROM added WHERE al = ? AND us = ?').run(albumId, userId);
+    this.db.prepare('DELETE FROM added WHERE album = ? AND user = ?').run(albumId, userId);
   }
   /** Every album we put this user into — used when unlinking a server. */
   addedAlbumsFor(userId: string): string[] {
-    return (this.db.prepare('SELECT al FROM added WHERE us = ?').all(userId) as { al: string }[]).map(
-      r => r.al
+    return (this.db.prepare('SELECT album FROM added WHERE user = ?').all(userId) as { album: string }[]).map(
+      r => r.album
     );
   }
   addedRemoveUser(userId: string) {
-    this.db.prepare('DELETE FROM added WHERE us = ?').run(userId);
-  }
-
-  offeredRemoveMapping(mappingId: string) {
-    this.db.prepare('DELETE FROM offered WHERE m = ?').run(mappingId);
+    this.db.prepare('DELETE FROM added WHERE user = ?').run(userId);
   }
 
   seenActHas(tag: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM seen_activity WHERE tag = ?').get(tag);
   }
-  seenActAdd(tag: string) {
-    this.db.prepare('INSERT OR IGNORE INTO seen_activity (tag) VALUES (?)').run(tag);
+  seenActAdd(tag: string, mappingId: string) {
+    this.db.prepare('INSERT OR IGNORE INTO seen_activity (tag, mapping) VALUES (?, ?)').run(tag, mappingId);
+  }
+  /** Reclaim the activity ledger when its mapping dies — without this the table only ever grows. */
+  seenActRemoveMapping(mappingId: string) {
+    this.db.prepare('DELETE FROM seen_activity WHERE mapping = ?').run(mappingId);
   }
 
   // ---- bounded LRU byte-cache accounting (files live in <dataDir>/cache) ----

@@ -63,7 +63,13 @@ export async function handleRedeem(callerPub: string, body: string) {
   const album = await getAlbum(link.album.id);
   album.assets = await getAlbumAssets(album.id);
   if (!state.peers.some(p => p.pub === callerPub)) {
-    state.peers.push({ pub: callerPub, name: household.name, version });
+    state.peers.push({
+      pub: callerPub,
+      name: household.name,
+      version,
+      via: 'link',
+      firstSeenAt: new Date().toISOString(),
+    });
   } else {
     const pe = peerByPub(callerPub);
     if (pe) {

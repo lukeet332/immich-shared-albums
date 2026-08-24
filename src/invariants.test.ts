@@ -14,17 +14,13 @@ import { personName } from './config.ts';
 import { permissionFor } from './sync/invites.ts';
 import { diffInvitees } from './sync/invitees.ts';
 
-test('bot namespaces are disjoint — no prefix may prefix another', () => {
-  // The mirror/withdraw ping-pong came from one bot serving two roles. Detection reads "this bot
-  // is an album member" as human intent, which is only sound for bots the sidecar never adds
-  // itself. If one prefix were a prefix of another, a startsWith() check would match both.
+test('bot accounts are keyed by id, never by display name', () => {
+  // Two remote people who share a display name must never collapse into one local account
+  // sharing one API key — the state key embeds the person's user id on their own server.
+  // (The old slugify(displayName) fallback also let a person named "Person 5" slug INTO the
+  // person- namespace that unlink trusts for deletion.)
   const prefixes = Object.values(BOT_PREFIX);
-  for (const a of prefixes) {
-    for (const b of prefixes) {
-      if (a === b) continue;
-      assert.ok(!a.startsWith(b), `${a} starts with ${b} — namespaces would overlap`);
-    }
-  }
+  assert.deepEqual(prefixes, ['person-'], 'one namespace, one keying rule');
 });
 
 test('a marker name never collides with an attribution contributor name', () => {
@@ -39,9 +35,9 @@ test('a marker name never collides with an attribution contributor name', () => 
 });
 
 test('isUtilityEmail accepts only the project domain', () => {
-  assert.ok(isUtilityEmail(`shared-x@${UTILITY_EMAIL_DOMAIN}`));
-  assert.ok(isUtilityEmail(`invite-person-a-b@${UTILITY_EMAIL_DOMAIN}`));
+  assert.ok(isUtilityEmail(`person-x@${UTILITY_EMAIL_DOMAIN}`));
   assert.ok(!isUtilityEmail('someone@sidecar.local'), 'v1 dropped the legacy domain');
+  assert.ok(!isUtilityEmail('person-x@immich-shared-albums.local'), 'v1 also left .local (mDNS-reserved)');
   assert.ok(!isUtilityEmail('real.person@example.com'));
   assert.ok(!isUtilityEmail(undefined));
   // a lookalike domain must not pass

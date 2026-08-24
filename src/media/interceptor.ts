@@ -37,7 +37,7 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
   // Only bytes that truly came FROM THE PEER are ever cached (a local stub
   // fallback must not poison the cache), and hits refresh their LRU slot.
   if (kind === 'preview') {
-    const cached = cacheRead(entry.o);
+    const cached = cacheRead(entry.originAsset);
     const baseHeaders = {
       'Content-Type': 'image/jpeg',
       'Cache-Control': 'private, max-age=604800, immutable',
@@ -47,16 +47,16 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
       res.end(cached);
       return true;
     }
-    const mapping2 = state.mappings.find(mp => mp.id === entry.m);
+    const mapping2 = state.mappings.find(mp => mp.id === entry.mapping);
     const peer2 = mapping2 && state.peers.find(pe => pe.pub === mapping2.peer);
     if (peer2) {
       try {
-        const up = await peerByteRequest(peer2, `/assets/${entry.o}/preview`);
+        const up = await peerByteRequest(peer2, `/assets/${entry.originAsset}/preview`);
         if (up.status < 400) {
           const chunks: Buffer[] = [];
           for await (const chunk of recvIterable(up.recv)) chunks.push(chunk);
           const buf = Buffer.concat(chunks);
-          cacheWrite(entry.o, buf);
+          cacheWrite(entry.originAsset, buf);
           res.writeHead(200, {
             ...baseHeaders,
             'Content-Type': up.headers['content-type'] || 'image/jpeg',

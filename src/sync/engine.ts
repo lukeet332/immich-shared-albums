@@ -41,6 +41,13 @@ export async function watchOnce() {
       if (mapping.role === 'member' && mapping.permissions === 'view') continue; // view-only: nothing to push
       const assets = await getAlbumAssets(mapping.albumId);
       mapping.failCount = 0;
+      // Revocation, per photo: an asset removed from the album must stop being served to
+      // this mapping's peer, not just stop being advertised.
+      const revoked = store.offeredReconcile(
+        mapping.id,
+        assets.map(a => a.id)
+      );
+      if (revoked) log(`revoked ${revoked} byte entitlement(s) on "${mapping.albumName}"`);
       const fresh = await shareableAssets(assets, mapping.id);
       if (!fresh.length) {
         mapping.localVersion = album.updatedAt;
@@ -53,16 +60,19 @@ export async function watchOnce() {
         mapping.role === 'member' ? mapping.remoteMappingId || mapping.remoteAlbumId : mapping.albumId;
       const add: AssetRef[] = [];
       for (const a of fresh) add.push(await assetToRef(a));
+      // Offering IS the grant: the peer materialises DURING the push, fetching stub bytes
+      // back from us before any response lands — so entitlement must be recorded first.
+      // A failed push leaves rows for assets still in the album, which the reconcile above
+      // keeps honest.
+      recordOffered(
+        mapping.id,
+        fresh.map(a => a.id)
+      );
       const r = await peerRequest(peer, `/albums/${targetMapping}/refs`, { add });
       if (r.status < 400) {
         const failed = new Set(r.json?.failed || []);
         const landed = fresh.filter(a => !failed.has(wireChecksum(a)));
         landed.forEach(a => seenAdd(mapping.id, wireChecksum(a), a.id));
-        // pushed to this peer => this peer may read their bytes (see p2p/entitlement)
-        recordOffered(
-          mapping.id,
-          landed.map(a => a.id)
-        );
         if (!failed.size) {
           mapping.localVersion = album.updatedAt;
           save();
@@ -75,6 +85,8 @@ export async function watchOnce() {
       mapping.failCount = (mapping.failCount || 0) + 1;
       if (/album.read access|Not found/i.test(e.message) && mapping.failCount >= 5) {
         mapping.dead = true;
+        mapping.deadAt = new Date().toISOString();
+        mapping.deadReason = `watcher: ${e.message.slice(0, 120)}`;
         save();
         log(
           `mapping "${mapping.albumName}" marked dead after ${mapping.failCount} failures (album deleted?) — no longer polled`
@@ -133,10 +145,12 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
       const offered = new Set(manifest.map(x => x.checksum));
       for (const entry of store.seenForMapping(mapping.id)) {
         if (process.env.RECONCILE_DEBUG)
-          log(`DBG entry c=${entry.c.slice(0, 8)} o=${!!entry.o} offered=${offered.has(entry.c)}`);
-        if (!entry.o || offered.has(entry.c)) continue;
-        if (await deleteProxyAsset(entry.l)) {
-          store.seenRemoveEntry(mapping.id, entry.c);
+          log(
+            `DBG entry c=${entry.checksum.slice(0, 8)} o=${!!entry.originAsset} offered=${offered.has(entry.checksum)}`
+          );
+        if (!entry.originAsset || offered.has(entry.checksum)) continue;
+        if (await deleteProxyAsset(entry.localAsset)) {
+          store.seenRemoveEntry(mapping.id, entry.checksum);
           log(`removed stub for a photo its owner deleted ("${mapping.albumName}")`);
         } else propagated = false; // keep the cursor back so the removal retries next cycle
       }

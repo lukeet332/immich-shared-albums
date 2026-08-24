@@ -130,6 +130,8 @@ export async function handlePair(callerPub: string, body: string) {
       pub: callerPub,
       name: household.name || 'Unnamed household',
       version: parsed.version,
+      via: 'pair',
+      firstSeenAt: new Date().toISOString(),
     });
   }
   save();
@@ -156,9 +158,11 @@ export async function redeemPairing(rawTicket: string) {
   if (!ticket) throw new Error('that does not look like a server link');
   if (ticket.pub === keys.pub)
     throw new Error('that is this server’s own link — paste it on the other server');
-  const origin = {
+  const origin: import('../store.ts').Peer = {
     pub: ticket.pub,
     name: 'pairing',
+    via: 'pair',
+    firstSeenAt: new Date().toISOString(),
     relayHint: ticket.relay,
     lastAddrs: ticket.addrs,
   };
@@ -182,6 +186,8 @@ export async function redeemPairing(rawTicket: string) {
       pub: ticket.pub,
       name: r.json.household.name || 'Unnamed household',
       version: r.json.version,
+      via: 'pair',
+      firstSeenAt: new Date().toISOString(),
       relayHint: ticket.relay,
       lastAddrs: ticket.addrs,
     });

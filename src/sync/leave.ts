@@ -21,17 +21,18 @@ export async function leaveAlbum(mappingId: string) {
     throw new Error('unknown mapping (only joined albums can be left)');
   let removed = 0;
   for (const entry of store.seenForMapping(mapping.id)) {
-    if (entry.o && (await deleteProxyAsset(entry.l))) removed++;
+    if (entry.originAsset && (await deleteProxyAsset(entry.localAsset))) removed++;
   }
-  const host = mapping.adminSlug ? state.contributors[mapping.adminSlug] : undefined;
-  if (host?.key) {
+  const host = mapping.hostSlug ? state.contributors[mapping.hostSlug] : undefined;
+  if (host?.apiKey) {
     try {
-      await immichJson(`/albums/${mapping.albumId}`, { method: 'DELETE' }, host.key);
+      await immichJson(`/albums/${mapping.albumId}`, { method: 'DELETE' }, host.apiKey);
     } catch (e) {
       log(`mirror album delete failed: ${e.message}`);
     }
   }
   store.seenRemoveMapping(mapping.id);
+  store.seenActRemoveMapping(mapping.id);
   forgetOffered(mapping.id);
   // Splice, never reassign. Loops run concurrently (watch, comments, invites), and replacing
   // the array silently discards anything another loop pushed onto the old reference in the

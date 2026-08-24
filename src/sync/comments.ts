@@ -22,42 +22,29 @@ export const getComments = (albumId, key?: string) =>
  * access because it owns the album. Owner mappings keep the admin key (undefined => default).
  */
 const albumReaderKey = mapping =>
-  mapping.role === 'member' && mapping.adminSlug ? state.contributors?.[mapping.adminSlug]?.key : undefined;
+  mapping.role === 'member' && mapping.hostSlug ? state.contributors[mapping.hostSlug]?.apiKey : undefined;
 export const postComment = (albumId, comment, key) =>
   immichJson('/activities', jsonBody({ albumId, type: 'comment', comment }), key);
-// Materialise foreign comments locally via the author's utility user. Skips ids already
-// seen AND (author, text) pairs already present locally — the latter guards legacy comments
-// synced before canonical ids existed.
+// Materialise foreign comments locally via the author's utility user, skipping ids
+// already seen.
 export async function materialiseComments(mapping, peer, comments) {
-  const users = await usersById();
-  const local = await getComments(mapping.albumId, albumReaderKey(mapping));
-  const localPairs = new Set(
-    local.map(a => {
-      const n = personName(users[a.user?.id]?.name || a.user?.name || '');
-      return `${n}\u0000${a.comment}`;
-    })
-  );
   const ids = {};
   for (const cm of comments) {
     const tag = `remote:${cm.id}`;
     if (seenActHas(tag)) continue;
-    if (localPairs.has(`${cm.author}\u0000${cm.comment}`)) {
-      seenActAdd(tag);
-      continue;
-    }
-    const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
+    const hostKey = mapping.hostSlug ? state.contributors[mapping.hostSlug]?.apiKey : undefined;
     const c = await ensureContributor(
       cm.author || peer.name,
       mapping.albumId,
-      adminKey,
+      hostKey,
       peer,
       cm.authorUserId,
       mapping.peer
     );
-    const posted = await postComment(mapping.albumId, cm.comment, c.key);
+    const posted = await postComment(mapping.albumId, cm.comment, c.apiKey);
     ids[cm.id] = posted.id;
-    seenActAdd(tag);
-    seenActAdd(`local:${posted.id}`); // don't echo it back
+    seenActAdd(tag, mapping.id);
+    seenActAdd(`local:${posted.id}`, mapping.id); // don't echo it back
     log(`synced comment from "${cm.author}" into "${mapping.albumName}"`);
   }
   return ids;
@@ -80,13 +67,20 @@ export async function handleComments(callerPub: string, albumMappingId: string) 
   const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
   if (!mapping) return [404, { error: 'unknown album mapping' }];
   const users = await usersById();
+  // Strip the "(via …)" decoration only from BOT authors — a human genuinely named with a
+  // trailing parenthesis must travel as written.
+  const authorName = (u: { id?: string; name?: string } | undefined) => {
+    const rec = u?.id ? users[u.id] : undefined;
+    const raw = rec?.name || u?.name || CFG.name;
+    return (rec?.utility ? personName(raw) : raw) || CFG.name;
+  };
   const comments = (await getComments(mapping.albumId))
     .filter(a => a.comment)
     .map(a => ({
       id: a.id,
       comment: a.comment,
       createdAt: a.createdAt,
-      author: personName(users[a.user?.id]?.name || a.user?.name || CFG.name) || CFG.name,
+      author: authorName(a.user),
       authorUserId: a.user?.id,
     }));
   return [200, { comments }];
@@ -117,7 +111,7 @@ export async function syncCommentsOnce() {
         albumReaderKey(mapping)
       ).catch(() => null);
       if (stats && stats.comments === mapping.commentCount) continue;
-      const utilityIds = new Set(Object.values(state.contributors || {}).map(c => c.userId));
+      const utilityIds = new Set(Object.values(state.contributors).map(c => c.userId));
       const comments = (await getComments(mapping.albumId, albumReaderKey(mapping))).filter(
         a =>
           a.comment &&
@@ -142,11 +136,11 @@ export async function syncCommentsOnce() {
       }));
       const r = await peerRequest(peer, `/albums/${targetMapping}/activity`, { comments: payload });
       if (r.status < 400) {
-        comments.forEach(a => seenActAdd(`local:${a.id}`));
+        comments.forEach(a => seenActAdd(`local:${a.id}`, mapping.id));
         // the origin answers with canonical ids for our comments — remember them so the
         // canonical pull can never hand us our own comments back
         const { ids = {} } = r.json ?? {};
-        for (const originId of Object.values(ids)) seenActAdd(`remote:${originId}`);
+        for (const originId of Object.values(ids)) seenActAdd(`remote:${originId}`, mapping.id);
         if (stats) {
           mapping.commentCount = stats.comments;
           save();

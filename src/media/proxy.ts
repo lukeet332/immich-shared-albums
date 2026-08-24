@@ -41,11 +41,11 @@ export async function fetchTrueBytes(
 ): Promise<ByteSource> {
   const entry = store.ledgerWithOrigin(assetId);
   if (entry) {
-    const mapping = state.mappings.find(mp => mp.id === entry.m);
+    const mapping = state.mappings.find(mp => mp.id === entry.mapping);
     const peer = mapping && peerByPub(mapping.peer);
     if (peer) {
       try {
-        const up = await peerByteRequest(peer, `/assets/${entry.o}/${kind}`, range);
+        const up = await peerByteRequest(peer, `/assets/${entry.originAsset}/${kind}`, range);
         if (up.status < 400) return { status: up.status, headers: up.headers, body: recvIterable(up.recv) };
         log(`chained ${kind} fetch failed (${up.status}) — serving local stub`);
       } catch (e) {
@@ -71,7 +71,7 @@ export async function servePeerBytes(
 ): Promise<{ status: number; headers?: Record<string, string>; body?: Buffer | AsyncIterable<Buffer> }> {
   const peer = peerByPub(callerPub);
   if (!peer) return { status: 403, body: Buffer.from(JSON.stringify({ error: 'unknown peer' })) };
-  if (!(await peerMayRead(callerPub, assetId))) {
+  if (!peerMayRead(callerPub, assetId)) {
     log(`byte read refused: "${peer.name}" is not entitled to asset ${assetId.slice(0, 8)}`);
     return { status: 403, body: Buffer.from(JSON.stringify({ error: 'not shared with you' })) };
   }
