@@ -91,6 +91,16 @@ When an album moves, every OTHER household mapped to it is told to pull now rath
 tick. A lost nudge costs nothing: the scheduled handshake catches everything regardless, so this is
 fail-open by design and must never be made blocking.
 
+## Re-sharing onward follows Immich's roles
+
+A household that received an album CAN extend it to a third household: its humans hold the
+Immich role the share's permission maps to (contribute → editor, view → viewer), and an Immich
+editor may add album members — on a mirror exactly as on any vanilla album. This is inherited
+behaviour, not an oversight (iron rule 8 in ARCHITECTURE.md): same-server and cross-server
+users operate identically, and the origin's leverage is the same as vanilla Immich's — share
+with view-only, or unshare. The cross-server delta worth knowing: the origin cannot SEE a
+mirror's member list, so an onward share is invisible to it.
+
 ## View-only governs photos, not conversation
 
 A `view` share refuses pushed refs (`403 view_only`) but accepts comments from the same peer:

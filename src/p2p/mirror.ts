@@ -4,8 +4,9 @@
  * Extracted from join.ts because there are now two ways to acquire an album and only one way to
  * mirror it: redeeming a share link (join.ts), and being invited in the origin's own Immich
  * picker (sync/invites.ts). The mirror itself is identical either way — a utility user owns it
- * so it stays out of local timelines, local humans are added as editors, and the reconciler
- * fills it in behind the answer.
+ * so it stays out of local timelines, local humans are added with the role the share's
+ * permission maps to in Immich's own vocabulary, and the reconciler fills it in behind
+ * the answer.
  */
 import crypto from 'node:crypto';
 import { CFG, log, isUtilityEmail, BOT_PREFIX, UTILITY_EMAIL_DOMAIN } from '../config.ts';
@@ -56,6 +57,10 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
   });
   await syncAvatar(host, peer, req.albumOwnerId);
 
+  // Vanilla parity: a view-only share makes local humans VIEWERS, exactly as Immich's own
+  // no-upload share links do — an editor role here would let them add photos that silently
+  // go nowhere (view-only mirrors never push). Contribute shares map to editor.
+  const memberRole = permissions === 'contribute' ? 'editor' : 'viewer';
   const addMembers = async (albumId: string) => {
     let members = (await immichJson('/admin/users')).filter(u => !isUtilityEmail(u.email));
     if (forUserIds?.length) members = members.filter(u => forUserIds.includes(u.id));
@@ -65,7 +70,10 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     if (members.length)
       await immichJson(
         `/albums/${albumId}/users`,
-        { ...jsonBody({ albumUsers: members.map(u => ({ userId: u.id, role: 'editor' })) }), method: 'PUT' },
+        {
+          ...jsonBody({ albumUsers: members.map(u => ({ userId: u.id, role: memberRole })) }),
+          method: 'PUT',
+        },
         host.apiKey
       );
     return members.length;
