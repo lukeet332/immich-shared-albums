@@ -36,6 +36,10 @@ printf 'Immich admin API key (input hidden): '
 read -rs SIDECAR_API_KEY; echo
 [ -n "$SIDECAR_API_KEY" ] || { echo "API key is required"; exit 1; }
 
+WANT_IPP=$(ask "Also set up public view-only share links via immich-public-proxy? [y/N]:" "n")
+case "$WANT_IPP" in y|Y|yes|YES) WANT_IPP=1;; *) WANT_IPP="";; esac
+[ -n "$WANT_IPP" ] && IPP_PORT=$(ask "Host port for immich-public-proxy [3000]:" 3000)
+
 INSTALL_DIR=$(ask "Install directory [./immich-shared-albums-live]:" ./immich-shared-albums-live)
 mkdir -p "$INSTALL_DIR/data"
 INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
@@ -59,6 +63,21 @@ services:
     ports:
       - $HOST_PORT:8300
     networks: [immich]
+EOF
+if [ -n "$WANT_IPP" ]; then
+cat >> "$INSTALL_DIR/docker-compose.yml" <<EOF
+  immich-public-proxy:
+    image: alangrainger/immich-public-proxy:latest
+    restart: unless-stopped
+    environment:
+      # points at the ADDON, so photos shared from other servers render full quality in links
+      IMMICH_URL: http://immich-shared-albums:8300
+    ports:
+      - $IPP_PORT:3000
+    networks: [immich]
+EOF
+fi
+cat >> "$INSTALL_DIR/docker-compose.yml" <<EOF
 networks:
   immich:
     external: true
@@ -113,3 +132,19 @@ Then reload the proxy and open any Immich share link — you should see the
 
 To uninstall: cd $INSTALL_DIR && docker compose down && remove the proxy lines.
 EOF
+
+if [ -n "$WANT_IPP" ]; then
+cat <<EOF
+
+immich-public-proxy is running on port $IPP_PORT. Two follow-ups it can't do for you:
+
+  1. Put your public HTTPS in front of it — and ONLY it, if you're keeping Immich private:
+       share.example.com { reverse_proxy immich-public-proxy:$IPP_PORT }
+  2. In Immich: Administration -> Settings -> Server -> External domain
+     -> set it to that public address, so the share links Immich creates point at the proxy.
+
+Optional but recommended with this setup: in the addon's panel, switch
+"Allow other Immich users to join albums via shared links" OFF — links stay
+view-only, and other servers link to yours by pairing code alone.
+EOF
+fi
