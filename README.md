@@ -74,6 +74,8 @@ Only two are required. The rest have working defaults, so set them only if you n
 | `UTILITY_QUOTA_MB` | `0` (none) | Storage cap on the addon's bot accounts. Bounds what a stolen key could write, but too low and syncing silently fails. |
 | `MAX_BODY_KB` | `1024` | Hard cap on any request body the addon buffers. |
 | `POLL_MS` | `20000` | How often it checks peers for changes. |
+| `COMMENT_POLL_MS` | `5000` | How often the fast comment lane checks for new activity. |
+| `RECONCILE_DEBUG` | off | Set `1` to log every reconcile decision — the first thing to turn on when a mirror looks wrong. |
 
 ## Permissions & security
 
