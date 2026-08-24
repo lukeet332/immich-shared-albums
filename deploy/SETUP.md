@@ -52,7 +52,9 @@ from other servers show the real photos too:
 immich-public-proxy:
   image: alangrainger/immich-public-proxy:latest
   environment:
-    IMMICH_URL: http://immich-shared:8300 # the addon's compose service name from the install
+    # This IS the addon (its compose service is named immich-shared; Immich itself would be
+    # immich-server:2283). Via the addon, photos shared from other servers render full quality.
+    IMMICH_URL: http://immich-shared:8300
   ports:
     - 3000:3000   # put your public HTTPS in front of this, and only this
 ```
