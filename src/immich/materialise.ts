@@ -48,7 +48,7 @@ async function materialiseRefLocked(mapping, peer, ref) {
   } else {
     bytes = Buffer.concat([STUB_JPEG, crypto.randomBytes(8)]);
   }
-  const adminKey = mapping.adminSlug ? state.contributors[mapping.adminSlug]?.key : undefined;
+  const hostKey = mapping.hostSlug ? state.contributors[mapping.hostSlug]?.apiKey : undefined;
   // On an INVITATION album a human already added the people they chose — their membership IS the
   // share. So for an invited person we must never add them: if they are missing, that absence is
   // the revocation, and filling it in would overrule the human and quietly re-create the share.
@@ -62,7 +62,7 @@ async function materialiseRefLocked(mapping, peer, ref) {
   const c = await ensureContributor(
     ref.contributor?.displayName || peer.name,
     mapping.albumId,
-    adminKey,
+    hostKey,
     peer,
     contributorId,
     mapping.peer,
@@ -71,9 +71,9 @@ async function materialiseRefLocked(mapping, peer, ref) {
   const ext = ref.kind === 'video' ? 'mp4' : 'jpg';
   // base64 checksums contain / and + — never let them into filenames
   const slug = ref.checksum.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
-  const up = await uploadAsset(bytes, `shared-${slug}.${ext}`, c.key, ref.takenAt);
-  await addToAlbum(mapping.albumId, [up.id], c.key);
-  await applyRefMetadata(up.id, ref, c.key);
+  const up = await uploadAsset(bytes, `shared-${slug}.${ext}`, c.apiKey, ref.takenAt);
+  await addToAlbum(mapping.albumId, [up.id], c.apiKey);
+  await applyRefMetadata(up.id, ref, c.apiKey);
   seenAdd(mapping.id, ref.checksum, up.id, ref.originAsset);
   log(`materialised ref from "${ref.contributor?.displayName || peer.name}" into "${mapping.albumName}"`);
   return true;
@@ -97,7 +97,7 @@ export async function deleteProxyAsset(assetId: string): Promise<boolean> {
     await immichJson(
       '/assets',
       { ...jsonBody({ ids: [assetId], force: true }), method: 'DELETE' },
-      owner.key
+      owner.apiKey
     );
     return true;
   } catch (e) {

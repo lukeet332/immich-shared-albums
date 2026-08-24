@@ -9,12 +9,6 @@ import { state, save, addedRecord } from '../state.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
 import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 
-export const slugify = s =>
-  (s || 'peer')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '') || 'peer';
-
 /**
  * Exactly what a utility user does, and nothing else. These are non-admin accounts, so an
  * "all" key was never admin-equivalent — but it still granted every action that user could
@@ -63,28 +57,32 @@ export async function ensureUtilityUser(
   opts: {
     peerPub?: string;
     peerUserId?: string;
-    stateKey?: string;
-    email?: string;
+    /** Always `person-<their user id on their own server>` — never derived from a display
+     *  name. Names are mutable and collide; ids are neither. */
+    stateKey: string;
+    email: string;
     fullName?: string;
     /** The server this person lives on. Set ONLY by the directory sync. */
     homePeer?: string;
-  } = {}
+  }
 ) {
   const { peerPub, peerUserId } = opts;
-  const slug = opts.stateKey || slugify(displayName);
+  const slug = opts.stateKey;
   let c = state.contributors[slug];
   const wantedName = opts.fullName || `${displayName}${UTILITY_SUFFIX}`;
-  if (c && c.key) {
+  if (c && c.apiKey) {
     // already fully provisioned — heal a stale display name.
     // Only a directory may say where someone lives. A relayed ref knows the person's id but not
     // their server, so it must never set or move `homePeer` — that is what stops an album shared
     // with a person at D from being handed to the C it travelled through.
-    if (opts.homePeer && c.homePeer !== opts.homePeer) {
-      c.homePeer = opts.homePeer;
-      save();
-    }
-    if ((peerPub && c.peer !== peerPub) || (peerUserId && c.peerUserId !== peerUserId)) {
-      c.peer = peerPub ?? c.peer;
+    // One save for all record healing — a crash must never split homePeer from the rest.
+    if (
+      (opts.homePeer && c.homePeer !== opts.homePeer) ||
+      (peerPub && c.viaPeer !== peerPub) ||
+      (peerUserId && c.peerUserId !== peerUserId)
+    ) {
+      if (opts.homePeer) c.homePeer = opts.homePeer;
+      c.viaPeer = peerPub ?? c.viaPeer;
       c.peerUserId = peerUserId ?? c.peerUserId;
       save();
     }
@@ -104,7 +102,7 @@ export async function ensureUtilityUser(
     }
     return c;
   }
-  const email = opts.email || `${BOT_PREFIX.contributor}${slug}@${UTILITY_EMAIL_DOMAIN}`;
+  const email = opts.email;
   // reuse a persisted password if we have one (survives partial-provision retries), else fresh
   const password = c?.password || crypto.randomBytes(18).toString('base64url');
   let user;
@@ -195,8 +193,8 @@ export async function ensureUtilityUser(
   c = {
     ...(c || {}),
     userId: user.id,
-    key: keyRes.secret,
-    peer: peerPub ?? c?.peer,
+    apiKey: keyRes.secret,
+    viaPeer: peerPub ?? c?.viaPeer,
     peerUserId: peerUserId ?? c?.peerUserId,
     homePeer: opts.homePeer ?? c?.homePeer,
   };
@@ -227,7 +225,7 @@ export async function syncAvatar(c, peer, originUserId) {
       );
       const put = await fetch(`${CFG.immichUrl}/api/users/profile-image`, {
         method: 'POST',
-        headers: { 'x-api-key': c.key },
+        headers: { 'x-api-key': c.apiKey },
         body: fd,
       });
       if (put.ok) {
@@ -263,32 +261,29 @@ export async function syncAvatar(c, peer, originUserId) {
 export async function ensureContributor(
   displayName,
   albumId,
-  adminKey,
+  hostKey,
   peer,
   originUserId,
   peerPub?: string,
   opts: { reAddIfMissing?: boolean } = {}
 ) {
-  // Key on the person's id on their OWN server when the ref carries it, so this is the same
-  // account the directory creates rather than a second entry for one human. No `fullName` and no
+  // Key on the person's id on their OWN server — required, so this is the same account the
+  // directory creates rather than a second entry for one human. No `fullName` and no
   // `homePeer`: a ref proves neither what to call them nor where they live.
-  const c = await ensureUtilityUser(
-    displayName,
-    originUserId
-      ? {
-          peerPub,
-          peerUserId: originUserId,
-          stateKey: `${BOT_PREFIX.person}${originUserId}`,
-          email: `${BOT_PREFIX.person}${originUserId}@${UTILITY_EMAIL_DOMAIN}`,
-        }
-      : { peerPub, peerUserId: originUserId }
-  );
-  if (!c.key) throw new Error(`contributor "${displayName}" has no API key yet — will retry`);
+  if (!originUserId)
+    throw new Error(`ref from "${displayName}" carries no contributor id — refusing a name-keyed account`);
+  const c = await ensureUtilityUser(displayName, {
+    peerPub,
+    peerUserId: originUserId,
+    stateKey: `${BOT_PREFIX.person}${originUserId}`,
+    email: `${BOT_PREFIX.person}${originUserId}@${UTILITY_EMAIL_DOMAIN}`,
+  });
+  if (!c.apiKey) throw new Error(`contributor "${displayName}" has no API key yet — will retry`);
   await syncAvatar(c, peer, originUserId);
 
   let alreadyMember = false;
   try {
-    const alb = await immichJson(`/albums/${albumId}?withoutAssets=true`, {}, adminKey);
+    const alb = await immichJson(`/albums/${albumId}?withoutAssets=true`, {}, hostKey);
     alreadyMember = (alb.albumUsers || []).some(au => au.user?.id === c.userId);
   } catch {
     // Cannot read the album, so cannot prove the membership is not already a human's. Do not
@@ -307,7 +302,7 @@ export async function ensureContributor(
       await immichJson(
         `/albums/${albumId}/users`,
         { ...jsonBody({ albumUsers: [{ userId: c.userId, role: 'editor' }] }), method: 'PUT' },
-        adminKey
+        hostKey
       );
     } catch (e) {
       log(`could not add "${displayName}" to the album: ${e.message} — will retry`);

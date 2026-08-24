@@ -18,9 +18,11 @@ export type JoinInvite = {
 
 export async function join(invite: JoinInvite, forUserId, password?: string) {
   if (!invite?.endpoint?.pub || !invite?.key) throw new Error('that does not look like a share invite');
-  const origin = {
+  const origin: import('../store.ts').Peer = {
     pub: invite.endpoint.pub,
     name: 'origin',
+    via: 'link',
+    firstSeenAt: new Date().toISOString(),
     relayHint: invite.endpoint.relay,
     lastAddrs: invite.endpoint.addrs,
   };
@@ -49,6 +51,8 @@ export async function join(invite: JoinInvite, forUserId, password?: string) {
       pub: res.household.publicKey,
       name: res.household.name,
       version: res.version,
+      via: 'link',
+      firstSeenAt: new Date().toISOString(),
       relayHint: invite.endpoint.relay,
       lastAddrs: invite.endpoint.addrs,
     });

@@ -9,7 +9,7 @@
  *    a hard cap; passthrough traffic (which includes photo uploads) streams straight
  *    through. Buffering first would let any caller size our memory.
  *  - Human routes authenticate against the caller's own Immich session (web/auth.ts);
- *    peer routes authenticate by signature AND check entitlement (p2p/entitlement.ts).
+ *    peer traffic rides iroh (identity = the connection) and checks entitlement (p2p/entitlement.ts).
  *    Being able to reach a route is never permission to use it.
  */
 import http from 'node:http';
@@ -26,7 +26,7 @@ import { callerIdentity, signInRequired } from './auth.ts';
 import { join } from '../p2p/join.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
-import { mintPairing, pendingPairings, revokePairing, redeemPairing } from '../p2p/pair.ts';
+import { mintPairing, pendingPairings, revokePairing, redeemPairing, parseTicket } from '../p2p/pair.ts';
 
 /**
  * Read a JSON-route body under a hard cap, or null if it is too big.
@@ -202,12 +202,10 @@ export const server = http.createServer(async (req, res) => {
       if (!caller.isAdmin) return send(403, { error: 'only an admin can revoke a pairing link' });
       try {
         const b = JSON.parse(body);
-        // Accept the whole link, so the panel can pass back exactly what it displayed.
-        const code =
-          String(b.link || b.code || '')
-            .split('#')
-            .pop() ?? '';
-        revokePairing(code);
+        // Accept the whole ticket, so the panel can pass back exactly what it displayed.
+        const ticket = parseTicket(String(b.link || b.code || ''));
+        if (!ticket) return send(400, { error: 'that is not a pairing link' });
+        revokePairing(ticket.secret);
         return send(200, { revoked: true });
       } catch (e) {
         return send(400, { error: e.message });

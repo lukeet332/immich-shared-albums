@@ -49,15 +49,16 @@ export const UTILITY_SUFFIX = ' (via shared albums)';
  * reason ROUTE_PREFIX is: "sidecar" is a generic term another Immich addon could reasonably
  * claim, and these addresses are how we tell our own bots apart from real people.
  *
- * A clean break from the old `@sidecar.local`: no rename migration, no dual-domain acceptance.
- * That was a ONE-TIME v1.0.0 allowance, taken because the install base was ~zero and a legacy
- * bridge here would be permanent maintenance. It is NOT the policy going forward — post-v1,
- * changes to this domain need a migration path.
+ * `.invalid` because that TLD exists for exactly this (RFC 2606): deliberately unresolvable,
+ * never a real mailbox. `.local` — the previous choice — is mDNS-reserved (RFC 6762) and can
+ * trip resolvers and email validators. This rename, like `@sidecar.local` before it, is a
+ * ONE-TIME v1.0.0 allowance taken while the install base is ~zero. It is NOT the policy going
+ * forward — post-v1, changes to this domain need a migration path.
  *
  * Getting this check wrong is not cosmetic (a bot misread as a human gets added to mirrors and
  * its stubs counted as someone's photos), so the test stays obviously correct by inspection.
  */
-export const UTILITY_EMAIL_DOMAIN = 'immich-shared-albums.local';
+export const UTILITY_EMAIL_DOMAIN = 'immich-shared-albums.invalid';
 
 /**
  * ONE local account per remote person, doing both jobs: it owns their mirrored photos, and it is
@@ -71,8 +72,12 @@ export const UTILITY_EMAIL_DOMAIN = 'immich-shared-albums.local';
  * The distinction therefore moved out of the namespace and into two explicit records:
  *  - `added` (store.addedRecord) says which memberships WE created, so only a human's counts as
  *    an invitation. Its write order is a security property: record first, add second.
- *  - `Contributor.directory` says we actually know which server the person is on, which only a
+ *  - `Contributor.homePeer` says we actually know which server the person is on, which only a
  *    linked server's directory can tell us. Without it an account is attribution-only.
+ *
+ * Every bot account is `person-<their user id on their own server>` — nothing is ever keyed by
+ * a display name, because names are mutable and collide (two remote people with the same name
+ * must never collapse into one local account sharing one API key).
  *
  * `person-` is keyed on the person's user id on THEIR OWN server, so the same human resolves to
  * the same local account whether we meet them through a directory or a relayed photo.
@@ -80,8 +85,6 @@ export const UTILITY_EMAIL_DOMAIN = 'immich-shared-albums.local';
 export const BOT_PREFIX = {
   /** One remote person, keyed by their user id on their home server. */
   person: 'person-',
-  /** Album-owner stand-ins and other non-person helpers. */
-  contributor: 'shared-',
 } as const;
 
 /**

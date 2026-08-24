@@ -92,7 +92,7 @@ async function syncPeerDirectory(peer: Peer) {
  * D and hand it to C. Only a linked server's directory proves where someone lives.
  */
 function inviteTargetsFor(peerPub: string) {
-  return Object.values(state.contributors || {}).filter(c => c.homePeer === peerPub && c.key && c.userId);
+  return Object.values(state.contributors).filter(c => c.homePeer === peerPub && c.apiKey && c.userId);
 }
 
 /** Immich album roles map onto the permission a share link would have carried. */
@@ -112,7 +112,7 @@ export const permissionFor = (role?: string): 'view' | 'contribute' =>
  * mirror/withdraw every poll. Read BOT_PREFIX before touching this.
  */
 
-type Invited = { name: string; permissions: 'view' | 'contribute'; ownerName?: string };
+type Invited = { name: string; permissions: 'view' | 'contribute'; ownerName?: string; ownerId?: string };
 type Seen = { invited: Map<string, Invited>; visible: Set<string> };
 
 /** Everything the stand-in can see, split into "invited to" and "merely visible". */
@@ -138,6 +138,7 @@ async function albumsAsMarker(markerKey: string, markerUserId: string): Promise<
       name: a.albumName,
       permissions: permissionFor(mine.role),
       ownerName: owner?.user?.name,
+      ownerId: owner?.user?.id,
     });
   }
   return { invited, visible };
@@ -161,7 +162,7 @@ export async function detectInvitesOnce() {
     let readFailed = false;
     for (const t of targets) {
       try {
-        const part = await albumsAsMarker(t.key, t.userId);
+        const part = await albumsAsMarker(t.apiKey, t.userId);
         for (const [id, v] of part.invited) {
           if (!seen.invited.has(id)) seen.invited.set(id, v);
           if (t.peerUserId) {
@@ -195,12 +196,13 @@ export async function detectInvitesOnce() {
           permissions: a.permissions,
           via: 'invite',
           albumOwnerName: a.ownerName,
+          albumOwnerId: a.ownerId,
           forPeerUserIds,
         });
         save();
         // A silent persistence failure here would mean invitations are re-detected on every
         // restart and withdrawals forgotten, so verify rather than assume.
-        const persisted = (store.state.mappings || []).some(x => x.albumId === albumId && x.via === 'invite');
+        const persisted = store.state.mappings.some(x => x.albumId === albumId && x.via === 'invite');
         log(
           `invited ${forPeerUserIds.length} person(s) at "${peer.name}" to "${a.name}" (${a.permissions}) — shared natively, no link needed` +
             (persisted ? '' : ' [WARNING: mapping did not persist]')
@@ -210,6 +212,8 @@ export async function detectInvitesOnce() {
       let changed = false;
       if (existing.dead) {
         existing.dead = false;
+        delete existing.deadAt;
+        delete existing.deadReason;
         changed = true;
         log(`invitation re-added: "${peer.name}" -> "${a.name}"`);
       }
@@ -244,6 +248,8 @@ export async function detectInvitesOnce() {
       // still visible but not invited => the stand-in owns it, or was demoted oddly; leave it
       if (seen.visible.has(mp.albumId)) continue;
       mp.dead = true;
+      mp.deadAt = new Date().toISOString();
+      mp.deadReason = 'invitation withdrawn';
       save();
       log(`invitation withdrawn: "${peer.name}" removed from "${mp.albumName}" — no longer syncing it`);
       // Clean up after ourselves, or Immich keeps showing these people on an album we have
@@ -283,8 +289,8 @@ export const invitationsFor = (peerPub: string) =>
     .map((mp: Mapping) => ({
       mappingId: mp.id,
       album: { id: mp.albumId, name: mp.albumName },
-      permissions: mp.permissions ?? 'view',
-      albumOwner: { displayName: mp.albumOwnerName },
+      permissions: mp.permissions,
+      albumOwner: { displayName: mp.albumOwnerName, originUserId: mp.albumOwnerId },
       forUserIds: mp.forPeerUserIds || [],
     }));
 
@@ -296,11 +302,11 @@ export const invitationsFor = (peerPub: string) =>
  * the album forever — the sender's action would appear to work and quietly do nothing.
  */
 async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
-  const host = mapping.adminSlug ? state.contributors[mapping.adminSlug] : undefined;
-  if (!host?.key) return;
+  const host = mapping.hostSlug ? state.contributors[mapping.hostSlug] : undefined;
+  if (!host?.apiKey) return;
   let alb;
   try {
-    alb = await immichJson(`/albums/${mapping.albumId}`, {}, host.key);
+    alb = await immichJson(`/albums/${mapping.albumId}`, {}, host.apiKey);
   } catch {
     return;
   } // album gone: the withdrawal path will clean up
@@ -317,7 +323,7 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
       await immichJson(
         `/albums/${mapping.albumId}/users`,
         { ...jsonBody({ albumUsers: add.map(id => ({ userId: id, role: 'editor' })) }), method: 'PUT' },
-        host.key
+        host.apiKey
       );
       log(`invitation for "${mapping.albumName}" now includes ${add.length} more of us`);
     } catch (e) {
@@ -326,7 +332,7 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
   }
   for (const id of remove) {
     try {
-      await immichJson(`/albums/${mapping.albumId}/user/${id}`, { method: 'DELETE' }, host.key);
+      await immichJson(`/albums/${mapping.albumId}/user/${id}`, { method: 'DELETE' }, host.apiKey);
       log(
         `"${humans.find(u => u.id === id)?.name || id}" was dropped from the invitation to "${mapping.albumName}" — removed locally`
       );
@@ -386,6 +392,7 @@ export async function pullInvitationsOnce() {
           album: { id: albumId, name: inv.album.name },
           permissions: inv.permissions === 'contribute' ? 'contribute' : 'view',
           albumOwnerName: inv.albumOwner?.displayName,
+          albumOwnerId: inv.albumOwner?.originUserId,
           remoteMappingId: inv.mappingId,
           via: 'invite',
           // Sharing is per person, so the origin always names who. Never fall back to "everyone

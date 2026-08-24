@@ -16,7 +16,7 @@ const api = async (base, key, path, init = {}) => {
 const j = (o) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
 // Bot users live on the project's own email domain — the one check that separates our bots from
 // real people, so it must match src/config.ts isUtilityEmail exactly.
-const isBot = (e) => !!e && e.endsWith('@immich-shared-albums.local');
+const isBot = (e) => !!e && e.endsWith('@immich-shared-albums.invalid');
 // /immich-shared-albums/join authenticates the caller against that household's own Immich, so the
 // suite has to present a real credential exactly like a signed-in browser would.
 const jAuth = (o, key) => ({ method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key }, body: JSON.stringify(o) });
@@ -52,12 +52,28 @@ const fetchBytes = async (url, key) => (await fetch(url, { headers: { 'x-api-key
 // Read a JSON value out of a sidecar's SQLite state, via the sqlite3 CLI the runner
 // already uses. Returns null (rather than throwing) when the rig is not local.
 import { execFileSync } from 'node:child_process';
-const readSidecarKv = (stateDir, name) => {
+const sidecarSql = (stateDir, sql) => {
   try {
     const path = new URL(`../${stateDir}/state.db`, import.meta.url).pathname;
-    const out = execFileSync('sqlite3', [path, `SELECT value FROM kv WHERE name='${name}'`],
-                             { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    return out ? JSON.parse(out) : null;
+    return execFileSync('sqlite3', ['-json', path, sql],
+                        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return null; }
+};
+const readSidecarKv = (stateDir, name) => {
+  const out = sidecarSql(stateDir, `SELECT value FROM kv WHERE name='${name}'`);
+  if (!out) return null;
+  try { return JSON.parse(JSON.parse(out)[0].value); } catch { return null; }
+};
+// peers and contributors are real tables since schema v1
+const readSidecarPeers = (stateDir) => {
+  const out = sidecarSql(stateDir, 'SELECT * FROM peers');
+  try { return out ? JSON.parse(out) : null; } catch { return null; }
+};
+const readSidecarContributors = (stateDir) => {
+  const out = sidecarSql(stateDir, 'SELECT * FROM contributors');
+  try {
+    if (!out) return null;
+    return Object.fromEntries(JSON.parse(out).map(({ slug, ...c }) => [slug, c]));
   } catch { return null; }
 };
 // Rows in the `added` ledger — memberships the sidecar created rather than a human. Security
@@ -155,7 +171,7 @@ const originOwner = await api(A, AKEY, '/users/me');
 const originOwnerName = originOwner.name;
 // One account per remote person is both the mirror owner and the picker entry, so its display
 // name changes when the directory sync lands. Asserting a name here raced; assert the id keying.
-const originOwnerEmail = `person-${originOwner.id}@immich-shared-albums.local`;
+const originOwnerEmail = `person-${originOwner.id}@immich-shared-albums.invalid`;
 const ownerUtility = bBotUsers.find(u => u.email === originOwnerEmail);
 check('an account exists for the origin album owner, keyed by their id on their own server',
       !!ownerUtility, bBotUsers.map(u => u.email).join(', '));
@@ -555,11 +571,11 @@ if (DKEY && dMirror) check('no ping-pong on D', (await albumAssets(D, DKEY, dMir
 // polling. Sharing is per person: there is deliberately no household-wide stand-in.
 console.log('— stage: native album invitations, per person (no share link)');
 {
-  const originPeers = readSidecarKv('household-c/c-sidecar', 'peers');
+  const originPeers = readSidecarPeers('household-c/c-sidecar');
   const bPeer = (originPeers || []).find(p => (p.name || '').includes('(B)'));
   if (!bPeer) console.log('  (skipped: cannot read the origin\'s peer record for B)');
   else {
-    const bKeys = readSidecarKv('b-sidecar', 'keys');
+    const bKeys = readSidecarKv('b-sidecar', 'identity');
     const bAdmin = await api(B, BKEY, '/users/me');
     // Markers are identified by display name — exactly how a human picks one in Immich.
     const markerFor = async (person) => (await api(A, AKEY, '/admin/users'))
@@ -594,8 +610,8 @@ console.log('— stage: native album invitations, per person (no share link)');
 
     // A narrowed mirror excludes B's admin, so GET /albums as BKEY cannot see it. Look with the
     // stand-in keys that OWN the mirrors — asserting via the admin only proves it was excluded.
-    const standInKeys = () => Object.values(readSidecarKv('b-sidecar', 'contributors') || {})
-      .map(c => c && c.key).filter(Boolean);
+    const standInKeys = () => Object.values(readSidecarContributors('b-sidecar') || {})
+      .map(c => c && c.apiKey).filter(Boolean);
     const findOnB = async (name, timeout = 150000) => until(async () => {
       for (const k of standInKeys()) {
         const al = await api(B, k, '/albums').catch(() => []);
@@ -724,7 +740,7 @@ console.log('— stage: native album invitations, per person (no share link)');
 // withdrawal assertion still holds.
 console.log('— stage: a revocation survives content arriving in the same window');
 {
-  const originPeers = readSidecarKv('household-c/c-sidecar', 'peers');
+  const originPeers = readSidecarPeers('household-c/c-sidecar');
   const bPeer = (originPeers || []).find(p => (p.name || '').includes('(B)'));
   const bAdmin2 = await api(B, BKEY, '/users/me');
   const nan =
@@ -742,8 +758,8 @@ console.log('— stage: a revocation survives content arriving in the same windo
       { ...j({ albumUsers: [{ userId: nan.id, role: 'editor' }] }), method: 'PUT' });
 
     const standInKeys = () =>
-      Object.values(readSidecarKv('b-sidecar', 'contributors') || {})
-        .map(c => c && c.key)
+      Object.values(readSidecarContributors('b-sidecar') || {})
+        .map(c => c && c.apiKey)
         .filter(Boolean);
     const mirroredRace = await until(async () => {
       for (const k of standInKeys()) {
@@ -769,7 +785,7 @@ console.log('— stage: a revocation survives content arriving in the same windo
 
       const originEp2 = await endpointOf(ORIGIN_DIRECT);
       const invitations = async () => {
-        const bKeys2 = readSidecarKv('b-sidecar', 'keys');
+        const bKeys2 = readSidecarKv('b-sidecar', 'identity');
         const r = irohProbe(bKeys2, originEp2, '/invitations');
         return r.status === 200 ? (r.json?.invitations || []) : null;
       };
@@ -914,11 +930,11 @@ console.log('— stage: security (unauthenticated surface)');
 
 console.log('— stage: security (entitlement — a signed peer is not entitled to everything)');
 {
-  // Sign as B really is: B's keypair lives in its sidecar volume. Read it with the sqlite3
+  // Dial as B really is: B's identity (raw ed25519, schema v1) lives in its sidecar volume. Read it with the sqlite3
   // CLI rather than node:sqlite — the runner already depends on the CLI, and node:sqlite
   // needs Node 22+, which would make these checks skip silently on an older host.
-  const bKeys = readSidecarKv('b-sidecar', 'keys');
-  if (!bKeys) console.log('  (skipped: cannot read B\'s keypair from demo/b-sidecar/state.db)');
+  const bKeys = readSidecarKv('b-sidecar', 'identity');
+  if (!bKeys) console.log('  (skipped: cannot read B\'s identity from demo/b-sidecar/state.db)');
 
   if (bKeys) {
     const originEp = await endpointOf(ORIGIN_DIRECT);
@@ -984,8 +1000,8 @@ console.log('— stage: bot naming uses the project domain');
 {
   const bots = (await api(B, BKEY, '/admin/users')).filter(u => isBot(u.email));
   check('bot users exist', bots.length > 0, `${bots.length} found`);
-  check('every bot uses the project email domain, not the legacy @sidecar.local',
-        bots.every(u => u.email.endsWith('@immich-shared-albums.local')),
+  check('every bot uses the project email domain (.invalid, RFC 2606)',
+        bots.every(u => u.email.endsWith('@immich-shared-albums.invalid')),
         bots.map(u => u.email.split('@')[1]).filter((v, i, a) => a.indexOf(v) === i).join(', '));
 }
 
@@ -994,11 +1010,11 @@ console.log('— stage: security (utility accounts cannot be signed into)');
   const utility = (await api(B, BKEY, '/admin/users')).filter(u => isBot(u.email));
   check('utility users exist to own the stubs', utility.length > 0, `${utility.length} found`);
   check('no utility user is an admin', utility.every(u => !u.isAdmin));
-  const contributors = readSidecarKv('b-sidecar', 'contributors');
+  const contributors = readSidecarContributors('b-sidecar');
   if (contributors) {
     const entries = Object.values(contributors);
     const withPassword = entries.filter((c) => c.password).length;
-    check('utility accounts were actually provisioned with keys', entries.length > 0 && entries.every((c) => c.key),
+    check('utility accounts were actually provisioned with keys', entries.length > 0 && entries.every((c) => c.apiKey),
           `${entries.length} contributor(s)`);
     check('no utility login password is retained in state.db once provisioned',
           withPassword === 0, `${withPassword} of ${entries.length} still stored`);

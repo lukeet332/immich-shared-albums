@@ -12,7 +12,7 @@ import { CFG, log, isUtilityEmail, BOT_PREFIX, UTILITY_EMAIL_DOMAIN } from '../c
 import type { Mapping, Peer } from '../store.ts';
 import { state, save } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
-import { ensureUtilityUser, syncAvatar, slugify } from '../immich/contributors.ts';
+import { ensureUtilityUser, syncAvatar } from '../immich/contributors.ts';
 import { reconcileMapping } from '../sync/engine.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
@@ -41,35 +41,32 @@ export type MirrorRequest = {
 export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mapping; created: boolean }> {
   const { peer, album, permissions, forUserIds } = req;
   const ownerName = req.albumOwnerName || peer.name;
-  // The album's owner is a person on that peer, so key them by their id on THEIR server when we
-  // know it. That makes the account we create here and the one the directory creates the same
-  // human rather than two picker entries for one person. `homePeer` is deliberately NOT set: a
-  // redeem does not prove where they live, only a directory does.
-  const hostSlug = req.albumOwnerId ? `${BOT_PREFIX.person}${req.albumOwnerId}` : slugify(ownerName);
-  const host = await ensureUtilityUser(
-    ownerName,
-    req.albumOwnerId
-      ? {
-          peerPub: peer.pub,
-          peerUserId: req.albumOwnerId,
-          stateKey: hostSlug,
-          email: `${hostSlug}@${UTILITY_EMAIL_DOMAIN}`,
-        }
-      : { peerPub: peer.pub }
-  );
+  // The album's owner is a person on that peer, keyed by their id on THEIR server — required,
+  // so the account we create here and the one the directory creates are the same human rather
+  // than two picker entries (or worse, two humans sharing one name-keyed account). `homePeer`
+  // is deliberately NOT set: a redeem does not prove where they live, only a directory does.
+  if (!req.albumOwnerId)
+    throw new Error(`the origin did not identify the owner of "${album.name}" — cannot mirror it`);
+  const hostSlug = `${BOT_PREFIX.person}${req.albumOwnerId}`;
+  const host = await ensureUtilityUser(ownerName, {
+    peerPub: peer.pub,
+    peerUserId: req.albumOwnerId,
+    stateKey: hostSlug,
+    email: `${hostSlug}@${UTILITY_EMAIL_DOMAIN}`,
+  });
   await syncAvatar(host, peer, req.albumOwnerId);
 
   const addMembers = async (albumId: string) => {
     let members = (await immichJson('/admin/users')).filter(u => !isUtilityEmail(u.email));
     if (forUserIds?.length) members = members.filter(u => forUserIds.includes(u.id));
-    const alb = await immichJson(`/albums/${albumId}`, {}, host.key);
+    const alb = await immichJson(`/albums/${albumId}`, {}, host.apiKey);
     const already = new Set((alb.albumUsers || []).map(au => au.user?.id));
     members = members.filter(u => !already.has(u.id));
     if (members.length)
       await immichJson(
         `/albums/${albumId}/users`,
         { ...jsonBody({ albumUsers: members.map(u => ({ userId: u.id, role: 'editor' })) }), method: 'PUT' },
-        host.key
+        host.apiKey
       );
     return members.length;
   };
@@ -91,7 +88,7 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
       mirror = await immichJson(
         '/albums',
         jsonBody({ albumName: CFG.template.replace('{name}', album.name) }),
-        host.key
+        host.apiKey
       );
       break;
     } catch (e) {
@@ -118,7 +115,7 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     remoteAlbumId: album.id,
     remoteMappingId: req.remoteMappingId,
     permissions,
-    adminSlug: hostSlug,
+    hostSlug,
     via: req.via ?? 'link',
   };
   state.mappings.push(mapping);

@@ -1,8 +1,8 @@
 /**
  * Sidecar-to-sidecar protocol types — imported by the runtime and enforced by
  * `npm run typecheck` in CI, so contract drift fails the build before the E2E suite.
- * All POST bodies are signed with the sender's household ed25519 key
- * (headers x-isa-key / x-isa-sig); signed GETs sign the path parameter.
+ * Identity is the connection itself: every request arrives over mutual-TLS iroh, so the
+ * caller's public key is proven by transport, never by headers.
  */
 
 export const PROTOCOL_VERSION = 2;
@@ -74,7 +74,7 @@ export type ActivityUpdate = {
 export type NudgeRequest = { album: string };
 
 /**
- * Byte endpoints (signed GETs — signature over the path parameter):
- *  /immich-shared-albums/api/v1/assets/:id/preview   — ~1440px preview of an origin asset
- *  /immich-shared-albums/api/v1/users/:id/avatar     — contributor profile image
+ * Byte endpoints (peer identity proven by the connection; entitlement checked per asset):
+ *  /assets/:id/{preview,original,playback} — bytes of an origin asset
+ *  /users/:id/avatar                       — contributor profile image
  */
