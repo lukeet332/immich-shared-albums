@@ -1,10 +1,9 @@
 # How exposed do you want to be?
 
-Cross-server sharing needs *something* of yours reachable from the internet — each household's
-sidecar has to reach the others. This page is how to decide what, and how to lock it down.
-
-Everything here is optional. The sidecar is safe to publish as-is; this is about the rest of
-your server.
+Cross-server sharing needs **nothing** of yours reachable from the internet — the sidecars
+connect to each other directly, dialling out. So exposure is purely a choice about how *you*
+want to reach your own photos and share links, and this page is how to decide, then lock down
+whatever you pick.
 
 ---
 
@@ -12,16 +11,23 @@ your server.
 
 | | What's on the internet | Trade-off |
 |---|---|---|
-| **A. Immich public** *(default, most people)* | All of Immich | Your sign-in page is reachable. Rate-limit it — see §2. |
-| **B. Immich public, sign-in closed** | All of Immich except sign-in | You sign in once at home. New devices need to be home (or on VPN) the first time. |
-| **C. Immich private** | Only shared albums + the sidecar protocol | Everyone in your household needs a VPN to use Immich. Joining albums happens at home. |
+| **A. Nothing** *(recommended)* | Nothing. Optionally [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) for view-only share links. | Your own devices need a VPN (Tailscale etc.) to reach your photos away from home. Share links can't be *joined* by strangers' servers — linking is by pairing code. |
+| **B. Immich public** | All of Immich | Your sign-in page is reachable. Rate-limit it — see §2. Share links become joinable. |
+| **C. Immich public, sign-in closed** | All of Immich except sign-in | You sign in once at home. New devices need to be home (or on VPN) the first time. |
 
-**Most people want A plus §2.** Pick C only if you're happy putting a VPN on every family
-phone — see §4 before you commit to it.
+**Posture A needs almost nothing from this page** — there's nothing exposed to harden. Two
+things to know:
+
+- **Your Immich apps must point at the sidecar**, not at Immich directly, or shared photos
+  render as blank placeholders. The byte interceptors live in the sidecar.
+- If you run immich-public-proxy, point its `IMMICH_URL` at the sidecar too, and it's the only
+  thing your reverse proxy publishes.
+
+The rest of this page is for postures B and C.
 
 ---
 
-## 2. Recommended Caddy config (any posture)
+## 2. Recommended Caddy config (postures B and C)
 
 One route sends everything to the sidecar, which passes non-shared traffic through to Immich.
 Immich is listed second so a dead sidecar **fails open** — your library keeps working.
@@ -62,13 +68,13 @@ photos.example.com {
 		request_body {
 			max_size 2MB
 		}
-		reverse_proxy immich-shared:8300 {
+		reverse_proxy immich-shared-albums:8300 {
 			header_up X-Real-IP {remote_host}
 		}
 	}
 
 	handle {
-		reverse_proxy immich-shared:8300 immich-server:2283 {
+		reverse_proxy immich-shared-albums:8300 immich-server:2283 {
 			lb_policy first
 			fail_duration 10s
 			header_up X-Real-IP {remote_host}
@@ -122,7 +128,7 @@ the header lines need their equivalents.
 
 ---
 
-## 4. Posture B: close sign-in
+## 4. Posture C: close sign-in
 
 Add this to your site block. Existing sessions keep working, so phones already signed in
 carry on; only *new* sign-ins are blocked from the internet.
@@ -137,20 +143,12 @@ handle @newlogin {
 Do **not** block all of `/api/auth/*` — `status`, `session` and `logout` all need to work for
 signed-in clients, and blocking them logs everyone out.
 
-## 5. Posture C: keep Immich private
+## 5. Joining albums from a share link, in posture A
 
-Immich stays on your LAN or VPN and only sharing is published. Two things to know before you
-choose it:
-
-- **Your Immich apps must point at the sidecar**, not at Immich, or shared photos render as
-  blank placeholders. The byte interceptors live in the sidecar.
-- **Joining an album needs local access.** The accept page reads your Immich session cookie,
-  and that session lives on the private origin. Sharing *out* works from anywhere; joining
-  *in* means being home or on the VPN.
-
-For sharing ordinary Immich links publicly (no cross-server involved),
-[immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) is purpose-built
-for it and runs happily alongside this sidecar.
+Share links can still be *viewed* publicly through immich-public-proxy, but a stranger's
+server can't *join* from one — the join card lives on your (private) share page. In posture A,
+someone in your household joins another family's album while home or on the VPN, and linking a
+new server is always the pairing code. That's the design, not a limitation to work around.
 
 ---
 

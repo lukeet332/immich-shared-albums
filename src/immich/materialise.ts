@@ -12,8 +12,24 @@ import { ensureContributor } from './contributors.ts';
 
 // Fetch a ref's preview from the peer and create the local proxy copy. Returns
 // false (without marking seen) on failure so reconciliation can retry later.
+//
+// IN-FLIGHT GUARD: a push (handleRefs) and a reconcile can carry the same ref concurrently, and
+// both pass the seenHas check before either records — two stubs for one photo. The set closes
+// that window; the loser returns false and the normal retry paths re-offer.
+const inFlight = new Set<string>();
 export async function materialiseRef(mapping, peer, ref) {
   if (seenHas(mapping.id, ref.checksum)) return true;
+  const flightKey = `${mapping.id}:${ref.checksum}`;
+  if (inFlight.has(flightKey)) return false;
+  inFlight.add(flightKey);
+  try {
+    return await materialiseRefLocked(mapping, peer, ref);
+  } finally {
+    inFlight.delete(flightKey);
+  }
+}
+
+async function materialiseRefLocked(mapping, peer, ref) {
   // Hotlink model: nothing of the photo is stored here. The mirror asset is a ~2KB
   // unique stub that exists so the stock app has a row to render; every actual pixel
   // (thumbnails, previews, playback, originals) streams live from the owner's server

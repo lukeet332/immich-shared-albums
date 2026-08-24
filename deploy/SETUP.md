@@ -52,6 +52,8 @@ from other servers show the real photos too:
 immich-public-proxy:
   image: alangrainger/immich-public-proxy:latest
   environment:
+    # Points at the ADDON (not immich-server:2283) so photos shared from other
+    # servers render full quality in public links.
     IMMICH_URL: http://immich-shared-albums:8300
   ports:
     - 3000:3000   # put your public HTTPS in front of this, and only this

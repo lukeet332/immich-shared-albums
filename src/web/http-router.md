@@ -31,6 +31,21 @@ they fill a form. The server never trusts it.
 JSON routes are buffered, under `MAX_BODY_KB`; passthrough traffic including photo uploads
 streams through), and authorise before doing work.
 
+## The share document, and the switch that governs it
+
+`GET /share/:key` serves the prerendered share document: `og:` tags for link unfurlers, the
+origin's **endpoint token** (so a visitor's sidecar can dial it over iroh), and the join card
+over the native album in a same-origin iframe. `?native=1` is the untouched Immich page — what
+the iframe loads, and where dismissing the card navigates.
+
+The panel's Settings switch (`shareLinkJoin` in the kv `settings` row, default on) governs the
+whole capability: off means every `/share/*` request passes straight through **and** the iroh
+`/invites/redeem` route answers 403 (`p2p/routes.ts`) — hiding the card without refusing the
+join would be a setting that lies.
+
+The element ids `#who`, `#go`, `#out`, `#openapp` and the join card's `#immich-shared-albums-banner .card`/`input`/`button.join`/`.err` are a **test contract**: the browser lane drives
+both pages through them, and it is the only end-to-end coverage those flows have.
+
 ## Two deployment shapes
 
 **Single front (simplest to install).** Point the reverse proxy at the sidecar and let it
@@ -39,7 +54,7 @@ wrong. Keep Immich as a second upstream so a dead sidecar fails open:
 
 ```caddy
 photos.example.com {
-	reverse_proxy immich-shared:8300 immich-server:2283 {
+	reverse_proxy immich-shared-albums:8300 immich-server:2283 {
 		lb_policy first
 		fail_duration 10s
 	}
@@ -48,7 +63,7 @@ photos.example.com {
 
 This is the shape the demo rig uses — the phones sign in to the sidecar's origin, because
 that is where the byte interceptors live. It also removes every same-origin question at a
-stroke: banner injection, byte interception and the accept page's session cookie all just
+stroke: the share document, byte interception and the accept page's session cookie all just
 work, because there genuinely is one origin.
 
 **Path-routed (Immich stays the front).** Route only `/immich-shared-albums/*`, `/share/*` and the three

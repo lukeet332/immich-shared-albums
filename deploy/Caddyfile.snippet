@@ -16,11 +16,11 @@ handle /immich-shared-albums/* {
 	request_body {
 		max_size 2MB
 	}
-	reverse_proxy immich-shared:8300
+	reverse_proxy immich-shared-albums:8300
 }
 # join banner on share pages; fallback keeps share pages working if the sidecar is down
 handle /share/* {
-	reverse_proxy immich-shared:8300 immich-server:2283 {
+	reverse_proxy immich-shared-albums:8300 immich-server:2283 {
 		lb_policy first
 		fail_duration 10s
 	}
@@ -33,7 +33,7 @@ handle /share/* {
 	path /api/assets/*/thumbnail /api/assets/*/original /api/assets/*/video/playback
 }
 handle @sharedbytes {
-	reverse_proxy immich-shared:8300 immich-server:2283 {
+	reverse_proxy immich-shared-albums:8300 immich-server:2283 {
 		lb_policy first
 		fail_duration 10s
 	}
