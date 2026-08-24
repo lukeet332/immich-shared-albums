@@ -76,7 +76,7 @@ AFTER INSTALL:
    skip this.
 
 Notes for you, the agent:
-- The sidecar is additive and fail-open: if it dies, only the banner and
+- The sidecar is additive and fail-open: if it dies, only the share-page join card and
   cross-server sync stop; Immich keeps working. Never modify Immich's own
   compose services, database, or upload folders.
 - State lives in the ./data volume (state.db: household keypair, peers, album
