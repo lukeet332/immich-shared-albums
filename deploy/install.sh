@@ -31,7 +31,7 @@ docker network inspect "$IMMICH_NETWORK" >/dev/null 2>&1 || {
 
 IMMICH_URL=$(ask "Immich server URL as reachable from that network [http://immich-server:2283]:" http://immich-server:2283)
 HOUSEHOLD_NAME=$(ask "Household name shown to peers [My household]:" "My household")
-HOST_PORT=$(ask "Host port to expose the sidecar on (your reverse proxy points here) [8300]:" 8300)
+HOST_PORT=$(ask "Host port to expose the sidecar on (your apps or proxy will point here) [8300]:" 8300)
 echo "API key: create it in Immich web -> Account Settings -> API Keys -> New API Key,"
 echo "ticking the permissions listed in deploy/api-key.md (the addon verifies at startup"
 echo "and logs anything missing; 'all' also works but is broader than needed)."
