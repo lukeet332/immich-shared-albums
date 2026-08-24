@@ -15,8 +15,8 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 command -v docker >/dev/null || { echo "docker is required — install Docker first"; exit 1; }
 
 say "immich-shared-albums installer"
-echo "You'll need an Immich admin API key with all permissions:"
-echo "  Immich web -> Account Settings -> API Keys -> New API Key -> tick everything."
+echo "You'll need an Immich admin API key — see deploy/api-key.md for the exact"
+echo "permissions to tick (a short list; 'all' also works but is broader than needed)."
 
 # auto-detect the network the Immich server container is on, to pre-fill the prompt
 DEFAULT_NET=immich_default
@@ -31,10 +31,22 @@ docker network inspect "$IMMICH_NETWORK" >/dev/null 2>&1 || {
 
 IMMICH_URL=$(ask "Immich server URL as reachable from that network [http://immich-server:2283]:" http://immich-server:2283)
 HOUSEHOLD_NAME=$(ask "Household name shown to peers [My household]:" "My household")
-HOST_PORT=$(ask "Host port to expose the sidecar on (your reverse proxy points here) [8300]:" 8300)
+HOST_PORT=$(ask "Host port to expose the sidecar on (your apps or proxy will point here) [8300]:" 8300)
+echo "API key: create it in Immich web -> Account Settings -> API Keys -> New API Key,"
+echo "ticking the permissions listed in deploy/api-key.md (the addon verifies at startup"
+echo "and logs anything missing; 'all' also works but is broader than needed)."
 printf 'Immich admin API key (input hidden): '
 read -rs SIDECAR_API_KEY; echo
 [ -n "$SIDECAR_API_KEY" ] || { echo "API key is required"; exit 1; }
+
+# No proxy is the default and needs nothing extra: the addon itself is the front,
+# passing everything that isn't shared-album traffic through to Immich.
+HAVE_PROXY=$(ask "Do you already run a reverse proxy in front of Immich (Caddy/nginx/Traefik/NPM)? [y/N]:" "n")
+case "$HAVE_PROXY" in y|Y|yes|YES) PROXY_MODE=1;; *) PROXY_MODE=2;; esac
+
+WANT_IPP=$(ask "Also set up public view-only share links via immich-public-proxy? [y/N]:" "n")
+case "$WANT_IPP" in y|Y|yes|YES) WANT_IPP=1;; *) WANT_IPP="";; esac
+[ -n "$WANT_IPP" ] && IPP_PORT=$(ask "Host port for immich-public-proxy [3000]:" 3000)
 
 INSTALL_DIR=$(ask "Install directory [./immich-shared-albums-live]:" ./immich-shared-albums-live)
 mkdir -p "$INSTALL_DIR/data"
@@ -59,6 +71,21 @@ services:
     ports:
       - $HOST_PORT:8300
     networks: [immich]
+EOF
+if [ -n "$WANT_IPP" ]; then
+cat >> "$INSTALL_DIR/docker-compose.yml" <<EOF
+  immich-public-proxy:
+    image: alangrainger/immich-public-proxy:latest
+    restart: unless-stopped
+    environment:
+      # points at the ADDON, so photos shared from other servers render full quality in links
+      IMMICH_URL: http://immich-shared-albums:8300
+    ports:
+      - $IPP_PORT:3000
+    networks: [immich]
+EOF
+fi
+cat >> "$INSTALL_DIR/docker-compose.yml" <<EOF
 networks:
   immich:
     external: true
@@ -86,6 +113,20 @@ else
   echo "health check failed — logs:"; (cd "$INSTALL_DIR" && docker compose logs immich-shared-albums --tail 30); exit 1
 fi
 
+if [ "$PROXY_MODE" = "2" ]; then
+say "Done — the addon IS your front"
+cat <<EOF
+Point your Immich apps and browser at:  http://<this-host>:$HOST_PORT
+Everything that isn't shared-album traffic passes straight through to Immich,
+websockets included, and if the addon is ever down you can point apps back at
+Immich directly — your library is never behind it hostage.
+
+Verify the panel (signed in to Immich as an admin):
+  http://<this-host>:$HOST_PORT/immich-shared-albums/
+
+To uninstall: cd $INSTALL_DIR && docker compose down.
+EOF
+else
 say "Last step (manual): route three paths through your reverse proxy"
 cat <<EOF
 Add to your existing site config, BEFORE the catch-all Immich route:
@@ -113,3 +154,22 @@ Then reload the proxy and open any Immich share link — you should see the
 
 To uninstall: cd $INSTALL_DIR && docker compose down && remove the proxy lines.
 EOF
+fi
+
+if [ -n "$WANT_IPP" ]; then
+cat <<EOF
+
+immich-public-proxy is running on port $IPP_PORT. Two follow-ups it can't do for you:
+
+  1. Make port $IPP_PORT reachable at your public address — and ONLY that port, if
+     you're keeping Immich private. However you host things is up to you; the
+     proxy's own docs cover the common setups:
+       https://github.com/alangrainger/immich-public-proxy
+  2. In Immich: Administration -> Settings -> Server -> External domain
+     -> set it to that public address, so the share links Immich creates point at the proxy.
+
+Optional but recommended with this setup: in the addon's panel, switch
+"Allow other Immich users to join albums via shared links" OFF — links stay
+view-only, and other servers link to yours by pairing code alone.
+EOF
+fi

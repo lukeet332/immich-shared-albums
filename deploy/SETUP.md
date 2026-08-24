@@ -41,7 +41,8 @@ account. Remove them from the album to unshare; unlink the server in the panel t
 
 ## 4. Optional: view-only links for people without a server
 
-Grandma doesn't run Immich — she just wants to *look*. Add
+Grandma doesn't run Immich — she just wants to *look*. The install script offers to set this
+up for you (answer **y** when it asks about share links); by hand, add
 [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) as the one small public
 piece. It shows Immich share links as a read-only gallery and exposes nothing else.
 

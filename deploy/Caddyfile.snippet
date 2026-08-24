@@ -18,7 +18,7 @@ handle /immich-shared-albums/* {
 	}
 	reverse_proxy immich-shared-albums:8300
 }
-# join banner on share pages; fallback keeps share pages working if the sidecar is down
+# join card on share pages; fallback keeps share pages working if the sidecar is down
 handle /share/* {
 	reverse_proxy immich-shared-albums:8300 immich-server:2283 {
 		lb_policy first

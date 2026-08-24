@@ -25,12 +25,21 @@ DISCOVER (do this yourself, don't ask me):
 3. Confirm docker and git are available.
 
 ASK ME (only these):
-1. My public Immich URL (e.g. https://photos.example.com).
-2. A household name to show to peers (e.g. "The Smith household").
-3. An Immich admin API key with ALL permissions — I create it in
-   Immich web -> Account Settings -> API Keys -> New API Key -> tick everything.
-   (If password login is disabled on my server because I use OAuth, warn me the
-   sidecar will briefly toggle it during utility-user provisioning.)
+1. A household name to show to peers (e.g. "The Smith household").
+2. An Immich admin API key. I create it in Immich web -> Account Settings ->
+   API Keys -> New API Key, ticking exactly the permissions listed in
+   deploy/api-key.md of the repo (read it; 'all' also works but is broader than
+   needed). The addon verifies the key at startup and logs anything missing.
+   (If password login is disabled on my server because I use OAuth, tell me the
+   scoped list needs systemConfig.read+update added, and why.)
+3. Whether I want PUBLIC view-only share links. If yes, also install
+   immich-public-proxy in the same compose file, with
+   IMMICH_URL: http://immich-shared-albums:8300 (the addon, NOT immich-server —
+   that is what makes photos shared from other servers render full quality),
+   and tell me the two follow-ups: make only the proxy's port publicly
+   reachable (my choice how — its own README covers the common setups), and set
+   Immich's Administration -> Settings -> Server -> External domain to that
+   public address.
 
 INSTALL:
 1. git clone https://github.com/lukeet332/immich-shared-albums
@@ -39,8 +48,12 @@ INSTALL:
    Immich docker network with env IMMICH_URL, IMMICH_API_KEY (in a chmod-600
    .env file, never in the yml), HOUSEHOLD_NAME, and a ./data
    volume for /data. Start it with docker compose up -d.
-3. Add these three routes to my reverse proxy BEFORE the catch-all Immich route,
-   then reload the proxy:
+3. If I have NO reverse proxy, skip the routes entirely: the sidecar is itself a
+   front for Immich — everything that isn't shared-album traffic passes through,
+   websockets included. Just tell me to point my Immich apps and browser at the
+   sidecar's port instead of Immich's.
+   Otherwise, add these three routes to my reverse proxy BEFORE the catch-all
+   Immich route, then reload the proxy:
      /immich-shared-albums/*                                       -> sidecar :8300
      /share/*                                         -> sidecar :8300 (fallback: immich)
      GET /api/assets/*/{thumbnail,original,video/playback} -> sidecar :8300 (fallback: immich)
@@ -49,23 +62,26 @@ INSTALL:
    Show me the exact diff before applying it.
 
 VERIFY (all three, report results):
-1. GET <public-url>/immich-shared-albums/health returns {"ok":true,...}.
-2. Any Immich share link opened in a browser shows the
-   "Join shared album with your server?" banner over the working share page.
-3. The share page itself still fully loads (photos render behind the banner).
+1. GET <immich-address>/immich-shared-albums/health returns {"ok":true,...}
+   (use whatever address serves my Immich — LAN is fine; nothing needs to be public).
+2. Any Immich share link opened in a browser shows the "Join shared album with
+   your server?" card, with the album visible behind it.
+3. <immich-address>/immich-shared-albums/ (signed in as an Immich admin) shows
+   the panel with a "Create pairing link" button.
 
 ROLLBACK (if anything fails): docker compose down the sidecar, revert the proxy
 diff, reload the proxy — Immich itself is untouched throughout.
 
-4. If my Immich is reachable from the public internet, set REQUIRE_SHARE_PASSWORD=true
-   and ALLOW_PRIVATE_PEERS=false in the sidecar env, and tell me what each one
-   changes. Skip both if I am only reachable over a LAN or a tailnet.
-5. Read deploy/exposure.md and offer me the hardening from section 2 (access log,
-   rate limiting, security headers) as a diff I can approve. Do not apply it
-   without showing me first.
+AFTER INSTALL:
+1. If my Immich is reachable from the public internet, set
+   REQUIRE_SHARE_PASSWORD=true in the sidecar env and tell me what it changes,
+   and point me at Immich's own hardening guidance — hosting is theirs to
+   document, and the sidecar adds no public surface beyond its own routes
+   (deploy/exposure.md has the details). If nothing of mine is public, say so
+   and skip this.
 
 Notes for you, the agent:
-- The sidecar is additive and fail-open: if it dies, only the banner and
+- The sidecar is additive and fail-open: if it dies, only the share-page join card and
   cross-server sync stop; Immich keeps working. Never modify Immich's own
   compose services, database, or upload folders.
 - State lives in the ./data volume (state.db: household keypair, peers, album

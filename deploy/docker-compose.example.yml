@@ -1,7 +1,7 @@
 # Build the image first, from a clone of this repo:
 #   docker build -t immich-shared-albums:live .
 # Put the API key in a .env file next to this compose file (chmod 600):
-#   SIDECAR_API_KEY=<immich admin api key, all permissions>
+#   SIDECAR_API_KEY=<immich admin api key — permissions in api-key.md>
 services:
   immich-shared-albums:
     image: immich-shared-albums:live
@@ -10,18 +10,24 @@ services:
       IMMICH_URL: http://immich-server:2283
       IMMICH_API_KEY: ${SIDECAR_API_KEY}
       HOUSEHOLD_NAME: "The Example household"
-      # optional: PORT (8300), DATA_DIR (/data), POLL_MS (20000), ALBUM_TEMPLATE ("{name}")
-      # optional: CACHE_MAX_MB (512), MAX_BODY_KB (1024)
+      # Every other setting has a working default — the full list with explanations
+      # is in configuration.md. The ones worth knowing about:
       #
       # Recommended when this server is reachable from the public internet:
       #   REQUIRE_SHARE_PASSWORD: "true"   # refuse to enrol a peer from a link with no
       #                                    # password set. Without it, whoever holds a
       #                                    # forwarded link can introduce their server.
-      #                                    # resolve to a private range. Leave this alone
-      #                                    # (default true) for LAN or tailnet setups.
       #   UTILITY_QUOTA_MB: "2048"         # storage cap on the bot users that own the
       #                                    # stubs. They store ~2KB/photo and ~2MB/video,
       #                                    # so size it well above your shared volume —
       #                                    # too low and syncing silently starts failing.
     volumes:
       - ./sidecar-data:/data
+    networks: [immich]
+
+# Join the docker network your Immich runs on, so IMMICH_URL resolves.
+# Find its name with:  docker inspect immich_server --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}'
+networks:
+  immich:
+    external: true
+    name: immich_default
