@@ -56,7 +56,7 @@
 | [Manual install](./deploy/) | compose example, Caddy snippet, the three proxy routes |
 | [API key guide](./deploy/api-key.md) | the exact permissions to tick, and why each one |
 | [Configuration reference](./deploy/configuration.md) | every setting, its default, and when to change it |
-| [Hardening guide](./deploy/exposure.md) | how exposed to be, and how to lock down whatever you pick |
+| [Hardening guide](./deploy/exposure.md) | how exposed to be, and what the addon changes about hosting |
 
 ### Under the hood
 
@@ -143,7 +143,7 @@ Your server stays as private as it is today, the two servers prove their identit
 - The API key doesn't need `all` — see [the API key guide](./deploy/api-key.md). Scoped like that, a leaked key can't delete or edit photos, can't change settings, and can't create a broader key.
 - The addon can't touch your photos. The only assets it ever deletes are the placeholder stubs it created itself, and the delete code refuses anything it doesn't own.
 - Share links are bearer credentials, same as in stock Immich: whoever has the link (and its password, if set) can use it. Treat them accordingly, or keep link-joining switched off.
-- Small surface: plain Node, the built-in `node:sqlite`, one pinned dependency, a codebase you can read. [deploy/exposure.md](./deploy/exposure.md) covers hardening if you host publicly.
+- Small surface: plain Node, the built-in `node:sqlite`, one pinned dependency, a codebase you can read. [deploy/exposure.md](./deploy/exposure.md) covers how exposed to be, and what the addon changes about hosting.
 
 ## Good to know
 
