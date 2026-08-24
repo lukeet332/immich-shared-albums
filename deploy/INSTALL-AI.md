@@ -45,7 +45,7 @@ INSTALL:
 1. git clone https://github.com/lukeet332/immich-shared-albums
 2. Either run `bash deploy/install.sh` interactively with me, or replicate what
    it does: build the image, write a compose file joining the sidecar to the
-   Immich docker network with env IMMICH_URL, IMMICH_API_KEY (in a chmod-600
+   Immich docker network with env ISA_IMMICH_URL, ISA_IMMICH_API_KEY (in a chmod-600
    .env file, never in the yml), HOUSEHOLD_NAME, and a ./data
    volume for /data. Start it with docker compose up -d.
 3. If I have NO reverse proxy, skip the routes entirely: the sidecar is itself a
@@ -74,7 +74,7 @@ diff, reload the proxy — Immich itself is untouched throughout.
 
 AFTER INSTALL:
 1. If my Immich is reachable from the public internet, set
-   REQUIRE_SHARE_PASSWORD=true in the sidecar env and tell me what it changes,
+   ISA_LINK_JOIN_REQUIRES_PASSWORD=true in the sidecar env and tell me what it changes,
    and point me at Immich's own hardening guidance — hosting is theirs to
    document, and the sidecar adds no public surface beyond its own routes
    (deploy/exposure.md has the details). If nothing of mine is public, say so

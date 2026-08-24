@@ -53,8 +53,8 @@ export async function startTransport(handler: PeerHandler): Promise<void> {
   const builder = Endpoint.builder();
   presetMinimal(builder);
   // Relays assist hole-punching and carry end-to-end-encrypted traffic when a direct path
-  // fails — the one disclosed third party, and only ever a fallback. RELAY=off runs dark.
-  if (process.env.RELAY !== 'off') builder.relayMode(RelayMode.defaultMode());
+  // fails — the one disclosed third party, and only ever a fallback. ISA_RELAY=off runs dark.
+  if (CFG.relay) builder.relayMode(RelayMode.defaultMode());
   builder.alpns([PROTOCOL_ALPN]);
   builder.secretKey(secretSeed());
   endpoint = await builder.bind();

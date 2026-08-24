@@ -1,28 +1,30 @@
 # Build the image first, from a clone of this repo:
 #   docker build -t immich-shared-albums:live .
 # Put the API key in a .env file next to this compose file (chmod 600):
-#   SIDECAR_API_KEY=<immich admin api key — permissions in api-key.md>
+#   ISA_IMMICH_API_KEY=<immich admin api key — permissions in api-key.md>
 services:
   immich-shared-albums:
     image: immich-shared-albums:live
     restart: always
     environment:
-      IMMICH_URL: http://immich-server:2283
-      IMMICH_API_KEY: ${SIDECAR_API_KEY}
-      HOUSEHOLD_NAME: "The Example household"
+      ISA_IMMICH_URL: http://immich-server:2283
+      ISA_IMMICH_API_KEY: ${ISA_IMMICH_API_KEY}
+      ISA_HOUSEHOLD_NAME: "The Example household"
       # Every other setting has a working default — the full list with explanations
       # is in configuration.md. The ones worth knowing about:
       #
       # Recommended when this server is reachable from the public internet:
-      #   REQUIRE_SHARE_PASSWORD: "true"   # refuse to enrol a peer from a link with no
+      #   ISA_LINK_JOIN_REQUIRES_PASSWORD: "true"   # refuse to enrol a peer from a link with no
       #                                    # password set. Without it, whoever holds a
       #                                    # forwarded link can introduce their server.
-      #   UTILITY_QUOTA_MB: "2048"         # storage cap on the bot users that own the
+      #   ISA_BOT_QUOTA_MB: "2048"         # storage cap on the bot users that own the
       #                                    # stubs. They store ~2KB/photo and ~2MB/video,
       #                                    # so size it well above your shared volume —
       #                                    # too low and syncing silently starts failing.
     volumes:
-      - ./sidecar-data:/data
+      # a named volume, owned by the container's non-root user. The identity key lives
+      # here: `docker compose down -v` would delete it and orphan every pairing.
+      - isa-data:/data
     networks: [immich]
 
 # Join the docker network your Immich runs on, so IMMICH_URL resolves.
@@ -31,3 +33,5 @@ networks:
   immich:
     external: true
     name: immich_default
+volumes:
+  isa-data:

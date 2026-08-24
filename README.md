@@ -123,8 +123,8 @@ Two settings matter when you install; everything else has a working default (ful
 
 | Variable | What to put there |
 |---|---|
-| `IMMICH_API_KEY` | **Required.** An API key from an admin account, created with the permissions below. |
-| `HOUSEHOLD_NAME` | The name the other family sees, e.g. `The Smiths`. |
+| `ISA_IMMICH_API_KEY` | **Required.** An API key from an admin account, created with the permissions below. |
+| `ISA_HOUSEHOLD_NAME` | The name the other family sees, e.g. `The Smiths`. |
 
 ### The API key
 

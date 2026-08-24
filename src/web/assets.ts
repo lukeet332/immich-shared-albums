@@ -1,14 +1,14 @@
 /** web/assets.ts — serves the committed dist/ artifacts and fills their %%TOKENS%%, escaped. See http-router.md. */
 import fs from 'node:fs';
 import path from 'node:path';
-import { CFG, ROUTE_PREFIX } from '../config.ts';
+import { CFG } from '../config.ts';
 
 const read = (name: string) => {
   const file = path.join(import.meta.dirname, 'dist', name);
   try {
-    // dist hardcodes the default prefix so it stays valid standalone; rewriting here keeps
-    // config.ROUTE_PREFIX the single source of truth.
-    return fs.readFileSync(file, 'utf8').replaceAll('/immich-shared-albums/', `${ROUTE_PREFIX}/`);
+    // The prefix is FIXED (see config.ROUTE_PREFIX: a member's share page probes the origin's
+    // prefix, so it could never vary per install) — dist hardcodes it and is served verbatim.
+    return fs.readFileSync(file, 'utf8');
   } catch {
     console.error(`asset missing at ${file} — run: npm run build:web`);
     return '';

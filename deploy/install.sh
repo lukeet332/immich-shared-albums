@@ -36,8 +36,8 @@ echo "API key: create it in Immich web -> Account Settings -> API Keys -> New AP
 echo "ticking the permissions listed in deploy/api-key.md (the addon verifies at startup"
 echo "and logs anything missing; 'all' also works but is broader than needed)."
 printf 'Immich admin API key (input hidden): '
-read -rs SIDECAR_API_KEY; echo
-[ -n "$SIDECAR_API_KEY" ] || { echo "API key is required"; exit 1; }
+read -rs ISA_API_KEY; echo
+[ -n "$ISA_API_KEY" ] || { echo "API key is required"; exit 1; }
 
 # No proxy is the default and needs nothing extra: the addon itself is the front,
 # passing everything that isn't shared-album traffic through to Immich.
@@ -49,7 +49,7 @@ case "$WANT_IPP" in y|Y|yes|YES) WANT_IPP=1;; *) WANT_IPP="";; esac
 [ -n "$WANT_IPP" ] && IPP_PORT=$(ask "Host port for immich-public-proxy [3000]:" 3000)
 
 INSTALL_DIR=$(ask "Install directory [./immich-shared-albums-live]:" ./immich-shared-albums-live)
-mkdir -p "$INSTALL_DIR/data"
+mkdir -p "$INSTALL_DIR"
 INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
 
 say "Building image from source"
@@ -63,11 +63,13 @@ services:
     image: immich-shared-albums:live
     restart: unless-stopped
     environment:
-      IMMICH_URL: $IMMICH_URL
-      IMMICH_API_KEY: \${SIDECAR_API_KEY}
-      HOUSEHOLD_NAME: "$HOUSEHOLD_NAME"
+      ISA_IMMICH_URL: $IMMICH_URL
+      ISA_IMMICH_API_KEY: \${ISA_IMMICH_API_KEY}
+      ISA_HOUSEHOLD_NAME: "$HOUSEHOLD_NAME"
     volumes:
-      - ./data:/data
+      # a named volume, so the container's own (non-root) user owns it. The identity key
+      # lives here: docker compose down -v would delete it and orphan every pairing.
+      - isa-data:/data
     ports:
       - $HOST_PORT:8300
     networks: [immich]
@@ -90,10 +92,12 @@ networks:
   immich:
     external: true
     name: $IMMICH_NETWORK
+volumes:
+  isa-data:
 EOF
 # key lives in an env file next to the compose, chmod 600, never in the yml
 umask 177
-echo "SIDECAR_API_KEY=$SIDECAR_API_KEY" > "$INSTALL_DIR/.env"
+echo "ISA_IMMICH_API_KEY=$ISA_API_KEY" > "$INSTALL_DIR/.env"
 umask 022
 
 say "Starting sidecar"
@@ -124,7 +128,7 @@ Immich directly — your library is never behind it hostage.
 Verify the panel (signed in to Immich as an admin):
   http://<this-host>:$HOST_PORT/immich-shared-albums/
 
-To uninstall: cd $INSTALL_DIR && docker compose down.
+To uninstall: cd $INSTALL_DIR && docker compose down (add -v to also delete\nthis server's identity — other servers would need a fresh pairing link).
 EOF
 else
 say "Last step (manual): route three paths through your reverse proxy"

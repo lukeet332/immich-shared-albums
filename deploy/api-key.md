@@ -31,5 +31,5 @@ by promise.
 
 ## Where to put it
 
-In the `.env` file next to the addon's `docker-compose.yml`, as `IMMICH_API_KEY`. Never in the
+In the `.env` file next to the addon's `docker-compose.yml`, as `ISA_IMMICH_API_KEY`. Never in the
 compose file itself.

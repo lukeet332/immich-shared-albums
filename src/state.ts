@@ -9,6 +9,19 @@ import { CFG } from './config.ts';
 
 // 0700: this directory holds the identity key and every bot account's API key.
 fs.mkdirSync(CFG.dataDir, { recursive: true, mode: 0o700 });
+// The identity key IS this server's identity: lose the volume and every pairing dies with it.
+// A data dir on the container's own filesystem (or an anonymous volume) survives restarts but
+// not recreation — loud warning rather than silent data loss on the next `down`.
+try {
+  const { dev: dataDev } = fs.statSync(CFG.dataDir);
+  const { dev: rootDev } = fs.statSync('/');
+  if (dataDev === rootDev)
+    console.error(
+      `WARNING: ${CFG.dataDir} is not a mounted volume — this server's identity will be lost when the container is recreated. Bind-mount it (see deploy/docker-compose.example.yml).`
+    );
+} catch {
+  /* stat quirks on exotic filesystems must not stop boot */
+}
 export const store = new Store(CFG.dataDir);
 export const state = store.state;
 /**

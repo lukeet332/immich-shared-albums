@@ -87,7 +87,9 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     try {
       mirror = await immichJson(
         '/albums',
-        jsonBody({ albumName: CFG.template.replace('{name}', album.name) }),
+        jsonBody({
+          albumName: CFG.mirrorAlbumTemplate.replaceAll('{name}', album.name).replaceAll('{peer}', peer.name),
+        }),
         host.apiKey
       );
       break;

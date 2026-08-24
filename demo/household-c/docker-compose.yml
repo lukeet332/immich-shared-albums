@@ -30,14 +30,17 @@ services:
     restart: unless-stopped
   sidecar-c:
     image: immich-shared-albums:demo
+    # rig-only: the suite reads state.db from the host and purges via docker exec,
+    # so the test sidecars keep running as root instead of the image's node user
+    user: "0:0"
     # LAN address when testing from a phone.
     extra_hosts:
       - host.docker.internal:host-gateway
     environment:
-      IMMICH_URL: http://immich-c:2283
-      IMMICH_API_KEY: ${C_SIDECAR_API_KEY:-${C_API_KEY}}
-      HOUSEHOLD_NAME: "Mock household (C)"
-      POLL_MS: "8000"
+      ISA_IMMICH_URL: http://immich-c:2283
+      ISA_IMMICH_API_KEY: ${C_SIDECAR_API_KEY:-${C_API_KEY}}
+      ISA_HOUSEHOLD_NAME: "Mock household (C)"
+      ISA_SYNC_POLL_MS: "8000"
     networks:
       - default
       - isa-demo

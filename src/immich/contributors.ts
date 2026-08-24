@@ -180,10 +180,10 @@ export async function ensureUtilityUser(
   } catch (e) {
     log(`WARNING: could not retire the login password for ${email}: ${e.message}`);
   }
-  if (CFG.utilityQuotaMb > 0) {
+  if (CFG.botQuotaMb > 0) {
     try {
       await immichJson(`/admin/users/${user.id}`, {
-        ...jsonBody({ quotaSizeInBytes: CFG.utilityQuotaMb * 1024 * 1024 }),
+        ...jsonBody({ quotaSizeInBytes: CFG.botQuotaMb * 1024 * 1024 }),
         method: 'PUT',
       });
     } catch (e) {

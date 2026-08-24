@@ -46,7 +46,7 @@ Addon-specific settings worth flipping per posture:
 - **Posture B:** in the panel, switch *"Allow other Immich users to join albums via shared
   links"* **off** — links stay strictly view-only, and servers link to yours by pairing code
   alone.
-- **Posture C:** set `REQUIRE_SHARE_PASSWORD: "true"` on the addon, so a forwarded share link
+- **Posture C:** set `ISA_LINK_JOIN_REQUIRES_PASSWORD: "true"` on the addon, so a forwarded share link
   with no password can't be used to introduce a stranger's server.
 - **Any posture:** `chmod 600` the `.env` holding the API key. If a non-root user needs
   `docker compose`, use `chown root:docker` + `chmod 640` instead — the docker group is
