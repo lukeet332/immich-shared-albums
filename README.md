@@ -1,103 +1,140 @@
-# immich-shared-albums
+<p align="center">
+  <br/>
+  <a href="https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml"><img src="https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml/badge.svg" alt="e2e"/></a>
+  <a href="https://github.com/sponsors/lukeet332"><img src="https://img.shields.io/badge/❤-Sponsor-ea4aaa?style=for-the-badge&logoColor=000000&labelColor=ececec" alt="Sponsor"/></a>
+  <br/>
+  <br/>
+</p>
 
-[![e2e](https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml/badge.svg)](https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml)
+<!-- v1: logo goes here
+<p align="center">
+<img src="design/logo.svg" width="300" title="immich-shared-albums">
+</p>
+-->
+<h1 align="center">immich-shared-albums</h1>
+<h3 align="center">Shared photo and video albums across separate Immich servers</h3>
+<br/>
 
-**It's finally here: cross-server shared albums for Immich!** (Hence the repo name, the code, and the over-excited sentence above.)
+<!-- v1: screenshot banner goes here
+<a href="https://www.youtube.com/watch?v=c3GO-YFchYo">
+<img src="design/screenshots.png" title="Screenshots">
+</a>
+-->
+<p align="center">
+<a href="https://www.youtube.com/watch?v=c3GO-YFchYo">
+<img src="https://img.youtube.com/vi/c3GO-YFchYo/hqdefault.jpg" title="Watch the demo — two Immich servers sharing an album live"/>
+</a>
+</p>
 
-It's a Google Photos style experience for shared photo and video albums, except it works across separate servers. The goal is for it to feel native: no separate apps to install, no weird web config portals to set up.
+> [!WARNING]
+> ⚠️ Pre-1.0 and under very active development. Expect breaking changes between versions, and always follow a [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) backup plan for your precious photos and videos!
 
-It never touches or modifies any of the Immich team's code. It runs in its own isolated Docker container on your server and only talks to Immich over the API. We call that container the sidecar.
+> [!NOTE]
+> The recommended setup exposes nothing to the internet. The walkthrough is at [deploy/SETUP.md](./deploy/SETUP.md).
 
-Between servers, the sidecars talk to each other **directly** over an encrypted connection that sets itself up (built on [iroh](https://www.iroh.computer)). Think of it as a private tunnel between the two homes that finds its own way — neither of you needs a domain name, port forwarding, or router settings, and nothing on either server is reachable from the internet. When something changes, a quick ping over that tunnel makes updates land in seconds; a periodic check runs as a backup.
+## Links
 
-Joining needs a small bit of custom UI on the shared album page, so the sidecar injects an HTML overlay. I know, I know, I said it never touches the stock Immich UI. It doesn't: a reverse proxy intercepts the URL and the sidecar serves its own overlay, without changing anything on your actual Immich server. It doesn't change how sharing works either. It just uses the normal share links your server already makes.
+- [Setup guide](./deploy/SETUP.md)
+- [Demo video](https://www.youtube.com/watch?v=c3GO-YFchYo)
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Configuration](#configuration)
+- [Security](#security)
+- [Architecture](./src/ARCHITECTURE.md)
+- [Changelog](./CHANGELOG.md)
+- [The design discussion it was born in](https://github.com/immich-app/immich/discussions/30794)
 
-Questions, suggestions and PRs are all welcome.
+## Demo
 
-## What you get
+Two households, one shared album. Created, shared, joined and commented on, all in the stock Immich apps: [watch the demo](https://www.youtube.com/watch?v=c3GO-YFchYo).
 
-- 🔒 **Nothing exposed.** Servers find each other through an encrypted peer-to-peer tunnel — no domain, no port forwarding, no VPN sharing. Pair once with a code; nothing on your server is reachable from the internet.
-- 🔗 **Sharing feels native.** Pick the person in Immich's own share menu — that's it. (Public share links work too, if you host publicly.) Stock apps, nothing to install on your phone.
-- 👤 **Joins your account, not the whole server.** So your parents won't see your antics from that lads' holiday.
-- 💾 **Your storage stays yours.** Photos stream from whoever owns them. All that lands on your disk is a tiny ~2KB placeholder per photo, whatever the album size, with full quality on demand.
-- 💬 **Cross-server comments.** Both ways, near-instant, credited to whoever wrote them.
-- 🎬 **Videos too.** Playable versions sync, originals stream on demand.
-- 📦 **Isolated and self-hosted.** One small container, no forks, no patched Immich, one pinned dependency (the connection library). Runs fine on a Pi.
+## Features
 
-## See it in action
+| Features                                                      | Stock apps | Notes                                    |
+| :------------------------------------------------------------ | ---------- | ---------------------------------------- |
+| Share an album with a person on another Immich server         | Yes        | picked in Immich's own share menu         |
+| Albums join a person, not a whole server                      | Yes        | your parents won't see the lads' holiday  |
+| Nothing exposed to the internet                               | Yes        | servers connect directly, dialling out    |
+| Link two servers with a one-line pairing code                 | Yes        | works once, expires in 15 minutes         |
+| Shared photos cost ~2KB of your disk each                     | Yes        | full quality streams from the owner       |
+| Cross-server comments                                         | Yes        | both ways, credited to the writer         |
+| Videos                                                        | Yes        | playable versions sync, originals stream  |
+| Public view-only share links                                  | Yes        | via [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy), optional |
+| Joinable public share links                                   | Yes        | optional, if you host Immich publicly     |
+| Unshare / unlink cleans everything up                         | Yes        | leaving an album works from the app too   |
+| Runs on a Raspberry Pi                                        | —          | one small container, one pinned dependency |
 
-[![Watch the demo — two Immich servers sharing an album live](https://img.youtube.com/vi/c3GO-YFchYo/hqdefault.jpg)](https://www.youtube.com/watch?v=c3GO-YFchYo)
+## How it works
 
-Two households, one shared album, created and shared and joined and commented on, all in the stock apps. Born from [this design discussion](https://github.com/immich-app/immich/discussions/30794). Full internals are in [ARCHITECTURE.md](./src/ARCHITECTURE.md).
+The addon runs in its own Docker container next to Immich and talks to it over the normal API. It never modifies Immich itself. If the addon dies, Immich carries on as if it was never there.
 
-## Install
+To reach the other family's server, the two addons open an encrypted connection directly to each other (built on [iroh](https://www.iroh.computer)). Each server is addressed by a cryptographic key rather than a URL, and the connection finds its way through home routers on its own. That is why neither side needs to expose anything: the servers dial out, nothing listens.
 
-Every method needs Docker, an admin API key, and a reverse proxy in front of Immich **on your own network** (the addon serves shared photos to the stock app through three small routes placed ahead of your normal Immich route). Whether anything is reachable from the internet is a separate choice — and the recommended answer is: **nothing**.
+When someone shares an album with you, your server creates a lightweight copy: real album, real rows in your Immich, but each photo is a tiny placeholder. When you look at a photo, the full-quality version streams live from the owner's server. Nobody accumulates copies of anyone else's library, and if the owner stops sharing, the photos are simply gone.
 
-### The recommended setup: nothing on the internet
+## Setup
 
-Sharing albums with another family does **not** need your server to be reachable from outside. The two sidecars connect to each other directly through their own encrypted tunnel, so:
+You need Docker, an Immich admin API key, and a reverse proxy in front of Immich on your own network. The addon sits behind three small proxy routes so the stock app can fetch shared photos. None of it has to be reachable from the internet. Full walkthrough: [deploy/SETUP.md](./deploy/SETUP.md).
 
-- **Keep Immich and the addon private** — home network only. Use Tailscale (or any VPN) if *you* want to reach your own photos while out, same as you would without this addon. That part's optional.
-- **Link with the other family once.** In the admin panel, click **Create pairing link**, send the code over WhatsApp (or anything), and the other family's admin pastes it into *their* panel. That's the whole setup — no domain, no port forwarding, no certificates, no shared VPN.
-- **Then share like normal.** Open an album in Immich, tap share, pick the person. They're in your picker now. Their copy appears on their server automatically.
-- **Want to send view-only links to people who don't run a server?** (Grandma just wants to *look*.) Add [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) as the one small public piece — it shows share links as a read-only gallery and exposes nothing else. Point it at the addon instead of Immich (its standard `IMMICH_URL` setting; nothing about it is modified) and albums containing photos shared from other servers render fully too — we verified the bytes are identical to the owner's, streamed live. In the addon's panel you can then switch **"Allow other Immich users to join albums via shared links"** off, so links are strictly for viewing.
+1. **Install the addon** on both servers. Options, easiest first:
+   - Point an AI coding agent (Claude Code, Cursor, etc.) at [deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md). It adapts the proxy routes to whatever reverse proxy you run.
+   - Run `bash deploy/install.sh`. It detects your Immich, starts the addon and prints the routes to add.
+   - Or do it by hand: see [deploy/](./deploy/).
+2. **Link the two servers.** Open the admin panel, click *Create pairing link*, and send the code to the other family over WhatsApp or wherever. Their admin pastes it into their panel.
+3. **Share an album.** Open it in Immich, tap share, pick the person. Done. Remove them from the album to unshare, or unlink the whole server from the panel.
 
-**Step-by-step walkthrough: [deploy/SETUP.md](./deploy/SETUP.md).**
+### Public share links (optional)
 
-### The alternative: Immich on the internet, joinable share links
+Want to send view-only links to people who don't run a server? Add [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) as the one public piece of your setup. It renders share links as a read-only gallery and exposes nothing else. Point its `IMMICH_URL` at this addon instead of Immich and shared photos from other servers show up in those links too. You can then turn off *"Allow other Immich users to join albums via shared links"* in the panel, so links are strictly for looking at.
 
-If your Immich already has a public address, share links do more: anyone opening one sees a "join with your own server" card on the album page, and a visitor who runs this addon can join from there. Same install either way — the panel setting decides whether link-joining is on.
+If your Immich is already public, share links do more: the album page shows a join card, and a visitor who runs this addon can join the album from it. Same install, one panel setting.
 
-Pick an install method, easiest first:
+## Configuration
 
-- **Preferred: let an AI agent install it.** If you use an AI coding agent (Claude Code, Cursor, Copilot CLI, etc.), either on the server or on your own machine with SSH access to it, paste [deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md). It discovers your setup, installs the sidecar, adds the proxy routes adapted to *your* reverse proxy, and verifies the result. It's the most hands-off option and the only one that adapts to any proxy (Caddy, nginx, NPM, Traefik, tunnels).
-- **Guided script.** No agent? Clone next to your Immich and run `bash deploy/install.sh`. It auto-detects your Immich network, builds and starts the sidecar, health-checks it, and prints the proxy routes for you to add.
-- **Manual.** Build the container and add the three routes yourself. See [deploy/](./deploy/).
-
-### Configuration
-
-Only two are required. The rest have working defaults, so set them only if you need to.
+Only `IMMICH_API_KEY` is required. Everything else has a working default.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `IMMICH_API_KEY` | — | **Required.** A key on an admin account, scoped to the list under *Permissions & security* (`all` also works, with a wider blast radius). The addon refuses to start without one, and verifies the scopes at startup. |
-| `HOUSEHOLD_NAME` | `Unnamed household` | The name peers see, and the name mirrored albums are attributed to. |
+| `IMMICH_API_KEY` | — | **Required.** A key on an admin account. Use the scoped permission list under [Security](#security); `all` works too. The addon checks the key when it starts and tells you if something is missing. |
+| `HOUSEHOLD_NAME` | `Unnamed household` | The name other servers see. |
 | `IMMICH_URL` | `http://immich-server:2283` | Your Immich, from inside the container. |
 | `PORT` | `8300` | Port the addon listens on. |
 | `DATA_DIR` | `/data` | Where `state.db` lives. Back this up; it holds your signing key. |
-| `REQUIRE_SHARE_PASSWORD` | `false` | Refuse to link with a server whose share link has no password. **Recommended if you are publicly reachable** — otherwise possession of a link is the whole credential. A link's own password and expiry are always enforced regardless. |
-| `SHARE_USER_DIRECTORY` | `true` | Share your users' **names** (never emails) with linked servers, so they can invite a specific person. Set `false` to keep your user list private — that disables native invitations with that server, leaving share links. |
-| `RELAY` | on | When two servers can't connect directly (~1 in 10 networks), traffic falls back through a public relay run by [n0](https://n0.computer) — it only ever sees encrypted bytes, and it's the one outside service involved. `off` disables the fallback: direct connections only. |
-| `ALBUM_TEMPLATE` | `{name}` | Naming for mirrored albums, e.g. `{name} (shared)`. |
-| `CACHE_MAX_MB` | `512` | Bounded cache for viewed photos. `0` disables. Delete the folder any time — it is a cache, not storage. |
-| `UTILITY_QUOTA_MB` | `0` (none) | Storage cap on the addon's bot accounts. Bounds what a stolen key could write, but too low and syncing silently fails. |
-| `MAX_BODY_KB` | `1024` | Hard cap on any request body the addon buffers. |
-| `POLL_MS` | `20000` | How often it checks peers for changes. |
+| `REQUIRE_SHARE_PASSWORD` | `false` | Refuse share-link joins when the link has no password. Worth setting if your Immich is public. |
+| `SHARE_USER_DIRECTORY` | `true` | Share your users' names (never emails) with linked servers so they can be picked in the share menu. `false` keeps your user list private and disables that, leaving share links. |
+| `RELAY` | on | If two servers can't connect directly (roughly 1 network in 10), traffic falls back through a public relay run by [n0](https://n0.computer). The relay only ever sees encrypted bytes. `off` means direct connections only. |
+| `ALBUM_TEMPLATE` | `{name}` | Naming for shared albums on your side, e.g. `{name} (shared)`. |
+| `CACHE_MAX_MB` | `512` | Cache for recently viewed shared photos. `0` disables it. Safe to delete any time. |
+| `UTILITY_QUOTA_MB` | `0` (none) | Storage cap for the addon's bot accounts. |
+| `MAX_BODY_KB` | `1024` | Cap on request bodies the addon buffers. |
+| `POLL_MS` | `20000` | How often it checks linked servers for changes. |
+| `COMMENT_POLL_MS` | `5000` | How often the comment sync checks for new activity. |
+| `RECONCILE_DEBUG` | off | Set `1` to log every sync decision. Turn this on first if an album looks wrong. |
 
-## Permissions & security
+## Security
 
-- **Servers never need to reach each other over the web.** All server-to-server traffic goes through the direct encrypted tunnel — other households never touch your web address, because you don't need one. The only reason to expose anything publicly is if you *want* strangers clicking share links (see the two setups under Install).
-- **Your server's security is your responsibility.** This is a tool, and it's only as secure as the server you run it on. [deploy/exposure.md](./deploy/exposure.md) is a short, practical guide: pick how exposed you want to be, then paste one hardening block.
-- **Nothing is protected by being hard to reach.** Every route assumes it's on the open internet. Pages you use (the panel, joining, leaving) require you to be **signed in to your own Immich** — the sidecar has no accounts of its own and checks your session against Immich itself. Between servers, a connection is only *possible* from a household you've paired with — both ends prove who they are cryptographically before a single byte moves, and everything is end-to-end encrypted. On top of that, every photo request checks that the asking household was actually offered that album and that photo. Being able to reach an endpoint is never permission to use it.
-- **Share links keep their own rules.** A password-protected link needs that same password to join across servers, and an expired link won't join at all. Set `REQUIRE_SHARE_PASSWORD=true` to refuse links that have no password — worth it on a public domain, because otherwise a forwarded link is the whole credential.
-- **Needs an admin API key — but a narrow one.** It creates the bot users that own the placeholder photos (that's what keeps shared albums out of your own timeline while showing the right name and avatar), so the key must belong to an admin account. It does **not** need `all`: create it with exactly `adminUser.create/read/update/delete`, `album.read`, `albumUser.create/update/delete`, `asset.read/view/download`, `activity.read/statistics`, `user.read`, `userProfileImage.read`, `sharedLink.read` (plus `systemConfig.read/update` only if your Immich is OAuth-only). Scoped like this, a leaked key **cannot delete or change a single photo, touch settings, or mint itself a broader key** — and the addon checks its key at startup and tells you if something's missing. Keep it in `.env`. The bot users it creates are not admins, get their own narrow keys, and have no password kept anywhere, so nobody can sign in as them.
-- **It can't touch your photos.** It only ever deletes the placeholder stubs it made itself, and only when you leave an album. The delete code refuses any asset it doesn't own, so your real library is safe whatever the key can do.
-- **Small attack surface.** Plain Node, the built-in `node:sqlite`, and exactly one dependency — the connection library ([iroh](https://www.iroh.computer), version-pinned). A codebase you can read.
-- **Closed by default, with one caveat worth knowing.** Two servers have to be introduced — a pairing string or a share link — before anything flows; every later connection is mutually authenticated on the pinned keys, and the owner can remove any household at any time. The caveat: a share link is a *bearer* credential — whoever holds it (and its password) can introduce their server. Treat album links like you'd treat any link that grants access.
+Your server stays as private as it is today, the two servers prove their identity to each other cryptographically, and the addon is built so that even its own credentials can't do much damage.
+
+- Server-to-server traffic only ever flows between servers that were deliberately paired, over an end-to-end encrypted connection. There is no server-to-server HTTP at all.
+- The pages you use (panel, joining) require you to be signed in to your own Immich. The addon has no accounts or passwords of its own.
+- Every photo request from another server is checked against what was actually shared with them. Reaching an endpoint is never permission to use it.
+- The API key doesn't need `all`. Create it with: `adminUser.create/read/update/delete`, `album.read`, `albumUser.create/update/delete`, `asset.read/view/download`, `activity.read/statistics`, `user.read`, `userProfileImage.read`, `sharedLink.read`. Add `systemConfig.read/update` only if your Immich is OAuth-only. A key scoped like that can't delete or edit photos, can't change settings, and can't create a broader key.
+- The addon can't touch your photos. The only assets it ever deletes are the placeholder stubs it created itself, and the delete code refuses anything it doesn't own.
+- Share links are bearer credentials, same as in stock Immich: whoever has the link (and its password, if set) can use it. Treat them accordingly, or keep link-joining switched off.
+- Small surface: plain Node, the built-in `node:sqlite`, one pinned dependency, a codebase you can read. [deploy/exposure.md](./deploy/exposure.md) covers hardening if you host publicly.
 
 ## Good to know
 
-- If a photo's owner server is offline you'll see placeholders until it's back (your device caches recent views). Your own library is never affected by someone else's downtime.
-- New photos show up on the app's next sync, usually within seconds while it's open, or when you reopen it.
-- Joining costs almost no storage, and leaving cleans it up. The sidecar notices the app's normal "Leave album" and removes everything the join created.
+- If a photo's owner is offline you'll see placeholders until they're back. Recently viewed photos survive from cache. Your own library is never affected.
+- New photos show up on the app's next sync, usually within seconds.
+- Leaving an album cleans up everything the join created. The addon notices the app's normal "Leave album" too.
 
 ## Versioning
 
-Semver with a sync-contract policy (a MAJOR bump means older peers can't sync with you). Versions are set automatically from commits, every change is gated on the e2e suite (100 checks plus a browser lane, 18 of them security regressions), and a weekly job runs against the latest Immich release to catch breakage early. See [CHANGELOG.md](./CHANGELOG.md).
+Semver, where a major bump means older peers can't sync with you. Versions come from commits automatically and every change is gated on the e2e suite plus a browser lane. A weekly run against the latest Immich release catches breakage early. See [CHANGELOG.md](./CHANGELOG.md).
 
-## Support
+## Support the project
 
-If this saved your family from the cloud, you can say thanks:
+Questions, suggestions and PRs are all welcome. And if this saved your family from the cloud, you can say thanks:
 
-[![Sponsor](https://img.shields.io/badge/❤-Sponsor_this_project-ea4aaa?style=for-the-badge)](https://github.com/sponsors/lukeet332)
+<a href="https://github.com/sponsors/lukeet332"><img src="https://img.shields.io/badge/❤-Sponsor_this_project-ea4aaa?style=for-the-badge" alt="Sponsor"/></a>
