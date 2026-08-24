@@ -6,8 +6,9 @@
  * Being purpose-built is what lets it be strict:
  *
  *  - **single-use** — consumed the moment it is redeemed, so a forwarded copy is inert;
- *  - **short-lived** — minutes, not the 24 hours an Immich share-link token lives;
+ *  - **short-lived** — panel-configurable, minutes-to-a-day, default 15 minutes;
  *  - **high-entropy** — 32 random bytes, so guessing is not a threat model;
+ *  - **shown once** — only a hash persists, so not even this server can re-display a ticket;
  *  - **revocable before use** — the panel can drop an unredeemed code;
  *  - **not an album grant** — pairing conveys no access to any photo. What the two servers may
  *    see of each other is decided afterwards, per person, in Immich's own picker.
@@ -17,15 +18,25 @@
  */
 import crypto from 'node:crypto';
 import { CFG, log, SIDECAR_VERSION } from '../config.ts';
+import { store as kvStore } from '../state.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
 import { state, save, store, keys } from '../state.ts';
 import { peerByPub } from '../peers.ts';
 import { localAddr, peerRequest } from './transport.ts';
 
-/** How long a freshly minted code stays redeemable. Long enough to paste into a chat. */
-const CODE_TTL_MS = 15 * 60 * 1000;
+/** How long a freshly minted code stays redeemable — panel-configurable, because "long
+ *  enough to paste into a chat" differs between a live call and a time-zoned family. */
+const DEFAULT_TTL_MINUTES = 15;
+export const TTL_MINUTES = { min: 5, max: 24 * 60 };
+export function pairingTtlMinutes(): number {
+  const v = (kvStore.kv('settings') as { pairingTtlMinutes?: number } | null)?.pairingTtlMinutes;
+  return typeof v === 'number' && v >= TTL_MINUTES.min && v <= TTL_MINUTES.max ? v : DEFAULT_TTL_MINUTES;
+}
 
-export type PairingCode = { code: string; createdAt: number; expiresAt: number };
+/** Only a HASH of the secret is stored: the ticket is displayable exactly once, at mint.
+ *  Nothing that can redeem a pairing ever rests in state.db. */
+export type PairingCode = { codeHash: string; createdAt: number; expiresAt: number };
+const hashCode = (code: string) => crypto.createHash('sha256').update(code).digest('base64url');
 
 const load = (): PairingCode[] => store.kv('pairings') ?? [];
 const persist = (list: PairingCode[]) => store.kvSet('pairings', list);
@@ -65,38 +76,35 @@ export const parseTicket = (raw: string): Ticket | null => {
   }
 };
 
-/** Mint a code and return the ticket to hand to the other admin. */
+/** Mint a code and return the ticket to hand to the other admin — the ONE time it is
+ *  visible. Only its hash persists, so nothing can re-display it, us included. */
 export function mintPairing(): { link: string; expiresAt: number } {
   const code = crypto.randomBytes(32).toString('base64url');
   const now = Date.now();
-  const entry = { code, createdAt: now, expiresAt: now + CODE_TTL_MS };
+  const ttlMs = pairingTtlMinutes() * 60 * 1000;
+  const entry = { codeHash: hashCode(code), createdAt: now, expiresAt: now + ttlMs };
   persist([...live(), entry]);
-  log(`minted a pairing code, valid for ${CODE_TTL_MS / 60000} minutes`);
+  log(`minted a pairing code, valid for ${ttlMs / 60000} minutes`);
   return { link: ticketString(code), expiresAt: entry.expiresAt };
 }
 
-/** What the panel shows: unredeemed codes, newest first. */
+/** What the panel shows: unredeemed codes, newest first — metadata only, never the ticket. */
 export const pendingPairings = () =>
   live()
     .slice()
     .sort((a, b) => b.createdAt - a.createdAt)
-    .map(p => ({ link: ticketString(p.code), expiresAt: p.expiresAt }));
+    .map(p => ({ id: p.codeHash.slice(0, 12), createdAt: p.createdAt, expiresAt: p.expiresAt }));
 
-export function revokePairing(code: string) {
-  persist(live().filter(p => p.code !== code));
+/** Revoke by the ticket itself (paste-back) or by a pending entry's id. */
+export function revokePairing(codeOrId: string) {
+  const asHash = hashCode(codeOrId);
+  persist(live().filter(p => p.codeHash !== asHash && p.codeHash.slice(0, 12) !== codeOrId));
 }
 
-/** Constant-time, so a wrong code leaks nothing about how wrong it was. */
+/** Hashes are fixed-length, so this stays constant-time without the length dance. */
 function codeMatches(candidate: string): PairingCode | undefined {
-  const want = Buffer.from(candidate);
-  return live().find(p => {
-    const have = Buffer.from(p.code);
-    if (have.length !== want.length) {
-      crypto.timingSafeEqual(have, have);
-      return false;
-    }
-    return crypto.timingSafeEqual(have, want);
-  });
+  const want = Buffer.from(hashCode(candidate));
+  return live().find(p => crypto.timingSafeEqual(Buffer.from(p.codeHash), want));
 }
 
 /**
@@ -119,7 +127,7 @@ export async function handlePair(callerPub: string, body: string) {
     return [403, { error: 'that pairing link is not valid — it may have expired or been used' }];
   }
   // Single-use: burn it before doing anything else, so a replay cannot land twice.
-  revokePairing(entry.code);
+  persist(live().filter(p => p.codeHash !== entry.codeHash));
 
   const existing = peerByPub(callerPub);
   if (existing) {

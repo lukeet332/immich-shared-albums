@@ -1088,6 +1088,14 @@ console.log('— stage: pairing links two servers on its own (no album)');
         body: JSON.stringify({ link: minted.link }) });
     check('a pairing link cannot be redeemed twice', !replay.ok, `status ${replay.status}`);
 
+    // SECURITY: shown once. Only a hash persists, so the pending list can never leak a
+    // redeemable ticket — not to an admin, not to anyone reading state.db.
+    const pending = await (await fetch(`${BS}/immich-shared-albums/pairings`,
+      { headers: { 'x-api-key': BKEY } })).json();
+    check('pending pairing codes are metadata only — the ticket is shown exactly once',
+          (pending.pairings || []).every(p2 => !p2.link && !p2.code && !JSON.stringify(p2).includes('isa2-')),
+          JSON.stringify(pending).slice(0, 120));
+
     // SECURITY: pairing conveys no access to any photo. The newly linked peer must carry zero
     // albums in either direction — what they may see is decided afterwards, per person.
     const linked = after.find(p => !before.some(b => b.pub === p.pub));

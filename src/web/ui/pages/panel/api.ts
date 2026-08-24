@@ -29,6 +29,6 @@ export const overview = () => json('/peers') as Promise<Overview>;
 export const mintLink = () => post('/pairings') as Promise<{ link: string; expiresAt: number }>;
 export const redeemLink = (link: string) => post('/pair', { link }) as Promise<{ linked: string }>;
 export const unlinkPeer = (pub: string) => post('/unlink', { pub }) as Promise<{ household: string }>;
-export type Settings = { shareLinkJoin: boolean };
+export type Settings = { shareLinkJoin: boolean; pairingTtlMinutes: number };
 export const getSettings = () => json('/settings') as Promise<Settings>;
 export const saveSettings = (next: Settings) => post('/settings', next) as Promise<Settings>;

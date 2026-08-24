@@ -91,6 +91,12 @@ When an album moves, every OTHER household mapped to it is told to pull now rath
 tick. A lost nudge costs nothing: the scheduled handshake catches everything regardless, so this is
 fail-open by design and must never be made blocking.
 
+## View-only governs photos, not conversation
+
+A `view` share refuses pushed refs (`403 view_only`) but accepts comments from the same peer:
+revoking upload rights must not mute anyone. This is a decided contract, not an omission —
+tightening it later would be a visible cross-server behaviour change.
+
 ## Pushed refs report partial success
 
 The sender re-offers only the failed refs next cycle. Pushes are **chunked** (400 refs per

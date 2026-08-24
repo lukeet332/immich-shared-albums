@@ -56,7 +56,7 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
       <b style={{ fontSize: 14 }}>Link a server</b>
       <p style={s.muted}>
         Send your link to the other server's admin, who pastes it into their own panel. It works once, expires
-        in 15 minutes, and shares no photos on its own.
+        (how fast is in Settings), and shares no photos on its own.
       </p>
       <div style={{ display: 'flex', gap: 8 }}>
         <button style={s.button} onClick={createLink}>
@@ -69,7 +69,10 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
 
       {link && (
         <div style={{ marginTop: 10 }}>
-          <p style={s.muted}>Send this to them — it works once, and expires in {minutesLeft} minutes.</p>
+          <p style={s.muted}>
+            Send this to them now — it works once, expires in {minutesLeft} minute
+            {minutesLeft === 1 ? '' : 's'}, and cannot be shown again after you leave this page.
+          </p>
           <div style={{ display: 'flex', gap: 8 }}>
             <input id="pairlink" style={s.input} readOnly value={link} />
             <button style={s.button} onClick={copyToClipboard}>
