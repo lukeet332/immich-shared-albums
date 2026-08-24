@@ -45,7 +45,7 @@ export async function fetchTrueBytes(
     const peer = mapping && peerByPub(mapping.peer);
     if (peer) {
       try {
-        const up = await peerByteRequest(peer, `/assets/${entry.originAsset}/${kind}`, range);
+        const up = await peerByteRequest(peer, `/assets/${entry.originAsset}/${kind}`, range, entry.mapping);
         if (up.status < 400) return { status: up.status, headers: up.headers, body: recvIterable(up.recv) };
         log(`chained ${kind} fetch failed (${up.status}) — serving local stub`);
       } catch (e) {

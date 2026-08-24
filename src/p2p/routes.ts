@@ -3,7 +3,15 @@ import { store, state } from '../state.ts';
 import { immich } from '../immich/client.ts';
 import { peerByPub } from '../peers.ts';
 import type { PeerHandler } from './transport.ts';
-import { handleRedeem, handleRefs, handleVersion, handleNudge, handleManifest } from './protocol.ts';
+import {
+  handleRedeem,
+  handleRefs,
+  handleVersion,
+  handleNudge,
+  handleManifest,
+  handleHello,
+  handleLeave,
+} from './protocol.ts';
 import { handlePair } from './pair.ts';
 import { handleActivity, handleComments } from '../sync/comments.ts';
 import { invitationsFor, localDirectory } from '../sync/invites.ts';
@@ -22,6 +30,7 @@ const json = ([status, obj]: any[]) => ({
 export const peerRoutes: PeerHandler = async (callerPub, path, bodyBuf, range) => {
   const body = bodyBuf.toString();
   let m;
+  if (path === '/hello') return json(handleHello());
   if (path === '/pair') return json(await handlePair(callerPub, body));
   if (path === '/invites/redeem') {
     if (!shareLinkJoiningEnabled())
@@ -33,6 +42,7 @@ export const peerRoutes: PeerHandler = async (callerPub, path, bodyBuf, range) =
     return json(await handleActivity(callerPub, body, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/version$/))) return json(await handleVersion(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/manifest$/))) return json(await handleManifest(callerPub, m[1]));
+  if ((m = path.match(/^\/albums\/([^/]+)\/leave$/))) return json(handleLeave(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/comments$/))) return json(await handleComments(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/nudge$/))) return json(await handleNudge(callerPub, m[1]));
   if (path === '/directory') {

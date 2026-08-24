@@ -74,6 +74,11 @@ One cheap album read instead of a full manifest scan, so members can skip untouc
 `updatedAt` alone misses cascade deletions — removing an asset from the library does not touch the
 albums containing it — so the asset count travels with the version.
 
+**`version` is an opaque equality token.** It is compared for equality against a stored cursor and
+nothing else: it is not ordered, must never be compared with `<`/`>`, and restoring an origin from
+backup is safe _because_ equality is the only test. Receivers read the structured fields
+(`updatedAt`, `assetCount`, `comments`) and never parse the string.
+
 ## The manifest is the reconciliation sweep
 
 Members re-pull it every poll and materialise anything missing, which is what heals refs dropped at
@@ -88,4 +93,40 @@ fail-open by design and must never be made blocking.
 
 ## Pushed refs report partial success
 
-The sender re-offers only the failed refs next cycle.
+The sender re-offers only the failed refs next cycle. Pushes are **chunked** (400 refs per
+frame): the receiver's `ISA_MAX_BODY_KB` caps any one frame, an over-limit frame is answered
+with `413`/`body_too_large` rather than abandoned, and every client read carries a deadline —
+a hung peer costs one timeout, never a wedged loop.
+
+## How this protocol evolves
+
+The rules that make additive change legal, written down so nobody has to re-derive them:
+
+1. **Unknown JSON fields MUST be ignored**, in request bodies, response bodies, and the frame
+   headers. Adding an optional field is never a breaking change.
+2. **Unknown routes answer 404**, and callers treat a 404 from a route added after protocol 2
+   as "peer too old", never as an error. Adding a route is never a breaking change.
+3. **The ALPN carries the protocol MAJOR** (`isa/2`). A future major keeps serving the previous
+   ALPN for at least one major and prefers the newest the dialer offers; the accept loop reads
+   the negotiated ALPN per connection, so dual-serving needs no flag day.
+4. **`/hello`** (`{protocol, version, features[]}`) is how peers learn each other's
+   capabilities; answers are persisted per peer and refreshed each boot. A 404 means a
+   protocol-2 build from before the route existed. New behaviour gates on a feature flag,
+   never on a version comparison.
+5. **Errors carry machine `code`s** alongside human `error` prose. Receivers render their own
+   words for codes they know and treat the prose as a debug hint — a peer must not compose
+   another server's UI.
+6. **`404` means "try again"; `410` means the relationship is over** — tear down locally
+   (members leave the mirror, origins stop pushing) instead of retrying forever. Members
+   announce their own departure with `POST /albums/:mappingId/leave`, best-effort.
+7. **`checksum` is an origin-supplied opaque identity**, not an integrity check: nothing
+   verifies it against bytes, only equality is ever used (dedup and loop prevention).
+   `checksumAlg` names the algorithm (absent = `sha1-b64`); an unrecognised algorithm makes a
+   ref opaque-but-usable, and a mixed-algorithm mesh duplicates rather than errors.
+8. **Byte requests**: the `range` header field is a single HTTP byte-range forwarded verbatim
+   (no multipart ranges, no validators — there are no ETags). The optional `mapping` field is
+   advisory in protocol 2; a future major may enforce it. A stream reset mid-body is a legal
+   cancellation, not an error to penalise. Receivers cap what they will buffer from a byte
+   stream even when they asked for a bounded range.
+9. **Reserved frame-header keys**: `flags` (request and response) and `encoding` (response)
+   are reserved for future use and currently absent.

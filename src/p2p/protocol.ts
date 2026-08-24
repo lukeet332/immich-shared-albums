@@ -12,6 +12,7 @@
  */
 import crypto from 'node:crypto';
 import { CFG, SIDECAR_VERSION, log } from '../config.ts';
+import { PROTOCOL_FEATURES } from '../types.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
 import { state, save, keys } from '../state.ts';
 import { nudgePeers, peerByPub, mappingFor } from '../peers.ts';
@@ -33,6 +34,31 @@ function secretEquals(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ba, bb);
 }
 
+/** Who are you, protocol-wise. Enrolment-free on purpose: it carries nothing private and a
+ *  dialer needs it BEFORE deciding whether the two of you can talk at all. */
+export function handleHello() {
+  return [200, { protocol: PROTOCOL_VERSION, version: SIDECAR_VERSION, features: PROTOCOL_FEATURES }];
+}
+
+/**
+ * A member says it has left an album — the courtesy signal that lets the origin stop
+ * pushing to a household that is gone. Trust-minimal: it only retires the caller's OWN
+ * mapping, and only marks it dead (a re-join or re-invite revives the relationship the
+ * normal ways). v2 members that never call it merely keep the old one-sided behaviour.
+ */
+export function handleLeave(callerPub: string, albumMappingId: string) {
+  const peer = peerByPub(callerPub);
+  if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
+  const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
+  if (!mapping || mapping.dead) return [404, { error: 'unknown album mapping', code: 'unknown_mapping' }];
+  mapping.dead = true;
+  mapping.deadAt = new Date().toISOString();
+  mapping.deadReason = 'member left';
+  save();
+  log(`"${peer.name}" left "${mapping.albumName}" — no longer pushing it to them`);
+  return [200, { ok: true }];
+}
+
 export async function handleRedeem(callerPub: string, body: string) {
   const { shareKey, household, protocol, version, password } = JSON.parse(body);
   // The connection already proved possession of the caller's key, so the enrolled identity
@@ -43,22 +69,29 @@ export async function handleRedeem(callerPub: string, body: string) {
       `peer "${household?.name}" speaks protocol ${protocol} > ours (${PROTOCOL_VERSION}) — update the immich-shared-albums sidecar on this server`
     );
   const link = await getSharedLinkByKey(shareKey);
-  if (!link || link.type !== 'ALBUM') return [404, { error: 'unknown share key' }];
+  if (!link || link.type !== 'ALBUM') return [404, { error: 'unknown share key', code: 'unknown_share_key' }];
   // A share link's own rules are the owner's stated intent — honour them here exactly as
   // the Immich share page does, rather than treating the key as the whole credential.
   if (link.expiresAt && new Date(link.expiresAt).getTime() <= Date.now()) {
     log(`redeem refused: share link expired (${link.expiresAt})`);
-    return [403, { error: 'this share link has expired' }];
+    return [403, { error: 'this share link has expired', code: 'link_expired' }];
   }
   if (link.password) {
-    if (!password) return [401, { error: 'this album is password protected', passwordRequired: true }];
+    if (!password)
+      return [
+        401,
+        { error: 'this album is password protected', code: 'password_required', passwordRequired: true },
+      ];
     if (!secretEquals(link.password, password)) {
       log(`redeem refused: wrong album password from "${household.name}"`);
-      return [403, { error: 'incorrect album password' }];
+      return [403, { error: 'incorrect album password', code: 'wrong_password' }];
     }
   } else if (CFG.linkJoinRequiresPassword) {
     log('redeem refused: ISA_LINK_JOIN_REQUIRES_PASSWORD is set and this link has no password');
-    return [403, { error: 'this server only shares albums whose link has a password set' }];
+    return [
+      403,
+      { error: 'this server only shares albums whose link has a password set', code: 'password_required' },
+    ];
   }
   const album = await getAlbum(link.album.id);
   album.assets = await getAlbumAssets(album.id);
@@ -122,13 +155,32 @@ export async function handleRedeem(callerPub: string, body: string) {
     },
   ];
 }
+// 404 means "try again" (transient, or a mapping the caller mis-addressed); 410 means the
+// relationship is OVER — the receiver should tear down its side rather than retry forever.
+const goneOr404 = (peerPub: string, albumMappingId: string) => {
+  const dead = state.mappings.find(
+    mp =>
+      mp.peer === peerPub &&
+      mp.dead &&
+      (mp.id === albumMappingId || mp.albumId === albumMappingId || mp.remoteAlbumId === albumMappingId)
+  );
+  return dead
+    ? [410, { error: 'this share has ended', code: 'gone' }]
+    : [404, { error: 'unknown album mapping', code: 'unknown_mapping' }];
+};
+
 export async function handleRefs(callerPub: string, body: string, albumMappingId: string) {
   const peer = peerByPub(callerPub);
-  if (!peer) return [403, { error: 'unknown peer' }];
+  if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId);
-  if (!mapping) return [404, { error: 'unknown album mapping' }];
-  // the share link's "allow public user to upload" switch, honoured cross-server
-  if (mapping.permissions === 'view') return [403, { error: 'view-only album — uploads not allowed' }];
+  if (!mapping || mapping.dead) return goneOr404(peer.pub, albumMappingId);
+  // The share link's "allow public user to upload" switch, honoured cross-server — but the
+  // check applies to MEMBER CONTRIBUTIONS only (our owner mapping's permissions say what the
+  // link granted them). On a member mapping, `permissions` means what WE may do at the
+  // origin; gating on it here 403'd the origin's own downward pushes to view-only mirrors,
+  // which re-pushed every cycle forever (content only ever arrived via the manifest pull).
+  if (mapping.role === 'owner' && mapping.permissions === 'view')
+    return [403, { error: 'view-only album — uploads not allowed', code: 'view_only' }];
   const { add = [] } = JSON.parse(body);
   const failed: string[] = [];
   for (const ref of add) {
@@ -147,16 +199,22 @@ export async function handleRefs(callerPub: string, body: string, albumMappingId
 // compare this against their stored version and only pull the manifest on mismatch.
 export async function handleVersion(callerPub: string, albumMappingId: string) {
   const peer = peerByPub(callerPub);
-  if (!peer) return [403, { error: 'unknown peer' }];
+  if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
-  if (!mapping) return [404, { error: 'unknown album mapping' }];
+  if (!mapping || mapping.dead) return goneOr404(peer.pub, albumMappingId);
   const stats = await immichJson(`/activities/statistics?albumId=${mapping.albumId}`).catch(() => null);
   const album = await getAlbum(mapping.albumId);
-  // updatedAt alone misses cascade deletions (removing an asset from the library skips
-  // the album's timestamp) — fold the asset count in so deletions move the version too
+  // `version` is an OPAQUE equality token. The packed "updatedAt|assetCount" shape is kept as
+  // its value for protocol-2 compatibility (updatedAt alone misses cascade deletions), but
+  // receivers should read the structured fields and never parse the string.
   return [
     200,
-    { version: `${album.updatedAt}|${album.assetCount ?? ''}`, comments: stats?.comments ?? null },
+    {
+      version: `${album.updatedAt}|${album.assetCount ?? ''}`,
+      updatedAt: album.updatedAt,
+      assetCount: album.assetCount ?? null,
+      comments: stats?.comments ?? null,
+    },
   ];
 }
 export async function handleNudge(callerPub: string, albumMappingId: string) {
@@ -188,9 +246,9 @@ export async function handleNudge(callerPub: string, albumMappingId: string) {
 // Members re-pull this to heal refs missed at join time (e.g. preview not yet generated).
 export async function handleManifest(callerPub: string, albumMappingId: string) {
   const peer = peerByPub(callerPub);
-  if (!peer) return [403, { error: 'unknown peer' }];
+  if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
-  if (!mapping) return [404, { error: 'unknown album mapping' }];
+  if (!mapping || mapping.dead) return goneOr404(peer.pub, albumMappingId);
   const manifest = await buildManifest(await getAlbumAssets(mapping.albumId));
   recordOfferedRefs(mapping.id, manifest);
   return [200, { manifest }];

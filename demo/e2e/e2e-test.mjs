@@ -959,6 +959,23 @@ console.log('— stage: security (entitlement — a signed peer is not entitled 
     check('a valid peer CANNOT read the manifest of an album not mapped to it (F-06)',
           [403, 404].includes(man.status), JSON.stringify(man));
 
+    // The wire contract's evolution surface, asserted over real iroh.
+    const hello = irohProbe(bKeys, originEp, '/hello');
+    check('/hello names the protocol and a feature list',
+          hello.status === 200 && hello.json?.protocol === 2 && Array.isArray(hello.json?.features),
+          JSON.stringify(hello.json));
+    const fat = irohProbe(bKeys, originEp, '/pair', { bodyPad: 1200 * 1024 });
+    check('an over-limit body is ANSWERED with 413, not abandoned mid-stream',
+          fat.status === 413 && fat.json?.code === 'body_too_large', JSON.stringify(fat));
+    // The fat-frame probe spins up a docker container in the same instant; on Docker Desktop the
+    // host->port-proxy connection can hiccup for one request, so retry rather than flake.
+    const health = await until(async () => {
+      try { return await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`)).json(); }
+      catch { return null; }
+    }, 10000, 1000);
+    check('the health probe names the protocol, so join cards can diagnose version skew',
+          health?.ok === true && health.protocol === 2, JSON.stringify(health));
+
     await api(A, AKEY, '/assets', { ...j({ ids: [privAsset], force: true }), method: 'DELETE' }).catch(() => {});
     await api(A, AKEY, `/albums/${privAlbum}`, { method: 'DELETE' }).catch(() => {});
   }

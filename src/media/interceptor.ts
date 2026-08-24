@@ -51,10 +51,25 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
     const peer2 = mapping2 && state.peers.find(pe => pe.pub === mapping2.peer);
     if (peer2) {
       try {
-        const up = await peerByteRequest(peer2, `/assets/${entry.originAsset}/preview`);
+        const up = await peerByteRequest(
+          peer2,
+          `/assets/${entry.originAsset}/preview`,
+          undefined,
+          entry.mapping
+        );
         if (up.status < 400) {
           const chunks: Buffer[] = [];
-          for await (const chunk of recvIterable(up.recv)) chunks.push(chunk);
+          let got = 0;
+          let overflow = false;
+          for await (const chunk of recvIterable(up.recv)) {
+            got += chunk.length;
+            if (got > 32 * 1024 * 1024) {
+              overflow = true; // previews are ~100KB; 32MB means a misbehaving peer
+              break;
+            }
+            chunks.push(chunk);
+          }
+          if (overflow) throw new Error('preview exceeded 32MB — refusing to buffer it');
           const buf = Buffer.concat(chunks);
           cacheWrite(entry.originAsset, buf);
           res.writeHead(200, {
