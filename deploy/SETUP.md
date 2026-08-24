@@ -52,7 +52,7 @@ from other servers show the real photos too:
 immich-public-proxy:
   image: alangrainger/immich-public-proxy:latest
   environment:
-    IMMICH_URL: http://immich-shared-albums:8300
+    IMMICH_URL: http://immich-shared:8300 # the addon's compose service name from the install
   ports:
     - 3000:3000   # put your public HTTPS in front of this, and only this
 ```

@@ -142,7 +142,7 @@ Two constraints, because a stored fact is also a stored liability:
   the bot accounts' API keys, so anything added inherits that blast radius. (The *admin* key is
   not in there — it comes from `IMMICH_API_KEY` in the environment.) Two rules follow, neither
   about compliance:
-  - **No retained bot password.** Rolled to a value nobody keeps (`ensureLocalAccountFor`) once the
+  - **No retained bot password.** Rolled to a value nobody keeps (`ensureUtilityUser`) once the
     API key is minted. A bot key deliberately lacks `apiKey.create`, so it can do its listed
     actions and no more; a password logs in interactively and can mint an unrestricted key for that
     account. Pure downside rather than a tradeoff. The e2e asserts it.
@@ -185,9 +185,9 @@ it fires.
 | `WATCH_RUNNING` — *"overlapping cycles stampede the host"* | `watchCycleInFlight` |
 | `mayAdd` — *"missing members are revoked, do not re-add"* | `reAddIfMissing` |
 
-`mayAdd` is the instructive one: a name can survive a rename and still be wrong — it says
-*permission* where the meaning is "if they are missing, put them back". Needing a comment after a
-rename means go again, not settle.
+`mayAdd` is the instructive one: a name can survive a rename and still be wrong — it said
+*permission* where the meaning is "if they are missing, put them back", hence `reAddIfMissing`.
+Needing a comment after a rename means go again, not settle.
 
 How to choose the name:
 

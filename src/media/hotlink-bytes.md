@@ -29,6 +29,8 @@ anywhere else. The two entry points authorise in completely different ways:
   any enrolled peer could read anything in the library it could name — asset ids are not
   secrets, and manifests hand them out by design.
 
-**Timeouts bound the handshake, not the transfer.** A hostile peer must not hold a
-connection open forever, but a legitimate 4K original may stream for minutes — so the
-clock stops the moment response headers arrive (`fetchWithHeaderTimeout`).
+**Streams have no read deadline, and the callers are not strangers.** A legitimate 4K
+original may stream for minutes, and every byte flows over a mutually authenticated iroh
+connection: an unknown key can reach only the two enrolment routes, never bytes. Memory
+stays bounded regardless — request frames are length-capped (64 KB headers, `MAX_BODY_KB`
+bodies) and responses stream chunk by chunk.
