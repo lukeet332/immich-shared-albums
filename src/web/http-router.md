@@ -54,7 +54,7 @@ wrong. Keep Immich as a second upstream so a dead sidecar fails open:
 
 ```caddy
 photos.example.com {
-	reverse_proxy immich-shared:8300 immich-server:2283 {
+	reverse_proxy immich-shared-albums:8300 immich-server:2283 {
 		lb_policy first
 		fail_duration 10s
 	}

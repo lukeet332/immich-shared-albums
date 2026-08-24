@@ -85,6 +85,6 @@ Notes for you, the agent:
 
 ## What a successful install looks like
 
-- One new container (`immich-shared`) on your Immich docker network.
+- One new container (`immich-shared-albums`) on your Immich docker network.
 - `https://your-domain/immich-shared-albums/` shows the sidecar panel.
 - Share links show the join banner; everything else about Immich is unchanged.

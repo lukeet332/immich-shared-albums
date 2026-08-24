@@ -47,7 +47,7 @@ say "Writing $INSTALL_DIR/docker-compose.yml"
 cat > "$INSTALL_DIR/docker-compose.yml" <<EOF
 name: immich-shared-albums
 services:
-  immich-shared:
+  immich-shared-albums:
     image: immich-shared-albums:live
     restart: unless-stopped
     environment:
@@ -74,7 +74,7 @@ say "Starting sidecar"
 printf "waiting for health"
 ok=""
 for _ in $(seq 1 20); do
-  if (cd "$INSTALL_DIR" && docker compose exec -T immich-shared wget -qO- http://localhost:8300/immich-shared-albums/health 2>/dev/null) | grep -q '"ok":true'; then
+  if (cd "$INSTALL_DIR" && docker compose exec -T immich-shared-albums wget -qO- http://localhost:8300/immich-shared-albums/health 2>/dev/null) | grep -q '"ok":true'; then
     ok=1; break
   fi
   printf "."; sleep 1
@@ -83,7 +83,7 @@ echo
 if [ -n "$ok" ]; then
   echo "health: OK"
 else
-  echo "health check failed — logs:"; (cd "$INSTALL_DIR" && docker compose logs immich-shared --tail 30); exit 1
+  echo "health check failed — logs:"; (cd "$INSTALL_DIR" && docker compose logs immich-shared-albums --tail 30); exit 1
 fi
 
 say "Last step (manual): route three paths through your reverse proxy"
@@ -91,13 +91,13 @@ cat <<EOF
 Add to your existing site config, BEFORE the catch-all Immich route:
 
   Caddy (byte routes are GET-only and fall back to Immich if the sidecar is down):
-    handle /immich-shared-albums/* { reverse_proxy immich-shared:8300 }
-    handle /share/*   { reverse_proxy immich-shared:8300 immich-server:2283 { lb_policy first } }
+    handle /immich-shared-albums/* { reverse_proxy immich-shared-albums:8300 }
+    handle /share/*   { reverse_proxy immich-shared-albums:8300 immich-server:2283 { lb_policy first } }
     @sharedbytes {
       method GET
       path /api/assets/*/thumbnail /api/assets/*/original /api/assets/*/video/playback
     }
-    handle @sharedbytes { reverse_proxy immich-shared:8300 immich-server:2283 { lb_policy first } }
+    handle @sharedbytes { reverse_proxy immich-shared-albums:8300 immich-server:2283 { lb_policy first } }
 
   nginx:
     location /immich-shared-albums/ { proxy_pass http://127.0.0.1:$HOST_PORT; }

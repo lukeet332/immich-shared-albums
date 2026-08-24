@@ -3,7 +3,7 @@
 # Put the API key in a .env file next to this compose file (chmod 600):
 #   SIDECAR_API_KEY=<immich admin api key, all permissions>
 services:
-  immich-shared:
+  immich-shared-albums:
     image: immich-shared-albums:live
     restart: always
     environment:

@@ -68,13 +68,13 @@ photos.example.com {
 		request_body {
 			max_size 2MB
 		}
-		reverse_proxy immich-shared:8300 {
+		reverse_proxy immich-shared-albums:8300 {
 			header_up X-Real-IP {remote_host}
 		}
 	}
 
 	handle {
-		reverse_proxy immich-shared:8300 immich-server:2283 {
+		reverse_proxy immich-shared-albums:8300 immich-server:2283 {
 			lb_policy first
 			fail_duration 10s
 			header_up X-Real-IP {remote_host}
