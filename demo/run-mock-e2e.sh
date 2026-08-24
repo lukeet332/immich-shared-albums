@@ -19,19 +19,10 @@ fi
 purge() { # base key statedir : delete all albums, sidecar users, non-admin assets, reset sidecar state
   local BASE=$1 KEY=$2 STATEDIR=${3:-}
   # mirror albums are owned by utility users — only their own keys (in the state store) can delete them
-  # (schema v1 keeps contributors in a real table; the kv-blob read is a fallback so this can
-  # still purge a rig last written by pre-v1 code)
   local CONTRIB=""
-  if [ -f "$STATEDIR/state.db" ]; then
-    CONTRIB=$(sqlite3 "$STATEDIR/state.db" "SELECT '[' || COALESCE(group_concat(json_object('key', apiKey)), '') || ']' FROM contributors" 2>/dev/null)
-    [ -n "$CONTRIB" ] && [ "$CONTRIB" != "[]" ] || CONTRIB=$(sqlite3 "$STATEDIR/state.db" "SELECT value FROM kv WHERE name='contributors'" 2>/dev/null)
-  fi
-  if [ -n "$CONTRIB" ] && [ "$CONTRIB" != "[]" ]; then
-    for CK in $(echo "$CONTRIB" | python3 -c "
-import json,sys
-d = json.load(sys.stdin)
-vals = d if isinstance(d, list) else d.values()
-print('\n'.join(c.get('apiKey') or c.get('key') or '' for c in vals))" 2>/dev/null); do
+  [ -f "$STATEDIR/state.db" ] && CONTRIB=$(sqlite3 "$STATEDIR/state.db" "SELECT apiKey FROM contributors" 2>/dev/null)
+  if [ -n "$CONTRIB" ]; then
+    for CK in $CONTRIB; do
       for AL in $(curl -s $BASE/api/albums -H "x-api-key: $CK" | python3 -c "import json,sys;[print(a['id']) for a in json.load(sys.stdin)]" 2>/dev/null); do
         curl -s -X DELETE $BASE/api/albums/$AL -H "x-api-key: $CK" -o /dev/null; done
     done

@@ -14,26 +14,8 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
 export const SCHEMA_VERSION = 1;
-
-// The pre-v1 store kept identity keys as DER (spki/pkcs8) base64url. The envelopes are
-// constant, so v0 -> v1 key conversion is a deterministic re-encoding of the same key —
-// which is what lets a migration preserve every pairing.
-const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-const derToRawPub = (derB64: string): string => {
-  const buf = Buffer.from(derB64, 'base64url');
-  return (buf.length > 32 ? buf.subarray(SPKI_PREFIX.length) : buf).toString('base64url');
-};
-const pkcs8ToSeed = (derB64: string): string => {
-  const key = crypto.createPrivateKey({
-    key: Buffer.from(derB64, 'base64url'),
-    format: 'der',
-    type: 'pkcs8',
-  });
-  return (key.export({ format: 'jwk' }) as { d: string }).d;
-};
 
 export type SeenEntry = {
   mapping: string;
@@ -165,10 +147,13 @@ export class Store {
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
-    // A pre-v1 store is recognisable by its identity blob under the old kv name. Migrate it
-    // BEFORE creating the v1 tables — the old ledgers share table names with different columns.
-    const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (version === 0 && this.kvGet('keys')) this.migrateV0();
+    // A pre-v1 store is recognisable by its identity blob under the old kv name. v0 shipped
+    // to nobody — that was the point of the v1 window — so there is deliberately NO migration:
+    // refuse with instructions instead of greeting an upgrade with raw SQL errors.
+    if (this.kvGet('keys'))
+      throw new Error(
+        'state.db is from a pre-v1 build. Stop the container, delete the data volume, and pair the servers again — pre-v1 state is not migrated.'
+      );
     this.createSchema();
     const current = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
     if (current === 0) this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
@@ -268,89 +253,6 @@ export class Store {
         homePeer TEXT
       );
     `);
-  }
-
-  /**
-   * v0 -> v1: kv-blob collections become tables, ledger columns get real names, DER key
-   * envelopes become raw — the SAME keys re-encoded, so every pairing survives and nothing
-   * needs re-linking. Field-level conversions mirror the type renames (key->apiKey,
-   * peer->viaPeer, adminSlug->hostSlug). Migrated peers are stamped via:'pair': the entire
-   * v0 install base consists of admin-paired servers, and the label is what any future
-   * pair-only policy would gate on.
-   */
-  private migrateV0() {
-    const hasTable = (name: string) =>
-      !!this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name);
-    this.db.exec('BEGIN');
-    try {
-      for (const t of ['seen', 'offered', 'added', 'seen_activity'])
-        if (hasTable(t)) this.db.exec(`ALTER TABLE ${t} RENAME TO ${t}_v0`);
-      this.createSchema();
-      if (hasTable('seen_v0'))
-        this.db.exec(
-          'INSERT INTO seen (mapping, checksum, localAsset, originAsset) SELECT m, c, l, o FROM seen_v0'
-        );
-      if (hasTable('offered_v0'))
-        this.db.exec('INSERT INTO offered (mapping, asset) SELECT m, a FROM offered_v0');
-      if (hasTable('added_v0')) this.db.exec('INSERT INTO added (album, user) SELECT al, us FROM added_v0');
-      if (hasTable('seen_activity_v0'))
-        this.db.exec('INSERT INTO seen_activity (tag, mapping) SELECT tag, NULL FROM seen_activity_v0');
-      for (const t of ['seen_v0', 'offered_v0', 'added_v0', 'seen_activity_v0'])
-        if (hasTable(t)) this.db.exec(`DROP TABLE ${t}`);
-
-      const now = new Date().toISOString();
-      const oldKeys = this.kvGet('keys') as { pub: string; priv: string } | null;
-      if (oldKeys)
-        this.kvSet('identity', {
-          v: 1,
-          alg: 'ed25519',
-          pub: derToRawPub(oldKeys.pub),
-          priv: pkcs8ToSeed(oldKeys.priv),
-          createdAt: now,
-        } satisfies Identity);
-      const migrated: Collections = {
-        identity: null, // written above via kv; putCollections skips it
-        peers: ((this.kvGet('peers') ?? []) as Record<string, unknown>[]).map(p => ({
-          ...(p as unknown as Peer),
-          pub: derToRawPub(p.pub as string),
-          via: 'pair',
-          firstSeenAt: now,
-        })),
-        mappings: ((this.kvGet('mappings') ?? []) as Record<string, unknown>[]).map(m => {
-          const { adminSlug, ...rest } = m as Record<string, unknown>;
-          return {
-            ...(rest as unknown as Mapping),
-            peer: derToRawPub(m.peer as string),
-            hostSlug: (adminSlug as string) ?? undefined,
-            via: (m.via as 'link' | 'invite') ?? 'link',
-            permissions: (m.permissions as 'view' | 'contribute') ?? 'view',
-          };
-        }),
-        contributors: Object.fromEntries(
-          Object.entries((this.kvGet('contributors') ?? {}) as Record<string, Record<string, unknown>>).map(
-            ([slug, c]) => {
-              const { key, peer, ...rest } = c;
-              return [
-                slug,
-                {
-                  ...(rest as unknown as Contributor),
-                  apiKey: key as string,
-                  viaPeer: peer ? derToRawPub(peer as string) : undefined,
-                  homePeer: c.homePeer ? derToRawPub(c.homePeer as string) : undefined,
-                },
-              ];
-            }
-          )
-        ),
-      };
-      this.putCollections(migrated);
-      this.db.prepare(`DELETE FROM kv WHERE name IN ('keys', 'peers', 'mappings', 'contributors')`).run();
-      this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-      this.db.exec('COMMIT');
-    } catch (e) {
-      this.db.exec('ROLLBACK');
-      throw e;
-    }
   }
 
   /**
