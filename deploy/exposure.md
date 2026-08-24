@@ -2,8 +2,17 @@
 
 Cross-server sharing needs **nothing** of yours reachable from the internet — the sidecars
 connect to each other directly, dialling out. So exposure is purely a choice about how *you*
-want to reach your own photos and share links, and this page is how to decide, then lock down
-whatever you pick.
+want to reach your own photos and share links. This page is how to decide, plus the two things
+the addon changes about hosting. Everything else — reverse proxies, TLS, tunnels, port
+forwarding, rate limiting — is ordinary Immich hosting, and the guides that already exist for
+it apply unchanged:
+
+- [Immich: remote access](https://docs.immich.app/guides/remote-access/) — VPNs, tunnels, and
+  when to use which
+- [Immich: reverse proxy](https://docs.immich.app/administration/reverse-proxy/) — proxy
+  configs and the upload-size traps
+- [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) — hosting the
+  share-link gallery, with configs for the common setups
 
 ---
 
@@ -13,168 +22,58 @@ whatever you pick.
 |---|---|---|
 | **A. Nothing** *(recommended)* | Nothing at all. | Your own devices need a VPN (Tailscale etc.) to reach your photos away from home. Share links only work at home or on the VPN. |
 | **B. Link sharing with immich-public-proxy** | Only [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) — a read-only gallery for share links. | Same VPN story as A for your own devices. Anyone with a link can view it (plus its password, if set). |
-| **C. Fully public** | All of Immich. | Your sign-in page is reachable from the internet — rate-limit it (§2). Share links become joinable by other servers. |
-
-Whatever you pick: **your Immich apps must point at the addon**, not at Immich directly, or
-shared photos render as blank placeholders — the byte interceptors live in the addon.
-
-**Posture A needs nothing else from this page** — there's nothing exposed to harden.
-
-**Posture B** publishes exactly one thing. Point immich-public-proxy's `IMMICH_URL` at the
-addon (`http://immich-shared-albums:8300`), put your reverse proxy in front of **only** the
-proxy's port, and you're done — Immich, the addon and the panel all stay private. The §3
-server checklist still applies; §2's Caddy config does not (there's no Immich to front).
-
-The rest of this page is for posture C.
+| **C. Fully public** | All of Immich. | Your sign-in page is reachable from the internet. Share links become joinable by other servers. |
 
 ---
 
-## 2. Recommended Caddy config (posture C)
+## 2. What the addon changes about hosting
 
-One route sends everything to the sidecar, which passes non-shared traffic through to Immich.
-Immich is listed second so a dead sidecar **fails open** — your library keeps working.
+Two things, and only these — after them, treat your setup as a vanilla Immich (posture C) or
+Immich + immich-public-proxy (posture B) and follow the guides above as written.
 
-```caddy
-photos.example.com {
-	# --- access log. Nothing else here is verifiable without it. ---
-	# Written inside Caddy's own /data volume so it survives container recreates.
-	log {
-		output file /data/access.log {
-			roll_size 20MiB
-			roll_keep 10
-		}
-		format json
-	}
+1. **Your Immich apps point at the addon, not at Immich directly** — otherwise shared photos
+   render as blank placeholders, because the byte interceptors live in the addon. Concretely:
+   wherever a hosting guide says to point something at Immich's port (`2283`), point it at the
+   addon's port (`8300`) instead. The addon passes everything else through unchanged,
+   websockets included, and if it's ever down you can point back at Immich directly — nothing
+   is held hostage.
+2. **immich-public-proxy's `IMMICH_URL` points at the addon too**
+   (`http://immich-shared-albums:8300`, not `immich-server:2283`) — that is what makes photos
+   shared from other servers render full quality in public links.
 
-	# --- brute-force protection (see the note below about the plugin) ---
-	rate_limit {
-		zone logins {
-			match {
-				path /api/auth/login /api/auth/admin-sign-up /api/shared-links/login
-			}
-			key {remote_host}
-			events 5
-			window 1m
-		}
-	}
+Addon-specific settings worth flipping per posture:
 
-	header {
-		Strict-Transport-Security "max-age=31536000"
-		X-Content-Type-Options "nosniff"
-		Referrer-Policy "strict-origin-when-cross-origin"
-		-Server
-	}
-
-	# the sidecar speaks JSON only, so a tight body cap is safe HERE
-	handle /immich-shared-albums/* {
-		request_body {
-			max_size 2MB
-		}
-		reverse_proxy immich-shared-albums:8300 {
-			header_up X-Real-IP {remote_host}
-		}
-	}
-
-	handle {
-		reverse_proxy immich-shared-albums:8300 immich-server:2283 {
-			lb_policy first
-			fail_duration 10s
-			header_up X-Real-IP {remote_host}
-		}
-	}
-}
-```
-
-Four things worth knowing, each of which bites people:
-
-- **Never put `request_body` at site level.** Immich needs 50GB for uploads. Capping globally
-  breaks every photo and video upload, and the failure looks like a flaky network.
-- **`rate_limit` is not built into Caddy.** You need a one-off custom image:
-  ```dockerfile
-  FROM caddy:2-builder AS build
-  RUN xcaddy build --with github.com/mholt/caddy-ratelimit
-  FROM caddy:2
-  COPY --from=build /usr/bin/caddy /usr/bin/caddy
-  ```
-  Build it (`docker build -t caddy-rl:2 .`) and use `caddy-rl:2` as your Caddy image. If you
-  would rather not, delete the `rate_limit` block — everything else works without it.
-- **Do not use fail2ban for this.** fail2ban and firewalld filter `INPUT`, but traffic to
-  Docker-published ports goes through `FORWARD → DOCKER`. Bans get logged and **never
-  enforced**, which is worse than no protection because it looks like it works. That is why
-  the rate limiting above is done in Caddy instead.
-- **`X-Real-IP` is not set by Caddy automatically.** Without it, anything IP-based sees your
-  proxy's container address rather than the real client.
-
-Apply changes with `docker exec caddy caddy reload --config /etc/caddy/Caddyfile` — no
-downtime, and it refuses a bad config rather than half-applying it.
-
-Using nginx, Traefik or NPM instead? The single route above translates directly: one
-`location /`, one router label, or one proxy host. Only the `handle /immich-shared-albums/*` body cap and
-the header lines need their equivalents.
-
----
-
-## 3. Server checklist
-
-- **Never publish Immich's port.** Delete `ports: - '2283:2283'` from your Immich compose.
-  Caddy reaches Immich by container name, so the mapping does nothing except expose plaintext
-  HTTP that bypasses your proxy. This is [Immich's own explicit
-  warning](https://docs.immich.app/guides/remote-access/).
-- **`chmod 600` your `.env`.** It holds an admin API key. If a non-root user needs to run
+- **Posture B:** in the panel, switch *"Allow other Immich users to join albums via shared
+  links"* **off** — links stay strictly view-only, and servers link to yours by pairing code
+  alone.
+- **Posture C:** set `REQUIRE_SHARE_PASSWORD: "true"` on the addon, so a forwarded share link
+  with no password can't be used to introduce a stranger's server.
+- **Any posture:** `chmod 600` the `.env` holding the API key. If a non-root user needs
   `docker compose`, use `chown root:docker` + `chmod 640` instead — the docker group is
   already root-equivalent, so this grants nothing new.
-- **Keep Immich patched.** This is your largest real risk and Immich says so themselves. Turn
-  on unattended updates, and remember a **reboot** is needed for kernel and glibc fixes.
-- **Check what your router actually forwards.** Only 80 and 443 should be. Everything else
-  bound to `0.0.0.0` — Cockpit on 9090, SSH, stray test listeners — is exposed if forwarded.
 
 ---
 
-## 4. Optional extra for posture C: close sign-in
-
-If you want Immich public but not its sign-in page, add this to your site block. Existing
-sessions keep working, so phones already signed in carry on; only *new* sign-ins are blocked
-from the internet — new devices sign in at home (or on VPN) the first time.
-
-```caddy
-@newlogin path /api/auth/login /api/auth/admin-sign-up /auth/login
-handle @newlogin {
-	respond "Sign in from your home network" 403
-}
-```
-
-Do **not** block all of `/api/auth/*` — `status`, `session` and `logout` all need to work for
-signed-in clients, and blocking them logs everyone out.
-
-## 5. Joining albums from a share link, in postures A and B
+## 3. Joining albums from a share link, in postures A and B
 
 Share links can still be *viewed* publicly through immich-public-proxy, but a stranger's
-server can't *join* from one — the join card lives on your (private) share page. In posture A,
-someone in your household joins another family's album while home or on the VPN, and linking a
-new server is always the pairing code. That's the design, not a limitation to work around.
+server can't *join* from one — the join card lives on your (private) share page. In postures A
+and B, someone in your household joins another family's album while home or on the VPN, and
+linking a new server is always the pairing code. That's the design, not a limitation to work
+around.
 
 ---
 
-## 6. Check it worked
+## 4. Check the addon's surface
 
-From a phone on mobile data, or any machine outside your network:
+Whatever posture you picked, from outside your network the addon's admin surface must demand a
+session:
 
 ```bash
-# only 80/443 should answer
-for p in 22 2283 9090 5432; do nc -z -w3 your-public-ip $p && echo "$p OPEN"; done
-
-# headers present, no Server banner
-curl -sI https://photos.example.com/ | grep -iE 'strict-transport|x-content-type|referrer'
-
-# the sidecar's admin surface must be closed
-curl -s -o /dev/null -w '%{http_code}\n' https://photos.example.com/immich-shared-albums/   # expect 401
-
-# rate limiting bites (expect 401s then 429s)
-for i in $(seq 1 8); do
-  curl -s -o /dev/null -w '%{http_code} ' -X POST https://photos.example.com/api/auth/login \
-    -H 'Content-Type: application/json' -d '{"email":"x@invalid.test","password":"x"}'
-done; echo
+curl -s -o /dev/null -w '%{http_code}\n' https://your-public-address/immich-shared-albums/   # expect 401
 ```
 
-One thing you **cannot** fix: `/api/server/version` is readable without auth, because Immich's
-share pages need it. Accept it and keep Immich updated.
+Everything reachable under `/immich-shared-albums/` without a signed-in Immich session returns
+401 by design — the addon has no accounts or passwords of its own. For checking the rest of
+your exposure (open ports, headers, rate limits), Immich's own hardening guidance applies —
+the addon adds no surface beyond the paths above.

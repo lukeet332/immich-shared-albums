@@ -2,7 +2,6 @@
 #
 # Simpler alternative: point ONE route at the sidecar and let it pass the rest through to
 # Immich — no path matching, no ordering to get wrong. See deploy/exposure.md §2.
-# That file also has the recommended hardening (access log, rate limiting, headers).
 #
 # All of /immich-shared-albums/* is safe to expose publicly: the panel and the join/leave routes
 # require a signed-in Immich session (checked against your own Immich, server-side).
