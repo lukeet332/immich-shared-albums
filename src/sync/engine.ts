@@ -134,7 +134,7 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
     // where the two agree — dirty reads retry next cycle instead of poisoning the cursor.
     const expectedCount = version ? Number(String(version).split('|')[1]) : NaN;
     const consistent = !Number.isFinite(expectedCount) || manifest.length === expectedCount;
-    if (process.env.RECONCILE_DEBUG)
+    if (CFG.reconcileDebug)
       log(
         `DBG reconcile "${mapping.albumName}": version=${version} cursor=${mapping.remoteVersion} manifest=${manifest.length} expected=${expectedCount} consistent=${consistent} ledger=${store.seenForMapping(mapping.id).length}`
       );
@@ -144,7 +144,7 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
     if (version && consistent) {
       const offered = new Set(manifest.map(x => x.checksum));
       for (const entry of store.seenForMapping(mapping.id)) {
-        if (process.env.RECONCILE_DEBUG)
+        if (CFG.reconcileDebug)
           log(
             `DBG entry c=${entry.checksum.slice(0, 8)} o=${!!entry.originAsset} offered=${offered.has(entry.checksum)}`
           );
@@ -188,5 +188,5 @@ export function startWatchLoop() {
       .finally(() => {
         WATCH_RUNNING = false;
       });
-  }, CFG.pollMs);
+  }, CFG.syncPollMs);
 }

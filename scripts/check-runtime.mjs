@@ -17,7 +17,7 @@ import { readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-process.env.IMMICH_API_KEY ||= 'check-runtime-only';
+process.env.ISA_IMMICH_API_KEY ||= 'check-runtime-only';
 process.env.DATA_DIR ||= '/tmp/check-runtime';
 
 const root = join(import.meta.dirname, '..', 'src');

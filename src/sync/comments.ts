@@ -172,8 +172,5 @@ export async function pullCanonicalComments(mapping, peer) {
 // comments ride a fast lane: the count statistic is one indexed query, so seconds-level
 // cadence stays cheap even on low-power hosts; the full activity fetch only runs on change
 export function startCommentLoop() {
-  setInterval(
-    () => syncComments().catch(e => log('comment loop:', e.message)),
-    Number(process.env.COMMENT_POLL_MS || 5000)
-  );
+  setInterval(() => syncComments().catch(e => log('comment loop:', e.message)), CFG.commentPollMs);
 }

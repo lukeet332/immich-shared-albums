@@ -1,7 +1,7 @@
 /**
  * media/cache.ts — a bounded LRU byte-cache for streamed previews. Files live under
  * <dataDir>/cache with accounting in SQLite; a cache, not storage (capped, reclaimable,
- * safe to delete). Disabled when CACHE_MAX_MB=0.
+ * safe to delete). Disabled when ISA_CACHE_MAX_MB=0.
  */
 import fs from 'node:fs';
 import crypto from 'node:crypto';

@@ -20,21 +20,21 @@ certificates, and no listening HTTP surface for peers at all.
   **Discovery is never enabled** — tickets and tokens carry the address, so no registry learns a
   server exists.
 
-| File | What it does |
-|---|---|
-| `transport.ts` | The iroh endpoint: lifecycle (the endpoint secret IS the household key's seed), dial-by-key with self-refreshing hints, the frame codec, `peerRequest`/`peerByteRequest`. |
-| `routes.ts` | The peer route table, served from the accept loop — the only place peer operations exist. Gates `/invites/redeem` on the panel's `shareLinkJoin` setting. |
-| `protocol.ts` | Inbound handlers, mostly owner-side. `handleRedeem` turns a share key into a pinned peer + mapping and returns the manifest; `handleRefs` accepts pushed photos; `handleVersion`/`handleManifest` answer the cheap handshake and the full offer set; `handleNudge` reacts to "something moved, pull now". Each returns `[status, jsonBody]` for `routes.ts` to frame. |
-| `pair.ts` | Linking two servers as its own act. Mints an `isa2-…` ticket — this endpoint's key + dial hints + a single-use, 15-minute, 32-byte secret — and `handlePair` burns the secret **before** answering, so a replay finds nothing. The redeeming side dials the ticket's key, and the dial only succeeds if the far end holds it: identity is verified by connecting. Pairing conveys **no album access** — what the two servers may see of each other is decided afterwards, per person, in Immich's own picker. |
-| `join.ts` | The **member side** of joining. Dials the endpoint carried by the invite, redeems the share key, pins the peer (refusing an origin that answers with a different identity than the invite named), creates the local mirror, and kicks off the first reconcile. Idempotent — re-joining adds the user to the existing mirror. |
-| `mirror.ts` | Creating the local mirror of a remote album — the account-owner, local members as editors, the mapping, and the background fill. Shared by `join.ts` (share link) and `sync/invites.ts` (native invitation): two ways to acquire an album, one way to mirror it. |
-| `entitlement.ts` | What a peer may **read**, as distinct from who it is. Records every asset advertised to a mapping, and answers the byte routes' "is this peer allowed this asset". |
-| `unlink.ts` | Cutting a server link, from the panel. Tears down mirrors held from that peer (via `sync/leave.ts`, so their stubs go too), drops the mappings and entitlement for albums shared *to* them, and deletes that peer's per-person accounts with `force: true` — **assets leave with their owner**. Unlinking is destructive by design, and the panel confirms it. |
+| File             | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transport.ts`   | The iroh endpoint: lifecycle (the endpoint secret IS the household key's seed), dial-by-key with self-refreshing hints, the frame codec, `peerRequest`/`peerByteRequest`.                                                                                                                                                                                                                                                                                                                                     |
+| `routes.ts`      | The peer route table, served from the accept loop — the only place peer operations exist. Gates `/invites/redeem` on the panel's `shareLinkJoin` setting.                                                                                                                                                                                                                                                                                                                                                     |
+| `protocol.ts`    | Inbound handlers, mostly owner-side. `handleRedeem` turns a share key into a pinned peer + mapping and returns the manifest; `handleRefs` accepts pushed photos; `handleVersion`/`handleManifest` answer the cheap handshake and the full offer set; `handleNudge` reacts to "something moved, pull now". Each returns `[status, jsonBody]` for `routes.ts` to frame.                                                                                                                                         |
+| `pair.ts`        | Linking two servers as its own act. Mints an `isa2-…` ticket — this endpoint's key + dial hints + a single-use, 15-minute, 32-byte secret — and `handlePair` burns the secret **before** answering, so a replay finds nothing. The redeeming side dials the ticket's key, and the dial only succeeds if the far end holds it: identity is verified by connecting. Pairing conveys **no album access** — what the two servers may see of each other is decided afterwards, per person, in Immich's own picker. |
+| `join.ts`        | The **member side** of joining. Dials the endpoint carried by the invite, redeems the share key, pins the peer (refusing an origin that answers with a different identity than the invite named), creates the local mirror, and kicks off the first reconcile. Idempotent — re-joining adds the user to the existing mirror.                                                                                                                                                                                  |
+| `mirror.ts`      | Creating the local mirror of a remote album — the account-owner, local members as editors, the mapping, and the background fill. Shared by `join.ts` (share link) and `sync/invites.ts` (native invitation): two ways to acquire an album, one way to mirror it.                                                                                                                                                                                                                                              |
+| `entitlement.ts` | What a peer may **read**, as distinct from who it is. Records every asset advertised to a mapping, and answers the byte routes' "is this peer allowed this asset".                                                                                                                                                                                                                                                                                                                                            |
+| `unlink.ts`      | Cutting a server link, from the panel. Tears down mirrors held from that peer (via `sync/leave.ts`, so their stubs go too), drops the mappings and entitlement for albums shared _to_ them, and deletes that peer's per-person accounts with `force: true` — **assets leave with their owner**. Unlinking is destructive by design, and the panel confirms it.                                                                                                                                                |
 
 **The share-link handshake, end to end:** the origin's share page embeds its endpoint token → the
 join card forwards it in the v2 invite fragment (never a server log) → the visitor's own sidecar
 dials the origin and redeems → the origin pins the caller's proven key and returns the manifest →
-the joiner materialises it via `sync/`. The origin's HTTPS exists for the *page*; the protocol leg
+the joiner materialises it via `sync/`. The origin's HTTPS exists for the _page_; the protocol leg
 needs no exposed surface anywhere.
 
 ## What the connection does and does not prove
@@ -44,7 +44,7 @@ forward-secret. On its own it says nothing about what that peer may touch, and t
 the same thing is how a peer-to-peer protocol turns into an open door. Two rules follow, and every
 inbound handler keeps them:
 
-1. **Look mappings up *with* the caller.** `peers.mappingFor` always filters on
+1. **Look mappings up _with_ the caller.** `peers.mappingFor` always filters on
    `m.peer === peerPub`. Without that term a mapping id alone selects an album, and any enrolled
    peer can act on a relationship belonging to a different household.
 2. **A nudge is a hint, never a source.** `handleNudge` reconciles against the mapping's own
@@ -60,7 +60,7 @@ inbound handler keeps them:
   get wrong.
 - **A grant an admin or owner actually made**: a pairing secret (single-use, burned before the
   answer) or a share key, whose own rules — expiry, password (constant-time compared),
-  `REQUIRE_SHARE_PASSWORD` — are honoured exactly as Immich's share page honours them.
+  `ISA_LINK_JOIN_REQUIRES_PASSWORD` — are honoured exactly as Immich's share page honours them.
 - **Idempotency.** Re-redeeming reuses the existing mapping rather than minting another, so a
   valid grant is not an unbounded state-growth lever.
 

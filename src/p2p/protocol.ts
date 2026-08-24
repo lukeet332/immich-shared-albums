@@ -56,8 +56,8 @@ export async function handleRedeem(callerPub: string, body: string) {
       log(`redeem refused: wrong album password from "${household.name}"`);
       return [403, { error: 'incorrect album password' }];
     }
-  } else if (CFG.requireSharePassword) {
-    log('redeem refused: REQUIRE_SHARE_PASSWORD is set and this link has no password');
+  } else if (CFG.linkJoinRequiresPassword) {
+    log('redeem refused: ISA_LINK_JOIN_REQUIRES_PASSWORD is set and this link has no password');
     return [403, { error: 'this server only shares albums whose link has a password set' }];
   }
   const album = await getAlbum(link.album.id);

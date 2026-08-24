@@ -37,13 +37,13 @@ transport — lockfile-pinned, installed by the Dockerfile):
 
 Started by `index.ts`, each guarded against overlapping itself:
 
-| Loop | Does | Cadence |
-|---|---|---|
-| `startWatchLoop` | `watchOnce` pushes local additions to peers, then **ends each cycle with `reconcileOnce`** | `POLL_MS` |
-| `startCommentLoop` | two-way comment sync, gated on a cheap activity-count statistic | fast lane |
-| `startInviteLoop` | `detectInvitesOnce` (origin side), then `pullInvitationsOnce` (member side) | own tick |
+| Loop               | Does                                                                                       | Cadence            |
+| ------------------ | ------------------------------------------------------------------------------------------ | ------------------ |
+| `startWatchLoop`   | `watchOnce` pushes local additions to peers, then **ends each cycle with `reconcileOnce`** | `ISA_SYNC_POLL_MS` |
+| `startCommentLoop` | two-way comment sync, gated on a cheap activity-count statistic                            | fast lane          |
+| `startInviteLoop`  | `detectInvitesOnce` (origin side), then `pullInvitationsOnce` (member side)                | own tick           |
 
-A lost nudge costs nothing — the next scheduled pass catches everything. `RECONCILE_DEBUG=1` traces
+A lost nudge costs nothing — the next scheduled pass catches everything. `ISA_RECONCILE_DEBUG=1` traces
 every decision.
 
 ## Components
@@ -68,7 +68,7 @@ every decision.
   QUIC dialing the household's key itself.
   - The key IS the address; relay/address hints refresh themselves after every dial.
   - Enrolment is proven by the connection (pairing ticket or share key names the grant).
-  - Identity is *only* identity: every mapping lookup filters on the calling peer, so a valid
+  - Identity is _only_ identity: every mapping lookup filters on the calling peer, so a valid
     connection can never select someone else's album. See [`p2p/wire-protocol.md`](./p2p/wire-protocol.md).
 - **entitlement** — "may this peer read these bytes", kept separate from "who is this peer".
   Everything advertised to a mapping (redeem response, manifest, ref push) lands in an `offered`
@@ -104,7 +104,7 @@ every decision.
 - **native invitations** — every person on a linked server has a local account, so adding one to an
   album in Immich's own picker shares it with **that person**, and removing them revokes it. Sharing
   never names a household.
-  - Detected by listing albums *as that account*, because `GET /albums` is scoped per user and the
+  - Detected by listing albums _as that account_, because `GET /albums` is scoped per user and the
     admin key only ever sees the admin's own albums — which is also why link-based sharing is still
     broken for non-admins.
   - Members **pull** invitations rather than being pushed them, so a household with no inbound
@@ -148,7 +148,7 @@ other only through runtime calls (join → reconcile, watcher → nudge), never 
 
 **A concern graduates.** It starts as one file at `src/` root (like `peers.ts`) and becomes a folder
 once it needs several. Where its doc then lives, and the rule that keeps these docs accurate, are in
-[AGENTS.md](../AGENTS.md) — *Where a doc lives* and *Keep the docs in sync*.
+[AGENTS.md](../AGENTS.md) — _Where a doc lives_ and _Keep the docs in sync_.
 
 ## Iron rules
 
@@ -162,7 +162,7 @@ once it needs several. Where its doc then lives, and the rule that keeps these d
 5. **Default-closed.** No uninvited server reaches anything.
 6. **Reachability is never permission.** Every route assumes it is published to the open internet.
    Human routes authenticate against the caller's own Immich session; peer routes require the
-   mutual-TLS connection's identity *and* an entitlement check. Nothing is protected by being hard to find, on a private
+   mutual-TLS connection's identity _and_ an entitlement check. Nothing is protected by being hard to find, on a private
    network, or behind a URL nobody has guessed.
 7. **The sidecar invents no identities and holds no logins.** The only identity that means anything
    is an Immich one. The accounts that own stubs get a narrowly-scoped API key and no retained

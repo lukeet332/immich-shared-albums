@@ -37,11 +37,11 @@ import crypto from 'node:crypto';
 /**
  * Our own human users, as offered to a paired household so they can invite one of us
  * specifically. NAMES ONLY — never emails, and never the bot users. Off entirely when
- * SHARE_USER_DIRECTORY=false, which disables native invitations with that peer altogether —
+ * ISA_PUBLISH_USER_DIRECTORY=false, which disables native invitations with that peer altogether —
  * sharing is per person, so with no directory there is nobody to name. Share links still work.
  */
 export async function localDirectory() {
-  if (!CFG.shareUserDirectory) return [];
+  if (!CFG.publishUserDirectory) return [];
   const users = await immichJson('/admin/users');
   return (users || [])
     .filter(u => !isUtilityEmail(u.email) && !u.deletedAt)
@@ -156,7 +156,7 @@ export async function detectInvitesOnce() {
     // given album: inviting two people from the same household to one album must mirror for both.
     // Abort the peer on ANY read failure — a partial view is indistinguishable from a withdrawal.
     const targets = inviteTargetsFor(peer.pub);
-    if (!targets.length) continue; // directory not shared yet, or SHARE_USER_DIRECTORY=false
+    if (!targets.length) continue; // directory not shared yet, or ISA_PUBLISH_USER_DIRECTORY=false
     const seen: Seen = { invited: new Map(), visible: new Set() };
     const invitees = new Map<string, Set<string>>();
     let readFailed = false;
@@ -453,5 +453,5 @@ export function startInviteLoop() {
     })().finally(() => {
       INVITES_RUNNING = false;
     });
-  }, CFG.pollMs);
+  }, CFG.syncPollMs);
 }

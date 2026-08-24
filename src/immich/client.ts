@@ -28,7 +28,6 @@ export const jsonBody = obj => ({
   body: JSON.stringify(obj),
 });
 
-export const UTILITY_SUFFIX = ' (via shared albums)';
 export let USERS = {};
 let USERS_AT = 0;
 export async function usersById(maxAgeMs = 60000) {
