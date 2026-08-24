@@ -1,7 +1,10 @@
 #!/bin/bash
-# Provision a fresh mock Immich for CI: wait for boot, admin sign-up, login,
-# mint an all-permissions API key. Prints the key on stdout (nothing else).
-# Usage: provision-mock.sh <base-url> [admin-name]
+# Provision a fresh mock Immich for CI: wait for boot, admin sign-up, login, mint an API key.
+# Prints the key on stdout (nothing else). The default key is all-permissions (the test RUNNER
+# acts as humans and admins); pass --scoped to mint the sidecar's key with exactly the
+# REQUIRED_ADMIN_PERMISSIONS list from src/immich/admin-key.ts — CI running the whole suite on
+# that key is the proof the documented list is sufficient.
+# Usage: provision-mock.sh <base-url> [admin-name] [--scoped]
 set -euo pipefail
 BASE=$1
 NAME=${2:-E2E Admin}
@@ -22,6 +25,21 @@ TOKEN=$(curl -sf -X POST "$BASE/api/auth/login" -H 'Content-Type: application/js
   -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" \
   | python3 -c 'import json,sys;print(json.load(sys.stdin)["accessToken"])')
 
+if [ "${3:-}" = "--scoped" ]; then
+  PERMS=$(python3 - <<'EOF'
+import re, json, pathlib
+src = pathlib.Path(__file__ if False else 'src/immich/admin-key.ts').read_text()
+def grab(name):
+    body = re.search(name + r"\s*=\s*\[(.*?)\]", src, re.S).group(1)
+    return re.findall(r"'([^']+)'", body)
+print(json.dumps(grab('REQUIRED_ADMIN_PERMISSIONS') + grab('OAUTH_ONLY_PERMISSIONS')))
+EOF
+)
+  NAME=sidecar-scoped
+else
+  PERMS='["all"]'
+  NAME=e2e
+fi
 curl -sf -X POST "$BASE/api/api-keys" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"e2e","permissions":["all"]}' \
+  -d "{\"name\":\"$NAME\",\"permissions\":$PERMS}" \
   | python3 -c 'import json,sys;print(json.load(sys.stdin)["secret"])'

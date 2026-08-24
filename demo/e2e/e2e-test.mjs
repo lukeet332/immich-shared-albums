@@ -886,6 +886,20 @@ console.log('— stage: security (unauthenticated surface)');
   check('health exposes liveness only (no household name, no peer count)',
         health.ok === true && !('household' in health) && !('peers' in health), JSON.stringify(health));
 
+  // The sidecar's own key must be the SCOPED one, and the scope must have teeth: it can list
+  // users (required) but cannot delete an asset or mint another key (excluded on purpose).
+  const SIDECAR_KEY = process.env.B_SIDECAR_API_KEY;
+  if (SIDECAR_KEY) {
+    check('sidecar key can do its job (adminUser.read)',
+          (await fetch(`${B}/api/admin/users`, { headers: { 'x-api-key': SIDECAR_KEY } })).status === 200);
+    check('sidecar key CANNOT delete assets (scope has teeth)',
+          (await fetch(`${B}/api/assets`, { method: 'DELETE', headers: { 'x-api-key': SIDECAR_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: ['00000000-0000-0000-0000-000000000000'] }) })).status === 403);
+    check('sidecar key CANNOT mint itself a broader key (no apiKey.*)',
+          (await fetch(`${B}/api/api-keys`, { method: 'POST', headers: { 'x-api-key': SIDECAR_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'escalate', permissions: ['all'] }) })).status === 403);
+  } else console.log('  (B_SIDECAR_API_KEY not set — scoped-key checks skipped)');
+
   check('oversized body is rejected before it is buffered',
         await status(`${BS}/immich-shared-albums/join`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                              body: 'x'.repeat(2 * 1024 * 1024) }) === 413);

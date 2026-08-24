@@ -29,10 +29,10 @@ it as Immich's problem. Concretely, and these are design rules not sentiments:
 - **Minimise the footprint in someone else's instance.** Every user, album, and permission this
   addon creates is a liability the operator did not ask for.
 
-Two known costs contradict this today — an all-permissions admin key, and one real Immich account
-per remote person. They are listed in
+Two known costs contradict this today — a key on the admin *account* (scoped, but still able to
+manage users), and one real Immich account per remote person. They are listed in
 [src/ARCHITECTURE.md](./src/ARCHITECTURE.md) "Where this falls short today". **Do not make either
-worse without saying so**, and chip at the key one whenever a change touches key handling.
+worse without saying so.**
 
 ## Golden rules
 
