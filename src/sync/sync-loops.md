@@ -5,7 +5,7 @@ also driven on demand by nudges (`../p2p/protocol.ts`) so changes land in second
 
 | File | What it does |
 |---|---|
-| `invites.ts` | **Native album invitations, per person.** Every person on a linked server gets a local marker user; adding one to an album in Immich's own picker shares that album with that person, and removing them revokes it. The origin detects this by listing albums as each marker; members discover it by polling `…/api/v1/invitations`. Server *linking* is not here — it is admin-owned, in [`p2p/unlink.ts`](../p2p/) and the panel. |
+| `invites.ts` | **Native album invitations, per person.** Every person on a linked server gets a local marker user; adding one to an album in Immich's own picker shares that album with that person, and removing them revokes it. The origin detects this by listing albums as each marker; members discover it by polling the `/invitations` peer route (over iroh). Server *linking* is not here — it is admin-owned, in [`p2p/unlink.ts`](../p2p/) and the panel. |
 | `engine.ts` | Photo sync. `watchOnce` pushes local additions out to peers; `reconcileOnce`/`reconcileMapping` pull the origin manifest, materialise anything missing, and **propagate deletions** (with a consistency gate so an indexing lag never wrongly deletes). `startWatchLoop` runs it on an overlap-guarded interval. |
 | `leave.ts` | `leaveAlbum` — the full reverse of a join: purges every stub, the mirror album, the mapping and its ledger. |
 | `comments.ts` | Cross-server comments. The origin album is the source of truth: members pull the canonical list and push their own, gated by a cheap activity-count statistic so messages land in seconds without heavy polling. Includes the inbound `handleActivity`/`handleComments` handlers. `startCommentLoop` runs the fast lane. |
@@ -51,7 +51,7 @@ on it:
 1. **Only `via: 'invite'` mappings may be retired** when a stand-in vanishes from an album. A
    link-redeemed mapping never had a stand-in added to its album, so it is absent from that
    list by design — retiring those here would silently unshare every link-based album.
-2. **Only `via: 'invite'` mappings are offered** on `…/api/v1/invitations`. Offering link ones
+2. **Only `via: 'invite'` mappings are offered** on the `/invitations` peer route. Offering link ones
    would re-mirror albums the member already handled through `join`, and worse, would silently
    undo `leaveAlbum` on the next poll, because leaving removes the member's mapping but not the
    origin's.
