@@ -5,7 +5,12 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
-## [1.0.0](https://github.com/lukeet332/immich-shared-albums/compare/v0.5.0...v1.0.0) (2026-08-25)
+## [1.0.1](https://github.com/lukeet332/immich-shared-albums/compare/v0.5.0...v1.0.1) (2026-08-25)
+
+> Note: v1.0.0 was never published — the tag was reserved by an earlier reverted release
+> (GitHub immutable releases), so the first v1 release ships as 1.0.1. Contents below are the
+> full v1 changeset.
+
 
 
 ### ⚠ BREAKING CHANGES
