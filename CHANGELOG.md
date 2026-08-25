@@ -5,6 +5,62 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## [1.0.0](https://github.com/lukeet332/immich-shared-albums/compare/v0.5.0...v1.0.0) (2026-08-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **p2p:** wire-contract completions — negotiation, codes, 410, hardening ([#38](https://github.com/lukeet332/immich-shared-albums/issues/38))
+* **config:** the ISA_ env contract — one namespace, strict parsing ([#37](https://github.com/lukeet332/immich-shared-albums/issues/37))
+* **state:** schema v1 — real tables, versioned, raw keys, honest names ([#36](https://github.com/lukeet332/immich-shared-albums/issues/36))
+* all peer traffic moves to iroh — dial keys, not URLs ([#26](https://github.com/lukeet332/immich-shared-albums/issues/26))
+* the share page becomes ours — native album framed under the join card ([#25](https://github.com/lukeet332/immich-shared-albums/issues/25))
+* both pages are client-rendered and require JavaScript, each with a noscript saying why. Everything they do is an API call that needs JS anyway, so there was no useful pre-JS state to render.
+* bot accounts are re-keyed from name-derived slugs to `person-<user id>`. Existing installs keep their old accounts as orphans; delete them or start clean. Household-wide sharing is gone — sharing names a person.
+* an install still holding a pre-SQLite state.json will no longer import it, so it starts from empty state and must re-join its albums. No released version wrote that file, so this affects nobody in practice; flagged because the migration path is gone rather than deprecated.
+* three changes need operator awareness, and none ship a migration. Bot users move to @immich-shared-albums.local from @sidecar.local; existing bots are not renamed. Household-wide invitations are gone, so any album shared that way must be re-shared to named people, and SHARE_USER_DIRECTORY=false now disables native invitations with that peer entirely rather than falling back to household-wide (share links are unaffected). Mapping.forPeerUserId becomes forPeerUserIds.
+* the URL prefix moved from /sidecar/* to /immich-shared-albums/* with no compatibility shim. Both peers must run a version that agrees on it, and every reverse-proxy route needs updating.
+
+### Features
+
+* all peer traffic moves to iroh — dial keys, not URLs ([#26](https://github.com/lukeet332/immich-shared-albums/issues/26)) ([854f3ea](https://github.com/lukeet332/immich-shared-albums/commit/854f3ea57ec705cda07e3572c05ad711723205de))
+* carry websocket upgrades so the sidecar can front Immich alone ([e5baa9b](https://github.com/lukeet332/immich-shared-albums/commit/e5baa9bbac069f001132342eff0d5c7d61675d5a))
+* **config:** the ISA_ env contract — one namespace, strict parsing ([#37](https://github.com/lukeet332/immich-shared-albums/issues/37)) ([39ab710](https://github.com/lukeet332/immich-shared-albums/commit/39ab7100fa6c8245df8b9dad2990ddf091d8f1b8))
+* **install:** IPP option, proxy choice, installer accuracy sweep ([#35](https://github.com/lukeet332/immich-shared-albums/issues/35)) ([e870d78](https://github.com/lukeet332/immich-shared-albums/commit/e870d78e514530e8621aeab7a1f4dc9257c53385))
+* link two servers on their own, instead of via an album share link ([#18](https://github.com/lukeet332/immich-shared-albums/issues/18)) ([2f20214](https://github.com/lukeet332/immich-shared-albums/commit/2f202144837b60959f395a7e4eabebf65b97a51e))
+* **naming:** don't stack 'server' when a household is already named one ([#40](https://github.com/lukeet332/immich-shared-albums/issues/40)) ([dac5ca5](https://github.com/lukeet332/immich-shared-albums/commit/dac5ca54769ae6a2eef43a0eb32bc147a6657636))
+* one account per remote person, and stop the sidecar overruling a human ([#17](https://github.com/lukeet332/immich-shared-albums/issues/17)) ([cd13d7a](https://github.com/lukeet332/immich-shared-albums/commit/cd13d7a03d8b65d2760eecc7a47b86dee5c2b12a))
+* one-show pairing, configurable TTL, vanilla-Immich parity (iron rule 8) ([#39](https://github.com/lukeet332/immich-shared-albums/issues/39)) ([db1c18b](https://github.com/lukeet332/immich-shared-albums/commit/db1c18b03a1b0c16323b30d79376484c96906010))
+* **p2p:** wire-contract completions — negotiation, codes, 410, hardening ([#38](https://github.com/lukeet332/immich-shared-albums/issues/38)) ([c0cf95e](https://github.com/lukeet332/immich-shared-albums/commit/c0cf95e0bf54f4137489fca31d7f764914b33a55))
+* rename the route prefix to /immich-shared-albums ([ad1bd79](https://github.com/lukeet332/immich-shared-albums/commit/ad1bd79241216f768f4154edfa0eba492fa9de1e))
+* share albums by inviting a household in Immich's own picker ([460f967](https://github.com/lukeet332/immich-shared-albums/commit/460f967a5ad429e6997beb6b6bcc1ca3bf19faa8))
+* share albums per person, and manage server links from the panel ([#13](https://github.com/lukeet332/immich-shared-albums/issues/13)) ([9d0f6c8](https://github.com/lukeet332/immich-shared-albums/commit/9d0f6c89dba069779b054659440bb51da0a613d4))
+* **state:** schema v1 — real tables, versioned, raw keys, honest names ([#36](https://github.com/lukeet332/immich-shared-albums/issues/36)) ([54bde8c](https://github.com/lukeet332/immich-shared-albums/commit/54bde8c877b86dc18677272565ebb5b5bd29ebb5))
+* the admin key shrinks from 'all' to sixteen enumerated permissions ([#27](https://github.com/lukeet332/immich-shared-albums/issues/27)) ([f3d0430](https://github.com/lukeet332/immich-shared-albums/commit/f3d04300c49c85005ee4f156e38e410514591454))
+* the share page becomes ours — native album framed under the join card ([#25](https://github.com/lukeet332/immich-shared-albums/issues/25)) ([71bbf55](https://github.com/lukeet332/immich-shared-albums/commit/71bbf555e8db042534d22c6598ab15ae94327403))
+
+
+### Bug Fixes
+
+* e2e flakes — duplicate-stub race, unlink-survivor miscount ([#34](https://github.com/lukeet332/immich-shared-albums/issues/34)) ([204e755](https://github.com/lukeet332/immich-shared-albums/commit/204e755940dbf49cea39c7997512cd7785704acd))
+* **e2e:** assert the mirror-owner account by id, not by its display name ([#21](https://github.com/lukeet332/immich-shared-albums/issues/21)) ([21eda34](https://github.com/lukeet332/immich-shared-albums/commit/21eda343c617088dca8c8fd712ad8382ac45060b))
+* enable strictNullChecks, and fix the two real bugs it found ([#15](https://github.com/lukeet332/immich-shared-albums/issues/15)) ([3735460](https://github.com/lukeet332/immich-shared-albums/commit/37354609024bb199c7e2789953499b1c3192d16e))
+
+
+### Reverts
+
+* the 1.0.0 release — the v1 breaking window stays open ([#28](https://github.com/lukeet332/immich-shared-albums/issues/28)) ([87fa0bb](https://github.com/lukeet332/immich-shared-albums/commit/87fa0bb4a65bee74b8c3a9326f887b392cd6abbb))
+
+
+### Miscellaneous Chores
+
+* clear the v1 housekeeping while the clean-break window is open ([#16](https://github.com/lukeet332/immich-shared-albums/issues/16)) ([aaf946c](https://github.com/lukeet332/immich-shared-albums/commit/aaf946cb34d8b9014c8ea5226de14dfb0aa60941))
+
+
+### Code Refactoring
+
+* the two front-end pages become Preact TSX, and one table says what exists ([#19](https://github.com/lukeet332/immich-shared-albums/issues/19)) ([019f20e](https://github.com/lukeet332/immich-shared-albums/commit/019f20e16879b1223313af117b918e7f461c87d1))
+
 ## [0.5.0](https://github.com/lukeet332/immich-shared-albums/compare/v0.4.1...v0.5.0) (2026-08-18)
 
 
