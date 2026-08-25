@@ -153,7 +153,11 @@ export const BOT_PREFIX = {
 export const personName = (name?: string) => (name || '').replace(/\s*\(via .*\)\s*$/, '').trim();
 
 export const markerName = {
-  person: (personName: string, peerName: string) => `${personName} (via ${peerName} server)`,
+  // Don't stack "server" when the household is already named one ("Bob's server" becomes
+  // "(via Bob's server)", not "(via Bob's server server)"). personName strips any trailing
+  // "(via …)" regardless, so this is purely cosmetic and safe.
+  person: (personName: string, peerName: string) =>
+    `${personName} (via ${peerName}${/servers?\s*$/i.test(peerName) ? '' : ' server'})`,
 };
 
 /** Is this one of our bot users? The single source of truth — never inline the check. */
