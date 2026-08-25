@@ -34,6 +34,15 @@ test('a marker name never collides with an attribution contributor name', () => 
   assert.ok(!marker.includes(UTILITY_SUFFIX), 'markers must not wear the contributor suffix');
 });
 
+test('marker name does not stack "server" when the household already ends in one', () => {
+  assert.equal(markerName.person('Nan', 'The Smiths'), 'Nan (via The Smiths server)');
+  assert.equal(markerName.person('Nan', "Bob's server"), "Nan (via Bob's server)");
+  assert.equal(markerName.person('Nan', 'My Server'), 'Nan (via My Server)'); // case-insensitive
+  // and personName still recovers the human whichever form was used
+  assert.equal(personName(markerName.person('Nan', "Bob's server")), 'Nan');
+  assert.equal(personName(markerName.person('Nan', 'The Smiths')), 'Nan');
+});
+
 test('isUtilityEmail accepts only the project domain', () => {
   assert.ok(isUtilityEmail(`person-x@${UTILITY_EMAIL_DOMAIN}`));
   assert.ok(!isUtilityEmail('someone@sidecar.local'), 'v1 dropped the legacy domain');
