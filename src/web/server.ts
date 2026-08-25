@@ -26,7 +26,15 @@ import { callerIdentity, signInRequired } from './auth.ts';
 import { join } from '../p2p/join.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
-import { mintPairing, pendingPairings, revokePairing, redeemPairing, parseTicket } from '../p2p/pair.ts';
+import {
+  mintPairing,
+  pendingPairings,
+  revokePairing,
+  redeemPairing,
+  parseTicket,
+  pairingTtlMinutes,
+  TTL_MINUTES,
+} from '../p2p/pair.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
 
 /**
@@ -164,7 +172,7 @@ export const server = http.createServer(async (req, res) => {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('change settings'));
       if (!caller.isAdmin) return send(403, { error: 'only an admin can change settings' });
-      return send(200, { shareLinkJoin: shareLinkJoiningEnabled() });
+      return send(200, { shareLinkJoin: shareLinkJoiningEnabled(), pairingTtlMinutes: pairingTtlMinutes() });
     }
     if (path === `${ROUTE_PREFIX}/settings` && req.method === 'POST') {
       const caller = await callerIdentity(req);
@@ -172,11 +180,20 @@ export const server = http.createServer(async (req, res) => {
       if (!caller.isAdmin) return send(403, { error: 'only an admin can change settings' });
       try {
         const b = JSON.parse(body);
+        const ttl = Number(b.pairingTtlMinutes ?? pairingTtlMinutes());
+        if (!Number.isInteger(ttl) || ttl < TTL_MINUTES.min || ttl > TTL_MINUTES.max)
+          return send(400, {
+            error: `pairing links must be valid for ${TTL_MINUTES.min} minutes to ${TTL_MINUTES.max / 60} hours`,
+          });
         store.kvSet('settings', {
           ...(store.kv('settings') ?? {}),
           shareLinkJoin: b.shareLinkJoin !== false,
+          pairingTtlMinutes: ttl,
         });
-        return send(200, { shareLinkJoin: shareLinkJoiningEnabled() });
+        return send(200, {
+          shareLinkJoin: shareLinkJoiningEnabled(),
+          pairingTtlMinutes: pairingTtlMinutes(),
+        });
       } catch (e) {
         return send(400, { error: e.message });
       }
@@ -203,10 +220,10 @@ export const server = http.createServer(async (req, res) => {
       if (!caller.isAdmin) return send(403, { error: 'only an admin can revoke a pairing link' });
       try {
         const b = JSON.parse(body);
-        // Accept the whole ticket, so the panel can pass back exactly what it displayed.
-        const ticket = parseTicket(String(b.link || b.code || ''));
-        if (!ticket) return send(400, { error: 'that is not a pairing link' });
-        revokePairing(ticket.secret);
+        // Accept a pending entry's id, or a pasted-back ticket for good measure.
+        const raw = String(b.id || b.link || b.code || '');
+        const ticket = parseTicket(raw);
+        revokePairing(ticket ? ticket.secret : raw);
         return send(200, { revoked: true });
       } catch (e) {
         return send(400, { error: e.message });

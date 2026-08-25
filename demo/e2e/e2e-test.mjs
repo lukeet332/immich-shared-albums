@@ -424,10 +424,18 @@ console.log('— stage: view-only share link (allowUpload off) rejects cross-ser
   const mirror6 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'view only album');
   const m6 = await until(async () => { const x = await albumAssets(B, BKEY, mirror6.id); return x.length === 1 ? x : null; }, 60000);
   check('view-only album still syncs for viewing', !!m6, m6 ? '' : 'timed out');
+  // Vanilla parity: a view-only share makes the member a VIEWER, so Immich itself refuses a
+  // local add — the rogue upload cannot even land in the mirror, a stronger guarantee than
+  // the old "adds locally but silently never propagates".
   const rogue = await upload(B, BKEY, 'rogue-e2e.jpg', `rg${Date.now() % 1000}`, '2026-05-02T09:00:00.000Z');
   await ensurePreviews(B, BKEY, [rogue]);
-  await api(B, BKEY, `/albums/${mirror6.id}/assets`, { ...j({ ids: [rogue] }), method: 'PUT' });
-  await sleep(25000); // two push cycles
+  const addRogue = await fetch(`${B}/api/albums/${mirror6.id}/assets`,
+    { method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY }, body: JSON.stringify({ ids: [rogue] }) });
+  const addBody = await addRogue.json().catch(() => []);
+  const addedOk = Array.isArray(addBody) && addBody.some(r => r.success);
+  check('view-only mirror refuses a local add (member is a viewer, not editor)',
+        !addedOk, `status ${addRogue.status}`);
+  await sleep(25000); // two push cycles — nothing to propagate either way
   check('view-only album rejects cross-server uploads', (await albumAssets(A, AKEY, alb6)).length === 1,
         `origin at ${(await albumAssets(A, AKEY, alb6)).length}`);
 }
@@ -1087,6 +1095,14 @@ console.log('— stage: pairing links two servers on its own (no album)');
       { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': DKEY },
         body: JSON.stringify({ link: minted.link }) });
     check('a pairing link cannot be redeemed twice', !replay.ok, `status ${replay.status}`);
+
+    // SECURITY: shown once. Only a hash persists, so the pending list can never leak a
+    // redeemable ticket — not to an admin, not to anyone reading state.db.
+    const pending = await (await fetch(`${BS}/immich-shared-albums/pairings`,
+      { headers: { 'x-api-key': BKEY } })).json();
+    check('pending pairing codes are metadata only — the ticket is shown exactly once',
+          (pending.pairings || []).every(p2 => !p2.link && !p2.code && !JSON.stringify(p2).includes('isa2-')),
+          JSON.stringify(pending).slice(0, 120));
 
     // SECURITY: pairing conveys no access to any photo. The newly linked peer must carry zero
     // albums in either direction — what they may see is decided afterwards, per person.

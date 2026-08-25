@@ -320,9 +320,11 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
   });
   if (add.length) {
     try {
+      // same vanilla-parity rule as p2p/mirror.ts: the share's permission picks the role
+      const role = mapping.permissions === 'contribute' ? 'editor' : 'viewer';
       await immichJson(
         `/albums/${mapping.albumId}/users`,
-        { ...jsonBody({ albumUsers: add.map(id => ({ userId: id, role: 'editor' })) }), method: 'PUT' },
+        { ...jsonBody({ albumUsers: add.map(id => ({ userId: id, role })) }), method: 'PUT' },
         host.apiKey
       );
       log(`invitation for "${mapping.albumName}" now includes ${add.length} more of us`);

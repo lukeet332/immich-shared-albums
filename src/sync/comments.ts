@@ -51,9 +51,12 @@ export async function materialiseComments(mapping, peer, comments) {
 }
 export async function handleActivity(callerPub: string, body: string, albumMappingId: string) {
   const peer = peerByPub(callerPub);
-  if (!peer) return [403, { error: 'unknown peer' }];
+  if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId);
-  if (!mapping) return [404, { error: 'unknown album mapping' }];
+  if (!mapping) return [404, { error: 'unknown album mapping', code: 'unknown_mapping' }];
+  // DELIBERATELY no permissions gate (decided 2026-08-24): view-only governs PHOTOS, not
+  // conversation. A shared album is still a shared space to talk in — revoking upload
+  // rights must not mute anyone. Tightening this would be a visible cross-server change.
   const { comments = [] } = JSON.parse(body);
   const ids = await materialiseComments(mapping, peer, comments);
   if (Object.keys(ids).length) nudgePeers(mapping.albumId, peer.pub); // new messages — tell the others

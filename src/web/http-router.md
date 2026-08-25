@@ -37,7 +37,7 @@ origin's **endpoint token** (so a visitor's sidecar can dial it over iroh), and 
 over the native album in a same-origin iframe. `?native=1` is the untouched Immich page — what
 the iframe loads, and where dismissing the card navigates.
 
-The panel's Settings switch (`shareLinkJoin` in the kv `settings` row, default on) governs the
+Panel settings live in the kv `settings` row: `pairingTtlMinutes` (how long a minted pairing link stays redeemable, default 15, clamped 5–1440 — the ticket itself is shown exactly once and only its hash persists) and `shareLinkJoin` (default on), which governs the
 whole capability: off means every `/share/*` request passes straight through **and** the iroh
 `/invites/redeem` route answers 403 (`p2p/routes.ts`) — hiding the card without refusing the
 join would be a setting that lies.

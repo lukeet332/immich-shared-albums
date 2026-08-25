@@ -167,6 +167,14 @@ once it needs several. Where its doc then lives, and the rule that keeps these d
 7. **The sidecar invents no identities and holds no logins.** The only identity that means anything
    is an Immich one. The accounts that own stubs get a narrowly-scoped API key and no retained
    password, so they cannot be signed into at all.
+8. **Vanilla Immich is the behavioural contract.** A user on another server operates as
+   functionally identically to a user on the same server as this layer can manage: album roles,
+   who may extend an album, what a viewer versus an editor can do — all of it is Immich's
+   semantics, inherited, never re-invented here as stricter or looser rules. Concretely: an
+   editor of a mirror can add members (so a received album can be re-shared onward), because
+   that is exactly what an editor of any Immich album can do. If that semantic has holes, they
+   are Immich's to patch — and when Immich patches them, this layer inherits the fix by doing
+   nothing.
 
 **Where this falls short today:** the sidecar needs a key on an admin **account** (user CRUD is
 admin-only; Immich has no service accounts), scoped to the enumerated list in
