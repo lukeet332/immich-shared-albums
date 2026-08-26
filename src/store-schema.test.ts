@@ -44,3 +44,37 @@ test('an unknown future schema version is refused rather than guessed at', () =>
   assert.throws(() => new Store(dir), /schema v99/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('a v1 database migrates to v2 by adding the storedFull column, keeping existing rows', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'isa-v1-'));
+  const db = new DatabaseSync(path.join(dir, 'state.db'));
+  // a v1 store: the seen table WITHOUT storedFull, stamped v1, and not the v0 signature (no kv 'keys')
+  db.exec(`
+    CREATE TABLE kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE seen (
+      id INTEGER PRIMARY KEY, mapping TEXT NOT NULL, checksum TEXT NOT NULL,
+      localAsset TEXT NOT NULL, originAsset TEXT
+    );
+    PRAGMA user_version = 1;
+  `);
+  db.prepare('INSERT INTO seen (mapping, checksum, localAsset, originAsset) VALUES (?, ?, ?, ?)').run(
+    'm1',
+    'c1',
+    'a1',
+    'o1'
+  );
+  db.close();
+
+  const store = new Store(dir);
+  assert.equal(SCHEMA_VERSION, 2, 'this migration targets schema v2');
+  assert.equal(
+    (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+    SCHEMA_VERSION,
+    'the v1 db is migrated up, not refused'
+  );
+  const row = store.seenForMapping('m1')[0];
+  assert.equal(row.localAsset, 'a1', 'pre-existing rows survive the migration');
+  assert.equal(row.storedFull, 0, 'the added column defaults to 0 (a stub) for old rows');
+  store.db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

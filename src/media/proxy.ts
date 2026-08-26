@@ -40,7 +40,9 @@ export async function fetchTrueBytes(
   range?: string
 ): Promise<ByteSource> {
   const entry = store.ledgerWithOrigin(assetId);
-  if (entry) {
+  // A stored-full copy holds the real bytes locally — serve those (below) instead of chaining to the
+  // owner; only genuine stubs need the peer fetch.
+  if (entry && !entry.storedFull) {
     const mapping = state.mappings.find(mp => mp.id === entry.mapping);
     const peer = mapping && peerByPub(mapping.peer);
     if (peer) {

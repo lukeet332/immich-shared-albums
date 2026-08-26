@@ -7,13 +7,14 @@
 import type { AssetRef } from '../types.ts';
 import { CFG, log } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
-import { state, store, save, seenHas, seenAdd, wireChecksum } from '../state.ts';
+import { state, store, save, seenHas, seenAdd, wireChecksum, storeSharedAssetsLocally } from '../state.ts';
 import { peerRequest } from '../p2p/transport.ts';
 import { getAlbum, getAlbumAssets, usersById } from '../immich/client.ts';
 import { shareableAssets, assetToRef } from '../immich/refs.ts';
 import { materialiseRef, deleteProxyAsset } from '../immich/materialise.ts';
 import { recordOffered } from '../p2p/entitlement.ts';
 import { leaveAlbum } from './leave.ts';
+import { backfillFullCopies, hasStubRows } from './backfill.ts';
 
 export async function watchOnce() {
   for (const mapping of state.mappings) {
@@ -155,7 +156,10 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
     }
     if (vr && vr.status < 400) {
       version = vr.json?.version || null;
-      if (version && version === mapping.remoteVersion) return;
+      // An unchanged version normally means nothing to do. But if store-shared-locally is on and we
+      // still hold un-upgraded stubs, pull the manifest anyway so the backfill can keep draining.
+      const backfillPending = storeSharedAssetsLocally() && hasStubRows(mapping.id);
+      if (version && version === mapping.remoteVersion && !backfillPending) return;
       // structured field preferred; the packed-string parse remains for protocol-2 peers
       expectedCount = Number.isFinite(vr.json?.assetCount)
         ? Number(vr.json.assetCount)
@@ -203,6 +207,8 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
         log(`reconcile materialise failed (${ref.checksum?.slice(0, 10)}): ${e.message}`);
       }
     }
+    // Store-shared-locally: upgrade any stubs we still hold to full local copies (bounded per cycle).
+    if (storeSharedAssetsLocally()) await backfillFullCopies(mapping, peer, manifest);
     if (allOk && propagated && version && consistent) {
       mapping.remoteVersion = version;
       save();

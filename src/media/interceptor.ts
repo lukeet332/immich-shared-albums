@@ -15,7 +15,9 @@ import { cacheRead, cacheWrite } from './cache.ts';
 export async function serveInterceptedBytes(req, res, assetId: string, rawKind: string): Promise<boolean> {
   const kind = rawKind === 'thumbnail' ? 'preview' : rawKind === 'original' ? 'original' : 'playback';
   const entry = store.ledgerWithOrigin(assetId);
-  if (!entry) return false; // not a proxy asset -> Immich serves it
+  // Not a proxy asset, OR a full local copy (store-shared-locally) that holds its own real bytes ->
+  // let Immich serve it directly; nothing to stream from the owner.
+  if (!entry || entry.storedFull) return false;
   // authorise with the caller's OWN credentials: they must be able to see the asset. A share-page
   // visitor's credential is the link's ?key= — forward it too, so Immich decides with the share
   // link's own authority (expiry, password) instead of 401ing anonymous viewers of stub assets.

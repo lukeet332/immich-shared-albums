@@ -47,11 +47,21 @@ export const keys = ensureIdentity();
 export const save = () => store.save();
 save();
 export const seenHas = (mappingId: string, checksum: string) => store.seenHas(mappingId, checksum);
-export const seenAdd = (mappingId: string, checksum: string, localAssetId: string, originAsset?: string) =>
-  store.seenAdd(mappingId, checksum, localAssetId, originAsset);
+export const seenAdd = (
+  mappingId: string,
+  checksum: string,
+  localAssetId: string,
+  originAsset?: string,
+  storedFull = false
+) => store.seenAdd(mappingId, checksum, localAssetId, originAsset, storedFull);
 // materialised proxies keep their SOURCE photo's checksum in the ledger — that identity,
 // not the local file's checksum (a re-encoded preview), is what travels on the wire.
 export const ledgerByAsset = (assetId: string) => store.ledgerByAsset(assetId);
+
+// Admin setting (default OFF): store mirrored photos as full local copies instead of hotlink stubs,
+// so an album survives the owner going offline. Read by materialise, the interceptor, and backfill.
+export const storeSharedAssetsLocally = () =>
+  (store.kv('settings') as { storeSharedAssetsLocally?: boolean } | null)?.storeSharedAssetsLocally === true;
 export const wireChecksum = (a: { id: string; checksum: string }) =>
   ledgerByAsset(a.id)?.checksum || a.checksum;
 // Memberships this sidecar created, as opposed to ones a human made. See store.addedRecord —

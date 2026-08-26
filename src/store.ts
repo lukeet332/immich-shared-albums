@@ -15,13 +15,17 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type SeenEntry = {
   mapping: string;
   checksum: string;
   localAsset: string;
   originAsset?: string;
+  /** SQLite INTEGER 0/1: 1 when the local asset holds the FULL bytes (store-shared-locally mode)
+   *  rather than a stub. The byte interceptor reads this — a stored-full asset is served from the
+   *  local copy instead of streamed from the owner, so it survives the owner going offline. */
+  storedFull?: number;
 };
 
 export type Mapping = {
@@ -155,9 +159,19 @@ export class Store {
         'state.db is from a pre-v1 build. Stop the container, delete the data volume, and pair the servers again — pre-v1 state is not migrated.'
       );
     this.createSchema();
-    const current = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (current === 0) this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-    else if (current !== SCHEMA_VERSION)
+    let current = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+    if (current === 0) {
+      this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`); // fresh DB: createSchema already wrote the current shape
+      current = SCHEMA_VERSION;
+    }
+    // v1 -> v2: the store-shared-locally flag. Additive column; CREATE TABLE IF NOT EXISTS left the
+    // existing table untouched, so an ALTER adds it to already-provisioned stores.
+    if (current === 1) {
+      this.db.exec('ALTER TABLE seen ADD COLUMN storedFull INTEGER NOT NULL DEFAULT 0');
+      this.db.exec('PRAGMA user_version = 2');
+      current = 2;
+    }
+    if (current !== SCHEMA_VERSION)
       throw new Error(
         `state.db is schema v${current}, this build writes v${SCHEMA_VERSION} — no migration exists for that jump`
       );
@@ -176,7 +190,8 @@ export class Store {
         mapping TEXT NOT NULL,
         checksum TEXT NOT NULL,
         localAsset TEXT NOT NULL,
-        originAsset TEXT
+        originAsset TEXT,
+        storedFull INTEGER NOT NULL DEFAULT 0
       );
       CREATE UNIQUE INDEX IF NOT EXISTS seen_mapping_checksum ON seen (mapping, checksum);
       CREATE INDEX IF NOT EXISTS seen_localAsset ON seen (localAsset);
@@ -390,10 +405,18 @@ export class Store {
       .prepare('SELECT 1 FROM seen WHERE mapping = ? AND checksum = ?')
       .get(mappingId, checksum);
   }
-  seenAdd(mappingId: string, checksum: string, localAssetId: string, originAsset?: string) {
+  seenAdd(
+    mappingId: string,
+    checksum: string,
+    localAssetId: string,
+    originAsset?: string,
+    storedFull = false
+  ) {
     this.db
-      .prepare('INSERT OR IGNORE INTO seen (mapping, checksum, localAsset, originAsset) VALUES (?, ?, ?, ?)')
-      .run(mappingId, checksum, localAssetId, originAsset ?? null);
+      .prepare(
+        'INSERT OR IGNORE INTO seen (mapping, checksum, localAsset, originAsset, storedFull) VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(mappingId, checksum, localAssetId, originAsset ?? null, storedFull ? 1 : 0);
   }
   /** The authoritative ledger entry for a local asset. A deduped proxy can carry rows
    *  from several mappings/eras; materialisation rows (with an origin asset) hold the
@@ -411,7 +434,7 @@ export class Store {
   ledgerWithOrigin(assetId: string): (SeenEntry & { originAsset: string }) | undefined {
     return this.db
       .prepare(
-        `SELECT mapping, checksum, localAsset, originAsset FROM seen
+        `SELECT mapping, checksum, localAsset, originAsset, storedFull FROM seen
          WHERE localAsset = ? AND originAsset IS NOT NULL ORDER BY id DESC LIMIT 1`
       )
       .get(assetId) as (SeenEntry & { originAsset: string }) | undefined;
@@ -421,7 +444,7 @@ export class Store {
   }
   seenForMapping(mappingId: string): SeenEntry[] {
     return this.db
-      .prepare('SELECT mapping, checksum, localAsset, originAsset FROM seen WHERE mapping = ?')
+      .prepare('SELECT mapping, checksum, localAsset, originAsset, storedFull FROM seen WHERE mapping = ?')
       .all(mappingId) as SeenEntry[];
   }
   seenRemoveEntry(mappingId: string, checksum: string) {
