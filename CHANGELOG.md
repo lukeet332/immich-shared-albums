@@ -5,6 +5,16 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## [1.0.2](https://github.com/lukeet332/immich-shared-albums/compare/v1.0.1...v1.0.2) (2026-08-26)
+
+> Manual release: release-please cannot cut releases while the reserved-immutable `v1.0.0` tag
+> blocks it (same reason 1.0.1 shipped by hand). Contents are the two post-v1 fixes below.
+
+### Bug Fixes
+
+* bot accounts use the `.internal` email domain instead of `.invalid`, which read as an error to end users; legacy-aware and migrated on startup ([#42](https://github.com/lukeet332/immich-shared-albums/issues/42))
+* cross-server mirror stubs now carry the origin photo's aspect ratio instead of a fixed 1×1, so mirrored photos lay out correctly in the grid and viewer ([#43](https://github.com/lukeet332/immich-shared-albums/issues/43))
+
 ## [1.0.1](https://github.com/lukeet332/immich-shared-albums/compare/v0.5.0...v1.0.1) (2026-08-25)
 
 > Note: v1.0.0 was never published — the tag was reserved by an earlier reverted release
