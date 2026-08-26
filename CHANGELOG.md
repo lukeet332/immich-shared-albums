@@ -5,6 +5,13 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## [1.1.0](https://github.com/lukeet332/immich-shared-albums/compare/v1.0.2...v1.1.0) (2026-08-26)
+
+
+### Features
+
+* admin toggle to store shared assets locally ([#45](https://github.com/lukeet332/immich-shared-albums/issues/45)) ([5bb197e](https://github.com/lukeet332/immich-shared-albums/commit/5bb197e40b6e5c349105e7adc6b5239a56f5ea68))
+
 ## [1.0.2](https://github.com/lukeet332/immich-shared-albums/compare/v1.0.1...v1.0.2) (2026-08-26)
 
 > Manual release: release-please cannot cut releases while the reserved-immutable `v1.0.0` tag
