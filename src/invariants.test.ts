@@ -9,7 +9,14 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BOT_PREFIX, markerName, isUtilityEmail, UTILITY_EMAIL_DOMAIN, UTILITY_SUFFIX } from './config.ts';
+import {
+  BOT_PREFIX,
+  markerName,
+  isUtilityEmail,
+  UTILITY_EMAIL_DOMAIN,
+  LEGACY_UTILITY_DOMAINS,
+  UTILITY_SUFFIX,
+} from './config.ts';
 import { personName } from './config.ts';
 import { permissionFor } from './sync/invites.ts';
 import { diffInvitees } from './sync/invitees.ts';
@@ -44,14 +51,26 @@ test('marker name does not stack "server" when the household already ends in one
   assert.equal(personName(markerName.person('Nan', 'The Smiths')), 'Nan');
 });
 
-test('isUtilityEmail accepts only the project domain', () => {
+test('isUtilityEmail accepts the current domain and every legacy domain', () => {
+  // Post-v1 the domain moved (.invalid -> .internal) WITH a migration, not as a clean break — so,
+  // unlike v1, isUtilityEmail must still recognise legacy bots. Otherwise an existing bot is misread
+  // as a human and gets added to mirrors / counted as real photos until migrate-domain renames it.
+  assert.equal(
+    UTILITY_EMAIL_DOMAIN,
+    'immich-shared-albums.internal',
+    'current domain reads as "internal", not "invalid"'
+  );
   assert.ok(isUtilityEmail(`person-x@${UTILITY_EMAIL_DOMAIN}`));
-  assert.ok(!isUtilityEmail('someone@sidecar.local'), 'v1 dropped the legacy domain');
-  assert.ok(!isUtilityEmail('person-x@immich-shared-albums.local'), 'v1 also left .local (mDNS-reserved)');
+  for (const d of LEGACY_UTILITY_DOMAINS)
+    assert.ok(isUtilityEmail(`person-x@${d}`), `legacy ${d} is still a bot`);
+  assert.ok(isUtilityEmail('shared-admin@sidecar.local'), 'v0 bots still recognised');
+  assert.ok(isUtilityEmail('person-x@immich-shared-albums.invalid'), 'v1 bots still recognised');
   assert.ok(!isUtilityEmail('real.person@example.com'));
   assert.ok(!isUtilityEmail(undefined));
-  // a lookalike domain must not pass
+  // a lookalike domain must not pass — the leading "@" is required, so neither a suffix hack nor a
+  // subdomain of our domain is a match.
   assert.ok(!isUtilityEmail(`x@evil-${UTILITY_EMAIL_DOMAIN}.example.com`));
+  assert.ok(!isUtilityEmail(`x@evil.${UTILITY_EMAIL_DOMAIN}`));
 });
 
 test('album roles map to share permissions', () => {

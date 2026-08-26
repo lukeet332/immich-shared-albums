@@ -87,20 +87,35 @@ export const log = (...a) => console.log(new Date().toISOString(), ...a);
 export const UTILITY_SUFFIX = ' (via shared albums)';
 
 /**
- * Email domain for the bot users this addon creates. Named after the project for the same
- * reason ROUTE_PREFIX is: "sidecar" is a generic term another Immich addon could reasonably
- * claim, and these addresses are how we tell our own bots apart from real people.
+ * Email domain for the bot users this addon creates. Named after the project (like ROUTE_PREFIX)
+ * so our own bots are distinguishable from real people.
  *
- * `.invalid` because that TLD exists for exactly this (RFC 2606): deliberately unresolvable,
- * never a real mailbox. `.local` — the previous choice — is mDNS-reserved (RFC 6762) and can
- * trip resolvers and email validators. This rename, like `@sidecar.local` before it, is a
- * ONE-TIME v1.0.0 allowance taken while the install base is ~zero. It is NOT the policy going
- * forward — post-v1, changes to this domain need a migration path.
+ * `.internal` is ICANN-reserved (2024) for private-use networks: guaranteed never delegated in the
+ * public DNS, so — like the `.invalid` it replaces — these addresses never resolve and can never
+ * receive mail. Unlike `.invalid`, it does not read as "broken" to a human who sees a bot in
+ * Immich's People list / album picker: an "internal" account is self-explanatory, an "invalid" one
+ * looks like an error. That end-user legibility is the whole reason for the change.
  *
- * Getting this check wrong is not cosmetic (a bot misread as a human gets added to mirrors and
- * its stubs counted as someone's photos), so the test stays obviously correct by inspection.
+ * History: `sidecar.local` (v0) -> `immich-shared-albums.invalid` (v1) -> `.internal` (this). The v1
+ * rename was a clean break, allowed while the install base was ~zero. This one is NOT — there are
+ * live installs — so it ships WITH a migration. Two parts make it safe:
+ *  - isUtilityEmail recognises LEGACY_UTILITY_DOMAINS too, so existing bots are still classified as
+ *    bots the moment this version boots — never misread as humans.
+ *  - migrateUtilityDomain (immich/migrate-domain.ts) renames existing bot accounts to `.internal` at
+ *    startup, so users stop seeing the old address. Accounts are keyed in state by person id, not
+ *    email, so the rename creates no duplicates.
+ *
+ * Getting isUtilityEmail wrong is not cosmetic (a bot misread as a human gets added to mirrors and
+ * its stubs counted as someone's photos), so the check stays obvious by inspection and legacy-aware.
  */
-export const UTILITY_EMAIL_DOMAIN = 'immich-shared-albums.invalid';
+export const UTILITY_EMAIL_DOMAIN = 'immich-shared-albums.internal';
+
+/**
+ * Domains earlier versions used for bot accounts. Still recognised by isUtilityEmail so a bot made
+ * by an older version stays classified as a bot until migrateUtilityDomain renames it. Never used
+ * for NEW bots. Order is irrelevant — membership is all that matters.
+ */
+export const LEGACY_UTILITY_DOMAINS = ['immich-shared-albums.invalid', 'sidecar.local'] as const;
 
 /**
  * ONE local account per remote person, doing both jobs: it owns their mirrored photos, and it is
@@ -160,8 +175,12 @@ export const markerName = {
     `${personName} (via ${peerName}${/servers?\s*$/i.test(peerName) ? '' : ' server'})`,
 };
 
-/** Is this one of our bot users? The single source of truth — never inline the check. */
-export const isUtilityEmail = (email?: string) => !!email && email.endsWith(`@${UTILITY_EMAIL_DOMAIN}`);
+/** Is this one of our bot users? The single source of truth — never inline the check. Recognises
+ *  the current domain AND every LEGACY_UTILITY_DOMAINS entry, so a bot created by an older version
+ *  is still a bot here (see UTILITY_EMAIL_DOMAIN for why that matters). The leading `@` is required,
+ *  so a subdomain lookalike ("x@evil.immich-shared-albums.internal") is not a match. */
+export const isUtilityEmail = (email?: string) =>
+  !!email && [UTILITY_EMAIL_DOMAIN, ...LEGACY_UTILITY_DOMAINS].some(d => email.endsWith(`@${d}`));
 
 /**
  * The URL prefix this addon owns on the Immich origin.

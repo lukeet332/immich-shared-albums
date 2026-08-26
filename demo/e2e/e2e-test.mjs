@@ -16,7 +16,9 @@ const api = async (base, key, path, init = {}) => {
 const j = (o) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
 // Bot users live on the project's own email domain — the one check that separates our bots from
 // real people, so it must match src/config.ts isUtilityEmail exactly.
-const isBot = (e) => !!e && e.endsWith('@immich-shared-albums.invalid');
+// Mirror the runtime's isUtilityEmail: current domain plus the legacy ones it still recognises.
+const BOT_DOMAINS = ['immich-shared-albums.internal', 'immich-shared-albums.invalid', 'immich-shared-albums.local', 'sidecar.local'];
+const isBot = (e) => !!e && BOT_DOMAINS.some(d => e.endsWith('@' + d));
 // /immich-shared-albums/join authenticates the caller against that household's own Immich, so the
 // suite has to present a real credential exactly like a signed-in browser would.
 const jAuth = (o, key) => ({ method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key }, body: JSON.stringify(o) });
@@ -171,7 +173,7 @@ const originOwner = await api(A, AKEY, '/users/me');
 const originOwnerName = originOwner.name;
 // One account per remote person is both the mirror owner and the picker entry, so its display
 // name changes when the directory sync lands. Asserting a name here raced; assert the id keying.
-const originOwnerEmail = `person-${originOwner.id}@immich-shared-albums.invalid`;
+const originOwnerEmail = `person-${originOwner.id}@immich-shared-albums.internal`;
 const ownerUtility = bBotUsers.find(u => u.email === originOwnerEmail);
 check('an account exists for the origin album owner, keyed by their id on their own server',
       !!ownerUtility, bBotUsers.map(u => u.email).join(', '));
@@ -1043,8 +1045,8 @@ console.log('— stage: bot naming uses the project domain');
 {
   const bots = (await api(B, BKEY, '/admin/users')).filter(u => isBot(u.email));
   check('bot users exist', bots.length > 0, `${bots.length} found`);
-  check('every bot uses the project email domain (.invalid, RFC 2606)',
-        bots.every(u => u.email.endsWith('@immich-shared-albums.invalid')),
+  check('every bot uses the project email domain (.internal, ICANN private-use)',
+        bots.every(u => u.email.endsWith('@immich-shared-albums.internal')),
         bots.map(u => u.email.split('@')[1]).filter((v, i, a) => a.indexOf(v) === i).join(', '));
 }
 
