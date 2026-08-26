@@ -2,8 +2,14 @@ name: release-please
 
 # Versioning is decided by conventional commits, not by hand:
 # feat: -> minor, fix: -> patch, feat!/BREAKING CHANGE -> major.
-# On every push to main this maintains a release PR; merging that PR
-# tags the release, which triggers the suite-gated publish (release.yml).
+# On every push to main this maintains a release PR (version bump + changelog + config.ts). To
+# publish: merge that PR, then push the matching vX.Y.Z tag, which triggers the suite-gated build
+# (release.yml).
+#
+# skip-github-release: the tag / GitHub Release is created BY HAND, not by this action. v1.0.0 is
+# immutably reserved (a reverted early release) and a repo ref-creation rule blocks the action from
+# creating tags, so letting it try fails every run. Skipping that phase keeps the useful half (the
+# release PR) and leaves tagging to the manual `git push origin vX.Y.Z`. See the roadmap note.
 on:
   push:
     branches: [main]
@@ -20,3 +26,4 @@ jobs:
         with:
           # PAT (not GITHUB_TOKEN) so the release PR triggers the e2e check
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          skip-github-release: true
