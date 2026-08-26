@@ -45,6 +45,12 @@ export type AssetRef = {
     longitude?: number;
     description?: string;
     rating?: number;
+    /** DISPLAY dimensions of the origin photo (orientation already applied). Used only to size the
+     *  mirror stub so Immich lays the photo out at the right aspect ratio. Optional per
+     *  wire-protocol.md evolution rule 1 — a peer that omits them makes the receiver fall back to the
+     *  legacy 1×1 stub, exactly today's behaviour. */
+    width?: number;
+    height?: number;
   };
 };
 

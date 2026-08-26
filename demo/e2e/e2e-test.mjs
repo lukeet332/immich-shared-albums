@@ -198,6 +198,24 @@ if (mirrorAssets) {
   const stubSizes = mirrorAssets.map(a => (a.exifInfo || {}).fileSizeInByte || 0);
   check('mirrors are kilobyte stubs — hotlink model stores no pixels', stubSizes.every(n => n > 0 && n < 20000),
         stubSizes.join(','));
+  // Regression: a mirror stub must carry the origin's ASPECT RATIO, not a fixed 1x1 (which made
+  // Immich lay every mirrored photo out square in the grid and letterboxed in the viewer). Compare
+  // DISPLAY aspect (orientation applied); mirror dims are capped so allow a small rounding tolerance.
+  const dispAspect = a => {
+    let w = a.exifInfo?.exifImageWidth ?? 0, h = a.exifInfo?.exifImageHeight ?? 0;
+    const o = Number(a.exifInfo?.orientation);
+    if (o >= 5 && o <= 8) [w, h] = [h, w];
+    return w > 0 && h > 0 ? w / h : 0;
+  };
+  check('mirror stubs carry real dimensions, not 1x1',
+        mirrorAssets.every(a => (a.exifInfo?.exifImageWidth ?? 0) > 1 && (a.exifInfo?.exifImageHeight ?? 0) > 1),
+        mirrorAssets.map(a => `${a.exifInfo?.exifImageWidth}x${a.exifInfo?.exifImageHeight}`).join(','));
+  const originAspects = (await albumAssets(A, AKEY, ALBUM_ID)).map(dispAspect).sort((x, y) => x - y);
+  const mirrorAspects = mirrorAssets.map(dispAspect).sort((x, y) => x - y);
+  check('mirror aspect ratios match the origin photos',
+        originAspects.length === mirrorAspects.length &&
+          originAspects.every((v, i) => Math.abs(v - mirrorAspects[i]) < 0.03),
+        `origin=[${originAspects.map(n => n.toFixed(2))}] mirror=[${mirrorAspects.map(n => n.toFixed(2))}]`);
   const gpsProxy = withGps || mirrorAssets[0];
   const viaProxy = await fetchBytes(`${BS}/api/assets/${gpsProxy.id}/original`, BKEY);
   const originOrig = await fetchBytes(`${A}/api/assets/${aIds[0]}/original`, AKEY);

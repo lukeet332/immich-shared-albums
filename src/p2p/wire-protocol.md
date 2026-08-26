@@ -119,7 +119,10 @@ a hung peer costs one timeout, never a wedged loop.
 The rules that make additive change legal, written down so nobody has to re-derive them:
 
 1. **Unknown JSON fields MUST be ignored**, in request bodies, response bodies, and the frame
-   headers. Adding an optional field is never a breaking change.
+   headers. Adding an optional field is never a breaking change. (Example: an `AssetRef`'s optional
+   `exif.width`/`exif.height` — the origin photo's display dimensions, used to size the mirror stub
+   to the right aspect ratio — were added this way; a peer that omits them makes the receiver fall
+   back to a 1×1 stub, exactly the prior behaviour.)
 2. **Unknown routes answer 404**, and callers treat a 404 from a route added after protocol 2
    as "peer too old", never as an error. Adding a route is never a breaking change.
 3. **The ALPN carries the protocol MAJOR** (`isa/2`). A future major keeps serving the previous
