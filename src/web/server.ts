@@ -14,7 +14,7 @@
  */
 import http from 'node:http';
 import { CFG, log, ROUTE_PREFIX } from '../config.ts';
-import { store } from '../state.ts';
+import { store, storeSharedAssetsLocally } from '../state.ts';
 import { publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
@@ -172,7 +172,11 @@ export const server = http.createServer(async (req, res) => {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('change settings'));
       if (!caller.isAdmin) return send(403, { error: 'only an admin can change settings' });
-      return send(200, { shareLinkJoin: shareLinkJoiningEnabled(), pairingTtlMinutes: pairingTtlMinutes() });
+      return send(200, {
+        shareLinkJoin: shareLinkJoiningEnabled(),
+        pairingTtlMinutes: pairingTtlMinutes(),
+        storeSharedAssetsLocally: storeSharedAssetsLocally(),
+      });
     }
     if (path === `${ROUTE_PREFIX}/settings` && req.method === 'POST') {
       const caller = await callerIdentity(req);
@@ -189,10 +193,12 @@ export const server = http.createServer(async (req, res) => {
           ...(store.kv('settings') ?? {}),
           shareLinkJoin: b.shareLinkJoin !== false,
           pairingTtlMinutes: ttl,
+          storeSharedAssetsLocally: b.storeSharedAssetsLocally === true,
         });
         return send(200, {
           shareLinkJoin: shareLinkJoiningEnabled(),
           pairingTtlMinutes: pairingTtlMinutes(),
+          storeSharedAssetsLocally: storeSharedAssetsLocally(),
         });
       } catch (e) {
         return send(400, { error: e.message });
