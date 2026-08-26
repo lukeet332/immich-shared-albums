@@ -9,6 +9,7 @@ import { state, seenHas, seenAdd } from '../state.ts';
 import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 import { STUB_JPEG, immichJson, jsonBody, uploadAsset, addToAlbum, applyRefMetadata } from './client.ts';
 import { ensureContributor } from './contributors.ts';
+import { jpegOfSize } from '../media/jpeg.ts';
 
 // Fetch a ref's preview from the peer and create the local proxy copy. Returns
 // false (without marking seen) on failure so reconciliation can retry later.
@@ -61,7 +62,13 @@ async function materialiseRefLocked(mapping, peer, ref) {
     }
     bytes = Buffer.concat([...prefix, crypto.randomBytes(8)]);
   } else {
-    bytes = Buffer.concat([STUB_JPEG, crypto.randomBytes(8)]);
+    // Size the stub to the origin's aspect ratio so Immich lays the mirror out correctly (grid tile
+    // shape + viewer box); real pixels still stream via the interceptor. A ref from an older peer
+    // carries no dimensions -> fall back to the legacy 1×1 stub. The random tail keeps each stub a
+    // distinct asset (Immich dedupes identical bytes per user).
+    const { width, height } = ref.exif ?? {};
+    const base = width && height ? jpegOfSize(width, height) : STUB_JPEG;
+    bytes = Buffer.concat([base, crypto.randomBytes(8)]);
   }
   const hostKey = mapping.hostSlug ? state.contributors[mapping.hostSlug]?.apiKey : undefined;
   // On an INVITATION album a human already added the people they chose — their membership IS the

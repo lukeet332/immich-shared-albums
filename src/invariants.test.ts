@@ -13,6 +13,7 @@ import { BOT_PREFIX, markerName, isUtilityEmail, UTILITY_EMAIL_DOMAIN, UTILITY_S
 import { personName } from './config.ts';
 import { permissionFor } from './sync/invites.ts';
 import { diffInvitees } from './sync/invitees.ts';
+import { jpegOfSize, boundedStubDims } from './media/jpeg.ts';
 
 test('bot accounts are keyed by id, never by display name', () => {
   // Two remote people who share a display name must never collapse into one local account
@@ -104,4 +105,45 @@ test('personName recovers the human, however the account was decorated', () => {
   // the compounded form seen in run27, which is what this exists to prevent
   assert.equal(personName('Nan (via Demo household (B) server) (via shared albums)'), 'Nan');
   assert.equal(personName(undefined), '');
+});
+
+test('mirror stub JPEG declares the origin aspect ratio, not 1x1', () => {
+  // A fixed 1x1 stub made Immich lay every mirrored photo out square (grid) / letterboxed (viewer).
+  // jpegOfSize must emit a valid baseline JPEG whose SOF0 carries the origin's aspect. Parse the
+  // SOF0 marker directly — no JPEG decoder dependency.
+  const sofDims = (buf: Buffer) => {
+    for (let i = 2; i < buf.length - 9;) {
+      if (buf[i] !== 0xff) {
+        i++;
+        continue;
+      }
+      const marker = buf[i + 1];
+      if (marker === 0xc0) return { w: buf.readUInt16BE(i + 7), h: buf.readUInt16BE(i + 5) };
+      if (marker === 0xd8 || marker === 0xd9) {
+        i += 2;
+        continue;
+      }
+      i += 2 + buf.readUInt16BE(i + 2);
+    }
+    return null;
+  };
+  for (const [w, h] of [
+    [4000, 3000],
+    [3000, 4000],
+    [1000, 1000],
+    [4032, 3024],
+    [100, 50],
+    [7, 13],
+  ]) {
+    const buf = jpegOfSize(w, h);
+    assert.equal(buf[0], 0xff);
+    assert.equal(buf[1], 0xd8, 'starts with SOI');
+    assert.equal(buf[buf.length - 2], 0xff);
+    assert.equal(buf[buf.length - 1], 0xd9, 'ends with EOI');
+    const [bw, bh] = boundedStubDims(w, h);
+    assert.deepEqual(sofDims(buf), { w: bw, h: bh }, `SOF matches bounded dims for ${w}x${h}`);
+    assert.ok(bw <= 256 && bh <= 256, 'capped to <=256 on the long edge');
+    assert.ok(Math.abs(bw / bh / (w / h) - 1) < 0.02, `aspect preserved for ${w}x${h}`);
+    assert.ok(buf.length < 4096, `stub stays tiny (${buf.length}B for ${w}x${h})`);
+  }
 });
