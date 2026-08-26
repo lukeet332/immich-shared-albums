@@ -11,7 +11,7 @@
  * `ISA_SYNC_POLL_MS=20s` becoming NaN would make setInterval fire every tick.
  */
 
-export const SIDECAR_VERSION = '1.0.2'; // x-release-please-version
+export const SIDECAR_VERSION = '1.1.0'; // x-release-please-version
 
 const die = (msg: string): never => {
   console.error(msg);
