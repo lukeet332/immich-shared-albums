@@ -3,6 +3,7 @@ import { CFG, log } from './config.ts';
 import { server } from './web/server.ts';
 import { proxyUpgrade } from './web/upgrade.ts';
 import { verifyAdminKeyAtBoot } from './immich/admin-key.ts';
+import { migrateUtilityDomain } from './immich/migrate-domain.ts';
 import { startTransport } from './p2p/transport.ts';
 import { helloPeers } from './peers.ts';
 import { peerRoutes } from './p2p/routes.ts';
@@ -25,6 +26,8 @@ process.on('uncaughtException', err => {
 server.on('upgrade', proxyUpgrade);
 // The transport binds first: the share page mints endpoint tokens from it on every request.
 void verifyAdminKeyAtBoot();
+// One-time rename of any bot account still on a legacy email domain — cosmetic, unawaited.
+void migrateUtilityDomain();
 await startTransport(peerRoutes);
 void helloPeers(); // refresh what each linked peer can do — deliberately unawaited
 server.listen(CFG.port, () => log(`sidecar "${CFG.name}" listening :${CFG.port} — immich: ${CFG.immichUrl}`));
