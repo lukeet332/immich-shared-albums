@@ -15,7 +15,7 @@ import { mkdirSync, writeFileSync, statSync } from 'node:fs';
 const OUT = 'src/web/dist';
 mkdirSync(OUT, { recursive: true });
 
-const BUNDLED_PAGES = ['panel', 'accept', 'share'];
+const BUNDLED_PAGES = ['panel', 'accept', 'share', 'me'];
 const ALL_PAGES = [...BUNDLED_PAGES, 'sign-in'];
 
 const report = file => console.log(`built ${file} — ${(statSync(file).size / 1024).toFixed(1)}KB`);
