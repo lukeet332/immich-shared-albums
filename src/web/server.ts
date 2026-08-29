@@ -18,6 +18,7 @@ import { store, storeSharedAssetsLocally } from '../state.ts';
 import { publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
+import { myAlbums } from './me.ts';
 import { sharePage, signInPage } from './assets.ts';
 import { localAddr } from '../p2p/transport.ts';
 import { keys } from '../state.ts';
@@ -86,6 +87,12 @@ export const server = http.createServer(async (req, res) => {
         const caller = await callerIdentity(req);
         if (!caller?.isAdmin) {
           res.writeHead(caller ? 403 : 401, { 'Content-Type': 'text/html' });
+          return res.end(signInPage(surface.action ?? 'use this page'));
+        }
+      } else if (surface.signedIn) {
+        // Any signed-in user; the page scopes to their own id. Fail closed — no session, no page.
+        if (!(await callerIdentity(req))) {
+          res.writeHead(401, { 'Content-Type': 'text/html' });
           return res.end(signInPage(surface.action ?? 'use this page'));
         }
       }
@@ -258,6 +265,13 @@ export const server = http.createServer(async (req, res) => {
       } catch (e) {
         return send(400, { error: e.message });
       }
+    }
+    // Per-user panel data: the caller's own shared albums. Any signed-in user; scoped to caller.id
+    // server-side (never a client-supplied id) — the keystone of the reunification user surface.
+    if (path === `${ROUTE_PREFIX}/me/albums` && req.method === 'GET') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('see your albums'));
+      return send(200, { albums: await myAlbums(caller.id) });
     }
     // Liveness only. The join banner probes this cross-origin to discover a sidecar, so
     // it stays open — which is exactly why it must not name the household or count peers.

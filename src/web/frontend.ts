@@ -13,7 +13,7 @@
  * authenticates on its own.
  */
 import { ROUTE_PREFIX } from '../config.ts';
-import { DIST, panelPage, acceptPage } from './assets.ts';
+import { DIST, panelPage, acceptPage, mePage } from './assets.ts';
 
 const HTML = 'text/html';
 const JS = 'application/javascript';
@@ -26,6 +26,9 @@ export type Surface = {
   body: () => string;
   /** Requires a signed-in Immich admin. */
   admin?: true;
+  /** Requires a signed-in Immich user (any). The page then scopes everything to the caller's own
+   *  id server-side — the per-user panel. Distinct from `admin`, which also requires isAdmin. */
+  signedIn?: true;
   /** What the sign-in page should say the caller was trying to do. */
   action?: string;
 };
@@ -33,6 +36,8 @@ export type Surface = {
 export const SURFACES: Record<string, Surface> = {
   [ROUTE_PREFIX]: { type: HTML, body: panelPage, admin: true, action: 'manage shared albums' },
   [`${ROUTE_PREFIX}/`]: { type: HTML, body: panelPage, admin: true, action: 'manage shared albums' },
+  [`${ROUTE_PREFIX}/me`]: { type: HTML, body: mePage, signedIn: true, action: 'see your shared albums' },
+  [`${ROUTE_PREFIX}/me/`]: { type: HTML, body: mePage, signedIn: true, action: 'see your shared albums' },
   [`${ROUTE_PREFIX}/accept`]: { type: HTML, body: acceptPage },
   ...Object.fromEntries(
     Object.entries(DIST).map(([name, content]) => [
