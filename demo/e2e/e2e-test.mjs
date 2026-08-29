@@ -881,6 +881,10 @@ console.log('— stage: route prefix rename + legacy compatibility');
         (await fetch(`${BS}/immich-shared-albums/settings`)).status === 401);
   check('settings are not writable without a session',
         (await fetch(`${BS}/immich-shared-albums/settings`, { method: 'POST', body: '{}' })).status === 401);
+  check('the user panel page needs a session (401 unauth)',
+        (await fetch(`${BS}/immich-shared-albums/me`, { redirect: 'manual' })).status === 401);
+  check('user-panel album data needs a session (401 unauth)',
+        (await fetch(`${BS}/immich-shared-albums/me/albums`)).status === 401);
   check('the join app probes the typed server via the prefixed health route',
         (await (await fetch(`${BS}/immich-shared-albums/assets/share.js`)).text()).includes('/immich-shared-albums/health'));
   const native = await (await fetch(`${BS}/share/e2e-any-key?native=1`)).text();
