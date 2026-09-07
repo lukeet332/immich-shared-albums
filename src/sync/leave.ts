@@ -22,7 +22,12 @@ export async function leaveAlbum(mappingId: string) {
     throw new Error('unknown mapping (only joined albums can be left)');
   let removed = 0;
   for (const entry of store.seenForMapping(mapping.id)) {
-    if (entry.originAsset && (await deleteProxyAsset(entry.localAsset))) removed++;
+    if (
+      entry.originAsset &&
+      !store.seenAssetUsedOutsideMapping(entry.localAsset, mapping.id) &&
+      (await deleteProxyAsset(entry.localAsset))
+    )
+      removed++;
   }
   const host = mapping.hostSlug ? state.contributors[mapping.hostSlug] : undefined;
   if (host?.apiKey) {

@@ -447,6 +447,11 @@ export class Store {
       .prepare('SELECT mapping, checksum, localAsset, originAsset, storedFull FROM seen WHERE mapping = ?')
       .all(mappingId) as SeenEntry[];
   }
+  seenAssetUsedOutsideMapping(assetId: string, mappingId: string): boolean {
+    return !!this.db
+      .prepare('SELECT 1 FROM seen WHERE localAsset = ? AND mapping <> ? LIMIT 1')
+      .get(assetId, mappingId);
+  }
   seenRemoveEntry(mappingId: string, checksum: string) {
     this.db.prepare('DELETE FROM seen WHERE mapping = ? AND checksum = ?').run(mappingId, checksum);
   }

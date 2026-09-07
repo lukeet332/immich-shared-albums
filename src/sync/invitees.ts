@@ -8,6 +8,28 @@
 
 export type InviteeDiff = { add: string[]; remove: string[] };
 
+type InvitationMirror = {
+  role: 'owner' | 'member';
+  via: 'link' | 'invite';
+  peer: string;
+  remoteAlbumId?: string;
+  dead?: boolean;
+};
+
+export function invitationMirrorWasWithdrawn(
+  mapping: InvitationMirror,
+  peerPub: string,
+  offeredAlbumIds: Set<string>
+): boolean {
+  return (
+    mapping.role === 'member' &&
+    mapping.via === 'invite' &&
+    mapping.peer === peerPub &&
+    !!mapping.remoteAlbumId &&
+    !offeredAlbumIds.has(mapping.remoteAlbumId)
+  );
+}
+
 /**
  * Reconcile an album's local membership against the people an invitation names.
  *

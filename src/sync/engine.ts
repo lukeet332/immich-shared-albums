@@ -21,9 +21,13 @@ export async function watchOnce() {
     if (mapping.dead) continue;
 
     try {
+      const localAlbumReaderKey =
+        mapping.role === 'member' && mapping.hostSlug
+          ? state.contributors[mapping.hostSlug]?.apiKey
+          : undefined;
       // handshake: skip untouched albums entirely (updatedAt bumps on any album change).
       // localVersion is only stored after a CLEAN cycle so deferred refs keep re-offering.
-      const album = await getAlbum(mapping.albumId);
+      const album = await getAlbum(mapping.albumId, localAlbumReaderKey);
       if (album.updatedAt && album.updatedAt === mapping.localVersion) continue;
       // native leave: when the last human member leaves the mirror in the STOCK app
       // (album settings -> Leave album), the sidecar cleans up everything the join
@@ -40,7 +44,7 @@ export async function watchOnce() {
         }
       }
       if (mapping.role === 'member' && mapping.permissions === 'view') continue; // view-only: nothing to push
-      const assets = await getAlbumAssets(mapping.albumId);
+      const assets = await getAlbumAssets(mapping.albumId, localAlbumReaderKey);
       mapping.failCount = 0;
       // Revocation, per photo: an asset removed from the album must stop being served to
       // this mapping's peer, not just stop being advertised.

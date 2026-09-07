@@ -19,7 +19,7 @@ import {
 } from './config.ts';
 import { personName } from './config.ts';
 import { permissionFor } from './sync/invites.ts';
-import { diffInvitees } from './sync/invitees.ts';
+import { diffInvitees, invitationMirrorWasWithdrawn } from './sync/invitees.ts';
 import { jpegOfSize, boundedStubDims } from './media/jpeg.ts';
 
 test('bot accounts are keyed by id, never by display name', () => {
@@ -110,6 +110,23 @@ test('an empty invitee list is never treated as "remove everyone"', () => {
     add: [],
     remove: [],
   });
+});
+
+test('a withdrawn invitation mirror is retired even after it was marked dead', () => {
+  assert.equal(
+    invitationMirrorWasWithdrawn(
+      {
+        role: 'member',
+        via: 'invite',
+        peer: 'origin',
+        remoteAlbumId: 'album-1',
+        dead: true,
+      },
+      'origin',
+      new Set()
+    ),
+    true
+  );
 });
 
 test('personName recovers the human, however the account was decorated', () => {

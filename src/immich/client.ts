@@ -51,15 +51,16 @@ export async function ownerName(ownerId) {
   return u && !u.utility ? u.name : null;
 }
 export const getSharedLinkByKey = async key => (await immichJson('/shared-links')).find(l => l.key === key);
-export const getAlbum = id => immichJson(`/albums/${id}?withoutAssets=true`);
+export const getAlbum = (id, key?: string) => immichJson(`/albums/${id}?withoutAssets=true`, {}, key);
 // Immich v3 removed embedded assets from the album endpoint; search/metadata is the stable enumerator.
-export const getAlbumAssets = async albumId => {
+export const getAlbumAssets = async (albumId, key?: string) => {
   const out: any[] = [];
   let page = 1;
   while (page) {
     const res = await immichJson(
       '/search/metadata',
-      jsonBody({ albumIds: [albumId], page, size: 500, withExif: true })
+      jsonBody({ albumIds: [albumId], page, size: 500, withExif: true }),
+      key
     );
     out.push(...(res.assets?.items || []));
     page = res.assets?.nextPage ? Number(res.assets.nextPage) : 0;
