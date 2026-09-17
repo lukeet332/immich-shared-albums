@@ -31,6 +31,13 @@ certificates, and no listening HTTP surface for peers at all.
 | `entitlement.ts` | What a peer may **read**, as distinct from who it is. Records every asset advertised to a mapping, and answers the byte routes' "is this peer allowed this asset".                                                                                                                                                                                                                                                                                                                                            |
 | `unlink.ts`      | Cutting a server link, from the panel. Tears down mirrors held from that peer (via `sync/leave.ts`, so their stubs go too), drops the mappings and entitlement for albums shared _to_ them, and deletes that peer's per-person accounts with `force: true` — **assets leave with their owner**. Unlinking is destructive by design, and the panel confirms it.                                                                                                                                                |
 
+**Completion, not just acceptance:** `POST …/refs` answers whether refs were _accepted_;
+materialisation, offers and comment push are asynchronous, so `GET /albums/:mappingId/status`
+answers the separate question _"is the work finished?"_ — `{settled, pending, cycles, failCount,
+dead}`, derived from cursors that are only written after a clean pass. Advertised as the
+`sync-status` feature; a peer that 404s the route is an older build and the caller waits instead
+(rule 2). This is what lets a caller stop guessing with a timeout.
+
 **The share-link handshake, end to end:** the origin's share page embeds its endpoint token → the
 join card forwards it in the v2 invite fragment (never a server log) → the visitor's own sidecar
 dials the origin and redeems → the origin pins the caller's proven key and returns the manifest →

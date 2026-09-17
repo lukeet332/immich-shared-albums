@@ -9,6 +9,7 @@ import {
   handleVersion,
   handleNudge,
   handleManifest,
+  handleStatus,
   handleHello,
   handleLeave,
 } from './protocol.ts';
@@ -42,6 +43,7 @@ export const peerRoutes: PeerHandler = async (callerPub, path, bodyBuf, range) =
     return json(await handleActivity(callerPub, body, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/version$/))) return json(await handleVersion(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/manifest$/))) return json(await handleManifest(callerPub, m[1]));
+  if ((m = path.match(/^\/albums\/([^/]+)\/status$/))) return json(await handleStatus(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/leave$/))) return json(handleLeave(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/comments$/))) return json(await handleComments(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/nudge$/))) return json(await handleNudge(callerPub, m[1]));
