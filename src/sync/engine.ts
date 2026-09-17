@@ -226,6 +226,12 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
     if (allOk && propagated && version && consistent) {
       mapping.remoteVersion = version;
       save();
+      emit('settled', {
+        mappingId: mapping.id,
+        albumId: mapping.albumId,
+        albumName: mapping.albumName,
+        detail: { applied: missing.length },
+      });
       emit('pulled', {
         mappingId: mapping.id,
         albumId: mapping.albumId,

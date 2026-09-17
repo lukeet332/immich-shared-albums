@@ -146,7 +146,18 @@ const until = async (fn, timeoutMs = 90000, everyMs = POLL_MS) => {
 // wait, so the event may already have happened — and `albumId` is a UUID, so a match can never be
 // some other album that shares a name.
 const event = async (side, type, albumId, { timeoutMs = 60000 } = {}) => {
-  const on = { B: [BS, BKEY], A: [ORIGIN_DIRECT, AKEY], D: [DS, DKEY] }[side];
+  // Resolved per side, and only the side asked for: a literal here would read DS/DKEY before the
+  // suite has initialised them, and an early event is not a reason to crash a run.
+  const sides = () => {
+    const known = { B: [BS, BKEY], A: [ORIGIN_DIRECT, AKEY] };
+    try {
+      if (typeof DS !== 'undefined' && typeof DKEY !== 'undefined' && DKEY) known.D = [DS, DKEY];
+    } catch {
+      /* D not initialised yet */
+    }
+    return known;
+  };
+  const on = sides()[side];
   if (!on) throw new Error(`event(): unknown sidecar '${side}'`);
   const [base, key] = on;
   const t0 = Date.now();
@@ -282,7 +293,8 @@ check('an account exists for the origin album owner, keyed by their id on their 
       !!ownerUtility, bBotUsers.map(u => u.email).join(', '));
 check('that account is named for the person', !!ownerUtility && ownerUtility.name.startsWith(originOwnerName),
       ownerUtility?.name || 'no account');
-const mirrorAssets = await until(async () => { const x = await albumAssets(B, BKEY, mirror.id); return x.length === 4 ? x : null; });
+await event('B', 'settled', mirror.id, { timeoutMs: 150000 });
+const mirrorAssets = await albumAssets(B, BKEY, mirror.id);
 check('mirror has 4 assets', !!mirrorAssets, mirrorAssets ? '' : 'timed out');
 if (mirrorAssets) {
   const humanIds = bUsers.filter(u => !isBot(u.email)).map(u => u.id);
@@ -353,7 +365,8 @@ await ensurePreviews(B, BKEY, nIds);
 await api(B, BKEY, `/albums/${mirror.id}/assets`, { ...j({ ids: nIds }), method: 'PUT' });
 
 stage('verify arrival + attribution on A');
-const aAfter = await until(async () => { const x = await albumAssets(A, AKEY, ALBUM_ID); return x.length === 6 ? x : null; });
+await event('A', 'settled', ALBUM_ID, { timeoutMs: 90000 });
+const aAfter = await albumAssets(A, AKEY, ALBUM_ID);
 check('A album has 6 assets after contribution', !!aAfter, aAfter ? '' : `still ${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
 if (aAfter) {
   const aUsers = await api(A, AKEY, '/admin/users');
@@ -443,7 +456,8 @@ if (aAfter && mirror) {
   for (let i = 1; i <= 2; i++) lateIds.push(await upload(A, AKEY, `late-owner-${i}.jpg`, `lo${i}${Date.now() % 10000}`, `2026-06-0${i}T08:00:00.000Z`));
   await ensurePreviews(A, AKEY, lateIds);
   await api(A, AKEY, `/albums/${ALBUM_ID}/assets`, { ...j({ ids: lateIds }), method: 'PUT' });
-  const grew = await until(async () => { const x = await albumAssets(B, BKEY, mirror.id); return x.length === 9 ? x : null; });
+  await event('B', 'settled', mirror.id, { timeoutMs: 120000 });
+const grew = await albumAssets(B, BKEY, mirror.id);
   check('owner post-join additions reach member mirror (7->9)', !!grew, grew ? '' : `mirror at ${(await albumAssets(B, BKEY, mirror.id)).length}`);
 }
 
@@ -456,7 +470,8 @@ if (aAfter) {
   const join2 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, share2, { forUserId: nanId }), BKEY))).json();
   check('second album join ok', join2.photos === 1, JSON.stringify(join2));
   const mirror2 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'second album');
-  const m2assets = await until(async () => { const x = await albumAssets(B, BKEY, mirror2.id); return x.length === 1 ? x : null; }, 40000);
+  await event('B', 'settled', mirror2.id, { timeoutMs: 40000 });
+const m2assets = await albumAssets(B, BKEY, mirror2.id);
   check('previously-shared photo synced into second album', !!m2assets);
   const m2detail = await api(B, BKEY, `/albums/${mirror2.id}`);
   const m2humans = (m2detail.albumUsers || []).filter(u => !isBot(u.user?.email)).map(u => u.user?.id);
@@ -545,7 +560,8 @@ stage('view-only share link (allowUpload off) rejects cross-server uploads');
   const meB6 = (await api(B, BKEY, '/users/me')).id;
   const join6 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, share6, { forUserId: meB6 }), BKEY))).json();
   const mirror6 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'view only album');
-  const m6 = await until(async () => { const x = await albumAssets(B, BKEY, mirror6.id); return x.length === 1 ? x : null; }, 60000);
+  await event('B', 'settled', mirror6.id, { timeoutMs: 60000 });
+const m6 = await albumAssets(B, BKEY, mirror6.id);
   check('view-only album still syncs for viewing', !!m6, m6 ? '' : 'timed out');
   // Vanilla parity: a view-only share makes the member a VIEWER, so Immich itself refuses a
   // local add — the rogue upload cannot even land in the mirror, a stronger guarantee than
@@ -635,7 +651,8 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
   const meBD = (await api(B, BKEY, '/users/me')).id;
   const joinD2 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, shareD, { forUserId: meBD }), BKEY))).json();
   const mirrorD = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'delete test');
-  const mD = await until(async () => { const x = await albumAssets(B, BKEY, mirrorD.id); return x.length === 2 ? x : null; }, 60000);
+  await event('B', 'settled', mirrorD.id, { timeoutMs: 60000 });
+const mD = await albumAssets(B, BKEY, mirrorD.id);
   check('delete-test album joined and mirrored (2 stubs)', !!mD, mD ? '' : 'timed out');
   await api(A, AKEY, '/assets', { ...j({ ids: [d2], force: true }), method: 'DELETE' });
   const shrunk = await until(async () => (await albumAssets(B, BKEY, mirrorD.id)).length === 1 ? true : null, 240000);

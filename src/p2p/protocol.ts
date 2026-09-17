@@ -13,6 +13,7 @@
 import crypto from 'node:crypto';
 import { CFG, SIDECAR_VERSION, log } from '../config.ts';
 import { PROTOCOL_FEATURES } from '../types.ts';
+import { emit } from '../events.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
 import { state, save, keys } from '../state.ts';
 import { nudgePeers, peerByPub, mappingFor } from '../peers.ts';
@@ -192,7 +193,18 @@ export async function handleRefs(callerPub: string, body: string, albumMappingId
       failed.push(ref.checksum);
     }
   }
-  if (add.length > failed.length) nudgePeers(mapping.albumId, peer.pub); // relay moved — tell the others
+  if (add.length > failed.length) {
+    // The batch is applied: ONE fact meaning "this mapping has taken on what it was offered", as
+    // opposed to `materialised` per ref. A caller waiting for the album to be there wants this,
+    // not the first of N per-photo events.
+    emit('settled', {
+      mappingId: mapping.id,
+      albumId: mapping.albumId,
+      albumName: mapping.albumName,
+      detail: { applied: add.length - failed.length, failed: failed.length },
+    });
+    nudgePeers(mapping.albumId, peer.pub); // relay moved — tell the others
+  }
   // partial success: sender re-offers only the failed refs next cycle
   return [200, { ok: failed.length === 0, failed }];
 }
