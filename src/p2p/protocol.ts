@@ -15,8 +15,10 @@ import { CFG, SIDECAR_VERSION, log } from '../config.ts';
 import { PROTOCOL_FEATURES } from '../types.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
 import { state, save, keys } from '../state.ts';
+import type { Mapping } from '../store.ts';
 import { nudgePeers, peerByPub, mappingFor } from '../peers.ts';
-import { getSharedLinkByKey, getAlbum, getAlbumAssets, ownerName, immichJson } from '../immich/client.ts';
+import { getSharedLinkByKey, ownerName, immichJson } from '../immich/client.ts';
+import { readCredsFor, readAlbumAs, readAlbumAssetsAs } from '../immich/access.ts';
 import { buildManifest } from '../immich/refs.ts';
 import { materialiseRef } from '../immich/materialise.ts';
 import { reconcileMapping } from '../sync/engine.ts';
@@ -93,8 +95,10 @@ export async function handleRedeem(callerPub: string, body: string) {
       { error: 'this server only shares albums whose link has a password set', code: 'password_required' },
     ];
   }
-  const album = await getAlbum(link.album.id);
-  album.assets = await getAlbumAssets(album.id);
+  const access = readCredsFor({ role: 'owner' } as Mapping);
+  const album = await readAlbumAs(link.album.id, access);
+  if (!album) return [404, { error: 'that album is gone', code: 'unknown_album' }];
+  album.assets = await readAlbumAssetsAs(album.id, access);
   if (!state.peers.some(p => p.pub === callerPub)) {
     state.peers.push({
       pub: callerPub,
@@ -203,7 +207,8 @@ export async function handleVersion(callerPub: string, albumMappingId: string) {
   const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
   if (!mapping || mapping.dead) return goneOr404(peer.pub, albumMappingId);
   const stats = await immichJson(`/activities/statistics?albumId=${mapping.albumId}`).catch(() => null);
-  const album = await getAlbum(mapping.albumId);
+  const album = await readAlbumAs(mapping.albumId, readCredsFor(mapping));
+  if (!album) return goneOr404(peer.pub, albumMappingId);
   // `version` is an OPAQUE equality token. The packed "updatedAt|assetCount" shape is kept as
   // its value for protocol-2 compatibility (updatedAt alone misses cascade deletions), but
   // receivers should read the structured fields and never parse the string.
@@ -249,7 +254,7 @@ export async function handleManifest(callerPub: string, albumMappingId: string) 
   if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
   const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
   if (!mapping || mapping.dead) return goneOr404(peer.pub, albumMappingId);
-  const manifest = await buildManifest(await getAlbumAssets(mapping.albumId));
+  const manifest = await buildManifest(await readAlbumAssetsAs(mapping.albumId, readCredsFor(mapping)));
   recordOfferedRefs(mapping.id, manifest);
   return [200, { manifest }];
 }

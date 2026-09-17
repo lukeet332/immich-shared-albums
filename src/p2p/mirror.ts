@@ -13,6 +13,7 @@ import { CFG, log, isUtilityEmail, BOT_PREFIX, UTILITY_EMAIL_DOMAIN } from '../c
 import type { Mapping, Peer } from '../store.ts';
 import { state, save } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
+import { keyAccess } from '../immich/access.ts';
 import { ensureUtilityUser, syncAvatar } from '../immich/contributors.ts';
 import { reconcileMapping } from '../sync/engine.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
@@ -64,7 +65,7 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
   const addMembers = async (albumId: string) => {
     let members = (await immichJson('/admin/users')).filter(u => !isUtilityEmail(u.email));
     if (forUserIds?.length) members = members.filter(u => forUserIds.includes(u.id));
-    const alb = await immichJson(`/albums/${albumId}`, {}, host.apiKey);
+    const alb = await immichJson(`/albums/${albumId}`, {}, keyAccess(host.apiKey));
     const already = new Set((alb.albumUsers || []).map(au => au.user?.id));
     members = members.filter(u => !already.has(u.id));
     if (members.length)

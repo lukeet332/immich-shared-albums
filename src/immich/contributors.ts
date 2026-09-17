@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { CFG, log, UTILITY_SUFFIX, UTILITY_EMAIL_DOMAIN, BOT_PREFIX } from '../config.ts';
 import { state, save, addedRecord } from '../state.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
+import { keyAccess } from './access.ts';
 import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 
 /**
@@ -288,7 +289,7 @@ export async function ensureContributor(
 
   let alreadyMember = false;
   try {
-    const alb = await immichJson(`/albums/${albumId}?withoutAssets=true`, {}, hostKey);
+    const alb = await immichJson(`/albums/${albumId}?withoutAssets=true`, {}, keyAccess(hostKey));
     alreadyMember = (alb.albumUsers || []).some(au => au.user?.id === c.userId);
   } catch {
     // Cannot read the album, so cannot prove the membership is not already a human's. Do not

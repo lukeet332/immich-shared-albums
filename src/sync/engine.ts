@@ -9,7 +9,8 @@ import { CFG, log } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
 import { state, store, save, seenHas, seenAdd, wireChecksum, storeSharedAssetsLocally } from '../state.ts';
 import { peerRequest } from '../p2p/transport.ts';
-import { getAlbum, getAlbumAssets, usersById } from '../immich/client.ts';
+import { usersById } from '../immich/client.ts';
+import { readCredsFor, readAlbumAs, readAlbumAssetsAs } from '../immich/access.ts';
 import { shareableAssets, assetToRef } from '../immich/refs.ts';
 import { materialiseRef, deleteProxyAsset } from '../immich/materialise.ts';
 import { recordOffered } from '../p2p/entitlement.ts';
@@ -21,9 +22,13 @@ export async function watchOnce() {
     if (mapping.dead) continue;
 
     try {
+      // The local side is read with the credential that can actually see it — a member mirror is
+      // owned by the origin owner's stand-in, not by this household's admin. See immich/access.ts.
+      const access = readCredsFor(mapping);
+      const album = await readAlbumAs(mapping.albumId, access);
+      if (!album) throw new Error(`no album.read access to "${mapping.albumName}"`);
       // handshake: skip untouched albums entirely (updatedAt bumps on any album change).
       // localVersion is only stored after a CLEAN cycle so deferred refs keep re-offering.
-      const album = await getAlbum(mapping.albumId);
       if (album.updatedAt && album.updatedAt === mapping.localVersion) continue;
       // native leave: when the last human member leaves the mirror in the STOCK app
       // (album settings -> Leave album), the sidecar cleans up everything the join
@@ -40,7 +45,7 @@ export async function watchOnce() {
         }
       }
       if (mapping.role === 'member' && mapping.permissions === 'view') continue; // view-only: nothing to push
-      const assets = await getAlbumAssets(mapping.albumId);
+      const assets = await readAlbumAssetsAs(mapping.albumId, access);
       mapping.failCount = 0;
       // Revocation, per photo: an asset removed from the album must stop being served to
       // this mapping's peer, not just stop being advertised.

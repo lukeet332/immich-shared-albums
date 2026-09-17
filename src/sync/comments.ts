@@ -8,6 +8,7 @@ import { state, save, seenActHas, seenActAdd } from '../state.ts';
 import { nudgePeers, peerByPub, mappingFor } from '../peers.ts';
 import { peerRequest } from '../p2p/transport.ts';
 import { immichJson, jsonBody, usersById } from '../immich/client.ts';
+import { readCredsFor } from '../immich/access.ts';
 import { ensureContributor } from '../immich/contributors.ts';
 
 export const getComments = (albumId, key?: string) =>
@@ -21,8 +22,7 @@ export const getComments = (albumId, key?: string) =>
  * `400 Not found or no album.read access` on every poll. The mirror-owning stand-in always has
  * access because it owns the album. Owner mappings keep the admin key (undefined => default).
  */
-const albumReaderKey = mapping =>
-  mapping.role === 'member' && mapping.hostSlug ? state.contributors[mapping.hostSlug]?.apiKey : undefined;
+const albumReaderKey = mapping => readCredsFor(mapping).key;
 export const postComment = (albumId, comment, key) =>
   immichJson('/activities', jsonBody({ albumId, type: 'comment', comment }), key);
 // Materialise foreign comments locally via the author's utility user, skipping ids
@@ -32,7 +32,7 @@ export async function materialiseComments(mapping, peer, comments) {
   for (const cm of comments) {
     const tag = `remote:${cm.id}`;
     if (seenActHas(tag)) continue;
-    const hostKey = mapping.hostSlug ? state.contributors[mapping.hostSlug]?.apiKey : undefined;
+    const hostKey = readCredsFor(mapping).key;
     const c = await ensureContributor(
       cm.author || peer.name,
       mapping.albumId,

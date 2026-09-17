@@ -6,17 +6,25 @@
 import crypto from 'node:crypto';
 import { CFG, log, isUtilityEmail } from '../config.ts';
 import type { AssetRef } from '../types.ts';
+import type { Creds } from './access.ts';
 
-export const immich = async (p: string, init: RequestInit = {}, key: string = CFG.apiKey) => {
+/** The admin key unless a caller names a specific one, or forwards their own credential. */
+export const immich = async (
+  p: string,
+  init: RequestInit = {},
+  key: string | Creds = CFG.apiKey
+) => {
+  const identity: Record<string, string> =
+    typeof key === 'string' ? { 'x-api-key': key } : key.headers;
   const r = await fetch(`${CFG.immichUrl}/api${p}`, {
     signal: AbortSignal.timeout(60000),
     ...init,
-    headers: { 'x-api-key': key, Accept: 'application/json', ...(init.headers || {}) },
+    headers: { ...identity, Accept: 'application/json', ...(init.headers || {}) },
   });
   if (!r.ok) throw new Error(`immich ${p} -> ${r.status} ${await r.text().catch(() => '')}`);
   return r;
 };
-export const immichJson = async (p: string, init?: RequestInit, key?: string) => {
+export const immichJson = async (p: string, init?: RequestInit, key?: string | Creds) => {
   const r = await immich(p, init, key);
   if (r.status === 204) return null;
   const text = await r.text();

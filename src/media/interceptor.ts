@@ -9,6 +9,7 @@ import { CFG, log } from '../config.ts';
 import { state, store } from '../state.ts';
 import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 import { immich } from '../immich/client.ts';
+import { credsFromHeaders } from '../immich/access.ts';
 import { fetchTrueBytes } from './proxy.ts';
 import { cacheRead, cacheWrite } from './cache.ts';
 
@@ -21,9 +22,7 @@ export async function serveInterceptedBytes(req, res, assetId: string, rawKind: 
   // authorise with the caller's OWN credentials: they must be able to see the asset. A share-page
   // visitor's credential is the link's ?key= — forward it too, so Immich decides with the share
   // link's own authority (expiry, password) instead of 401ing anonymous viewers of stub assets.
-  const authHeaders: Record<string, string> = {};
-  for (const h of ['cookie', 'x-api-key', 'authorization'])
-    if (req.headers[h]) authHeaders[h] = req.headers[h] as string;
+  const authHeaders = credsFromHeaders(req.headers)?.headers ?? {};
   const shareKey = new URL(req.url ?? '/', 'http://x').searchParams.get('key');
   const probe = await fetch(
     `${CFG.immichUrl}/api/assets/${assetId}${shareKey ? `?key=${encodeURIComponent(shareKey)}` : ''}`,

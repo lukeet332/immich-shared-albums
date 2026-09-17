@@ -9,6 +9,7 @@
 import { log } from '../config.ts';
 import { state, store, save } from '../state.ts';
 import { immichJson } from '../immich/client.ts';
+import { readCredsFor } from '../immich/access.ts';
 import { deleteProxyAsset } from '../immich/materialise.ts';
 import { forgetOffered } from '../p2p/entitlement.ts';
 import { peerRequest } from '../p2p/transport.ts';
@@ -24,13 +25,10 @@ export async function leaveAlbum(mappingId: string) {
   for (const entry of store.seenForMapping(mapping.id)) {
     if (entry.originAsset && (await deleteProxyAsset(entry.localAsset))) removed++;
   }
-  const host = mapping.hostSlug ? state.contributors[mapping.hostSlug] : undefined;
-  if (host?.apiKey) {
-    try {
-      await immichJson(`/albums/${mapping.albumId}`, { method: 'DELETE' }, host.apiKey);
-    } catch (e) {
-      log(`mirror album delete failed: ${e.message}`);
-    }
+  try {
+    await immichJson(`/albums/${mapping.albumId}`, { method: 'DELETE' }, readCredsFor(mapping));
+  } catch (e) {
+    log(`mirror album delete failed: ${e.message}`);
   }
   store.seenRemoveMapping(mapping.id);
   store.seenActRemoveMapping(mapping.id);

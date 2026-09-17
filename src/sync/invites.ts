@@ -306,7 +306,7 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
   if (!host?.apiKey) return;
   let alb;
   try {
-    alb = await immichJson(`/albums/${mapping.albumId}`, {}, host.apiKey);
+    alb = await immichJson(`/albums/${mapping.albumId}`, {}, readCredsFor(mapping));
   } catch {
     return;
   } // album gone: the withdrawal path will clean up
