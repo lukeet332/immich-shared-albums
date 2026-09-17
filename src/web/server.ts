@@ -23,7 +23,7 @@ import { sharePage, signInPage } from './assets.ts';
 import { localAddr } from '../p2p/transport.ts';
 import { keys } from '../state.ts';
 import { proxyToImmich } from './passthrough.ts';
-import { callerIdentity, signInRequired } from './auth.ts';
+import { callerIdentity, callerSignedIn, signInRequired } from './auth.ts';
 import { join } from '../p2p/join.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
@@ -266,12 +266,12 @@ export const server = http.createServer(async (req, res) => {
         return send(400, { error: e.message });
       }
     }
-    // Per-user panel data: the caller's own shared albums. Any signed-in user; scoped to caller.id
-    // server-side (never a client-supplied id) — the keystone of the reunification user surface.
+    // Per-user panel data: the caller's own shared albums, read AS the caller so Immich answers
+    // membership (never a client-supplied id, never a filtered admin read).
     if (path === `${ROUTE_PREFIX}/me/albums` && req.method === 'GET') {
-      const caller = await callerIdentity(req);
-      if (!caller) return send(401, signInRequired('see your albums'));
-      return send(200, { albums: await myAlbums(caller.id) });
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('see your albums'));
+      return send(200, { albums: await myAlbums(signedIn.creds) });
     }
     // Liveness only. The join banner probes this cross-origin to discover a sidecar, so
     // it stays open — which is exactly why it must not name the household or count peers.
