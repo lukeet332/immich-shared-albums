@@ -20,6 +20,7 @@ import { getSharedLinkByKey, getAlbum, getAlbumAssets, ownerName, immichJson } f
 import { buildManifest } from '../immich/refs.ts';
 import { materialiseRef } from '../immich/materialise.ts';
 import { reconcileMapping } from '../sync/engine.ts';
+import { syncStatus } from '../sync/status.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 import { recordOfferedRefs } from './entitlement.ts';
 
@@ -243,6 +244,18 @@ export async function handleNudge(callerPub: string, albumMappingId: string) {
   })();
   return [200, { ok: true }];
 }
+// Status probe: has the work for this mapping finished? `refs` answers "accepted", which is a
+// different question — a caller that needs completion has no other way to ask, and used to infer
+// it from silence. Peers that 404 this route are older builds; callers fall back to waiting.
+export async function handleStatus(callerPub: string, albumMappingId: string) {
+  const peer = peerByPub(callerPub);
+  if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
+  const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
+  if (!mapping || mapping.dead) return goneOr404(peer.pub, albumMappingId);
+  const album = await getAlbum(mapping.albumId).catch(() => undefined);
+  return [200, syncStatus(mapping, album)];
+}
+
 // Members re-pull this to heal refs missed at join time (e.g. preview not yet generated).
 export async function handleManifest(callerPub: string, albumMappingId: string) {
   const peer = peerByPub(callerPub);

@@ -12,6 +12,7 @@ import { immichJson } from '../immich/client.ts';
 import { deleteProxyAsset } from '../immich/materialise.ts';
 import { forgetOffered } from '../p2p/entitlement.ts';
 import { peerRequest } from '../p2p/transport.ts';
+import { forgetWatcherCycles } from './status.ts';
 
 // Leave & purge: the reverse of joining. Removes every stub this album materialised
 // (utility-owner-guarded), the mirror album, the mapping and its ledger — a join is
@@ -39,6 +40,7 @@ export async function leaveAlbum(mappingId: string) {
       log(`mirror album delete failed: ${e.message}`);
     }
   }
+  forgetWatcherCycles(mapping.id);
   store.seenRemoveMapping(mapping.id);
   store.seenActRemoveMapping(mapping.id);
   forgetOffered(mapping.id);

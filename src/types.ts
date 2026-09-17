@@ -6,9 +6,26 @@
  */
 
 export const PROTOCOL_VERSION = 2;
-/** Capability flags a /hello answer may carry. Empty in protocol 2 — the field exists so a
- *  future feature can be sniffed per peer instead of forcing a protocol bump. */
-export const PROTOCOL_FEATURES: string[] = [];
+/** Capability flags a /hello answer may carry. Advertised per peer, sniffed per peer, and gated
+ *  on a flag rather than a version comparison — see wire-protocol.md rule 4. */
+export const PROTOCOL_FEATURES: string[] = ['sync-status'];
+
+/** GET /albums/:mappingId/status — is the work you took on actually finished?
+ *
+ *  `refs` answers "accepted", which is not the same question: materialisation is asynchronous, so
+ *  without this a sender cannot tell "still working" from "done" and has to guess with a timeout.
+ *  Peers that 404 the route are simply older; callers fall back to waiting (rule 2). */
+export type SyncStatus = {
+  /** No deferred refs and both cursors have caught up — nothing outstanding on this mapping. */
+  settled: boolean;
+  /** Accepted this cycle but not yet materialised, and re-offered next cycle. */
+  pending: number;
+  /** Watcher cycles that have completed for this mapping since boot. */
+  cycles: number;
+  /** Consecutive failed cycles; the mapping is retired at 5 (see watchOnce). */
+  failCount: number;
+  dead: boolean;
+};
 
 /** GET /hello — who are you, protocol-wise. Answered by every peer route table since v1;
  *  callers persist the result per peer and treat a 404 as "protocol 2, no features". */

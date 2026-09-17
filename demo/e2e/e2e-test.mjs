@@ -96,10 +96,55 @@ const readSidecarAdded = (stateDir, albumId) => {
   }
 };
 
-const until = async (fn, timeoutMs = 90000, everyMs = 5000) => {
+// Profile every wait: a suite that sleeps blindly cannot be made faster without knowing which
+// waits actually cost time and which return immediately. Printed at the end when E2E_PROFILE=1.
+const WAITS = [];
+const POLL_MS = Number(process.env.E2E_POLL_MS || 1000);
+// Interval only: how often we LOOK. Never a budget — see demo/e2e/README.md.
+const until = async (fn, timeoutMs = 90000, everyMs = POLL_MS) => {
   const t0 = Date.now();
-  while (Date.now() - t0 < timeoutMs) { const v = await fn(); if (v) return v; await sleep(everyMs); }
+  let polls = 0;
+  while (Date.now() - t0 < timeoutMs) {
+    polls++;
+    const v = await fn();
+    if (v) {
+      WAITS.push({ ms: Date.now() - t0, polls, ok: true });
+      return v;
+    }
+    await sleep(everyMs);
+  }
+  WAITS.push({ ms: Date.now() - t0, polls, ok: false });
   return null;
+};
+
+const stable = async (fn, holdMs, timeoutMs = 60000, everyMs = POLL_MS) => {
+  const t0 = Date.now();
+  let value = await fn();
+  let heldSince = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    await sleep(everyMs);
+    const next = await fn();
+    if (JSON.stringify(next) !== JSON.stringify(value)) {
+      value = next;
+      heldSince = Date.now();
+      continue;
+    }
+    if (Date.now() - heldSince >= holdMs) {
+      WAITS.push({ ms: Date.now() - t0, polls: Math.ceil((Date.now() - t0) / everyMs), ok: true });
+      return value;
+    }
+  }
+  WAITS.push({ ms: Date.now() - t0, polls: Math.ceil((Date.now() - t0) / everyMs), ok: false });
+  return null; // never held — the assertion that follows reports the real state
+};
+
+const waitFor = async (fn, timeoutMs = 20000, everyMs = 250) => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    if (await fn()) return true;
+    await sleep(everyMs);
+  }
+  return false;
 };
 
 let ALBUM_ID = ALBUM;
@@ -148,16 +193,28 @@ const endpointOf = async pageBase => {
 // One iroh request from INSIDE the rig's network (the host cannot dial container IPs).
 const { execSync } = await import('node:child_process');
 const REPO = new URL('../..', import.meta.url).pathname.replace(/\/$/, '');
+// A probe spawns a container and does a live iroh round trip, so it can fail transiently — the
+// native addon has been seen to exit on SIGBUS (135) mid-run. That used to throw out of execSync
+// and kill the whole suite, hiding every other result behind one flake. Retry once, then report a
+// status the checks can fail on, so a probe problem reads as one red check instead of no output.
 const irohProbe = (keys, endpoint, path, opts = {}) => {
   const job = JSON.stringify({ keys, peerPub: endpoint.pub, addrs: endpoint.addrs, path, ...opts });
-  const out = execSync(
+  const cmd =
     `docker run --rm --network isa-demo -e ISA_ROOT=/repo -e RELAY=off ` +
-      `-v "${REPO}":/repo -v isa-node-modules:/repo/node_modules node:24-alpine ` +
-      `sh -c 'cd /repo && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1; ` +
-      `node demo/e2e/probe.mjs ${JSON.stringify(job).replace(/'/g, String.raw`'\''`)}'`,
-    { timeout: 120000 }
-  ).toString().trim().split('\n').pop();
-  return JSON.parse(out);
+    `-v "${REPO}":/repo -v isa-node-modules:/repo/node_modules node:24-alpine ` +
+    `sh -c 'cd /repo && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1; ` +
+    `node demo/e2e/probe.mjs ${JSON.stringify(job).replace(/'/g, String.raw`'\''`)}'`;
+  let last;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const out = execSync(cmd, { timeout: 120000 }).toString().trim().split('\n').pop();
+      return JSON.parse(out);
+    } catch (e) {
+      last = e;
+    }
+  }
+  console.log(`  (probe failed twice: ${String(last?.message).split('\n')[0].slice(0, 80)})`);
+  return { status: 0, json: null, probeFailed: true };
 };
 const joinRes = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, shareKey), BKEY))).json();
 check('join succeeded', !!joinRes.album, JSON.stringify(joinRes));
@@ -455,9 +512,12 @@ console.log('— stage: view-only share link (allowUpload off) rejects cross-ser
   const addedOk = Array.isArray(addBody) && addBody.some(r => r.success);
   check('view-only mirror refuses a local add (member is a viewer, not editor)',
         !addedOk, `status ${addRogue.status}`);
-  await sleep(25000); // two push cycles — nothing to propagate either way
-  check('view-only album rejects cross-server uploads', (await albumAssets(A, AKEY, alb6)).length === 1,
-        `origin at ${(await albumAssets(A, AKEY, alb6)).length}`);
+  // Two push cycles with nothing to propagate: require the origin count to HOLD across them
+  // rather than trusting one reading after a fixed wait. Runs in ~2 cycles, fails fast if a
+  // stray upload ever lands.
+  const viewOnlyHeld = await stable(() => albumAssets(A, AKEY, alb6).then(a => a.length), 8000, 25000);
+  check('view-only album rejects cross-server uploads', viewOnlyHeld === 1,
+        `origin held at ${viewOnlyHeld} (want 1)`);
 }
 
 console.log('— stage: reverse-direction share — member-owned album with an already-shared photo must not echo');
@@ -476,9 +536,9 @@ console.log('— stage: reverse-direction share — member-owned album with an a
   const mirrorR = (await api(A, AKEY, '/albums')).find(a => a.albumName === 'reverse album');
   const mR = mirrorR && await until(async () => { const x = await albumAssets(A, AKEY, mirrorR.id); return x.length === 1 ? x : null; }, 180000);
   check('reverse mirror syncs (dedup reuses the existing proxy)', !!mR, mR ? '' : 'timed out');
-  await sleep(25000);
-  check('already-shared photo does NOT echo back to its owner (regression)',
-        (await albumAssets(B, BKEY, albR)).length === 1, `B album at ${(await albumAssets(B, BKEY, albR)).length}`);
+  const noEchoHeld = await stable(() => albumAssets(B, BKEY, albR).then(a => a.length), 8000, 25000);
+  check('already-shared photo does NOT echo back to its owner (regression)', noEchoHeld === 1,
+        `B album held at ${noEchoHeld} (want 1)`);
 }
 
 console.log('— stage: third household D joins — member contributions relay through the origin');
@@ -561,7 +621,10 @@ console.log('— stage: kill test — uncached photos fail closed; cached ones s
   const { execSync } = await import('node:child_process');
   const dockerEnv = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
   execSync('docker stop household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
-  await sleep(1500);
+  await waitFor(() => {
+    try { return execSync('docker inspect -f {{.State.Running}} household-c-sidecar-c-1', { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
+    catch { return true; }
+  }, 15000);
   const deadRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
   const deadBytes = await deadRes.arrayBuffer();
   check('owner offline: UNCACHED photo cannot be produced (no hidden copy exists)',
@@ -571,19 +634,26 @@ console.log('— stage: kill test — uncached photos fail closed; cached ones s
   check('owner offline: recently viewed photo still renders FROM CACHE',
         cachedRes.headers.get('x-cache') === 'HIT' && sha1(await cachedRes.arrayBuffer()) === cachedSha);
   execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
-  await sleep(4000);
+  // wait for the owner to answer again instead of guessing how long a start takes
+  await waitFor(async () => (await fetch(`${A}/api/server/ping`).catch(() => ({ ok: false }))).ok, 20000);
   const aliveRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
   check('owner back online: uncached photo streams again (hotlink recovery)',
         aliveRes.headers.get('x-cache') === 'MISS' && (await aliveRes.arrayBuffer()).byteLength > 500,
         `x-cache: ${aliveRes.headers.get('x-cache')}`);
 }
 
-console.log('— stage: loop prevention (2 idle watcher cycles)');
-await sleep(35000);
+console.log('— stage: loop prevention (the counts must HOLD, not merely read true once)');
+// Ping-pong does not show up in a single reading — it shows up as a count that keeps climbing.
+// So require every count to be unchanged for two full sync intervals, which is what "2 idle
+// watcher cycles" was estimating, and which fails fast if a cycle ever increments anything.
 const EXPECT = DKEY ? 10 : 9;
-check('no ping-pong on A', (await albumAssets(A, AKEY, ALBUM_ID)).length === EXPECT, `A=${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
-check('no ping-pong on B', (await albumAssets(B, BKEY, mirror.id)).length === EXPECT, `B=${(await albumAssets(B, BKEY, mirror.id)).length}`);
-if (DKEY && dMirror) check('no ping-pong on D', (await albumAssets(D, DKEY, dMirror.id)).length === EXPECT, `D=${(await albumAssets(D, DKEY, dMirror.id)).length}`);
+const counts = async () => [
+  (await albumAssets(A, AKEY, ALBUM_ID)).length,
+  (await albumAssets(B, BKEY, mirror.id)).length,
+  ...(DKEY && dMirror ? [(await albumAssets(D, DKEY, dMirror.id)).length] : []),
+];
+const held = await stable(counts, 8000, 35000);
+check('no ping-pong: every count holds for two idle cycles', !!held && held[0] === EXPECT, JSON.stringify(held));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Security regressions. Each check below maps to a specific hole that existed
@@ -1224,6 +1294,15 @@ console.log('— stage: panel manages server links (unlink)');
       { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
         body: JSON.stringify({ pub: target.pub }) });
     check('unlinking an already-unlinked server fails cleanly', dead.status === 400, `status ${dead.status}`);
+  }
+}
+
+if (process.env.E2E_PROFILE) {
+  const total = WAITS.reduce((s, w) => s + w.ms, 0);
+  const polls = WAITS.reduce((s, w) => s + w.polls, 0);
+  console.log(`\n— wait profile: ${WAITS.length} until() calls, ${(total / 1000).toFixed(1)}s waiting, ${polls} polls`);
+  for (const w of [...WAITS].sort((a, b) => b.ms - a.ms).slice(0, 12)) {
+    console.log(`   ${(w.ms / 1000).toFixed(1).padStart(6)}s  ${String(w.polls).padStart(3)} polls  ${w.ok ? 'ok' : 'TIMEOUT'}`);
   }
 }
 

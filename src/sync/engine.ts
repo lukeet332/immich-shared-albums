@@ -15,6 +15,7 @@ import { materialiseRef, deleteProxyAsset } from '../immich/materialise.ts';
 import { recordOffered } from '../p2p/entitlement.ts';
 import { leaveAlbum } from './leave.ts';
 import { backfillFullCopies, hasStubRows } from './backfill.ts';
+import { recordWatcherCycle } from './status.ts';
 
 export async function watchOnce() {
   for (const mapping of state.mappings) {
@@ -56,6 +57,7 @@ export async function watchOnce() {
       const fresh = await shareableAssets(assets, mapping.id);
       if (!fresh.length) {
         mapping.localVersion = album.updatedAt;
+        recordWatcherCycle(mapping.id);
         save();
         continue;
       }
@@ -103,6 +105,7 @@ export async function watchOnce() {
         landed.forEach(a => seenAdd(mapping.id, wireChecksum(a), a.id));
         if (!failed.size) {
           mapping.localVersion = album.updatedAt;
+          recordWatcherCycle(mapping.id);
           save();
         }
         log(

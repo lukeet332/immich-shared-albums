@@ -21,6 +21,8 @@ import { personName } from './config.ts';
 import { permissionFor } from './sync/invites.ts';
 import { diffInvitees, invitationMirrorWasWithdrawn } from './sync/invitees.ts';
 import { jpegOfSize, boundedStubDims } from './media/jpeg.ts';
+import { syncStatus, whyNotSettled } from './sync/status.ts';
+import type { Mapping } from './store.ts';
 
 test('bot accounts are keyed by id, never by display name', () => {
   // Two remote people who share a display name must never collapse into one local account
@@ -182,4 +184,58 @@ test('mirror stub JPEG declares the origin aspect ratio, not 1x1', () => {
     assert.ok(Math.abs(bw / bh / (w / h) - 1) < 0.02, `aspect preserved for ${w}x${h}`);
     assert.ok(buf.length < 4096, `stub stays tiny (${buf.length}B for ${w}x${h})`);
   }
+});
+
+// ─── sync status: the "am I done?" answer the tests and peers both wait on ────────────────────
+// Settled is derived from cursors that are ONLY written after a clean pass, which is why it can
+// answer the question a timeout used to guess at. These cases pin that derivation, because a
+// wrong `settled` would make every test that waits on it either flaky or falsely green.
+const mappingWith = (over: Partial<Mapping>): Mapping =>
+  ({
+    id: 'm',
+    role: 'member',
+    albumId: 'a',
+    albumName: 'A',
+    peer: 'p',
+    permissions: 'contribute',
+    via: 'invite',
+    ...over,
+  }) as Mapping;
+
+test('a mapping settled when its local cursor matches the album it just read', () => {
+  const st = syncStatus(mappingWith({ localVersion: 'v1' }), { updatedAt: 'v1' });
+  assert.equal(st.settled, true);
+  assert.equal(st.dead, false);
+  assert.equal(st.failCount, 0);
+});
+
+// The cursor is written only when a pass had nothing left to defer, so a stale cursor IS the
+// deferred-refs signal — the deferred refs themselves are the ones never recorded.
+test('a mapping with deferred refs is not settled', () => {
+  assert.equal(syncStatus(mappingWith({ localVersion: 'v1' }), { updatedAt: 'v2' }).settled, false);
+  assert.equal(syncStatus(mappingWith({}), { updatedAt: 'v1' }).settled, false);
+});
+
+test('failures and retirement are never settled, whatever the cursor says', () => {
+  assert.equal(
+    syncStatus(mappingWith({ localVersion: 'v1', failCount: 2 }), { updatedAt: 'v1' }).settled,
+    false
+  );
+  assert.equal(
+    syncStatus(mappingWith({ localVersion: 'v1', dead: true }), { updatedAt: 'v1' }).settled,
+    false
+  );
+});
+
+// Without the album in hand (an offline probe) an absent cursor must not read as settled: that
+// would report a mapping we have never successfully watched as finished.
+test('without the album, a never-watched mapping is not settled', () => {
+  assert.equal(syncStatus(mappingWith({})).settled, false);
+  assert.equal(syncStatus(mappingWith({ localVersion: 'v1' })).settled, true);
+});
+
+test('the status names why it is not settled', () => {
+  assert.equal(whyNotSettled(syncStatus(mappingWith({ dead: true }))), 'retired');
+  assert.equal(whyNotSettled(syncStatus(mappingWith({ failCount: 3 }))), '3 failed cycles');
+  assert.equal(whyNotSettled(syncStatus(mappingWith({}))), 'refs deferred');
 });

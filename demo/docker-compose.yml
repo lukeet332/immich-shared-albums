@@ -43,7 +43,8 @@ services:
       ISA_IMMICH_URL: http://immich-b:2283
       ISA_IMMICH_API_KEY: ${B_SIDECAR_API_KEY:-${B_API_KEY}}
       ISA_HOUSEHOLD_NAME: "Demo household (B)"
-      ISA_SYNC_POLL_MS: "15000"
+      # Rig only: the suite waits on convergence, so the production 15s interval is pure test latency.
+      ISA_SYNC_POLL_MS: "${ISA_SYNC_POLL_MS:-4000}"
     networks:
       - default
       - isa-demo
