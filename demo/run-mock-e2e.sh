@@ -16,6 +16,21 @@ else
   echo "== SKIP_BUILD set: testing against the existing image =="
 fi
 
+# Delete a sidecar's state as ROOT, but only while the container is stopped.
+#
+# Root matters: the rig runs sidecars as root (`user: "0:0"`), so state.db is root-owned and a
+# plain `rm` as the runner fails — which the CI runner hits even though a Docker Desktop bind
+# mount does not. Stopped matters: a running sidecar holds the file open and rewrites it, which is
+# the stale-state bug this replaced. A throwaway container has the same volume mounted, so it can
+# delete what the host cannot.
+reset_state() { # reset_state <compose-dir> <service>
+  local dir=$1 svc=$2
+  ( cd "$dir" && docker compose stop "$svc" >/dev/null 2>&1 )
+  ( cd "$dir" && docker compose run --rm --no-deps --entrypoint sh "$svc" \
+      -c 'rm -f /data/state.db /data/state.db-wal /data/state.db-shm' >/dev/null 2>&1 )
+  ( cd "$dir" && docker compose start "$svc" >/dev/null 2>&1 )
+}
+
 purge() { # base key statedir : delete all albums, sidecar users, non-admin assets, reset sidecar state
   local BASE=$1 KEY=$2 STATEDIR=${3:-}
   # mirror albums are owned by utility users — only their own keys (in the state store) can delete them
@@ -38,11 +53,13 @@ purge() { # base key statedir : delete all albums, sidecar users, non-admin asse
 
 echo "== redeploy + purge B =="
 cd "$DIR/demo" && docker compose up -d --force-recreate sidecar-b >/dev/null 2>&1
-purge http://localhost:2284 "$BKEY" b-sidecar; docker compose exec -T sidecar-b rm -f /data/state.db /data/state.db-wal /data/state.db-shm 2>/dev/null; docker compose restart sidecar-b >/dev/null 2>&1
+purge http://localhost:2284 "$BKEY" b-sidecar
+reset_state "$DIR/demo" sidecar-b
 
 echo "== redeploy + purge C =="
 cd "$DIR/demo/household-c" && docker compose up -d --force-recreate sidecar-c >/dev/null 2>&1
-purge http://localhost:2285 "$CKEY" c-sidecar; docker compose exec -T sidecar-c rm -f /data/state.db /data/state.db-wal /data/state.db-shm 2>/dev/null; docker compose restart sidecar-c >/dev/null 2>&1
+purge http://localhost:2285 "$CKEY" c-sidecar
+reset_state "$DIR/demo/household-c" sidecar-c
 
 echo "== redeploy + purge D (third household — relay coverage) =="
 cd "$DIR/demo/household-d"
@@ -52,8 +69,24 @@ if [ ! -f .env ]; then
 fi
 DKEY=$(grep -m1 "^D_API_KEY=" .env | cut -d= -f2-)
 docker compose up -d --force-recreate sidecar-d >/dev/null 2>&1
-purge http://localhost:2286 "$DKEY" d-sidecar; docker compose exec -T sidecar-d rm -f /data/state.db /data/state.db-wal /data/state.db-shm 2>/dev/null; docker compose restart sidecar-d >/dev/null 2>&1
+purge http://localhost:2286 "$DKEY" d-sidecar
+reset_state "$DIR/demo/household-d" sidecar-d
 sleep 4
+
+# Fail fast on a rig that did not actually reset. A stale state.db carries bot keys whose
+# Immich accounts the purge already deleted, and every later assertion then fails with
+# "Invalid API key" — which reads exactly like a product bug and has cost whole runs. Cheap to
+# check, so check it before spending nine minutes finding out the hard way.
+echo "== preflight: sidecars start from empty state =="
+for pair in "b-sidecar:B" "household-c/c-sidecar:C" "household-d/d-sidecar:D"; do
+  dir=${pair%%:*}; label=${pair##*:}
+  n=$(sqlite3 "$DIR/demo/$dir/state.db" "SELECT COUNT(*) FROM mappings" 2>/dev/null || echo "?")
+  if [ "$n" != "0" ]; then
+    echo "  !! $label sidecar kept $n mapping(s) across the reset — aborting before the suite"
+    exit 1
+  fi
+  echo "  $label starts clean"
+done
 
 echo "== harden C like production (passwordLogin off) =="
 CFGJSON=$(curl -s http://localhost:2285/api/system-config -H "x-api-key: $CKEY" | python3 -c "import json,sys; c=json.load(sys.stdin); c['passwordLogin']['enabled']=False; print(json.dumps(c))")
