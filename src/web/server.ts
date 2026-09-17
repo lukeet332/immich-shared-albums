@@ -37,6 +37,7 @@ import {
   TTL_MINUTES,
 } from '../p2p/pair.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
+import { eventsSince, eventCount } from '../events.ts';
 
 /**
  * Read a JSON-route body under a hard cap, or null if it is too big.
@@ -272,6 +273,14 @@ export const server = http.createServer(async (req, res) => {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('see your albums'));
       return send(200, { albums: await myAlbums(caller.id) });
+    }
+    // The event log, for catch-up when a callback delivery was missed. Gated like every other
+    // hook: ISA_TEST_HOOKS off means a household has no such route at all.
+    if (CFG.testHooks && path === `${ROUTE_PREFIX}/events` && req.method === 'GET') {
+      const caller = await callerIdentity(req);
+      if (!caller?.isAdmin) return send(403, { error: 'only an admin can read events' });
+      const since = Number(u.searchParams.get('since') || 0);
+      return send(200, { now: eventCount(), events: eventsSince(Number.isFinite(since) ? since : 0) });
     }
     // Liveness only. The join banner probes this cross-origin to discover a sidecar, so
     // it stays open — which is exactly why it must not name the household or count peers.

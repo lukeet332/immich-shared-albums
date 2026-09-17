@@ -50,6 +50,11 @@ export const CFG = {
   // The album/asset watch cadence. Invite detection rides the same tick today; if the two
   // ever want different cadences, mint ISA_INVITE_POLL_MS rather than overloading this one.
   syncPollMs: envInt('ISA_SYNC_POLL_MS', 20000, 1000),
+  /** Where to POST each event as it happens (a test runner listening on the host). Empty by
+   *  default: a household buffers events and pushes nothing. */
+  testCallbackUrl: process.env.ISA_TEST_CALLBACK || '',
+  /** Read the event log over HTTP. Off by default — no extra surface for a household. */
+  testHooks: envBool('ISA_TEST_HOOKS', false),
   commentPollMs: envInt('ISA_COMMENT_POLL_MS', 5000, 500),
   // Naming for mirror albums created on this side. Tokens: {name} = the album's name at the
   // origin, {peer} = the sending household's name. The vocabulary is declared here so adding

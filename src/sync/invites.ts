@@ -33,6 +33,7 @@ import { ensureMirror, fillMirrorInBackground } from '../p2p/mirror.ts';
 import { leaveAlbum } from './leave.ts';
 import { diffInvitees, invitationMirrorWasWithdrawn } from './invitees.ts';
 import crypto from 'node:crypto';
+import { emit } from '../events.ts';
 
 /**
  * Our own human users, as offered to a paired household so they can invite one of us
@@ -402,6 +403,11 @@ export async function pullInvitationsOnce() {
           forUserIds: inv.forUserIds || [],
         });
         if (created) {
+          emit('invitation.mirrored', {
+            mappingId: mapping.id,
+            albumId: mapping.albumId,
+            albumName: inv.album.name,
+          });
           log(
             `"${peer.name}" invited ${(inv.forUserIds || []).length} of us to "${inv.album.name}" — mirrored it (${inv.permissions})`
           );
@@ -419,6 +425,7 @@ export async function pullInvitationsOnce() {
     for (const mp of [...state.mappings].filter(mp => invitationMirrorWasWithdrawn(mp, peer.pub, offered))) {
       try {
         await leaveAlbum(mp.id);
+        emit('invitation.withdrawn', { mappingId: mp.id, albumId: mp.albumId, albumName: mp.albumName });
         log(`"${peer.name}" withdrew "${mp.albumName}" — removed the mirror it created`);
       } catch (e) {
         log(`could not remove withdrawn mirror "${mp.albumName}": ${e.message}`);

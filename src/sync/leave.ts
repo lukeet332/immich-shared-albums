@@ -13,6 +13,7 @@ import { deleteProxyAsset } from '../immich/materialise.ts';
 import { forgetOffered } from '../p2p/entitlement.ts';
 import { peerRequest } from '../p2p/transport.ts';
 import { forgetWatcherCycles } from './status.ts';
+import { emit } from '../events.ts';
 
 // Leave & purge: the reverse of joining. Removes every stub this album materialised
 // (utility-owner-guarded), the mirror album, the mapping and its ledger — a join is
@@ -59,6 +60,12 @@ export async function leaveAlbum(mappingId: string) {
     void peerRequest(origin, `/albums/${target}/leave`).catch(() => {
       /* unreachable or too old — their next 410 handling or manual unshare covers it */
     });
+  emit('mirror.left', {
+    mappingId: mapping.id,
+    albumId: mapping.albumId,
+    albumName: mapping.albumName,
+    detail: { purged: removed },
+  });
   log(`left "${mapping.albumName}" — ${removed} stub(s) purged`);
   return { left: mapping.albumName, purged: removed };
 }

@@ -45,6 +45,8 @@ services:
       ISA_HOUSEHOLD_NAME: "Demo household (B)"
       # Rig only: the suite waits on convergence, so the production 15s interval is pure test latency.
       ISA_SYNC_POLL_MS: "${ISA_SYNC_POLL_MS:-4000}"
+      ISA_TEST_HOOKS: "true"
+      ISA_TEST_CALLBACK: "${ISA_TEST_CALLBACK:-http://host.docker.internal:8400/events}"
     networks:
       - default
       - isa-demo

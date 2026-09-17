@@ -16,6 +16,7 @@ import { recordOffered } from '../p2p/entitlement.ts';
 import { leaveAlbum } from './leave.ts';
 import { backfillFullCopies, hasStubRows } from './backfill.ts';
 import { recordWatcherCycle } from './status.ts';
+import { emit } from '../events.ts';
 
 export async function watchOnce() {
   for (const mapping of state.mappings) {
@@ -111,6 +112,12 @@ export async function watchOnce() {
         log(
           `pushed ${landed.length}/${fresh.length} ref(s) to "${peer.name}"${failed.size ? ` (${failed.size} deferred)` : ''}`
         );
+        emit('pushed', {
+          mappingId: mapping.id,
+          albumId: mapping.albumId,
+          albumName: mapping.albumName,
+          detail: { count: landed.length, deferred: failed.size, peer: peer.name },
+        });
       }
     } catch (e) {
       mapping.failCount = (mapping.failCount || 0) + 1;
@@ -219,6 +226,12 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
     if (allOk && propagated && version && consistent) {
       mapping.remoteVersion = version;
       save();
+      emit('pulled', {
+        mappingId: mapping.id,
+        albumId: mapping.albumId,
+        albumName: mapping.albumName,
+        detail: { manifest: manifest.length },
+      });
     }
   } finally {
     RECONCILING.delete(mapping.id);

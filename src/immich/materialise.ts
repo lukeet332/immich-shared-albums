@@ -10,6 +10,7 @@ import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 import { STUB_JPEG, immichJson, jsonBody, uploadAsset, addToAlbum, applyRefMetadata } from './client.ts';
 import { ensureContributor } from './contributors.ts';
 import { jpegOfSize } from '../media/jpeg.ts';
+import { emit } from '../events.ts';
 
 // Store-shared-locally: cap on a full copy we will buffer into heap. Bigger originals (long 4K
 // videos) keep the hotlink stub instead — buffering GB on a small box is worse than one asset
@@ -154,6 +155,14 @@ async function materialiseRefLocked(mapping, peer, ref) {
   const up = await uploadAsset(bytes, `shared-${slug}.${ext}`, c.apiKey, ref.takenAt);
   await addToAlbum(mapping.albumId, [up.id], c.apiKey);
   await applyRefMetadata(up.id, ref, c.apiKey);
+  // AFTER the metadata pass: a caller waiting on "the photo arrived" must not be handed an asset
+  // whose dimensions and capture data are still being written.
+  emit('materialised', {
+    mappingId: mapping.id,
+    albumId: mapping.albumId,
+    albumName: mapping.albumName,
+    detail: { storedFull: !!storedFull },
+  });
   seenAdd(mapping.id, ref.checksum, up.id, ref.originAsset, storedFull);
   log(
     `materialised ${storedFull ? 'full copy of' : 'stub for'} ref from ` +
