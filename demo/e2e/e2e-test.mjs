@@ -718,9 +718,25 @@ console.log('— stage: native album invitations, per person (no share link)');
         }, 150000);
         check('de-inviting one person removes only them, and keeps the album for the rest',
               !!narrowed, narrowed ? narrowed.join(', ') : (await humansOn(mirrored)).join(', ') || 'timed out');
-        // and the album itself must survive a partial revocation
-        const survives = await findOnB('natively invited album', 20000);
-        check('a partial revocation does not tear down the whole mirror', !!survives);
+        // Across several watcher cycles the mirror must stay exactly one album owned by a
+        // stand-in — not a second copy, and not gone. Read through the API rather than state.db:
+        // a member mirror is a real table and the runner's purge rewrites it under the process.
+        const nonAdminOnlyMirrorStabilityMs = 55000;
+        await sleep(nonAdminOnlyMirrorStabilityMs);
+        const mirrorAlbumIds = new Set();
+        for (const key of standInKeys()) {
+          const albums = await api(B, key, '/albums').catch(() => []);
+          for (const album of albums || []) {
+            if (album.albumName === 'natively invited album') mirrorAlbumIds.add(album.id);
+          }
+        }
+        const survivors = await until(async () => {
+          const h = await humansOn(mirrored);
+          return h.length === 1 && h[0] === 'Second Human' ? h : null;
+        }, 30000);
+        check('a non-admin-only invitation keeps one live mirror across watcher cycles',
+              mirrorAlbumIds.size === 1 && !!survivors,
+              JSON.stringify({ albumIds: [...mirrorAlbumIds], humans: survivors }));
         await fetch(`${A}/api/albums/${invAlb}/user/${second.id}`, { method: 'DELETE', headers: { 'x-api-key': AKEY } });
       } else {
         await fetch(`${A}/api/albums/${invAlb}/user/${nan.id}`, { method: 'DELETE', headers: { 'x-api-key': AKEY } });

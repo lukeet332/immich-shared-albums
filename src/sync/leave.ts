@@ -15,14 +15,21 @@ import { peerRequest } from '../p2p/transport.ts';
 
 // Leave & purge: the reverse of joining. Removes every stub this album materialised
 // (utility-owner-guarded), the mirror album, the mapping and its ledger — a join is
-// fully reversible and reclaims all space it ever took.
+// fully reversible and reclaims all space it ever took, except for an asset another
+// mapping still claims.
 export async function leaveAlbum(mappingId: string) {
   const mapping = state.mappings.find(mp => mp.id === mappingId);
   if (!mapping || mapping.role !== 'member')
     throw new Error('unknown mapping (only joined albums can be left)');
   let removed = 0;
   for (const entry of store.seenForMapping(mapping.id)) {
-    if (entry.originAsset && (await deleteProxyAsset(entry.localAsset))) removed++;
+    if (!entry.originAsset) continue;
+    // A deduped proxy can carry ledger rows from several mappings, so another mapping may still
+    // be serving this very asset. Ask the authoritative row (which holds the true wire identity)
+    // rather than whether any row mentions the id — a stale row must never pin a stored copy.
+    const owner = store.ledgerByAsset(entry.localAsset);
+    if (owner && owner.mapping !== mapping.id) continue;
+    if (await deleteProxyAsset(entry.localAsset)) removed++;
   }
   const host = mapping.hostSlug ? state.contributors[mapping.hostSlug] : undefined;
   if (host?.apiKey) {

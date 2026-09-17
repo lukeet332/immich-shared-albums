@@ -31,7 +31,7 @@ import { ensureUtilityUser } from '../immich/contributors.ts';
 import { peerRequest } from '../p2p/transport.ts';
 import { ensureMirror, fillMirrorInBackground } from '../p2p/mirror.ts';
 import { leaveAlbum } from './leave.ts';
-import { diffInvitees } from './invitees.ts';
+import { diffInvitees, invitationMirrorWasWithdrawn } from './invitees.ts';
 import crypto from 'node:crypto';
 
 /**
@@ -416,9 +416,7 @@ export async function pullInvitationsOnce() {
     // placeholders that will never resolve. Reached only after a SUCCESSFUL poll (a failed one
     // `continue`s above), and scoped to invitation-created mirrors — a link-based mirror has
     // its own lifecycle via native leave detection and must not be touched here.
-    for (const mp of [...state.mappings]) {
-      if (mp.role !== 'member' || mp.via !== 'invite' || mp.peer !== peer.pub || mp.dead) continue;
-      if (!mp.remoteAlbumId || offered.has(mp.remoteAlbumId)) continue;
+    for (const mp of [...state.mappings].filter(mp => invitationMirrorWasWithdrawn(mp, peer.pub, offered))) {
       try {
         await leaveAlbum(mp.id);
         log(`"${peer.name}" withdrew "${mp.albumName}" — removed the mirror it created`);
