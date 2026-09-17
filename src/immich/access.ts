@@ -17,7 +17,6 @@
  * a member mapping read as the admin is not a thing this module can return.
  */
 import { state } from '../state.ts';
-import type { Mapping } from '../store.ts';
 import { immichJson, jsonBody } from './client.ts';
 
 /** Credentials forwarded on behalf of a signed-in caller, exactly as Immich receives them. */
@@ -28,6 +27,13 @@ export type Creds = { headers: Record<string, string> };
  *  would fall through to the admin key. */
 export type AlbumAccess =
   { source: 'admin' } | { source: 'mapping'; key: string } | { source: 'caller'; creds: Creds };
+
+export type MappingCredentials = {
+  role: 'owner' | 'member';
+  hostSlug?: string;
+  albumName?: string;
+  id?: string;
+};
 
 /** Headers that carry a caller's identity. One list, because a second copy drifts. */
 const CRED_HEADER_NAMES = ['cookie', 'x-api-key', 'authorization'] as const;
@@ -48,7 +54,7 @@ export function credsFromHeaders(headers: Record<string, unknown>): Creds | null
  *
  *  A member mapping whose host key is missing is not answerable: returning the admin key would
  *  reproduce the exact refusal this exists to avoid. */
-export function readCredsFor(mapping: Mapping): AlbumAccess {
+export function readCredsFor(mapping: MappingCredentials): AlbumAccess {
   if (mapping.role !== 'member') return { source: 'admin' };
   const key = mapping.hostSlug ? state.contributors[mapping.hostSlug]?.apiKey : undefined;
   if (!key)
@@ -57,6 +63,16 @@ export function readCredsFor(mapping: Mapping): AlbumAccess {
     );
   return { source: 'mapping', key };
 }
+
+/** The key form of an access, for a WRITE (a comment, an activity, a membership the stand-in
+ *  must make). Only the mapping shape carries a key, so this is the one place that decides it. */
+export function albumReadKey(access: AlbumAccess): string | undefined {
+  return access.source === 'mapping' ? access.key : undefined;
+}
+
+/** Any Immich call made under an access — the read paths below, and callers that need a VERB
+ *  (`DELETE`, `PUT`) rather than one of them. */
+export const callAs = (access: AlbumAccess, path: string, init?: RequestInit) => call(access, path, init);
 
 /** `source: 'admin'` passes no key on purpose — `immichJson`'s default IS the admin key, and
  *  saying so here is the whole distinction this module owns. */
