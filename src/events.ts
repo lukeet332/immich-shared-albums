@@ -10,7 +10,7 @@
  * The ring buffer is the safety net — a caller resumes from the last `seq` it saw, so a dropped
  * callback degrades to one small read instead of a caller waiting forever.
  */
-import { CFG } from './config.ts';
+import { CFG, log } from './config.ts';
 
 export type SidecarEvent = {
   /** The household that did it. Emitted by the sender rather than inferred by the listener: with
@@ -60,7 +60,9 @@ export function emit(type: string, fields: Omit<SidecarEvent, 'seq' | 'ts' | 'ty
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(event),
     signal: AbortSignal.timeout(5000),
-  }).catch(() => {
-    /* the buffer is the durable half — the callback is the fast path */
+  }).catch(e => {
+    /* the buffer is the durable half — the callback is the fast path. Logged because a silent
+       failure here is indistinguishable from the event never having happened. */
+    log(`event callback failed for ${type}: ${e.message}`);
   });
 }

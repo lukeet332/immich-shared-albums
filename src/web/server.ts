@@ -38,6 +38,7 @@ import {
 } from '../p2p/pair.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
 import { eventsSince, eventCount } from '../events.ts';
+import { runSyncPass, allStatus, allSettled } from '../sync/pass.ts';
 
 /**
  * Read a JSON-route body under a hard cap, or null if it is too big.
@@ -274,13 +275,28 @@ export const server = http.createServer(async (req, res) => {
       if (!caller) return send(401, signInRequired('see your albums'));
       return send(200, { albums: await myAlbums(caller.id) });
     }
+    // Run a pass now, so timer-gated work happens on demand rather than at its next tick. The
+    // events say when work finished; this is what makes it start. Gated like every other hook.
+    if (CFG.testHooks && path === `${ROUTE_PREFIX}/sync/run` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller?.isAdmin) return send(403, { error: 'only an admin can run a sync pass' });
+      await runSyncPass();
+      const mappings = allStatus();
+      return send(200, { settled: allSettled(mappings), mappings });
+    }
     // The event log, for catch-up when a callback delivery was missed. Gated like every other
     // hook: ISA_TEST_HOOKS off means a household has no such route at all.
     if (CFG.testHooks && path === `${ROUTE_PREFIX}/events` && req.method === 'GET') {
       const caller = await callerIdentity(req);
       if (!caller?.isAdmin) return send(403, { error: 'only an admin can read events' });
       const since = Number(u.searchParams.get('since') || 0);
-      return send(200, { now: eventCount(), events: eventsSince(Number.isFinite(since) ? since : 0) });
+      // `source` names the household, so a caller keys its place in the stream without assuming
+      // what CFG.name is. Safe here for the opposite reason to /health: this route needs an admin.
+      return send(200, {
+        source: CFG.name,
+        now: eventCount(),
+        events: eventsSince(Number.isFinite(since) ? since : 0),
+      });
     }
     // Liveness only. The join banner probes this cross-origin to discover a sidecar, so
     // it stays open — which is exactly why it must not name the household or count peers.

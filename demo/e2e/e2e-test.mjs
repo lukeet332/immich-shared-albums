@@ -100,12 +100,7 @@ const readSidecarAdded = (stateDir, albumId) => {
 
 // Profile every wait: a suite that sleeps blindly cannot be made faster without knowing which
 // waits actually cost time and which return immediately. Printed at the end when E2E_PROFILE=1.
-import {
-  startEventListener,
-  waitForEvent,
-  seenEvents,
-  lastEventSeq,
-} from './event-listen.mjs';
+import { startEventListener, waitForEvent, seenEvents, consumeUpTo, lastEventOrder } from './event-listen.mjs';
 
 const WAITS = [];
 const POLL_MS = Number(process.env.E2E_POLL_MS || 1000);
@@ -138,6 +133,43 @@ const until = async (fn, timeoutMs = 90000, everyMs = POLL_MS) => {
   return null;
 };
 
+const sidecarCache = new Map();
+// Resolve a sidecar once: its base URL and key (as passed in by the runner) plus its household
+// name, which is the `source` its events carry. The name is ASKED FOR, never assumed — a test that
+// hardcoded it would silently match nothing the day the rig names a household differently.
+const sidecar = async side => {
+  if (!sidecarCache.has(side)) {
+    sidecarCache.set(
+      side,
+      (async () => {
+        const known = { B: [BS, BKEY], A: [ORIGIN_DIRECT, AKEY] };
+        try {
+          if (typeof DS !== 'undefined' && typeof DKEY !== 'undefined' && DKEY) known.D = [DS, DKEY];
+        } catch {
+          /* D not initialised yet */
+        }
+        const on = known[side];
+        if (!on) throw new Error(`unknown sidecar '${side}'`);
+        const [base, key] = on;
+        const r = await fetch(`${base}/immich-shared-albums/events?since=1e9`, { headers: { 'x-api-key': key } });
+        if (!r.ok) throw new Error(`cannot name the household on ${base}: ${r.status}`);
+        return { base, key, source: (await r.json()).source };
+      })()
+    );
+  }
+  return sidecarCache.get(side);
+};
+
+// Make a sidecar run a pass NOW. The events say when work finished; this is what makes it start,
+// so a wait on timer-driven work (comment sync, invitation poll) costs a round trip rather than
+// the loop's interval. The timers are untouched — this is in addition to them.
+const trigger = async side => {
+  const { base, key } = await sidecar(side);
+  await fetch(`${base}/immich-shared-albums/sync/run`, { method: 'POST', headers: { 'x-api-key': key } }).catch(
+    () => {}
+  );
+};
+
 // Wait for ONE fact: this sidecar did this to this album. That is the whole contract.
 //
 // Declarative on purpose — no wildcard, no predicate, no "wake on any event". A test knows which
@@ -145,38 +177,32 @@ const until = async (fn, timeoutMs = 90000, everyMs = POLL_MS) => {
 // means done. The buffer is searched first because the work often starts on the line before the
 // wait, so the event may already have happened — and `albumId` is a UUID, so a match can never be
 // some other album that shares a name.
-// Wait for ONE fact: this sidecar did this to this album. That is the whole contract.
 //
-// Declarative: no wildcard, no predicate. The test knows which sidecar acts and what it emits.
-//
-// The watermark is per (mapping, type), NOT global, and it is what makes the wait mean "the NEXT
-// time this happens". A mapping receives many `settled` events in a run, so matching the buffer
+// The watermark is per (source, album, type), NOT global, and it is what makes the wait mean "the
+// NEXT time this happens". A mapping emits many `settled` events in a run, so matching the buffer
 // alone would return an EARLIER one and the assertion would read state from before the work it is
-// waiting for — the bug this replaces. `albumId` being a UUID means a match is never some other
-// album; the watermark means it is never an earlier moment of this one.
+// waiting for — the bug this replaces.
 const eventWatermark = new Map();
-const event = async (side, type, albumId, { timeoutMs = 60000 } = {}) => {
-  const sidecars = () => {
-    const known = { B: [BS, BKEY], A: [ORIGIN_DIRECT, AKEY] };
-    try {
-      if (typeof DS !== 'undefined' && typeof DKEY !== 'undefined' && DKEY) known.D = [DS, DKEY];
-    } catch {
-      /* D not initialised yet */
-    }
-    return known;
-  };
-  const on = sidecars()[side];
-  if (!on) throw new Error(`event(): unknown sidecar '${side}'`);
-  const [base, key] = on;
-  const keyed = `${albumId}:${type}`;
+// Trigger a pass on `side`, then wait for the event. Triggering FIRST is what keeps a wait on
+// timer-driven work off the timer; the event is still the thing that says it finished.
+const settle = async (side, type, albumId, opts = {}) => {
+  await Promise.all([event(side, type, albumId, opts), trigger(side)]);
+  return true;
+};
+
+const event = async (side, type, albumId, { timeoutMs = 60000, noTrigger = false } = {}) => {
+  const { base, key, source } = await sidecar(side);
+  const watermarkKey = `${source}:${albumId}:${type}`;
+  const afterSeq = eventWatermark.get(watermarkKey) || 0;
   const t0 = Date.now();
+  if (!noTrigger) void trigger(side); // fire and forget: the wait below covers the work
   try {
     const found = await waitForEvent(
       type,
-      { albumId },
-      { timeoutMs, catchUp: { base, key }, afterSeq: eventWatermark.get(keyed) || 0 }
+      { albumId, source },
+      { timeoutMs, catchUp: { base, key }, afterSeq }
     );
-    eventWatermark.set(keyed, found.seq);
+    eventWatermark.set(watermarkKey, found.seq);
     WAITS.push({ ms: Date.now() - t0, polls: 0, ok: true, kind: `${side}:${type}` });
     return found;
   } catch (e) {
@@ -221,6 +247,7 @@ if (process.env.E2E_DUMP_EVENTS) {
   setInterval(() => {
     for (const e of seenEvents())
       console.log(`    EV [${e.source}] ${e.type} ${e.albumId?.slice(0, 8) || ''}`);
+    consumeUpTo(lastEventOrder());
   }, 1500);
 }
 
