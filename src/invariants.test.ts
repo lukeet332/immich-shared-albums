@@ -22,7 +22,42 @@ import { permissionFor } from './sync/invites.ts';
 import { diffInvitees, invitationMirrorWasWithdrawn } from './sync/invitees.ts';
 import { jpegOfSize, boundedStubDims } from './media/jpeg.ts';
 import { syncStatus, whyNotSettled } from './sync/status.ts';
+import { readCredsFor, credsFromHeaders } from './immich/access.ts';
+import { state } from './state.ts';
 import type { Mapping } from './store.ts';
+
+// A member mirror is readable only by the stand-in that owns it. Reading it as the household
+// admin is the bug that produced duplicate albums: Immich refuses, watchOnce counts a failure,
+// and the mapping is declared dead five cycles later.
+test('a member mirror is read with its stand-in key, never the admin key', () => {
+  state.contributors['person-owner'] = { userId: 'u1', apiKey: 'stand-in-key' };
+  try {
+    assert.deepEqual(readCredsFor(mappingWith({ hostSlug: 'person-owner' })), {
+      source: 'mapping',
+      key: 'stand-in-key',
+    });
+  } finally {
+    delete state.contributors['person-owner'];
+  }
+});
+
+test('an owner mapping is this household album, so the admin key is the right one', () => {
+  assert.deepEqual(readCredsFor(mappingWith({ role: 'owner' })), { source: 'admin' });
+});
+
+// The dangerous shape: `state.contributors[slug]?.apiKey` yields undefined, and undefined means
+// "admin key" downstream — which would silently reproduce the bug above.
+test('a member mirror with no host key is refused, not silently read as the admin', () => {
+  assert.throws(() => readCredsFor(mappingWith({ hostSlug: 'person-missing' })), /no host key/);
+  assert.throws(() => readCredsFor(mappingWith({ hostSlug: undefined })), /no host key/);
+});
+
+test('caller credentials are forwarded as sent, and absent means absent', () => {
+  const creds = credsFromHeaders({ cookie: 'session=1', 'x-api-key': 'k', accept: 'application/json' });
+  assert.deepEqual(creds, { headers: { cookie: 'session=1', 'x-api-key': 'k' } });
+  assert.equal(credsFromHeaders({ accept: 'application/json' }), null);
+  assert.equal(credsFromHeaders({}), null);
+});
 
 test('bot accounts are keyed by id, never by display name', () => {
   // Two remote people who share a display name must never collapse into one local account
