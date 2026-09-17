@@ -145,10 +145,18 @@ const until = async (fn, timeoutMs = 90000, everyMs = POLL_MS) => {
 // means done. The buffer is searched first because the work often starts on the line before the
 // wait, so the event may already have happened — and `albumId` is a UUID, so a match can never be
 // some other album that shares a name.
+// Wait for ONE fact: this sidecar did this to this album. That is the whole contract.
+//
+// Declarative: no wildcard, no predicate. The test knows which sidecar acts and what it emits.
+//
+// The watermark is per (mapping, type), NOT global, and it is what makes the wait mean "the NEXT
+// time this happens". A mapping receives many `settled` events in a run, so matching the buffer
+// alone would return an EARLIER one and the assertion would read state from before the work it is
+// waiting for — the bug this replaces. `albumId` being a UUID means a match is never some other
+// album; the watermark means it is never an earlier moment of this one.
+const eventWatermark = new Map();
 const event = async (side, type, albumId, { timeoutMs = 60000 } = {}) => {
-  // Resolved per side, and only the side asked for: a literal here would read DS/DKEY before the
-  // suite has initialised them, and an early event is not a reason to crash a run.
-  const sides = () => {
+  const sidecars = () => {
     const known = { B: [BS, BKEY], A: [ORIGIN_DIRECT, AKEY] };
     try {
       if (typeof DS !== 'undefined' && typeof DKEY !== 'undefined' && DKEY) known.D = [DS, DKEY];
@@ -157,12 +165,18 @@ const event = async (side, type, albumId, { timeoutMs = 60000 } = {}) => {
     }
     return known;
   };
-  const on = sides()[side];
+  const on = sidecars()[side];
   if (!on) throw new Error(`event(): unknown sidecar '${side}'`);
   const [base, key] = on;
+  const keyed = `${albumId}:${type}`;
   const t0 = Date.now();
   try {
-    const found = await waitForEvent(type, { albumId }, { timeoutMs, catchUp: { base, key } });
+    const found = await waitForEvent(
+      type,
+      { albumId },
+      { timeoutMs, catchUp: { base, key }, afterSeq: eventWatermark.get(keyed) || 0 }
+    );
+    eventWatermark.set(keyed, found.seq);
     WAITS.push({ ms: Date.now() - t0, polls: 0, ok: true, kind: `${side}:${type}` });
     return found;
   } catch (e) {
@@ -203,6 +217,12 @@ const waitFor = async (fn, timeoutMs = 20000, everyMs = 250) => {
 
 // Events are pushed here by every sidecar as they happen (see demo/e2e/event-listen.mjs).
 await startEventListener();
+if (process.env.E2E_DUMP_EVENTS) {
+  setInterval(() => {
+    for (const e of seenEvents())
+      console.log(`    EV [${e.source}] ${e.type} ${e.albumId?.slice(0, 8) || ''}`);
+  }, 1500);
+}
 
 let ALBUM_ID = ALBUM;
 stage('seed origin album (4 photos, capture dates spread over 4 days)');
@@ -434,16 +454,12 @@ if (aAfter && mirror) {
   joinerComment = `joiner replies ${Date.now()}`;
   await api(A, AKEY, '/activities', j({ albumId: ALBUM_ID, type: 'comment', comment: originComment }));
   await api(B, BKEY, '/activities', j({ albumId: mirror.id, type: 'comment', comment: joinerComment }));
-  const onJoiner = await until(async () => {
-    const c = await api(B, BKEY, `/activities?albumId=${mirror.id}&type=comment`);
-    return c.some(x => x.comment === originComment) ? c : null;
-  }, 40000);
-  check('origin comment reached joiner', !!onJoiner);
-  const onOrigin = await until(async () => {
-    const c = await api(A, AKEY, `/activities?albumId=${ALBUM_ID}&type=comment`);
-    return c.some(x => x.comment === joinerComment) ? c : null;
-  }, 40000);
-  check('joiner comment reached origin', !!onOrigin);
+  await event('B', 'comment.materialised', mirror.id, { timeoutMs: 40000 });
+  const onJoiner = await api(B, BKEY, `/activities?albumId=${mirror.id}&type=comment`);
+  check('origin comment reached joiner', onJoiner.some(x => x.comment === originComment));
+  await event('A', 'comment.materialised', ALBUM_ID, { timeoutMs: 40000 });
+  const onOrigin = await api(A, AKEY, `/activities?albumId=${ALBUM_ID}&type=comment`);
+  check('joiner comment reached origin', onOrigin.some(x => x.comment === joinerComment));
   // no duplication / echo loop
   const finalOrigin = await api(A, AKEY, `/activities?albumId=${ALBUM_ID}&type=comment`);
   check('no comment echo loop', finalOrigin.filter(c => c.comment === originComment).length === 1,

@@ -9,6 +9,7 @@ import { nudgePeers, peerByPub, mappingFor } from '../peers.ts';
 import { peerRequest } from '../p2p/transport.ts';
 import { immichJson, jsonBody, usersById } from '../immich/client.ts';
 import { ensureContributor } from '../immich/contributors.ts';
+import { emit } from '../events.ts';
 
 export const getComments = (albumId, key?: string) =>
   immichJson(`/activities?albumId=${albumId}&type=comment`, {}, key);
@@ -42,6 +43,12 @@ export async function materialiseComments(mapping, peer, comments) {
       mapping.peer
     );
     const posted = await postComment(mapping.albumId, cm.comment, c.apiKey);
+    emit('comment.materialised', {
+      mappingId: mapping.id,
+      albumId: mapping.albumId,
+      albumName: mapping.albumName,
+      detail: { author: cm.author || peer.name },
+    });
     ids[cm.id] = posted.id;
     seenActAdd(tag, mapping.id);
     seenActAdd(`local:${posted.id}`, mapping.id); // don't echo it back
