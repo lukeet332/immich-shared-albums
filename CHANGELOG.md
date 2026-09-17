@@ -5,6 +5,13 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## [1.1.1](https://github.com/lukeet332/immich-shared-albums/compare/v1.1.0...v1.1.1) (2026-09-17)
+
+
+### Bug Fixes
+
+* member-side mirrors read with the utility key, not the admin key ([#51](https://github.com/lukeet332/immich-shared-albums/issues/51)) ([1d0185b](https://github.com/lukeet332/immich-shared-albums/commit/1d0185b561a337eae97d47127c3de77d0424bfcc))
+
 ## [1.1.0](https://github.com/lukeet332/immich-shared-albums/compare/v1.0.2...v1.1.0) (2026-08-26)
 
 
