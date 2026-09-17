@@ -51,6 +51,8 @@ const ensurePreviews = async (base, key, ids) => {
 };
 const sha1 = (buf) => crypto.createHash('sha1').update(Buffer.from(buf)).digest('hex');
 const fetchBytes = async (url, key) => (await fetch(url, { headers: { 'x-api-key': key } })).arrayBuffer();
+// A helper must not be able to kill the run: no out-of-process or network call in this suite
+// may throw past its check (see demo/e2e/README.md rule 8).
 // Read a JSON value out of a sidecar's SQLite state, via the sqlite3 CLI the runner
 // already uses. Returns null (rather than throwing) when the rig is not local.
 import { execFileSync } from 'node:child_process';
@@ -625,7 +627,11 @@ console.log('— stage: kill test — uncached photos fail closed; cached ones s
     try { return execSync('docker inspect -f {{.State.Running}} household-c-sidecar-c-1', { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
     catch { return true; }
   }, 15000);
-  const deadRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
+  // B may still be tearing down requests to the container we just stopped, so a closed socket
+  // here is an expected outcome of this stage — not a reason to abort the whole suite. Treat an
+  // unreachable B as the fail-closed answer the check is looking for.
+  const deadRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } })
+    .catch(() => ({ headers: { get: () => 'BYPROXY' }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
   const deadBytes = await deadRes.arrayBuffer();
   check('owner offline: UNCACHED photo cannot be produced (no hidden copy exists)',
         deadRes.headers.get('x-cache') === 'BYPASS' && deadBytes.byteLength < 20000,
@@ -636,7 +642,8 @@ console.log('— stage: kill test — uncached photos fail closed; cached ones s
   execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
   // wait for the owner to answer again instead of guessing how long a start takes
   await waitFor(async () => (await fetch(`${A}/api/server/ping`).catch(() => ({ ok: false }))).ok, 20000);
-  const aliveRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
+  const aliveRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } })
+    .catch(() => ({ headers: { get: () => 'UNREACHABLE' }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
   check('owner back online: uncached photo streams again (hotlink recovery)',
         aliveRes.headers.get('x-cache') === 'MISS' && (await aliveRes.arrayBuffer()).byteLength > 500,
         `x-cache: ${aliveRes.headers.get('x-cache')}`);
