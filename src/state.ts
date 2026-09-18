@@ -46,6 +46,14 @@ function ensureIdentity(): Identity {
 export const keys = ensureIdentity();
 export const save = () => store.save();
 save();
+
+/** Peers whose unlink is in progress. An unlink deletes the peer's utility accounts before it
+ *  removes the peer record, and a materialisation already in flight for that peer would otherwise
+ *  re-provision one of them in the gap — an orphan bot account for a server you just unlinked.
+ *  Provisioning consults this set AND the peer list, so the window is closed from both ends. */
+export const unlinking = new Set<string>();
+export const peerIsLinked = (pub?: string): boolean =>
+  !!pub && !unlinking.has(pub) && state.peers.some(p => p.pub === pub);
 export const seenHas = (mappingId: string, checksum: string) => store.seenHas(mappingId, checksum);
 export const seenAdd = (
   mappingId: string,

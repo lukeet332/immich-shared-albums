@@ -5,7 +5,7 @@
  */
 import crypto from 'node:crypto';
 import { CFG, log, UTILITY_SUFFIX, UTILITY_EMAIL_DOMAIN, BOT_PREFIX } from '../config.ts';
-import { state, save, addedRecord } from '../state.ts';
+import { state, save, addedRecord, peerIsLinked } from '../state.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
 import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 
@@ -101,6 +101,14 @@ export async function ensureUtilityUser(
       }
     }
     return c;
+  }
+  // Creating an account is a commitment on behalf of a linked server. If that server is being
+  // unlinked — or already is — the caller is a materialisation that outran the teardown, and
+  // finishing it would leave an orphan bot account with a live key for a server we no longer
+  // trust. Refuse; the mapping it served is gone, so nothing retries.
+  const via = opts.homePeer ?? peerPub;
+  if (via && !peerIsLinked(via)) {
+    throw new Error(`not provisioning "${wantedName}": its server is no longer linked`);
   }
   const email = opts.email;
   // reuse a persisted password if we have one (survives partial-provision retries), else fresh
