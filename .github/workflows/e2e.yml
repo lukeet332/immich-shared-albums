@@ -74,7 +74,9 @@ jobs:
       - name: Start background work (sidecar image build, browser tooling)
         run: |
           mkdir -p /tmp/bg
-          ( docker build -q -t immich-shared-albums:demo . > /tmp/bg/build.log 2>&1; echo $? > /tmp/bg/build.rc ) &
+          # Labelled with the commit, like run-mock-e2e.sh's own build, so its SKIP_BUILD path can
+          # confirm the image it is testing is this checkout's.
+          ( docker build -q --label "isa.commit=$(git rev-parse --short HEAD)" -t immich-shared-albums:demo . > /tmp/bg/build.log 2>&1; echo $? > /tmp/bg/build.rc ) &
           ( cd demo/e2e && npm install --silent && npx playwright install --with-deps chromium; echo $? > /tmp/bg/playwright.rc ) > /tmp/bg/playwright.log 2>&1 &
           echo "started"
 
