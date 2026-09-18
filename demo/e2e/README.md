@@ -55,15 +55,20 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
    read once from `ISA_SYNC_POLL_MS`, default `4000` to match the composes). It used to be a literal
    `8000`, which meant changing the rig's cadence left every hold-point at the old duration — an
    experiment that varied the cadence then measured a constant. `HOLD_DEADLINE_MS` is derived too, so
-   a slower cadence can never make a deadline shorter than the hold it must allow. `ISA_SYNC_POLL_MS`
-   is a `workflow_dispatch` input, so a cadence experiment is one run of the same commit.
+   a slower cadence can never make a deadline shorter than the hold it must allow. The value is
+   clamped like the sidecar clamps it (floor 1000, else the default), so an empty or bad env can never
+   produce a zero-length hold. `ISA_SYNC_POLL_MS` is a `workflow_dispatch` input, so a cadence
+   experiment is one run of the same commit. History: PR #55's 15s→4s drop was the largest single
+   reduction the suite has had (~499s→~320s wall); whether 4s→1s pays is the open experiment.
 5. **A stage that cannot read its own evidence must fail, not skip.** Some stages read sidecar state
    through the sqlite3 CLI (`readSidecarPeers`, `readSidecarKv`, …). An unreadable `state.db` used to
    look identical to an empty one, so `native album invitations` and `a revocation survives content
    arriving in the same window` could run **zero checks** and still report green — silently dropping
-   the coverage for per-person invitations. `requireState` now throws instead, and the error names
-   the unreadable thing. `E2E_ALLOW_SKIP=1` restores the old behaviour for a run that knowingly
-   cannot read host state; it is a coverage trade, not a convenience, and CI must never set it.
+   the coverage for per-person invitations. `requireState` now records a **failed check** naming the
+   missing precondition and the stage runs no further checks — a failed check rather than a throw, so
+   the rest of the suite still runs and the summary line still prints (rule 9). `E2E_ALLOW_SKIP=1`
+   restores the old behaviour for a run that knowingly cannot read host state; it is a coverage trade,
+   not a convenience, and CI must never set it.
 6. **Poll frequently, assert invariantly.** `E2E_POLL_MS` (default 1000) only controls how often we
    look; it cannot make a test pass that would otherwise fail.
 7. **If a wait times out, fix the wait — not the timeout.** A timeout means either the interval is

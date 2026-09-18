@@ -10,7 +10,11 @@ const ALBUM = process.env.A_ALBUM || '__CREATE__';
 // literal, changing the rig's cadence silently leaves every hold-point at the old duration, and an
 // experiment that varies the cadence measures nothing. Keep the default in step with
 // demo/docker-compose.yml and the household composes.
-const SYNC_POLL_MS = Number(process.env.ISA_SYNC_POLL_MS ?? 4000);
+// Guarded the way the sidecar guards it (src/config.ts envInt: empty → default, below 1000 → refuse):
+// an empty or bad value must not become a zero-length hold, which would let every stable() pass on
+// its first reading.
+const rawPollMs = Number(process.env.ISA_SYNC_POLL_MS);
+const SYNC_POLL_MS = Number.isFinite(rawPollMs) && rawPollMs >= 1000 ? rawPollMs : 4000;
 /** Two sidecar passes: the smallest window in which "nothing changed" means anything. */
 const TWO_CYCLES_MS = 2 * SYNC_POLL_MS;
 /** Deadline for a hold: the hold itself plus room for the change to be seen and settle. Derived so
@@ -63,7 +67,7 @@ const ensurePreviews = async (base, key, ids) => {
 const sha1 = (buf) => crypto.createHash('sha1').update(Buffer.from(buf)).digest('hex');
 const fetchBytes = async (url, key) => (await fetch(url, { headers: { 'x-api-key': key } })).arrayBuffer();
 // A helper must not be able to kill the run: no out-of-process or network call in this suite
-// may throw past its check (see demo/e2e/README.md rule 8).
+// may throw past its check (see demo/e2e/README.md rule 9).
 // Read a JSON value out of a sidecar's SQLite state, via the sqlite3 CLI the runner
 // already uses. Returns null (rather than throwing) when the rig is not local.
 import { execFileSync } from 'node:child_process';
@@ -85,18 +89,19 @@ const readSidecarKv = (stateDir, name) => {
  * to treat an unreadable state.db as an empty one, so `native album invitations` and `a revocation
  * survives content arriving in the same window` could run zero checks and still report green —
  * which silently removes the two stages that cover per-person invitations. `E2E_ALLOW_SKIP=1`
- * keeps the old behaviour for a run that knowingly cannot read host state; otherwise it is fatal,
- * because a green suite that skipped its own coverage is worse than a red one.
+ * keeps the old behaviour for a run that knowingly cannot read host state; otherwise the missing
+ * precondition is a failed check, because a green suite that skipped its own coverage is worse than
+ * a red one. A failed check, not a throw: a throw here would abort the run, hide every later stage
+ * and drop the `N checks)` summary the per-stage timing depends on (README rule 9).
  */
 const requireState = what => {
   if (process.env.E2E_ALLOW_SKIP === '1') {
     console.log(`  (skipped: ${what}; E2E_ALLOW_SKIP=1)`);
     return false;
   }
-  throw new Error(
-    `cannot read ${what} — the sidecar state.db is missing or unreadable to this test \n` +
-      `  (set E2E_ALLOW_SKIP=1 to skip the affected stages instead of failing; that weakens coverage)`
-  );
+  check(`precondition: ${what}`, false,
+        'missing, so this stage ran no checks (E2E_ALLOW_SKIP=1 skips it knowingly; that weakens coverage)');
+  return false;
 };
 const readSidecarPeers = (stateDir) => {
   const out = sidecarSql(stateDir, 'SELECT * FROM peers');
