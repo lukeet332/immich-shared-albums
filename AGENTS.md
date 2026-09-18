@@ -95,6 +95,11 @@ worse without saying so.**
   `npm run verify`, `bash demo/run-mock-e2e.sh` (API lane, purges its rig first), and
   `demo/e2e/browser-test.mjs` (browser lane — the only coverage that loads a page).
   The e2e suite is deliberately NOT in the hook: a seven-minute hook is a hook people bypass.
+- **CodeRabbit reviews every PR, advisory only.** Config is `.coderabbit.yaml`, and the conventions
+  it reviews against are this file, ingested through its `knowledge_base.code_guidelines` setting —
+  so a rule changed here changes what it enforces, with no second copy to drift. It is deliberately
+  **not** a required status check: the gates stay the fast checks and the two e2e lanes, because a
+  bot's request-changes must never block a merge that CI passed.
 - **Three traps code cannot catch for you:** a rig recreated by hand instead of via
   `run-mock-e2e.sh` keeps stale bot keys in `state.db`, and the resulting `Invalid API key`
   failures look like product bugs; a browser-lane run on a dev machine needs
