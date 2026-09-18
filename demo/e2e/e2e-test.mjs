@@ -839,10 +839,28 @@ console.log('— stage: native album invitations, per person (no share link)');
         check('de-inviting one person removes only them, and keeps the album for the rest',
               !!narrowed, narrowed ? narrowed.join(', ') : (await humansOn(mirrored)).join(', ') || 'timed out');
         // Across several watcher cycles the mirror must stay exactly one album owned by a
-        // stand-in — not a second copy, and not gone. Read through the API rather than state.db:
-        // a member mirror is a real table and the runner's purge rewrites it under the process.
-        const nonAdminOnlyMirrorStabilityMs = 55000;
-        await sleep(nonAdminOnlyMirrorStabilityMs);
+        // stand-in — not a second copy, and not gone. "Several cycles" is a COUNT: the member
+        // sidecar counts every evaluation of its watcher and invite loops — at the top of the tick,
+        // before any skip, so a settled mapping keeps counting — and the rig exposes that over the
+        // hook-gated /sync/status (README rule 10). The 55s sleep this replaces could not tell five
+        // cycles from none; waiting until both loops have looked twice more can, and it ends the
+        // moment they have. Read the mirror through the API rather than state.db: a member mirror
+        // is a real table and the runner's purge rewrites it under the process.
+        const ticksOn = async () => {
+          const r = await fetch(`${BS}/immich-shared-albums/sync/status?albumId=${mirrored.album.id}`,
+                                { headers: { 'x-api-key': BKEY } });
+          return r.ok ? (await r.json()).ticks : null;
+        };
+        const CYCLES_TO_SURVIVE = 2;
+        const ticksBefore = await ticksOn();
+        const ticksAfter = ticksBefore && await until(async () => {
+          const t = await ticksOn();
+          return t && t.watcher >= ticksBefore.watcher + CYCLES_TO_SURVIVE
+                   && t.invites >= ticksBefore.invites + CYCLES_TO_SURVIVE ? t : null;
+        }, 120000);
+        check('the member sidecar kept evaluating both loops while the mirror was left alone',
+              !!ticksAfter,
+              ticksBefore ? JSON.stringify({ before: ticksBefore, after: ticksAfter }) : 'sync/status unreadable — is ISA_TEST_HOOKS set on B?');
         const mirrorAlbumIds = new Set();
         for (const key of standInKeys()) {
           const albums = await api(B, key, '/albums').catch(() => []);
@@ -855,8 +873,8 @@ console.log('— stage: native album invitations, per person (no share link)');
           return h.length === 1 && h[0] === 'Second Human' ? h : null;
         }, 30000);
         check('a non-admin-only invitation keeps one live mirror across watcher cycles',
-              mirrorAlbumIds.size === 1 && !!survivors,
-              JSON.stringify({ albumIds: [...mirrorAlbumIds], humans: survivors }));
+              mirrorAlbumIds.size === 1 && !!survivors && !!ticksAfter,
+              JSON.stringify({ albumIds: [...mirrorAlbumIds], humans: survivors, cyclesSurvived: ticksAfter ? CYCLES_TO_SURVIVE : 'unproven' }));
         await fetch(`${A}/api/albums/${invAlb}/user/${second.id}`, { method: 'DELETE', headers: { 'x-api-key': AKEY } });
       } else {
         await fetch(`${A}/api/albums/${invAlb}/user/${nan.id}`, { method: 'DELETE', headers: { 'x-api-key': AKEY } });

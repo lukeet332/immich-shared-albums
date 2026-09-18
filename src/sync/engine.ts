@@ -15,9 +15,11 @@ import { materialiseRef, deleteProxyAsset } from '../immich/materialise.ts';
 import { recordOffered } from '../p2p/entitlement.ts';
 import { leaveAlbum } from './leave.ts';
 import { backfillFullCopies, hasStubRows } from './backfill.ts';
-import { recordWatcherCycle } from './status.ts';
+import { recordWatcherCycle, recordLoopTick } from './status.ts';
 
 export async function watchOnce() {
+  // Counted before anything can skip: this is "the watcher looked", not "the watcher worked".
+  recordLoopTick('watcher');
   for (const mapping of state.mappings) {
     if (mapping.dead) continue;
 

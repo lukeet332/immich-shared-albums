@@ -82,6 +82,9 @@ export const CFG = {
   relay: envBool('ISA_RELAY', true),
   // Log every sync decision — turn on first when an album looks wrong.
   reconcileDebug: envBool('ISA_RECONCILE_DEBUG', false),
+  // Rig-only reads that describe this sidecar's own progress, for the e2e suite. Off by default:
+  // with it off the route does not exist, so it is not a surface a household runs.
+  testHooks: envBool('ISA_TEST_HOOKS', false),
 };
 export const log = (...a) => console.log(new Date().toISOString(), ...a);
 export const UTILITY_SUFFIX = ' (via shared albums)';

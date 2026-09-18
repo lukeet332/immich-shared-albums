@@ -18,6 +18,17 @@ export const recordWatcherCycle = (mappingId: string) =>
   cycles.set(mappingId, (cycles.get(mappingId) || 0) + 1);
 export const forgetWatcherCycles = (mappingId: string) => cycles.delete(mappingId);
 
+/** Loop evaluations since boot, counted at the TOP of each tick — before the untouched-album skip,
+ *  before any early return. `cycles` above counts passes that did work and therefore stops
+ *  advancing the moment a mapping settles; a caller asking "has the sidecar looked N more times
+ *  and left things alone?" needs this count instead. Process-wide, in memory, observational. */
+export type LoopName = 'watcher' | 'invites';
+const ticks: Record<LoopName, number> = { watcher: 0, invites: 0 };
+export const recordLoopTick = (loop: LoopName) => {
+  ticks[loop] += 1;
+};
+export const loopTicks = (): Record<LoopName, number> => ({ ...ticks });
+
 /** `album` is the local album as read this cycle: its `updatedAt` is what a settled
  *  `localVersion` must equal. Omit it to answer from state alone (a status probe off the sync
  *  path), where an absent cursor counts as not settled rather than optimistically settled. */

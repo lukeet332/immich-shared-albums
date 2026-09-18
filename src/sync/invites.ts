@@ -32,6 +32,7 @@ import { peerRequest } from '../p2p/transport.ts';
 import { ensureMirror, fillMirrorInBackground } from '../p2p/mirror.ts';
 import { leaveAlbum } from './leave.ts';
 import { diffInvitees, invitationMirrorWasWithdrawn } from './invitees.ts';
+import { recordLoopTick } from './status.ts';
 import crypto from 'node:crypto';
 
 /**
@@ -438,6 +439,8 @@ export function startInviteLoop() {
   setInterval(() => {
     if (INVITES_RUNNING) return;
     INVITES_RUNNING = true;
+    // Counted before anything can skip: this is "the loop looked", not "the loop worked".
+    recordLoopTick('invites');
     // `void`: the tick owns its errors and clears the guard in .finally — do not await it.
     void (async () => {
       try {
