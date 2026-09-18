@@ -699,9 +699,15 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   // the member can still reach; if either changed, the recovery check's detail says which, so a red
   // run explains itself instead of reading like a transport bug.
   const originWhere = async () => {
-    const ip = (() => { try { return execSync("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' household-c-sidecar-c-1", { env: dockerEnv, encoding: 'utf8' }).trim(); } catch { return '?'; } })();
+    const sh = cmd => { try { return execSync(cmd, { env: dockerEnv, encoding: 'utf8' }).trim(); } catch (e) { return `? (${String(e.message).split('\n')[0].slice(0, 60)})`; } };
+    const ip = sh("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' household-c-sidecar-c-1");
+    // What the origin holds on disk and what it believes in memory: a restart can only recover if
+    // both survived. Sizes of state.db and its WAL, and the origin's own peer list.
+    const files = sh("docker exec household-c-sidecar-c-1 sh -c 'ls -l /data | grep state | awk \"{print \\$5, \\$9}\" | tr \"\\n\" \" \"'");
+    const peers = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/peers`, { headers: { 'x-api-key': AKEY } })
+      .then(r => r.json()).then(j => (j.peers || []).map(p => `${p.name}:${p.sharedTo ?? '?'}/${p.sharedFrom ?? '?'}`).join(',') || 'none').catch(e => `? ${e.message}`);
     const ep = await endpointOf(ORIGIN_DIRECT).catch(() => null);
-    return { pub: ep?.pub ? ep.pub.slice(0, 12) : '?', addrs: ep?.addrs ?? '?', ip };
+    return { pub: ep?.pub ? ep.pub.slice(0, 12) : '?', addrs: ep?.addrs ?? '?', ip, files, peers };
   };
   const before = await originWhere();
   // `kill`, not `stop`: this stage simulates the owner VANISHING, so SIGKILL is the faithful
