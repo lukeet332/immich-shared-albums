@@ -1,6 +1,7 @@
 <p align="center">
   <br/>
   <a href="https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml"><img src="https://github.com/lukeet332/immich-shared-albums/actions/workflows/e2e.yml/badge.svg" alt="e2e"/></a>
+  <a href="https://coderabbit.ai"><img src="https://img.shields.io/coderabbit/prs/github/lukeet332/immich-shared-albums?utm_source=oss&utm_medium=github&utm_campaign=lukeet332%2Fimmich-shared-albums&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews" alt="CodeRabbit Pull Request Reviews"/></a>
   <a href="https://github.com/sponsors/lukeet332"><img src="https://img.shields.io/badge/❤-Sponsor-ea4aaa?style=for-the-badge&logoColor=000000&labelColor=ececec" alt="Sponsor"/></a>
   <br/>
   <br/>
