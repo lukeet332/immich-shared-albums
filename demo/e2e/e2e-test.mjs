@@ -109,17 +109,32 @@ import {
   lastEventSeq,
 } from './event-listen.mjs';
 
-const WAITS = [];
 const POLL_MS = Number(process.env.E2E_POLL_MS || 1000);
 // Interval only: how often we LOOK. Never a budget — see demo/e2e/README.md.
 // `E2E_STOP_AFTER=<substring>` stops the suite once a stage heading matches, so iterating on an
 // early stage costs ~75s instead of ~300s. Exits non-zero only if something already failed.
 const stopAfter = process.env.E2E_STOP_AFTER || '';
+// Profile every wait: a suite that sleeps blindly cannot be made faster without knowing which
+// waits actually cost time and which return immediately. Printed at the end when E2E_PROFILE=1,
+// and also on a stop-after run, which is the combination used to measure one stage.
+const WAITS = [];
+const printWaitProfile = () => {
+  if (!process.env.E2E_PROFILE) return;
+  const total = WAITS.reduce((s, w) => s + w.ms, 0);
+  const polls = WAITS.reduce((s, w) => s + w.polls, 0);
+  console.log(`\n— wait profile: ${WAITS.length} waits, ${(total / 1000).toFixed(1)}s waiting, ${polls} polls`);
+  for (const w of [...WAITS].sort((a, b) => b.ms - a.ms).slice(0, 12)) {
+    console.log(
+      `   ${(w.ms / 1000).toFixed(1).padStart(6)}s  ${String(w.polls).padStart(3)} polls  ${w.ok ? 'ok' : 'TIMEOUT'}  ${w.kind || ''}`
+    );
+  }
+};
 const stage = name => {
   console.log(`— stage: ${name}`);
   if (stopAfter && name.includes(stopAfter)) {
     const bad = results.filter(r => !r.ok);
     console.log(`\n(stopped after '${stopAfter}') ${bad.length} FAILURES (${results.length} checks)`);
+    printWaitProfile();
     process.exit(bad.length ? 1 : 0);
   }
 };
@@ -131,12 +146,12 @@ const until = async (fn, timeoutMs = 90000, everyMs = POLL_MS) => {
     polls++;
     const v = await fn();
     if (v) {
-      WAITS.push({ ms: Date.now() - t0, polls, ok: true });
+      WAITS.push({ ms: Date.now() - t0, polls, ok: true, kind: 'until' });
       return v;
     }
     await sleep(everyMs);
   }
-  WAITS.push({ ms: Date.now() - t0, polls, ok: false });
+  WAITS.push({ ms: Date.now() - t0, polls, ok: false, kind: 'until' });
   return null;
 };
 
@@ -241,11 +256,11 @@ const stable = async (fn, holdMs, timeoutMs = 60000, everyMs = POLL_MS) => {
       continue;
     }
     if (Date.now() - heldSince >= holdMs) {
-      WAITS.push({ ms: Date.now() - t0, polls: Math.ceil((Date.now() - t0) / everyMs), ok: true });
+      WAITS.push({ ms: Date.now() - t0, polls: Math.ceil((Date.now() - t0) / everyMs), ok: true, kind: 'stable' });
       return value;
     }
   }
-  WAITS.push({ ms: Date.now() - t0, polls: Math.ceil((Date.now() - t0) / everyMs), ok: false });
+  WAITS.push({ ms: Date.now() - t0, polls: Math.ceil((Date.now() - t0) / everyMs), ok: false, kind: 'stable' });
   return null; // never held — the assertion that follows reports the real state
 };
 
@@ -1512,14 +1527,7 @@ stage('panel manages server links (unlink)');
   }
 }
 
-if (process.env.E2E_PROFILE) {
-  const total = WAITS.reduce((s, w) => s + w.ms, 0);
-  const polls = WAITS.reduce((s, w) => s + w.polls, 0);
-  console.log(`\n— wait profile: ${WAITS.length} until() calls, ${(total / 1000).toFixed(1)}s waiting, ${polls} polls`);
-  for (const w of [...WAITS].sort((a, b) => b.ms - a.ms).slice(0, 12)) {
-    console.log(`   ${(w.ms / 1000).toFixed(1).padStart(6)}s  ${String(w.polls).padStart(3)} polls  ${w.ok ? 'ok' : 'TIMEOUT'}`);
-  }
-}
+printWaitProfile();
 
 const fails = results.filter(r => !r.ok);
 console.log(`\n${fails.length === 0 ? '🎉 ALL PASS' : `💥 ${fails.length} FAILURES`} (${results.length} checks)`);
