@@ -8,7 +8,12 @@ transport — lockfile-pinned, installed by the Dockerfile):
 - **No build step to run it.** TypeScript is executed natively by Node's type stripping —
   `node index.ts`, Node ≥ 23.6. The front-end pages are Preact TSX bundled by esbuild, but the
   bundles are **committed**, so deploying builds nothing.
-- **State is SQLite** via the built-in `node:sqlite` — WAL, crash-safe, indexed ledgers.
+- **State is SQLite** via the built-in `node:sqlite` — WAL, crash-safe, indexed ledgers. Inspect it
+  from inside the container (`docker exec <sidecar> node -e …` with `node:sqlite`), never with a host
+  `sqlite3` across a Docker Desktop bind mount: WAL relies on POSIX locks that do not cross that VM
+  boundary, so a host reader thinks it is the last connection and deletes `state.db-wal`/`-shm` on
+  exit — after which the running sidecar writes into an unlinked WAL and a restart loses that state.
+  Linux bind mounts and named volumes are unaffected (see demo/e2e/README.md rule 11).
 - **Sync is nudge-driven with a timed backstop.** A signed HTTP nudge makes the common case
   near-instant; three timers are the fail-open safety net. No websockets, no push channel to keep
   alive.

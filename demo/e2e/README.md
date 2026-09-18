@@ -67,7 +67,7 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
    is container lifecycle, not cadence); no stage slower. The sidecar refuses anything below 1000, so
    this is the floor: further gains are structural, not cadence.
 5. **A stage that cannot read its own evidence must fail, not skip.** Some stages read sidecar state
-   through the sqlite3 CLI (`readSidecarPeers`, `readSidecarKv`, …). An unreadable `state.db` used to
+   (`readSidecarPeers`, `readSidecarKv`, … — through the container, see rule 11). An unreadable `state.db` used to
    look identical to an empty one, so `native album invitations` and `a revocation survives content
    arriving in the same window` could run **zero checks** and still report green — silently dropping
    the coverage for per-person invitations. `requireState` now records a **failed check** naming the
@@ -97,4 +97,29 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
     `GET /immich-shared-albums/sync/status?albumId=` — present only with `ISA_TEST_HOOKS`,
     admin-only, absent from every real install. Wait for both counts to advance by N, then assert
     the value held. This is why the suite has no literal `sleep` left.
+11. **Never open a running sidecar's `state.db` from the host — read it through the container.**
+    The store is WAL-mode SQLite, and the WAL protocol relies on POSIX file locks to know who else
+    has the database open. Across a Docker Desktop bind mount (macOS) those locks never reach the
+    VM, so a host-side `sqlite3` — the suite's old reader, `purge`, the preflight, or a curious
+    `sqlite3 state.db` — believes it is the **last** connection and deletes `state.db-wal`/`-shm`
+    when it exits. The sidecar keeps writing into an unlinked WAL nobody can read; the file on disk
+    freezes at the last checkpoint (empty tables), and a restarted sidecar has forgotten everything
+    since. Found 2026-09-18 as `state.db-wal (deleted)` on PID 1's fd table of all three rig
+    sidecars. It was the single cause of every "local-only" failure this suite ever had: the two
+    precondition skips (empty `peers`, missing `identity`), the kill test's "back online → BYPASS"
+    (the restarted origin had lost B's entitlements), the later 403 for the same reason, and
+    leftover albums when `purge` read a frozen `contributors` table. Linux bind mounts (CI) share the
+    locks, which is why it looked like flakiness rather than a bug. `sidecarSql` and `sidecar_col`
+    now run `node -e` with `node:sqlite` **inside** the sidecar's container (a proper lock
+    participant), and `E2E_SIDECAR_CONTAINER_{B,C,D}` overrides the container names for a rig that
+    names its projects differently.
+12. **A red run stops at the end of the failing stage.** `E2E_FAIL_FAST=1` (CI's default for pull
+    requests) makes `stage()` exit after the first stage that failed a check, once that stage has
+    finished — so the failing check's neighbours are still there, but the ~30 stages after it are
+    not run against a rig nobody asserted on. A red run costs ~4 minutes instead of ~12, and the
+    later checks it would have printed mostly describe the fallout of the first failure anyway
+    (2026-09-18: one duplicate stub on D produced six more red checks over the next nine minutes).
+    The summary line still prints, so per-stage timing parsers keep working. When the full failure
+    pattern IS the evidence, dispatch the workflow with `fail_fast=0` or run locally with
+    `E2E_FAIL_FAST=0`; a local run defaults to running everything.
 

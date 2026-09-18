@@ -23,6 +23,28 @@ const HOLD_DEADLINE_MS = TWO_CYCLES_MS + 25000;
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); console.log(`${ok ? '  ✅' : '  ❌'} ${name}${detail ? ' — ' + detail : ''}`); };
+// Stage boundary. With E2E_FAIL_FAST=1 (CI's default for pull requests) the run stops at the END
+// of the first stage that failed a check: the whole stage's evidence is kept — a red check's
+// neighbours usually say why — but the ~30 stages after it are not run against a rig that is
+// already in a state nobody asserted on. That is what makes a red run take 4 minutes instead
+// of 12, and it is why a failing run's later red checks stopped being trustworthy anyway: after
+// the first failure they mostly describe the fallout. The summary line still prints, so per-stage
+// timing parsers keep working. E2E_FAIL_FAST=0 (a dispatch input in CI) runs everything, for the
+// cases where the full failure pattern is the evidence.
+const FAIL_FAST = process.env.E2E_FAIL_FAST === '1';
+const summary = () => {
+  const fails = results.filter(r => !r.ok);
+  console.log(`\n${fails.length === 0 ? '🎉 ALL PASS' : `💥 ${fails.length} FAILURES`} (${results.length} checks)`);
+  return fails.length;
+};
+const stage = name => {
+  if (FAIL_FAST && results.some(r => !r.ok)) {
+    console.log(`\n— stopping before "${name}": E2E_FAIL_FAST=1 and the previous stage failed`);
+    summary();
+    process.exit(1);
+  }
+  console.log(`— stage: ${name}`);
+};
 const api = async (base, key, path, init = {}) => {
   const r = await fetch(`${base}/api${path}`, { ...init, headers: { 'x-api-key': key, Accept: 'application/json', ...(init.headers || {}) } });
   if (!r.ok) throw new Error(`${path} -> ${r.status} ${await r.text().catch(() => '')}`);
@@ -68,14 +90,33 @@ const sha1 = (buf) => crypto.createHash('sha1').update(Buffer.from(buf)).digest(
 const fetchBytes = async (url, key) => (await fetch(url, { headers: { 'x-api-key': key } })).arrayBuffer();
 // A helper must not be able to kill the run: no out-of-process or network call in this suite
 // may throw past its check (see demo/e2e/README.md rule 9).
-// Read a JSON value out of a sidecar's SQLite state, via the sqlite3 CLI the runner
-// already uses. Returns null (rather than throwing) when the rig is not local.
+// Sidecar state is read THROUGH the sidecar's own container — never by opening state.db from the
+// host. The database is in WAL mode, and SQLite's WAL protocol relies on POSIX locks to know who
+// else has the file open. Across a Docker Desktop bind mount those locks do not reach the VM, so a
+// host-side sqlite3 (this suite's old reader, or a curious `sqlite3 state.db`) believes it is the
+// LAST connection and deletes state.db-wal/-shm on close. The running sidecar then writes into an
+// unlinked WAL forever: every later read — from the host OR from a fresh connection inside the
+// container — sees the tables frozen at the last checkpoint, and a restarted sidecar loses
+// everything since. Seen 2026-09-18 as `state.db-wal (deleted)` on PID 1's fd table of all three
+// rig sidecars; it produced every "local-only" failure this suite ever had (empty peers, a
+// missing identity, a kill test whose restarted origin had forgotten its entitlements). A reader
+// inside the container is a proper lock participant, so it is safe. Linux bind mounts (CI) share
+// the locks and never had the problem — which is why it looked like flakiness instead of a bug.
+// Returns the rows as JSON text ('[]' when the query matches nothing), or null when the read
+// itself failed (no container, no docker), so a caller can tell "empty" from "unreadable".
 import { execFileSync } from 'node:child_process';
+const DOCKER_ENV = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
+const containerFor = stateDir => {
+  const letter = (stateDir.match(/([a-z])-sidecar$/) || [])[1];
+  return process.env[`E2E_SIDECAR_CONTAINER_${String(letter).toUpperCase()}`] || `household-${letter}-sidecar-${letter}-1`;
+};
+const SQLITE_ROWS_JSON =
+  'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db",{readOnly:true});' +
+  'process.stdout.write(JSON.stringify(db.prepare(process.argv[1]).all()))';
 const sidecarSql = (stateDir, sql) => {
   try {
-    const path = new URL(`../${stateDir}/state.db`, import.meta.url).pathname;
-    return execFileSync('sqlite3', ['-json', path, sql],
-                        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return execFileSync('docker', ['exec', containerFor(stateDir), 'node', '-e', SQLITE_ROWS_JSON, sql],
+                        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
   } catch { return null; }
 };
 const readSidecarKv = (stateDir, name) => {
@@ -117,19 +158,11 @@ const readSidecarContributors = (stateDir) => {
 // Rows in the `added` ledger — memberships the sidecar created rather than a human. Security
 // property: after unlinking, the memberships left behind must be recorded here.
 const readSidecarAdded = (stateDir, albumId) => {
-  try {
-    const path = new URL(`../${stateDir}/state.db`, import.meta.url).pathname;
-    const sql = albumId
-      ? `SELECT COUNT(*) FROM added WHERE al='${albumId}'`
-      : 'SELECT COUNT(*) FROM added';
-    const out = execFileSync('sqlite3', [path, sql], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return out ? Number(out) : 0;
-  } catch {
-    return null;
-  }
+  const sql = albumId
+    ? `SELECT COUNT(*) AS n FROM added WHERE al='${albumId}'`
+    : 'SELECT COUNT(*) AS n FROM added';
+  const out = sidecarSql(stateDir, sql);
+  try { return out ? Number(JSON.parse(out)[0].n) : null; } catch { return null; }
 };
 
 // Profile every wait: a suite that sleeps blindly cannot be made faster without knowing which
@@ -184,7 +217,7 @@ const waitFor = async (fn, timeoutMs = 20000, everyMs = 250) => {
 };
 
 let ALBUM_ID = ALBUM;
-console.log('— stage: seed origin album (4 photos, capture dates spread over 4 days)');
+stage('seed origin album (4 photos, capture dates spread over 4 days)');
 if (ALBUM === '__CREATE__') {
   ALBUM_ID = (await api(A, AKEY, '/albums', j({ albumName: 'cross server album' }))).id;
 } else {
@@ -206,7 +239,7 @@ await api(A, AKEY, `/assets/${aIds[0]}`, { ...j({ latitude: 51.5074, longitude: 
 await api(A, AKEY, `/albums/${ALBUM_ID}/assets`, { ...j({ ids: aIds }), method: 'PUT' });
 check('origin album seeded', (await albumAssets(A, AKEY, ALBUM_ID)).length === 4);
 
-console.log('— stage: create share link + join from B');
+stage('create share link + join from B');
 let shareKey = (await api(A, AKEY, '/shared-links')).find(l => l.album?.id === ALBUM_ID)?.key;
 if (!shareKey) shareKey = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: ALBUM_ID, allowUpload: true }))).key;
 // Without Caddy, sidecar and immich are on different ports — the redeem must target the ORIGIN SIDECAR.
@@ -261,7 +294,7 @@ const joinRes = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(awai
 check('join succeeded', !!joinRes.album, JSON.stringify(joinRes));
 check('join manifest = 4 photos', joinRes.photos === 4, `got ${joinRes.photos}`);
 
-console.log('— stage: verify mirror on B');
+stage('verify mirror on B');
 const bAlbums = await api(B, BKEY, '/albums');
 const mirror = bAlbums.find(a => a.albumName === joinRes.album && a.assetCount > 0) || bAlbums.find(a => a.albumName === joinRes.album);
 check('mirror exists', !!mirror);
@@ -338,7 +371,7 @@ const bAdminName = (await api(B, BKEY, '/users/me')).name;
 // "(via <server> server)" once a directory has placed them, "(via shared albums)" until then.
 // Match the person, not one naming form — the point is that the account represents that human.
 const representsBAdmin = name => !!name && name.startsWith(`${bAdminName} (`);
-console.log(`— stage: B admin contributes 2 photos (old capture dates)`);
+stage(`B admin contributes 2 photos (old capture dates)`);
 const nIds = [];
 for (let i = 1; i <= 2; i++) {
   const takenAt = `2026-07-0${i}T09:00:00.000Z`;
@@ -347,7 +380,7 @@ for (let i = 1; i <= 2; i++) {
 await ensurePreviews(B, BKEY, nIds);
 await api(B, BKEY, `/albums/${mirror.id}/assets`, { ...j({ ids: nIds }), method: 'PUT' });
 
-console.log('— stage: verify arrival + attribution on A');
+stage('verify arrival + attribution on A');
 const aAfter = await until(async () => { const x = await albumAssets(A, AKEY, ALBUM_ID); return x.length === 6 ? x : null; });
 check('A album has 6 assets after contribution', !!aAfter, aAfter ? '' : `still ${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
 if (aAfter) {
@@ -365,7 +398,7 @@ if (aAfter) {
   const cDates = contributed.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
   check('contribution capture dates preserved', JSON.stringify(cDates) === JSON.stringify(['2026-07-01','2026-07-02']), cDates.join(','));
 
-  console.log('— stage: stale utility-user display name heals on next sync');
+  stage('stale utility-user display name heals on next sync');
   if (!nanUser) console.log('  (skipped: no contributor account found on A)');
   else {
   await api(A, AKEY, `/admin/users/${nanUser.id}`, { ...j({ name: 'Shared · Legacy Name' }), method: 'PUT' });
@@ -381,7 +414,7 @@ if (aAfter) {
   }
 }
 
-console.log('— stage: A personal timeline must NOT contain B-contributed photos');
+stage('A personal timeline must NOT contain B-contributed photos');
 if (aAfter) {
   const ownerId_A = (await api(A, AKEY, '/users/me')).id;
   // The mobile Photos tab shows the logged-in user's own assets. Query exactly that.
@@ -393,7 +426,7 @@ if (aAfter) {
         leaked.length ? `${leaked.length} leaked into personal library` : 'clean');
 }
 
-console.log('— stage: album People / owners documented in settings');
+stage('album People / owners documented in settings');
 if (aAfter) {
   // albumUsers is what the app renders under album Options → People
   const albumDetail = await api(A, AKEY, `/albums/${ALBUM_ID}`);
@@ -401,7 +434,7 @@ if (aAfter) {
   check('contributor utility user listed as album member on A', memberNames.some(representsBAdmin), memberNames.join(', ') || '(none)');
 }
 
-console.log('— stage: photo ordering matches capture date (newest-first)');
+stage('photo ordering matches capture date (newest-first)');
 if (aAfter) {
   const ordered = await api(A, AKEY, '/search/metadata', j({ albumIds: [ALBUM_ID], size: 100, order: 'desc' }));
   const dates = ordered.assets.items.map(a => a.fileCreatedAt);
@@ -409,7 +442,7 @@ if (aAfter) {
   check('album assets returned in capture-date order', JSON.stringify(dates) === JSON.stringify(sorted));
 }
 
-console.log('— stage: two-way comment sync');
+stage('two-way comment sync');
 let joinerComment = '';
 if (aAfter && mirror) {
   const originComment = `origin says hi ${Date.now()}`;
@@ -432,7 +465,7 @@ if (aAfter && mirror) {
         `${finalOrigin.filter(c => c.comment === originComment).length} copies of origin comment`);
 }
 
-console.log('— stage: OWNER adds photos post-join -> member receives (owner-perspective sync)');
+stage('OWNER adds photos post-join -> member receives (owner-perspective sync)');
 if (aAfter && mirror) {
   const lateIds = [];
   for (let i = 1; i <= 2; i++) lateIds.push(await upload(A, AKEY, `late-owner-${i}.jpg`, `lo${i}${Date.now() % 10000}`, `2026-06-0${i}T08:00:00.000Z`));
@@ -442,7 +475,7 @@ if (aAfter && mirror) {
   check('owner post-join additions reach member mirror (7->9)', !!grew, grew ? '' : `mirror at ${(await albumAssets(B, BKEY, mirror.id)).length}`);
 }
 
-console.log('— stage: same photo shareable into a second album (cross-album dedup bug)');
+stage('same photo shareable into a second album (cross-album dedup bug)');
 if (aAfter) {
   const alb2 = (await api(A, AKEY, '/albums', j({ albumName: 'second album' }))).id;
   await api(A, AKEY, `/albums/${alb2}/assets`, { ...j({ ids: [aIds[0]] }), method: 'PUT' });
@@ -457,7 +490,7 @@ if (aAfter) {
   const m2humans = (m2detail.albumUsers || []).filter(u => !isBot(u.user?.email)).map(u => u.user?.id);
   check('private join: only the receiving user among human members', m2humans.length === 1 && m2humans[0] === nanId, `${m2humans.length} human member(s)`);
 
-  console.log('— stage: re-join by a second user attaches to the existing mirror');
+  stage('re-join by a second user attaches to the existing mirror');
   let second = (await api(B, BKEY, '/admin/users')).find(u => u.email === 'second-e2e@demo.local');
   if (!second) second = await api(B, BKEY, '/admin/users', j({ email: 'second-e2e@demo.local', name: 'Second Human', password: 'e2e-pass-123' }));
   const join2b = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, share2, { forUserId: second.id }), BKEY))).json();
@@ -468,7 +501,7 @@ if (aAfter) {
   const m2h2 = (m2after.albumUsers || []).filter(u => !isBot(u.user?.email)).map(u => u.user?.id);
   check('re-join added the second user as member', m2h2.length === 2 && m2h2.includes(second.id), `${m2h2.length} human member(s)`);
 
-  console.log('— stage: video syncs cross-server as a full original');
+  stage('video syncs cross-server as a full original');
   const vidBytes = Buffer.concat([fs.readFileSync(new URL('./fixtures/clip.mp4', import.meta.url)), crypto.randomBytes(8)]);
   const vfd = new FormData();
   vfd.set('deviceAssetId', `e2e-vid-${Date.now() % 100000}`); vfd.set('deviceId', 'e2e-test');
@@ -493,7 +526,7 @@ if (aAfter) {
   }
 }
 
-console.log('— stage: instant join (no preview wait) heals via reconciliation');
+stage('instant join (no preview wait) heals via reconciliation');
 {
   const alb3 = (await api(A, AKEY, '/albums', j({ albumName: 'instant album' }))).id;
   const fresh = await upload(A, AKEY, 'instant-e2e.jpg', `inst${Date.now() % 100000}`, '2026-08-15T09:00:00.000Z');
@@ -511,7 +544,7 @@ console.log('— stage: instant join (no preview wait) heals via reconciliation'
   check('photo uploaded seconds before join eventually lands (reconciliation)', !!m3, m3 ? 'landed' : 'timed out');
 }
 
-console.log('— stage: share link created before any photos (empty album) still names the sharer');
+stage('share link created before any photos (empty album) still names the sharer');
 {
   const alb5 = (await api(A, AKEY, '/albums', j({ albumName: 'born empty' }))).id;
   const share5 = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: alb5, allowUpload: true }))).key;
@@ -530,7 +563,7 @@ console.log('— stage: share link created before any photos (empty album) still
         !!owner5 && !owner5.startsWith('Mock household'), `owner=${owner5}`);
 }
 
-console.log('— stage: view-only share link (allowUpload off) rejects cross-server uploads');
+stage('view-only share link (allowUpload off) rejects cross-server uploads');
 {
   const alb6 = (await api(A, AKEY, '/albums', j({ albumName: 'view only album' }))).id;
   const voId = await upload(A, AKEY, 'viewonly-e2e.jpg', `vo${Date.now() % 1000}`, '2026-05-01T09:00:00.000Z');
@@ -561,7 +594,7 @@ console.log('— stage: view-only share link (allowUpload off) rejects cross-ser
         `origin held at ${viewOnlyHeld} (want 1)`);
 }
 
-console.log('— stage: reverse-direction share — member-owned album with an already-shared photo must not echo');
+stage('reverse-direction share — member-owned album with an already-shared photo must not echo');
 {
   // regression: a deduped proxy carries ledger rows from several albums/eras; the wire
   // identity must come from the authoritative (materialisation) row or the origin gets
@@ -582,7 +615,7 @@ console.log('— stage: reverse-direction share — member-owned album with an a
         `B album held at ${noEchoHeld} (want 1)`);
 }
 
-console.log('— stage: third household D joins — member contributions relay through the origin');
+stage('third household D joins — member contributions relay through the origin');
 const D = process.env.D_URL || 'http://localhost:2286';
 const DS = process.env.D_SIDECAR || 'http://localhost:8303';
 const DKEY = process.env.DKEY;
@@ -619,7 +652,7 @@ if (DKEY) {
   check('D contribution relays onward to B', !!(await until(async () => (await albumAssets(B, BKEY, mirror.id)).length === 10 ? true : null, 150000)));
 } else console.log('  (skipped: no DKEY)');
 
-console.log('— stage: deletion propagation + leave-&-purge (reversible joins)');
+stage('deletion propagation + leave-&-purge (reversible joins)');
 {
   const albD = (await api(A, AKEY, '/albums', j({ albumName: 'delete test' }))).id;
   const d1 = await upload(A, AKEY, 'del-1.jpg', `dl1${Date.now() % 1000}`, '2026-04-01T09:00:00.000Z');
@@ -651,7 +684,7 @@ console.log('— stage: deletion propagation + leave-&-purge (reversible joins)'
   check('native leave: stubs deleted (space reclaimed)', stubsGone);
 }
 
-console.log('— stage: kill test — uncached photos fail closed; cached ones survive from cache');
+stage('kill test — uncached photos fail closed; cached ones survive from cache');
 {
   const all = await albumAssets(B, BKEY, mirror.id);
   const cachedProxy = all.find(a => a.exifInfo?.latitude);          // viewed earlier -> in cache
@@ -661,6 +694,22 @@ console.log('— stage: kill test — uncached photos fail closed; cached ones s
   const uncachedProxy = all.find(a => !a.exifInfo?.latitude && (a.fileCreatedAt || '').startsWith('2026-08-1'));
   const { execSync } = await import('node:child_process');
   const dockerEnv = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
+  // Who the origin IS and WHERE it is, before and after the restart. Recovery can only work if the
+  // restarted sidecar comes back with the same iroh identity (its persisted identity) at an address
+  // the member can still reach; if either changed, the recovery check's detail says which, so a red
+  // run explains itself instead of reading like a transport bug.
+  const originWhere = async () => {
+    const sh = cmd => { try { return execSync(cmd, { env: dockerEnv, encoding: 'utf8' }).trim(); } catch (e) { return `? (${String(e.message).split('\n')[0].slice(0, 60)})`; } };
+    const ip = sh("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' household-c-sidecar-c-1");
+    // What the origin holds on disk and what it believes in memory: a restart can only recover if
+    // both survived. Sizes of state.db and its WAL, and the origin's own peer list.
+    const files = sh("docker exec household-c-sidecar-c-1 sh -c 'ls -l /data | grep state | awk \"{print \\$5, \\$9}\" | tr \"\\n\" \" \"'");
+    const peers = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/peers`, { headers: { 'x-api-key': AKEY } })
+      .then(r => r.json()).then(j => (j.peers || []).map(p => `${p.name}:${p.sharedTo ?? '?'}/${p.sharedFrom ?? '?'}`).join(',') || 'none').catch(e => `? ${e.message}`);
+    const ep = await endpointOf(ORIGIN_DIRECT).catch(() => null);
+    return { pub: ep?.pub ? ep.pub.slice(0, 12) : '?', addrs: ep?.addrs ?? '?', ip, files, peers };
+  };
+  const before = await originWhere();
   // `kill`, not `stop`: this stage simulates the owner VANISHING, so SIGKILL is the faithful
   // signal and it returns at once. `stop` would additionally wait out the grace period the sidecar
   // now uses to exit cleanly — a graceful exit is covered by a unit test, and paying for it here
@@ -683,16 +732,18 @@ console.log('— stage: kill test — uncached photos fail closed; cached ones s
   check('owner offline: recently viewed photo still renders FROM CACHE',
         cachedRes.headers.get('x-cache') === 'HIT' && sha1(await cachedRes.arrayBuffer()) === cachedSha);
   execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
-  // wait for the owner to answer again instead of guessing how long a start takes
-  await waitFor(async () => (await fetch(`${A}/api/server/ping`).catch(() => ({ ok: false }))).ok, 20000);
+  // Wait for the thing that restarted — the origin SIDECAR — to answer again, instead of guessing
+  // how long a start takes. (This used to ping the origin's Immich, which never went down.)
+  await waitFor(async () => (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`).catch(() => ({ ok: false }))).ok, 20000);
+  const after = await originWhere();
   const aliveRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } })
     .catch(() => ({ headers: { get: () => 'UNREACHABLE' }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
   check('owner back online: uncached photo streams again (hotlink recovery)',
         aliveRes.headers.get('x-cache') === 'MISS' && (await aliveRes.arrayBuffer()).byteLength > 500,
-        `x-cache: ${aliveRes.headers.get('x-cache')}`);
+        `x-cache: ${aliveRes.headers.get('x-cache')}; origin before ${JSON.stringify(before)} after ${JSON.stringify(after)}`);
 }
 
-console.log('— stage: loop prevention (the counts must HOLD, not merely read true once)');
+stage('loop prevention (the counts must HOLD, not merely read true once)');
 // Ping-pong does not show up in a single reading — it shows up as a count that keeps climbing.
 // So require every count to be unchanged for two full sync intervals, which is what "2 idle
 // watcher cycles" was estimating, and which fails fast if a cycle ever increments anything.
@@ -717,7 +768,7 @@ check('no ping-pong: every count holds for two idle cycles', !!held && held[0] =
 // picker, with no share link involved. The origin detects it by listing albums AS that person's
 // marker (which is why this works for albums a non-admin owns), and the member discovers it by
 // polling. Sharing is per person: there is deliberately no household-wide stand-in.
-console.log('— stage: native album invitations, per person (no share link)');
+stage('native album invitations, per person (no share link)');
 {
   const originPeers = readSidecarPeers('household-c/c-sidecar');
   const bPeer = (originPeers || []).find(p => (p.name || '').includes('(B)'));
@@ -920,7 +971,7 @@ console.log('— stage: native album invitations, per person (no share link)');
 // never fail falsely: it drives content at the album immediately after revoking, then asserts the
 // withdrawal happened anyway. If the re-add did land it proves the ledger; if it did not, the
 // withdrawal assertion still holds.
-console.log('— stage: a revocation survives content arriving in the same window');
+stage('a revocation survives content arriving in the same window');
 {
   const originPeers = readSidecarPeers('household-c/c-sidecar');
   const bPeer = (originPeers || []).find(p => (p.name || '').includes('(B)'));
@@ -1004,7 +1055,7 @@ console.log('— stage: a revocation survives content arriving in the same windo
 // The route prefix moved from /sidecar to /immich-shared-albums — a clean break, no shim, so
 // both peers must agree on it. Pins the panel answering WITHOUT a trailing slash, and that
 // nothing still emits the old prefix.
-console.log('— stage: route prefix rename + legacy compatibility');
+stage('route prefix rename + legacy compatibility');
 {
   const code = async (u, init) => (await fetch(u, init).catch(() => ({ status: 0 }))).status;
   const j2 = (o, key) => ({ method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key }, body: JSON.stringify(o) });
@@ -1045,7 +1096,7 @@ console.log('— stage: route prefix rename + legacy compatibility');
         native.slice(0, 120));
 }
 
-console.log('— stage: websocket upgrades pass through the sidecar');
+stage('websocket upgrades pass through the sidecar');
 {
   const http = await import('node:http');
   // the accept hash is derived from the client key, so BOTH handshakes must send the same
@@ -1072,7 +1123,7 @@ console.log('— stage: websocket upgrades pass through the sidecar');
         `sidecar=${viaSidecar.accept} immich=${direct.accept}`);
 }
 
-console.log('— stage: security (unauthenticated surface)');
+stage('security (unauthenticated surface)');
 {
   const status = async (url, init) => (await fetch(url, init).catch(() => ({ status: 0 }))).status;
 
@@ -1113,7 +1164,7 @@ console.log('— stage: security (unauthenticated surface)');
         await status(`${ORIGIN_DIRECT}/immich-shared-albums/api/v1/assets/x/original`) === 404);
 }
 
-console.log('— stage: security (entitlement — a signed peer is not entitled to everything)');
+stage('security (entitlement — a signed peer is not entitled to everything)');
 {
   // Dial as B really is: B's identity (raw ed25519, schema v1) lives in its sidecar volume. Read it with the sqlite3
   // CLI rather than node:sqlite — the runner already depends on the CLI, and node:sqlite
@@ -1166,7 +1217,7 @@ console.log('— stage: security (entitlement — a signed peer is not entitled 
   }
 }
 
-console.log('— stage: security (album password gates enrolment)');
+stage('security (album password gates enrolment)');
 {
   const pwAlbum = (await api(A, AKEY, '/albums', j({ albumName: 'password album' }))).id;
   const pwAsset = await upload(A, AKEY, 'pw-e2e.jpg', `pw${Date.now() % 10000}`, '2026-07-02T09:00:00.000Z');
@@ -1198,7 +1249,7 @@ console.log('— stage: security (album password gates enrolment)');
   await api(A, AKEY, `/albums/${expAlbum}`, { method: 'DELETE' }).catch(() => {});
 }
 
-console.log('— stage: bot naming uses the project domain');
+stage('bot naming uses the project domain');
 {
   const bots = (await api(B, BKEY, '/admin/users')).filter(u => isBot(u.email));
   check('bot users exist', bots.length > 0, `${bots.length} found`);
@@ -1207,7 +1258,7 @@ console.log('— stage: bot naming uses the project domain');
         bots.map(u => u.email.split('@')[1]).filter((v, i, a) => a.indexOf(v) === i).join(', '));
 }
 
-console.log('— stage: security (utility accounts cannot be signed into)');
+stage('security (utility accounts cannot be signed into)');
 {
   const utility = (await api(B, BKEY, '/admin/users')).filter(u => isBot(u.email));
   check('utility users exist to own the stubs', utility.length > 0, `${utility.length} found`);
@@ -1226,7 +1277,7 @@ console.log('— stage: security (utility accounts cannot be signed into)');
 // Server pairing: linking two servers as its own act, with no album involved. This replaces
 // bearer-based enrolment, where anyone holding an album share link could attach their server.
 // Runs LAST, alongside unlink, because it mutates the peer list.
-console.log('— stage: pairing links two servers on its own (no album)');
+stage('pairing links two servers on its own (no album)');
 {
   const anonMint = await fetch(`${BS}/immich-shared-albums/pairings`, { method: 'POST' });
   check('minting a pairing link needs a session', anonMint.status === 401, `status ${anonMint.status}`);
@@ -1299,7 +1350,7 @@ console.log('— stage: pairing links two servers on its own (no album)');
 // LAST STAGE, deliberately: unlinking is destructive, so it runs after everything that needs
 // the B<->C link. Server links are admin-owned objects managed from the panel — not something
 // expressed by removing a bot from an album.
-console.log('— stage: panel manages server links (unlink)');
+stage('panel manages server links (unlink)');
 {
   const peersUrl = `${BS}/immich-shared-albums/peers`;
   const anon = await fetch(peersUrl);
@@ -1373,6 +1424,4 @@ if (process.env.E2E_PROFILE) {
   }
 }
 
-const fails = results.filter(r => !r.ok);
-console.log(`\n${fails.length === 0 ? '🎉 ALL PASS' : `💥 ${fails.length} FAILURES`} (${results.length} checks)`);
-process.exit(fails.length ? 1 : 0);
+process.exit(summary() ? 1 : 0);
