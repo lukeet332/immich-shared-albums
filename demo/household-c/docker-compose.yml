@@ -13,7 +13,9 @@ services:
     volumes:
       - ./c-library:/data
     ports:
-      - 2285:2283
+      # Host ports follow run-mock-e2e.sh's map and bind to loopback by default; RIG_BIND=0.0.0.0 opens
+      # them to the LAN (testing from a phone). Nothing inside the rig depends on them.
+      - "${RIG_BIND:-127.0.0.1}:${PORT_IMMICH_C:-2285}:2283"
     depends_on: [db-c, redis-c]
     restart: unless-stopped
   db-c:
@@ -33,7 +35,7 @@ services:
     # rig-only: the suite reads state.db from the host and purges via docker exec,
     # so the test sidecars keep running as root instead of the image's node user
     user: "0:0"
-    # LAN address when testing from a phone.
+    # host.docker.internal for the runner's browser lane; peers reach each other by container name.
     extra_hosts:
       - host.docker.internal:host-gateway
     environment:
@@ -52,7 +54,7 @@ services:
     volumes:
       - ./c-sidecar:/data
     ports:
-      - 8302:8300
+      - "${RIG_BIND:-127.0.0.1}:${PORT_SIDECAR_C:-8302}:8300"
     restart: unless-stopped
 
 # iroh direct addresses are container IPs; one shared network makes them route across the rig

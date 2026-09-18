@@ -1,8 +1,15 @@
 /** e2e/e2e-test.mjs — full-cycle assertion harness: reseed A, reset B, join, contribute, verify. See README.md. */
-// Usage: node e2e-test.mjs  (env: AKEY, BKEY, A_URL, B_URL, B_SIDECAR)
-const A = process.env.A_URL || 'http://localhost:2285';
-const B = process.env.B_URL || 'http://localhost:2284';
-const BS = process.env.B_SIDECAR || 'http://localhost:8301';
+// Usage: node e2e-test.mjs  (env: AKEY, BKEY, A_URL, B_URL, B_SIDECAR; see run-mock-e2e.sh)
+// Every address defaults from the same PORT_* map the rig's composes and runner use, so a shifted
+// map — a host that also runs a real Immich — reaches the suite without editing it. The rig's
+// compose projects name its containers; RIG_PROJECT_{B,C,D} follow the `name:` in the compose
+// files, and every destructive, name-addressed verb below checks that label before acting.
+const PORT = (name, dflt) => process.env[name] || dflt;
+const RIG_PROJECT = letter => process.env[`RIG_PROJECT_${letter.toUpperCase()}`] || `household-${letter}`;
+const RIG_PROJECTS = (process.env.RIG_PROJECTS || 'household-b household-c household-d').split(/\s+/).filter(Boolean);
+const A = process.env.A_URL || `http://localhost:${PORT('PORT_IMMICH_C', 2285)}`;
+const B = process.env.B_URL || `http://localhost:${PORT('PORT_IMMICH_B', 2284)}`;
+const BS = process.env.B_SIDECAR || `http://localhost:${PORT('PORT_SIDECAR_B', 8301)}`;
 const AKEY = process.env.AKEY, BKEY = process.env.BKEY;
 const ALBUM = process.env.A_ALBUM || '__CREATE__';
 // The sidecar's cadence, as the rig actually runs it. `stable()` holds a value for two of these, so
@@ -108,7 +115,17 @@ import { execFileSync } from 'node:child_process';
 const DOCKER_ENV = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
 const containerFor = stateDir => {
   const letter = (stateDir.match(/([a-z])-sidecar$/) || [])[1];
-  return process.env[`E2E_SIDECAR_CONTAINER_${String(letter).toUpperCase()}`] || `household-${letter}-sidecar-${letter}-1`;
+  return process.env[`E2E_SIDECAR_CONTAINER_${String(letter).toUpperCase()}`] || `${RIG_PROJECT(letter)}-sidecar-${letter}-1`;
+};
+// The compose project that owns a container, or '' — the label every name-addressed destructive
+// verb checks before acting, so a stale or mistyped name can never reach a container that is not
+// this rig's (on a host that also runs a real Immich, that is the production sidecar).
+const rigOwns = (container, env) => {
+  try {
+    const owner = execFileSync('docker', ['inspect', '-f', '{{index .Config.Labels "com.docker.compose.project"}}', container],
+                               { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env }).trim();
+    return { ok: RIG_PROJECTS.includes(owner), owner };
+  } catch { return { ok: false, owner: '(no such container)' }; }
 };
 const SQLITE_ROWS_JSON =
   'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db",{readOnly:true});' +
@@ -246,7 +263,7 @@ if (!shareKey) shareKey = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM'
 const ORIGIN_SIDECAR = process.env.ORIGIN_SIDECAR || A;
 // ORIGIN_SIDECAR is resolved by B's sidecar from INSIDE its container (host.docker.internal).
 // The security stage calls the origin directly from this process, so it needs a host route.
-const ORIGIN_DIRECT = process.env.ORIGIN_SIDECAR_DIRECT || 'http://localhost:8302';
+const ORIGIN_DIRECT = process.env.ORIGIN_SIDECAR_DIRECT || `http://localhost:${PORT('PORT_SIDECAR_C', 8302)}`;
 
 // v2 join body: the origin's share page carries its endpoint token; the invite forwards it.
 const inviteFor = async (pageBase, key, extra = {}) => {
@@ -635,8 +652,9 @@ stage('reverse-direction share — member-owned album with an already-shared pho
   // regression: a deduped proxy carries ledger rows from several albums/eras; the wire
   // identity must come from the authoritative (materialisation) row or the origin gets
   // its own photo back as a duplicate
-  const CS = process.env.C_SIDECAR || 'http://localhost:8302';
-  const REV = process.env.REVERSE_ORIGIN || 'http://host.docker.internal:8301';
+  const CS = process.env.C_SIDECAR || `http://localhost:${PORT('PORT_SIDECAR_C', 8302)}`;
+  // A URL a SIDECAR is told to fetch: a container name on the shared network, never a host port.
+  const REV = process.env.REVERSE_ORIGIN || `http://${RIG_PROJECT('b')}-sidecar-b-1:8300`;
   const albR = (await api(B, BKEY, '/albums', j({ albumName: 'reverse album' }))).id;
   await api(B, BKEY, `/albums/${albR}/assets`, { ...j({ ids: [nIds[0]] }), method: 'PUT' });
   const shareR = (await api(B, BKEY, '/shared-links', j({ type: 'ALBUM', albumId: albR, allowUpload: true }))).key;
@@ -652,8 +670,8 @@ stage('reverse-direction share — member-owned album with an already-shared pho
 }
 
 stage('third household D joins — member contributions relay through the origin');
-const D = process.env.D_URL || 'http://localhost:2286';
-const DS = process.env.D_SIDECAR || 'http://localhost:8303';
+const D = process.env.D_URL || `http://localhost:${PORT('PORT_IMMICH_D', 2286)}`;
+const DS = process.env.D_SIDECAR || `http://localhost:${PORT('PORT_SIDECAR_D', 8303)}`;
 const DKEY = process.env.DKEY;
 let dMirror = null;
 if (DKEY) {
@@ -730,16 +748,23 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   const uncachedProxy = all.find(a => !a.exifInfo?.latitude && (a.fileCreatedAt || '').startsWith('2026-08-1'));
   const { execSync } = await import('node:child_process');
   const dockerEnv = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
+  // The one name-addressed destructive verb in the suite. On a host that also runs a real
+  // sidecar, a stale or mistyped name here would kill THAT — so the container must prove it
+  // belongs to one of the rig's compose projects before anything is done to it.
+  const ORIGIN_CONTAINER = containerFor('household-c/c-sidecar');
+  const owner = rigOwns(ORIGIN_CONTAINER, dockerEnv);
+  const isRig = owner.ok;
+  check(`rig: ${ORIGIN_CONTAINER} belongs to one of this rig's compose projects`, isRig, `project: ${owner.owner}`);
   // Who the origin IS and WHERE it is, before and after the restart. Recovery can only work if the
   // restarted sidecar comes back with the same iroh identity (its persisted identity) at an address
   // the member can still reach; if either changed, the recovery check's detail says which, so a red
   // run explains itself instead of reading like a transport bug.
   const originWhere = async () => {
     const sh = cmd => { try { return execSync(cmd, { env: dockerEnv, encoding: 'utf8' }).trim(); } catch (e) { return `? (${String(e.message).split('\n')[0].slice(0, 60)})`; } };
-    const ip = sh("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' household-c-sidecar-c-1");
+    const ip = sh(`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' ${ORIGIN_CONTAINER}`);
     // What the origin holds on disk and what it believes in memory: a restart can only recover if
     // both survived. Sizes of state.db and its WAL, and the origin's own peer list.
-    const files = sh("docker exec household-c-sidecar-c-1 sh -c 'ls -l /data | grep state | awk \"{print \\$5, \\$9}\" | tr \"\\n\" \" \"'");
+    const files = sh(`docker exec ${ORIGIN_CONTAINER} sh -c 'ls -l /data | grep state | awk "{print \\$5, \\$9}" | tr "\\n" " "'`);
     const peers = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/peers`, { headers: { 'x-api-key': AKEY } })
       .then(r => r.json()).then(j => (j.peers || []).map(p => `${p.name}:${p.sharedTo ?? '?'}/${p.sharedFrom ?? '?'}`).join(',') || 'none').catch(e => `? ${e.message}`);
     const ep = await endpointOf(ORIGIN_DIRECT).catch(() => null);
@@ -750,9 +775,9 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   // signal and it returns at once. `stop` would additionally wait out the grace period the sidecar
   // now uses to exit cleanly — a graceful exit is covered by a unit test, and paying for it here
   // would only make the crash simulation slower, not more realistic.
-  execSync('docker kill household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
+  if (isRig) execSync(`docker kill ${ORIGIN_CONTAINER}`, { env: dockerEnv, stdio: 'ignore' });
   await waitFor(() => {
-    try { return execSync('docker inspect -f {{.State.Running}} household-c-sidecar-c-1', { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
+    try { return execSync(`docker inspect -f {{.State.Running}} ${ORIGIN_CONTAINER}`, { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
     catch { return true; }
   }, 15000);
   // B may still be tearing down requests to the container we just stopped, so a closed socket
@@ -767,7 +792,7 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   const cachedRes = await fetch(`${BS}/api/assets/${cachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
   check('owner offline: recently viewed photo still renders FROM CACHE',
         cachedRes.headers.get('x-cache') === 'HIT' && sha1(await cachedRes.arrayBuffer()) === cachedSha);
-  execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
+  if (isRig) execSync(`docker start ${ORIGIN_CONTAINER}`, { env: dockerEnv, stdio: 'ignore' });
   // Wait for the thing that restarted — the origin SIDECAR — to answer again, instead of guessing
   // how long a start takes. (This used to ping the origin's Immich, which never went down.)
   await waitFor(async () => (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`).catch(() => ({ ok: false }))).ok, 20000);

@@ -3,12 +3,16 @@
 // Env: CKEY (origin admin key). Exits non-zero on any failure.
 import { chromium } from 'playwright';
 
-const C = 'http://localhost:2285';
-// The share page must be browsed on an address B's CONTAINER can also reach — the
-// banner embeds the page's own host into the join payload for the redeem.
-const SHARE_HOST = process.env.SHARE_HOST || 'http://host.docker.internal:8302';
-const B_ADDR = process.env.B_ADDR || 'host.docker.internal:8301';                // typed into the banner
-const B_PANEL_WEB = process.env.B_PANEL_WEB || 'http://localhost:8301';
+// Addresses follow the same PORT_* map as run-mock-e2e.sh and the composes (loopback-bound).
+const PORT = (name, dflt) => process.env[name] || dflt;
+const C = `http://localhost:${PORT('PORT_IMMICH_C', 2285)}`;
+// The share page is browsed on host.docker.internal so one hostname works for the runner's
+// browser (CI maps it to 127.0.0.1 in /etc/hosts; a dev machine uses HOST_RESOLVER_RULES below).
+// The join itself carries the origin's iroh endpoint token from the page, so B's sidecar never
+// has to reach this host address — only the browser does.
+const SHARE_HOST = process.env.SHARE_HOST || `http://host.docker.internal:${PORT('PORT_SIDECAR_C', 8302)}`;
+const B_ADDR = process.env.B_ADDR || `host.docker.internal:${PORT('PORT_SIDECAR_B', 8301)}`;   // typed into the banner
+const B_PANEL_WEB = process.env.B_PANEL_WEB || `http://localhost:${PORT('PORT_SIDECAR_B', 8301)}`;
 const B_EMAIL = process.env.B_EMAIL || 'demo@household-b.local';
 const B_PASS = process.env.B_PASS || 'demo-household-b-1';
 const CKEY = process.env.CKEY;
