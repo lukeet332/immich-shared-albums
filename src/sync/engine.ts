@@ -17,6 +17,15 @@ import { leaveAlbum } from './leave.ts';
 import { backfillFullCopies, hasStubRows } from './backfill.ts';
 import { recordWatcherCycle, recordLoopTick } from './status.ts';
 
+/** Consecutive failed pushes per mapping, in memory. A single 404 is TRANSIENT by protocol — the
+ *  member may not have created its mirror yet (see goneOr404 in p2p/protocol.ts) — so the bar is
+ *  high: a peer that answers 404 this many cycles in a row (20s in the rig, ~7 minutes at the
+ *  production cadence) has lost the album for good, typically by losing its state, and the mapping
+ *  is retired instead of being retried and logged every cycle forever. Other failures are logged
+ *  on the first and every tenth. */
+const PUSH_404_DEAD_AFTER = 20;
+const pushFailures = new Map<string, number>();
+
 export async function watchOnce() {
   // Counted before anything can skip: this is "the watcher looked", not "the watcher worked".
   recordLoopTick('watcher');
@@ -96,13 +105,28 @@ export async function watchOnce() {
           break;
         }
         if (r.status >= 400) {
-          log(`ref push failed: ${r.status}`);
           pushFailed = true;
+          const n = (pushFailures.get(mapping.id) || 0) + 1;
+          pushFailures.set(mapping.id, n);
+          if (r.status === 404 && n >= PUSH_404_DEAD_AFTER) {
+            // The peer keeps saying it has no such album. Whatever happened over there — they
+            // unlinked us, lost their state, left — retrying every cycle forever only fills the
+            // log. Retire the mapping like a 410; re-sharing the album starts a fresh one.
+            mapping.dead = true;
+            mapping.deadAt = new Date().toISOString();
+            mapping.deadReason = `peer answered 404 to ${n} pushes in a row — it no longer has this album`;
+            pushFailures.delete(mapping.id);
+            save();
+            log(`"${peer.name}" no longer has "${mapping.albumName}" (404 x${n}) — no longer pushing it`);
+          } else if (n === 1 || n % 10 === 0) {
+            log(`ref push to "${peer.name}" failed: ${r.status}${n > 1 ? ` (x${n})` : ''}`);
+          }
           break;
         }
         for (const c of r.json?.failed || []) failed.add(c);
       }
       if (!pushFailed) {
+        pushFailures.delete(mapping.id);
         const landed = fresh.filter(a => !failed.has(wireChecksum(a)));
         landed.forEach(a => seenAdd(mapping.id, wireChecksum(a), a.id));
         if (!failed.size) {
