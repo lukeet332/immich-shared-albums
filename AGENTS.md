@@ -95,10 +95,17 @@ worse without saying so.**
   `npm run verify`, `bash demo/run-mock-e2e.sh` (API lane, purges its rig first), and
   `demo/e2e/browser-test.mjs` (browser lane — the only coverage that loads a page).
   The e2e suite is deliberately NOT in the hook: a seven-minute hook is a hook people bypass.
-- **Two traps code cannot catch for you:** a rig recreated by hand instead of via
+- **Three traps code cannot catch for you:** a rig recreated by hand instead of via
   `run-mock-e2e.sh` keeps stale bot keys in `state.db`, and the resulting `Invalid API key`
-  failures look like product bugs; and a browser-lane run on a dev machine needs
-  `HOST_RESOLVER_RULES="MAP host.docker.internal 127.0.0.1"` rather than an /etc/hosts edit.
+  failures look like product bugs; a browser-lane run on a dev machine needs
+  `HOST_RESOLVER_RULES="MAP host.docker.internal 127.0.0.1"` rather than an /etc/hosts edit; and
+  **never open a running sidecar's `state.db` with a host `sqlite3` on macOS** — across the Docker
+  Desktop bind mount the host cannot see the sidecar's locks, decides it is the last connection,
+  and deletes the WAL under the running process, after which every read is stale and a restart
+  loses state. Read it through the container (`demo/e2e/README.md` rule 11).
+- **Measure in CI, conclude from CI.** Local timings and local-only failures are suspect until
+  reproduced there; before calling anything slow, flaky or fixed, get the per-stage numbers from
+  a CI log (the `— stage:` lines are timestamped) on the same commit, and name the run.
 - **Formatting is Prettier's, correctness is ESLint's.** They do not overlap: `eslint.config.mjs`
   contains zero formatting rules, and that is a property to preserve. Never add
   `tseslint.configs.stylistic`/`recommended` or a whitespace rule there.

@@ -49,7 +49,21 @@ Started by `index.ts`, each guarded against overlapping itself:
 | `startInviteLoop`  | `detectInvitesOnce` (origin side), then `pullInvitationsOnce` (member side)                | own tick           |
 
 A lost nudge costs nothing — the next scheduled pass catches everything. `ISA_RECONCILE_DEBUG=1` traces
-every decision.
+every decision. A push the peer answers with 404 is retried next cycle (a 404 is transient by
+protocol — the member's mirror may not exist yet); twenty in a row retire the mapping like a 410,
+so a peer that lost its state is not retried and logged forever.
+
+## Reaching a peer
+
+`p2p/transport.ts` dials by key over iroh. Three budgets: **10s to connect** (a dial either
+completes in seconds — direct, hole-punched, or relayed — or the peer is offline), **15s for a byte
+response header** (a peer answers a byte request the moment its Immich returns headers), and
+**120s for a JSON response** (a ref push is processed before it is answered). A connection whose
+response never arrives is **evicted**: a peer that died without closing still looks open to QUIC for
+~45s, and without eviction the next request — including the first one after the peer comes back —
+would wait out that silence again. The endpoint binds a **stable UDP port** (`ISA_P2P_PORT`,
+default 8300): a peer remembers where it last reached us, and only a fixed port keeps that memory
+true across our restarts — a random one leaves recovery to whether we happen to dial the peer first.
 
 ## Components
 
@@ -139,7 +153,7 @@ src/
   config.ts           settings (CFG), the logger, string constants
   state.ts            the store instance, household keypair, seen-ledger accessors
   store.ts            the raw SQLite layer
-  peers.ts            P2P transport: sign / verify / signed POST / nudge
+  p2p/transport.ts    the iroh transport: dial-by-key, framing, the three deadlines, stable port
   types.ts            wire types shared by both ends
   invariants.test.ts  pure-logic unit tests
   immich/             the local Immich API layer        → local-immich-api.md
