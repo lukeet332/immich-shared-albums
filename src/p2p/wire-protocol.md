@@ -119,7 +119,9 @@ tightening it later would be a visible cross-server behaviour change.
 The sender re-offers only the failed refs next cycle. Pushes are **chunked** (400 refs per
 frame): the receiver's `ISA_MAX_BODY_KB` caps any one frame, an over-limit frame is answered
 with `413`/`body_too_large` rather than abandoned, and every client read carries a deadline —
-a hung peer costs one timeout, never a wedged loop.
+a hung peer costs one timeout, never a wedged loop. Reaching a peer has its own, shorter budget
+(10s): a dial either completes in seconds or the peer is offline, and an offline owner must make
+the member's uncached photos fail closed to their stubs in seconds, not after QUIC's ~45s give-up.
 
 ## How this protocol evolves
 

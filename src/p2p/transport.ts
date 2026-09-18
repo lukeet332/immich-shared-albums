@@ -13,15 +13,18 @@ export const SERVED_ALPNS = [PROTOCOL_ALPN];
 /** Reject a hung request instead of blocking a sync loop forever — a v0-style peer that
  *  abandons a stream mid-request must cost one timeout, not a wedged process. */
 const DEADLINE_MS = 120_000;
-const withDeadline = <T>(p: Promise<T>, what: string): Promise<T> => {
+/** Reaching a peer is a different budget from streaming a body. A dial either completes in a
+ *  few seconds (direct, hole-punched, or via the relay) or the peer is not there; QUIC's own
+ *  give-up is ~45s and the stream deadline above is two minutes, and until this existed an
+ *  OFFLINE owner made every uncached photo hang in the member's Immich for that long before
+ *  the local stub was served. The byte path fails closed to the stub in seconds instead. */
+const DIAL_DEADLINE_MS = 10_000;
+const withDeadline = <T>(p: Promise<T>, what: string, ms = DEADLINE_MS): Promise<T> => {
   let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
     p.finally(() => clearTimeout(timer)),
     new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`${what} timed out after ${DEADLINE_MS / 1000}s`)),
-        DEADLINE_MS
-      );
+      timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms / 1000}s`)), ms);
     }),
   ]);
 };
@@ -215,7 +218,7 @@ async function connectionFor(peer: Peer): Promise<any> {
 async function roundTrip(peer: Peer, header: FrameHeader, body: Buffer) {
   if (!endpoint) throw new Error('transport not started');
   try {
-    const conn = await withDeadline(connectionFor(peer), `dial to "${peer.name}"`);
+    const conn = await withDeadline(connectionFor(peer), `dial to "${peer.name}"`, DIAL_DEADLINE_MS);
     const bi = await conn.openBi();
     await bi.send.writeAll(lenPrefixed(Buffer.from(JSON.stringify(header))));
     await bi.send.writeAll(lenPrefixed(body));
