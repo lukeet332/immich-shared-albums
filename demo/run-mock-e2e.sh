@@ -62,28 +62,34 @@ DKEY=$(grep -m1 "^D_API_KEY=" .env | cut -d= -f2-)
 
 # Redeploy the sidecar, purge its Immich, reset its state — for one household, in a subshell so
 # the cd is contained (purge reads state.db RELATIVE to the compose dir).
+# Compose output is kept (prefixed per household) rather than discarded: a redeploy that fails
+# here used to be invisible, and the run then died later with a message about something else.
 redeploy() { # redeploy <compose-dir> <service> <immich-url> <admin-key> <state-dir>
   (
-    cd "$1" && docker compose up -d --force-recreate "$2" >/dev/null 2>&1
+    cd "$1" && docker compose up -d --force-recreate "$2" 2>&1 | sed "s/^/  [$2] /"
     purge "$3" "$4" "$5"
     reset_state "$1" "$2"
   )
 }
 # The three households are independent stacks on separate ports and separate compose projects,
-# so they redeploy at once: the wall is the slowest one, not the sum (~30s -> ~12s in CI).
+# so they redeploy at once: the wall is the slowest one, not the sum.
 echo "== redeploy + purge B, C, D (in parallel) =="
 redeploy "$DIR/demo" sidecar-b http://localhost:2284 "$BKEY" b-sidecar &
 redeploy "$DIR/demo/household-c" sidecar-c http://localhost:2285 "$CKEY" c-sidecar &
 redeploy "$DIR/demo/household-d" sidecar-d http://localhost:2286 "$DKEY" d-sidecar &
 wait
-# The reset restarts each sidecar from nothing; the preflight below reads the state.db a booting
-# sidecar has not created yet. The sidecar opens its store at import, before it listens, so
-# "health answers" is also "that file exists" — wait on that, bounded, instead of a sleep that
-# only ever passed because the sequential redeploys gave B a head start.
-for port in 8301 8302 8303; do
+# The reset restarts each sidecar from nothing; the preflight below reads a state.db a booting
+# sidecar may not have created yet. The sidecar opens its store at import, before it listens, so
+# "health answers" is also "that file exists" — wait on that, bounded, rather than on a sleep.
+# On failure, say what the containers were actually doing instead of guessing later.
+for pair in "8301:$DIR/demo:sidecar-b" "8302:$DIR/demo/household-c:sidecar-c" "8303:$DIR/demo/household-d:sidecar-d"; do
+  port=${pair%%:*}; rest=${pair#*:}; cdir=${rest%:*}; svc=${rest##*:}
   for i in $(seq 1 60); do curl -sf "http://localhost:$port/immich-shared-albums/health" >/dev/null && break; sleep 1; done
-  curl -sf "http://localhost:$port/immich-shared-albums/health" >/dev/null \
-    || { echo "  !! sidecar on :$port did not come up after the reset — aborting before the suite"; exit 1; }
+  if ! curl -sf "http://localhost:$port/immich-shared-albums/health" >/dev/null; then
+    echo "  !! $svc on :$port did not come up after the reset — aborting before the suite"
+    ( cd "$cdir" && docker compose ps -a && docker compose logs --tail 40 "$svc" ) 2>&1 | sed 's/^/     /'
+    exit 1
+  fi
 done
 
 # Fail fast on a rig that did not actually reset. A stale state.db carries bot keys whose
