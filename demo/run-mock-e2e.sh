@@ -76,7 +76,15 @@ redeploy "$DIR/demo" sidecar-b http://localhost:2284 "$BKEY" b-sidecar &
 redeploy "$DIR/demo/household-c" sidecar-c http://localhost:2285 "$CKEY" c-sidecar &
 redeploy "$DIR/demo/household-d" sidecar-d http://localhost:2286 "$DKEY" d-sidecar &
 wait
-sleep 4
+# The reset restarts each sidecar from nothing; the preflight below reads the state.db a booting
+# sidecar has not created yet. The sidecar opens its store at import, before it listens, so
+# "health answers" is also "that file exists" — wait on that, bounded, instead of a sleep that
+# only ever passed because the sequential redeploys gave B a head start.
+for port in 8301 8302 8303; do
+  for i in $(seq 1 60); do curl -sf "http://localhost:$port/immich-shared-albums/health" >/dev/null && break; sleep 1; done
+  curl -sf "http://localhost:$port/immich-shared-albums/health" >/dev/null \
+    || { echo "  !! sidecar on :$port did not come up after the reset — aborting before the suite"; exit 1; }
+done
 
 # Fail fast on a rig that did not actually reset. A stale state.db carries bot keys whose
 # Immich accounts the purge already deleted, and every later assertion then fails with
