@@ -123,3 +123,43 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
     pattern IS the evidence, dispatch the workflow with `fail_fast=0` or run locally with
     `E2E_FAIL_FAST=0`; a local run defaults to running everything.
 
+## Running the rig on a host that also runs a real Immich
+
+The rig is destructive by design — `purge()` force-deletes every album, bot user and asset it can
+see — so it is built to be **incapable of aiming that at anything but its own mocks**, even on a
+machine where a real Immich (or a real sidecar) is listening. Four layers, and all of them are in
+the repo rather than in anyone's host config:
+
+1. **The address map is one set of variables**, read by the composes, `run-mock-e2e.sh`, the suite
+   and the browser lane alike: `PORT_IMMICH_{B,C,D}` (defaults `2284–2286`), `PORT_SIDECAR_{B,C,D}`
+   (`8301–8303`) and `RIG_BIND` (`127.0.0.1`). Put a host's map in a file **outside the repo** and
+   `source` it before running:
+
+   ```bash
+   # ~/rig.env — never inside the repo
+   export PORT_IMMICH_B=2384 PORT_IMMICH_C=2385 PORT_IMMICH_D=2386
+   export PORT_SIDECAR_B=9381 PORT_SIDECAR_C=9382 PORT_SIDECAR_D=9383
+   source ~/rig.env && bash demo/run-mock-e2e.sh
+   ```
+
+   Host ports bind to loopback: the mocks carry a known admin password. `RIG_BIND=0.0.0.0` opens
+   them to the LAN for phone testing. Nothing inside the rig depends on host ports — sidecars
+   reach each other by container name on the `isa-demo` network and joins carry an iroh endpoint
+   token — so the map can move freely.
+2. **`require_mock` runs before every purge.** It resolves the port the purge is about to hit to
+   the container publishing it and refuses (exit 2, nothing deleted) unless that container's
+   `com.docker.compose.project` label is one of the rig's projects (`RIG_PROJECTS`, default
+   `household-b household-c household-d` — the `name:` in the compose files). It keys on the
+   **label, not the port**, so a wrong port stops at the check. Never work around a refusal by
+   pointing the map at another host.
+3. **The suite's one name-addressed destructive verb** — the kill test's `docker kill`/`start` —
+   checks the same label before acting (`rigOwns`), and reports it as a check. Every other compose
+   verb runs inside a rig compose directory and is project-scoped by construction.
+4. **One run at a time** (a lock at `$RIG_LOCK`, default `/tmp/immich-shared-albums-rig.lock`),
+   and **the image is labelled with the commit it was built from**, so `SKIP_BUILD=1` prints what
+   it is really testing and warns when that is not `HEAD`.
+
+Before trusting the rig on such a host: run it once, then confirm the real containers' `StartedAt`
+and `RestartCount` did not change (`docker inspect -f '{{.State.StartedAt}} {{.RestartCount}}'`),
+and try `require_mock` by hand against a real port — it must refuse.
+
