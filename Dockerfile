@@ -10,7 +10,10 @@ COPY src/ ./
 RUN mkdir -p /data && chown node:node /data
 USER node
 VOLUME /data
+# 8300/tcp is the addon's HTTP front; 8300/udp is the peer transport (ISA_P2P_PORT), fixed so
+# linked servers can find this one again after a restart without waiting on a relay.
 EXPOSE 8300
+EXPOSE 8300/udp
 # Lets `depends_on: condition: service_healthy` work for anything composed in front of the addon.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD wget -qO- "http://127.0.0.1:${ISA_PORT:-8300}/immich-shared-albums/health" || exit 1
