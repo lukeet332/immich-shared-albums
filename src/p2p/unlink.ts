@@ -18,7 +18,7 @@
  *    re-link from misreading a leftover membership as a fresh invitation.
  */
 import { CFG, log, BOT_PREFIX } from '../config.ts';
-import { state, save, store } from '../state.ts';
+import { state, save, store, unlinking } from '../state.ts';
 import { immichJson } from '../immich/client.ts';
 import { forgetOffered } from './entitlement.ts';
 import { leaveAlbum } from '../sync/leave.ts';
@@ -30,7 +30,19 @@ export type UnlinkResult = {
   markersRemoved: number;
 };
 
+/** Tombstone the peer for the whole teardown: a materialisation already in flight for this peer
+ *  must not re-provision one of the accounts being deleted below (see state.peerIsLinked). The
+ *  peer record itself stays until the end because leaveAlbum still needs it to notify the origin. */
 export async function unlinkPeer(pub: string): Promise<UnlinkResult> {
+  unlinking.add(pub);
+  try {
+    return await unlinkPeerNow(pub);
+  } finally {
+    unlinking.delete(pub);
+  }
+}
+
+async function unlinkPeerNow(pub: string): Promise<UnlinkResult> {
   const peer = state.peers.find(p => p.pub === pub);
   if (!peer) throw new Error('unknown household');
   const household = peer.name;
