@@ -46,26 +46,47 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
 2. **Never shorten a timeout.** Timeouts are hang guards that must essentially never fire;
    shortening one converts a clear assertion failure into a timeout. Shrink the *interval*, leave
    the *budget*.
-3. **Wait on convergence, not on a clock.** The sidecar records its cursors only after a clean
+3. **A wait ends when the sidecar says that work finished, not when a poll notices.** Every sidecar
+   POSTs what it did to `ISA_TEST_CALLBACK` (`src/events.ts`, gated by `ISA_TEST_HOOKS`), and
+   `waitForEvent` resolves on delivery. A test names one sidecar, one event type and one album —
+   `event(side, type, albumId)` — because it knows which of those acts and what it emits; a
+   wildcard or a predicate is guessing at which signal means done. `settle(side, type, albumId)`
+   adds a `POST /immich-shared-albums/sync/run` first, which is what takes timer-driven work
+   (comment sync, invitation poll) off its interval.
+4. **A wait must not match an event older than the action that caused it.** A wait reads the
+   emitter's current `seq` before it triggers and matches only what follows (`lastEventSeq` in
+   `event-listen.mjs`), so a pass already in flight counts and an earlier one cannot. An
+   observational wait (`noTrigger`) has no such marker, so it passes `afterTs` and refuses events
+   stamped before it began, with `CLOCK_SKEW_MS` covering container/host clock skew. `seq` counts
+   from zero in **each** sidecar, so every counter in `event-listen.mjs` is keyed by `source`; one
+   counter across three emitters silently discards the quieter ones.
+5. **Polling is still correct for absence, and only for absence.** "The mirror is gone", "the panel
+   no longer lists the server", "the `/invitations` contract stopped offering it" — a removal the
+   subject does not announce is read until it is true. Everything that a sidecar *does* has an
+   event, so `until()` is no longer the default way to wait for work.
+6. **Wait on convergence, not on a clock.** The sidecar records its cursors only after a clean
    pass, and `sync/status.ts` exposes that as `settled` plus a cycle count — so a wait can end when
    the work ends instead of after a guess. Peers can ask the same question over
    `GET /albums/:mappingId/status` (feature `sync-status`; a 404 means an older peer — wait instead).
-4. **The rig's poll interval is the dominant cost.** Every convergence wait is quantised by
-   `ISA_SYNC_POLL_MS`, which is why the demo stacks set it low (`4000`) rather than the production
-   default. Measured: dropping it from 15s saved more than shortening every test-side poll, because
-   the waits end at the *system's* cadence, not the test's.
-5. **Poll frequently, assert invariantly.** `E2E_POLL_MS` (default 1000) only controls how often we
-   look; it cannot make a test pass that would otherwise fail.
-6. **If a wait times out, fix the wait — not the timeout.** A timeout means either the interval is
+7. **A wait that ends on an event is bounded by the poll interval only if it does not trigger.** The
+   rig still stacks `ISA_SYNC_POLL_MS` low (`4000`, against the production default) because a
+   purely observational wait ends at the *system's* next tick. `settle()` is what removes that
+   quantisation: it asks for a pass (`POST /immich-shared-albums/sync/run`) and the timers are
+   untouched, so the wait ends when the work does. A full profile is printed with `E2E_PROFILE=1`.
+8. **An event is the sidecar's half, never Immich's.** `settled` means the sidecar finished;
+   `exifInfo`, profile images and generated previews are Immich's own async work. Where a check
+   reads those, wait on the event first and then read the property — do not assume the sample
+   taken at the event is final.
+9. **If a wait times out, fix the wait — not the timeout.** A timeout means either the interval is
    too coarse, the hold period too short, or there is a real convergence bug. Raising the number
    hides all three.
-7. **Verify speed changes with repeat runs.** Three consecutive green runs, compared against a
-   recorded per-stage baseline, is the bar for landing anything here — and check the image ID
-   changed, since `run-mock-e2e.sh` continues past a failed `docker build` and will happily test
-   stale code.
-8. **An external probe must not be able to kill the run.** `irohProbe` spawns a container and does
-   a live round trip, so it can fail transiently — the native addon has exited on SIGBUS mid-run.
-   It retries once and then reports a status the check can fail on, because a throw here aborts the
-   suite and hides every other result behind one flake. Any new out-of-process helper needs the
-   same shape: bounded retry, structured failure, never an uncaught throw.
+10. **An external probe must not be able to kill the run.** `irohProbe` spawns a container and does
+    a live round trip, so it can fail transiently — the native addon has exited on SIGBUS mid-run.
+    It retries once and then reports a status the check can fail on, because a throw here aborts the
+    suite and hides every other result behind one flake. Any new out-of-process helper needs the
+    same shape: bounded retry, structured failure, never an uncaught throw.
+11. **Verify speed changes with repeat runs.** Three consecutive green runs, compared against a
+    recorded per-stage baseline, is the bar for landing anything here — and check the image ID
+    changed, since `run-mock-e2e.sh` continues past a failed `docker build` and will happily test
+    stale code.
 

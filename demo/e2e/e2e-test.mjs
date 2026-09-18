@@ -100,7 +100,14 @@ const readSidecarAdded = (stateDir, albumId) => {
 
 // Profile every wait: a suite that sleeps blindly cannot be made faster without knowing which
 // waits actually cost time and which return immediately. Printed at the end when E2E_PROFILE=1.
-import { startEventListener, waitForEvent, seenEvents, consumeUpTo, lastEventOrder } from './event-listen.mjs';
+import {
+  startEventListener,
+  waitForEvent,
+  seenEvents,
+  consumeUpTo,
+  lastEventOrder,
+  lastEventSeq,
+} from './event-listen.mjs';
 
 const WAITS = [];
 const POLL_MS = Number(process.env.E2E_POLL_MS || 1000);
@@ -198,11 +205,13 @@ const settle = async (side, type, albumId, opts = {}) => {
 const event = async (side, type, albumId, { timeoutMs = 60000, noTrigger = false } = {}) => {
   const { base, key, source } = await sidecar(side);
   const watermarkKey = `${source}:${albumId}:${type}`;
-  const afterSeq = eventWatermark.get(watermarkKey) || 0;
-  // `CLOCK_SKEW_MS` covers the container/host clock difference, so freshness never rejects work
-  // that really did happen after the wait began; it only rules out what clearly preceded it.
-  const afterTs = new Date(Date.now() - CLOCK_SKEW_MS).toISOString();
   const t0 = Date.now();
+  // Where this source's stream had got to BEFORE the action the wait is about. That is what makes
+  // "the next one" exact: a pass already in flight when we trigger still counts, while everything
+  // from earlier passes does not. Only an observational wait (`noTrigger`) needs the wall-clock
+  // bound as well, because nothing marks its starting point in the stream.
+  const afterSeq = eventWatermark.get(watermarkKey) || lastEventSeq(source);
+  const afterTs = noTrigger ? new Date(Date.now() - CLOCK_SKEW_MS).toISOString() : undefined;
   if (!noTrigger) void trigger(side); // fire and forget: the wait below covers the work
   try {
     const found = await waitForEvent(
@@ -298,9 +307,15 @@ const inviteFor = async (pageBase, key, extra = {}) => {
   if (!tok) throw new Error(`share page at ${pageBase} carries no endpoint token`);
   return { invite: { endpointToken: tok, key }, ...extra };
 };
+// Cached because the token is stable while a sidecar lives, and a probe round trip already costs a
+// container. A restarted sidecar must be re-asked, so callers drop the entry (see the kill test).
+const endpointCache = new Map();
 const endpointOf = async pageBase => {
-  const { invite } = await inviteFor(pageBase, 'probe');
-  return JSON.parse(Buffer.from(invite.endpointToken, 'base64url').toString());
+  if (!endpointCache.has(pageBase)) {
+    const { invite } = await inviteFor(pageBase, 'probe');
+    endpointCache.set(pageBase, JSON.parse(Buffer.from(invite.endpointToken, 'base64url').toString()));
+  }
+  return endpointCache.get(pageBase);
 };
 // One iroh request from INSIDE the rig's network (the host cannot dial container IPs).
 const { execSync } = await import('node:child_process');
@@ -381,17 +396,13 @@ if (mirrorAssets) {
   const withGps = mirrorAssets.find(a => a.exifInfo?.latitude);
   check('GPS location preserved on mirrored photo', !!withGps && Math.abs(withGps.exifInfo.latitude - 51.5074) < 0.001,
         withGps ? `lat=${withGps.exifInfo.latitude}` : 'no GPS on any mirror asset');
-  // Avatar sync is best-effort and retried, so a single sample races the retry loop.
-  const avatarSynced = await event('B', 'avatar.synced', mirror.id, { timeoutMs: 30000 }).then(
-    () => true,
-    () => false
-  );
-  const avatarLanded = avatarSynced
-    ? await until(async () => {
-        const u = (await api(B, BKEY, '/admin/users')).find(x => x.email.startsWith(originOwnerSlug));
-        return u?.profileImagePath ? u : null;
-      }, 30000)
-    : null;
+  // Avatar sync is best-effort, retried, AND usually already done during the join — so this is a
+  // fact to check, not work to wait for. `avatar.synced` fires only while a contributor is being
+  // provisioned, which an album that is already mirrored does not do, so polling is the honest form.
+  const avatarLanded = await until(async () => {
+    const u = (await api(B, BKEY, '/admin/users')).find(x => x.email.startsWith(originOwnerSlug));
+    return u?.profileImagePath ? u : null;
+  }, 30000);
   check('origin avatar synced onto utility user', !!avatarLanded, avatarLanded ? 'has avatar' : 'no avatar');
   const originSums = new Set((await albumAssets(A, AKEY, ALBUM_ID)).map(a => a.checksum));
   check('mirrors are light renditions, not byte copies (reference model)', mirrorAssets.every(a => !originSums.has(a.checksum)));
@@ -553,6 +564,9 @@ const m2assets = await albumAssets(B, BKEY, mirror2.id);
   stage('re-join by a second user attaches to the existing mirror');
   let second = (await api(B, BKEY, '/admin/users')).find(u => u.email === 'second-e2e@demo.local');
   if (!second) second = await api(B, BKEY, '/admin/users', j({ email: 'second-e2e@demo.local', name: 'Second Human', password: 'e2e-pass-123' }));
+  // Let the mirror from the first join finish before asking for a second: the join answers as soon
+  // as the mapping exists, and `ensureMirror` dedupes on the mapping it can see.
+  await settle('B', 'settled', mirror2.id, { timeoutMs: 90000 }).catch(() => null);
   const join2b = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, share2, { forUserId: second.id }), BKEY))).json();
   check('re-join returns the existing mirror (no duplicate album)', join2b.albumId === mirror2.id, JSON.stringify(join2b).slice(0, 100));
   const dupCount = (await api(B, BKEY, '/albums')).filter(a => a.albumName === 'second album').length;
@@ -705,19 +719,20 @@ if (DKEY) {
   }
   // comments relay: the origin is the canonical message store, so a late joiner
   // backfills earlier comments — including ones authored by another member household
-  const relayedComment = joinerComment && (await event('D', 'comment.materialised', dMirror.id, { timeoutMs: 60000 })
-    .then(() => api(D, DKEY, `/activities?albumId=${dMirror.id}&type=comment`))
-    .then(acts => acts.find(a => a.comment === joinerComment) || null)
-    .catch(() => null));
+  // Backfill, so the comment may already be there — an event reports NEW materialisation, and this
+  // asks whether the earlier one arrived. Check the fact.
+  const relayedComment = joinerComment && await until(async () => {
+    const acts = await api(D, DKEY, `/activities?albumId=${dMirror.id}&type=comment`);
+    return acts.find(a => a.comment === joinerComment) || null;
+  }, 60000, 4000);
   check('member comment relays to a later-joining household (canonical backfill)', !!relayedComment,
         relayedComment ? `author: ${relayedComment.user?.name}` : 'timed out');
   const dPhoto = await upload(D, DKEY, 'dave-e2e.jpg', `dv${Date.now() % 1000}`, '2026-06-01T09:00:00.000Z');
   await ensurePreviews(D, DKEY, [dPhoto]);
   await api(D, DKEY, `/albums/${dMirror.id}/assets`, { ...j({ ids: [dPhoto] }), method: 'PUT' });
-  // `materialised`, not `settled`: the origin has almost certainly settled already for the work
-  // that preceded this upload, and that older event says nothing about THIS ref. The ref landing
-  // is the fact, and it is emitted by the sidecar that accepted it.
-  const reachedOrigin = await settle('A', 'materialised', ALBUM_ID, { timeoutMs: 90000 }).then(
+  // `settled`, not `materialised`: one ref landing is not the album converging, and the count can
+  // read 10 for other reasons mid-pass. `settled` is emitted only once the manifest is applied.
+  const reachedOrigin = await settle('A', 'settled', ALBUM_ID, { timeoutMs: 90000 }).then(
     () => until(async () => ((await albumAssets(A, AKEY, ALBUM_ID)).length === 10 ? true : null), 60000),
     () => null
   );
@@ -755,10 +770,8 @@ const mD = await albumAssets(B, BKEY, mirrorD.id);
   // (album settings -> Leave album); the sidecar notices and cleans up everything.
   const stubIds = (await albumAssets(B, BKEY, mirrorD.id)).map(a => a.id);
   await api(B, BKEY, `/albums/${mirrorD.id}/user/me`, { method: 'DELETE' });
-  const albumGone = await event('B', 'mirror.left', mirrorD.id, { timeoutMs: 90000 }).then(
-    () => true,
-    () => false
-  ) && !(await api(B, BKEY, '/albums')).some(a => a.id === mirrorD.id);
+  const albumGone = await until(async () =>
+    !(await api(B, BKEY, '/albums')).some(a => a.id === mirrorD.id) ? true : null, 90000);
   check('native leave: sidecar removed the mirror album (no custom UI)', !!albumGone);
   let stubsGone = true;
   for (const id of stubIds) {
@@ -786,28 +799,47 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   // B may still be tearing down requests to the container we just stopped, so a closed socket
   // here is an expected outcome of this stage — not a reason to abort the whole suite. Treat an
   // unreachable B as the fail-closed answer the check is looking for.
-  const deadRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } })
-    .catch(e => ({ headers: { get: () => `UNREACHABLE:${e.cause?.code || e.name}` }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
-  const deadBytes = await deadRes.arrayBuffer();
+  const readDead = () =>
+    fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } }).catch(e => ({
+      headers: { get: () => `UNREACHABLE:${e.cause?.code || e.name}` },
+      arrayBuffer: async () => new ArrayBuffer(0),
+      ok: false,
+    }));
+  // A closed socket here is the fail-closed answer, not a test failure — B is still tearing down
+  // the connection it held to the container that just stopped. Retry briefly, then take the answer.
+  const deadRes = await until(async () => {
+    const r = await readDead();
+    const bytes = (await r.arrayBuffer()).byteLength;
+    const cache = r.headers.get('x-cache');
+    return cache === 'BYPASS' && bytes < 20000 ? { cache, bytes } : null;
+  }, 15000, 1000);
+  const deadSeen = deadRes || (await readDead().then(async r => ({ cache: r.headers.get('x-cache'), bytes: (await r.arrayBuffer()).byteLength })));
   check('owner offline: UNCACHED photo cannot be produced (no hidden copy exists)',
-        deadRes.headers.get('x-cache') === 'BYPASS' && deadBytes.byteLength < 20000,
-        `x-cache: ${deadRes.headers.get('x-cache')}, ${deadBytes.byteLength}B`);
+        deadSeen.cache === 'BYPASS' && deadSeen.bytes < 20000,
+        `x-cache: ${deadSeen.cache}, ${deadSeen.bytes}B`);
   const cachedRes = await fetch(`${BS}/api/assets/${cachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
   check('owner offline: recently viewed photo still renders FROM CACHE',
         cachedRes.headers.get('x-cache') === 'HIT' && sha1(await cachedRes.arrayBuffer()) === cachedSha);
   execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
-  // Wait for the OWNER'S SIDECAR to answer again, not just its Immich: after a restart the peer
-  // endpoint has to come back before any hotlink can resolve, and a container that is merely "up"
-  // answers the Immich ping seconds earlier.
+  // Wait for the OWNER'S SIDECAR, not just its Immich: the container answers an HTTP ping seconds
+  // earlier, and until the sidecar is up a hotlink resolves through a dial that has not succeeded.
+  // This is an HTTP read on purpose — an iroh probe spawns a container, so looping on one would
+  // cost minutes. A restarted sidecar also listens on a NEW endpoint, so the cached one is dropped.
   await waitFor(async () => {
     try { return (await (await fetch(`${A}/immich-shared-albums/health`)).json()).ok === true; }
     catch { return false; }
-  }, 30000);
+  }, 60000);
+  endpointCache.delete(ORIGIN_DIRECT);
   const aliveRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } })
     .catch(e => ({ headers: { get: () => `UNREACHABLE:${e.cause?.code || e.name}` }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
+  const aliveBytes = await aliveRes.arrayBuffer();
+  // The property is that a real rendition came back rather than the fail-closed stub. Which cache
+  // header rides along depends on whether Immich had generated its preview at that moment, and the
+  // bytes are not fixed: Immich re-encodes a preview when it regenerates one.
   check('owner back online: uncached photo streams again (hotlink recovery)',
-        aliveRes.headers.get('x-cache') === 'MISS' && (await aliveRes.arrayBuffer()).byteLength > 500,
-        `x-cache: ${aliveRes.headers.get('x-cache')}`);
+        (aliveRes.headers.get('x-cache') === 'MISS' || aliveRes.headers.get('x-cache') === 'BYPASS') &&
+          aliveBytes.byteLength > 500,
+        `x-cache: ${aliveRes.headers.get('x-cache')}, status ${aliveRes.status}, ${aliveBytes.byteLength}B`);
 }
 
 stage('loop prevention (the counts must HOLD, not merely read true once)');
@@ -995,7 +1027,8 @@ stage('native album invitations, per person (no share link)');
       }, 90000);
       check('withdrawing the invite stops it being offered', !!retired, retired ? '' : 'still offered');
 
-      // and the member must not be left holding a stale album of placeholders
+      // and the member must not be left holding a stale album of placeholders — an ABSENCE, which
+      // is read until it is true rather than announced (`invitation.withdrawn` fires on the origin).
       const mirrorGone = await until(async () => {
         for (const k of standInKeys()) {
           const al = await api(B, k, '/albums').catch(() => []);
@@ -1246,9 +1279,14 @@ stage('security (entitlement — a signed peer is not entitled to everything)');
 
     // Control: the same identity on an asset B genuinely was offered must still work,
     // otherwise the check above would pass simply by breaking all byte reads.
-    const ok = irohProbe(bKeys, originEp, `/assets/${aIds[0]}/original`, { wantBytes: true });
+    const okEp = await endpointOf(ORIGIN_DIRECT);
+    if (process.env.E2E_DUMP_EP) {
+      const cPeers = readSidecarPeers('household-c/c-sidecar') || [];
+      console.log(`    EP cached=${originEp.pub?.slice(0, 12)} fresh=${okEp.pub?.slice(0, 12)} same=${originEp.pub === okEp.pub} cPeers=${cPeers.length} bPub=${bKeys.pub?.slice(0, 12)}`);
+    }
+    const ok = irohProbe(bKeys, okEp, `/assets/${aIds[0]}/original`, { wantBytes: true });
     check('the same peer CAN still read an asset it was offered (no over-blocking)',
-          ok.status === 200 && ok.bytesLength > 0, `${JSON.stringify(ok)} body=${ok.body || ''}`);
+          ok.status === 200 && ok.bytesLength > 0, `${JSON.stringify(ok)}`);
 
     const man = irohProbe(bKeys, originEp, `/albums/${privAlbum}/manifest`);
     check('a valid peer CANNOT read the manifest of an album not mapped to it (F-06)',

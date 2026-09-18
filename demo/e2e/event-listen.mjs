@@ -143,3 +143,5 @@ export function consumeUpTo(order) {
 
 export const seenEvents = () => seen.slice();
 export const lastEventOrder = () => eventsAccepted;
+/** Where `source`'s stream had got to, so a caller can trigger work and match only what follows. */
+export const lastEventSeq = source => lastSeqBySource.get(source) || 0;
