@@ -6,6 +6,7 @@
 import crypto from 'node:crypto';
 import { CFG, log, UTILITY_SUFFIX, UTILITY_EMAIL_DOMAIN, BOT_PREFIX } from '../config.ts';
 import { state, save, addedRecord } from '../state.ts';
+import { emit } from '../events.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
 import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 
@@ -208,8 +209,11 @@ export async function ensureUtilityUser(
   );
   return c;
 }
+/** Whether an avatar is in place for this contributor — already true is still true, because the
+ *  question a caller asks is "is there one", not "did this call put it there". */
 export async function syncAvatar(c, peer, originUserId) {
-  if (!peer || !originUserId || c.avatarDone) return;
+  if (!peer || !originUserId) return false;
+  if (c.avatarDone) return true;
   try {
     const av = await peerByteRequest(peer, `/users/${originUserId}/avatar`);
     if (av.status < 400) {
@@ -217,7 +221,7 @@ export async function syncAvatar(c, peer, originUserId) {
       let got = 0;
       for await (const chunk of recvIterable(av.recv)) {
         got += chunk.length;
-        if (got > 8 * 1024 * 1024) return; // an avatar is not 8MB — refuse, retry never
+        if (got > 8 * 1024 * 1024) return false; // an avatar is not 8MB — refuse, retry never
         chunks.push(chunk);
       }
       const fd = new FormData();
@@ -234,13 +238,16 @@ export async function syncAvatar(c, peer, originUserId) {
         body: fd,
       });
       if (put.ok) {
+        // Only stop retrying once an avatar actually landed.
         c.avatarDone = true;
         save();
-      } // only stop retrying once an avatar actually landed
+        return true;
+      }
     }
   } catch {
     /* avatars are garnish */
   }
+  return false;
 }
 /**
  * The remote person's local account, present in the album so it can own their photos.
@@ -284,7 +291,8 @@ export async function ensureContributor(
     email: `${BOT_PREFIX.person}${originUserId}@${UTILITY_EMAIL_DOMAIN}`,
   });
   if (!c.apiKey) throw new Error(`contributor "${displayName}" has no API key yet — will retry`);
-  await syncAvatar(c, peer, originUserId);
+  if (await syncAvatar(c, peer, originUserId))
+    emit('avatar.synced', { albumId, detail: { contributor: c.userId } });
 
   let alreadyMember = false;
   try {

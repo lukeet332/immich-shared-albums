@@ -14,6 +14,7 @@ import type { Mapping, Peer } from '../store.ts';
 import { state, save } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
 import { ensureUtilityUser, syncAvatar } from '../immich/contributors.ts';
+import { emit } from '../events.ts';
 import { reconcileMapping } from '../sync/engine.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
@@ -55,7 +56,6 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     stateKey: hostSlug,
     email: `${hostSlug}@${UTILITY_EMAIL_DOMAIN}`,
   });
-  await syncAvatar(host, peer, req.albumOwnerId);
 
   // Vanilla parity: a view-only share makes local humans VIEWERS, exactly as Immich's own
   // no-upload share links do — an editor role here would let them add photos that silently
@@ -130,6 +130,10 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
   };
   state.mappings.push(mapping);
   save();
+  // After the mapping, not before it: the event names the LOCAL mirror album, which does not
+  // exist until here, and the caller is watching for it from the moment the join returns.
+  if (await syncAvatar(host, peer, req.albumOwnerId))
+    emit('avatar.synced', { mappingId: mapping.id, albumId: mapping.albumId });
   return { mapping, created: true };
 }
 

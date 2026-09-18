@@ -35,15 +35,25 @@ const matches = (event, type, filter) =>
   (!filter.mappingId || event.mappingId === filter.mappingId) &&
   (!filter.source || event.source === filter.source);
 
-const dispatch = event => {
+/** An event newer than the action that is meant to cause it.
+ *
+ *  A per-source watermark only proves an event is newer than the last one THIS listener looked at.
+ *  An album that has already converged emits an earlier `settled` for work the test is not waiting
+ *  on, and matching it is a false pass that reads pre-work state — so a wait carries the wall-clock
+ *  moment it was issued and refuses anything older. */
+const isFresh = (event, afterTs) => !afterTs || !event.ts || event.ts >= afterTs;
+
+const dispatch = (event, durableAfter) => {
   if (typeof event?.seq !== 'number' || !event.source) return;
+  if (durableAfter && !isFresh(event, durableAfter)) return;
   const highWater = lastSeqBySource.get(event.source) || 0;
   if (event.seq <= highWater) return; // duplicate: push and replay overlap
   lastSeqBySource.set(event.source, event.seq);
   seen.push({ ...event, order: ++eventsAccepted });
   for (let i = waiters.length - 1; i >= 0; i--) {
-    if (matches(event, waiters[i].type, waiters[i].filter) && event.seq > waiters[i].afterSeq) {
-      waiters[i].resolve(event);
+    const w = waiters[i];
+    if (matches(event, w.type, w.filter) && event.seq > w.afterSeq && isFresh(event, w.afterTs)) {
+      w.resolve(event);
       waiters.splice(i, 1);
     }
   }
@@ -73,8 +83,12 @@ export function startEventListener() {
  *  had got to when the test last looked, so a wait means "the NEXT one", not "any one ever".
  *  `catchUp` names that source's own HTTP endpoint, so a missed delivery is replayed rather than
  *  waited out; passing the wrong sidecar there would replay a different stream under this key. */
-export function waitForEvent(type, filter = {}, { timeoutMs = 30000, catchUp, everyMs = 250, afterSeq = 0 } = {}) {
-  const already = seen.find(e => matches(e, type, filter) && e.seq > afterSeq);
+export function waitForEvent(
+  type,
+  filter = {},
+  { timeoutMs = 30000, catchUp, everyMs = 250, afterSeq = 0, afterTs } = {}
+) {
+  const already = seen.find(e => matches(e, type, filter) && e.seq > afterSeq && isFresh(e, afterTs));
   if (already) return Promise.resolve(already);
 
   return new Promise((resolve, reject) => {
@@ -83,6 +97,7 @@ export function waitForEvent(type, filter = {}, { timeoutMs = 30000, catchUp, ev
       type,
       filter,
       afterSeq,
+      afterTs,
       resolve: event => {
         clearInterval(replayTimer);
         clearTimeout(deadline);
@@ -98,7 +113,7 @@ export function waitForEvent(type, filter = {}, { timeoutMs = 30000, catchUp, ev
           const r = await fetch(`${catchUp.base}/immich-shared-albums/events?since=${since}`, {
             headers: { 'x-api-key': catchUp.key },
           });
-          if (r.ok) for (const e of (await r.json()).events || []) dispatch(e);
+          if (r.ok) for (const e of (await r.json()).events || []) dispatch(e, afterTs);
         } catch {
           /* the next tick tries again */
         }

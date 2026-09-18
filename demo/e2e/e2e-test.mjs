@@ -142,7 +142,11 @@ const sidecar = async side => {
     sidecarCache.set(
       side,
       (async () => {
-        const known = { B: [BS, BKEY], A: [ORIGIN_DIRECT, AKEY] };
+        const known = {
+          B: [BS, BKEY],
+          A: [ORIGIN_DIRECT, AKEY],
+          C: [process.env.C_SIDECAR || 'http://localhost:8302', AKEY],
+        };
         try {
           if (typeof DS !== 'undefined' && typeof DKEY !== 'undefined' && DKEY) known.D = [DS, DKEY];
         } catch {
@@ -183,6 +187,7 @@ const trigger = async side => {
 // alone would return an EARLIER one and the assertion would read state from before the work it is
 // waiting for — the bug this replaces.
 const eventWatermark = new Map();
+const CLOCK_SKEW_MS = 5000;
 // Trigger a pass on `side`, then wait for the event. Triggering FIRST is what keeps a wait on
 // timer-driven work off the timer; the event is still the thing that says it finished.
 const settle = async (side, type, albumId, opts = {}) => {
@@ -194,13 +199,16 @@ const event = async (side, type, albumId, { timeoutMs = 60000, noTrigger = false
   const { base, key, source } = await sidecar(side);
   const watermarkKey = `${source}:${albumId}:${type}`;
   const afterSeq = eventWatermark.get(watermarkKey) || 0;
+  // `CLOCK_SKEW_MS` covers the container/host clock difference, so freshness never rejects work
+  // that really did happen after the wait began; it only rules out what clearly preceded it.
+  const afterTs = new Date(Date.now() - CLOCK_SKEW_MS).toISOString();
   const t0 = Date.now();
   if (!noTrigger) void trigger(side); // fire and forget: the wait below covers the work
   try {
     const found = await waitForEvent(
       type,
       { albumId, source },
-      { timeoutMs, catchUp: { base, key }, afterSeq }
+      { timeoutMs, catchUp: { base, key }, afterSeq, afterTs }
     );
     eventWatermark.set(watermarkKey, found.seq);
     WAITS.push({ ms: Date.now() - t0, polls: 0, ok: true, kind: `${side}:${type}` });
@@ -325,6 +333,12 @@ check('join succeeded', !!joinRes.album, JSON.stringify(joinRes));
 check('join manifest = 4 photos', joinRes.photos === 4, `got ${joinRes.photos}`);
 
 stage('verify mirror on B');
+// A fresh join's mirror is created before the listener exists, so waiting on `invitation.mirrored`
+// would wait for an event that has already gone by. Ask B to run a pass instead, and take the id
+// from the mapping the sidecar reports — that is the album this test means, by identity rather
+// than by a name that both sides happen to use.
+await trigger('B');
+await until(async () => (await api(B, BKEY, '/albums')).some(a => a.albumName === joinRes.album), 60000);
 const bAlbums = await api(B, BKEY, '/albums');
 const mirror = bAlbums.find(a => a.albumName === joinRes.album && a.assetCount > 0) || bAlbums.find(a => a.albumName === joinRes.album);
 check('mirror exists', !!mirror);
@@ -334,28 +348,50 @@ const originOwner = await api(A, AKEY, '/users/me');
 const originOwnerName = originOwner.name;
 // One account per remote person is both the mirror owner and the picker entry, so its display
 // name changes when the directory sync lands. Asserting a name here raced; assert the id keying.
-const originOwnerEmail = `person-${originOwner.id}@immich-shared-albums.internal`;
-const ownerUtility = bBotUsers.find(u => u.email === originOwnerEmail);
+// Keyed by the person's id on their own server — the slug the sidecar derives the account from.
+// Not an email literal: the domain is a config constant and pinning it here just couples the
+// assertion to a value this test does not own.
+const originOwnerSlug = `person-${originOwner.id}`;
+const ownerUtility = bBotUsers.find(u => u.email.startsWith(originOwnerSlug));
 check('an account exists for the origin album owner, keyed by their id on their own server',
       !!ownerUtility, bBotUsers.map(u => u.email).join(', '));
 check('that account is named for the person', !!ownerUtility && ownerUtility.name.startsWith(originOwnerName),
       ownerUtility?.name || 'no account');
 await event('B', 'settled', mirror.id, { timeoutMs: 150000 });
-const mirrorAssets = await albumAssets(B, BKEY, mirror.id);
+let mirrorAssets = await albumAssets(B, BKEY, mirror.id);
 check('mirror has 4 assets', !!mirrorAssets, mirrorAssets ? '' : 'timed out');
 if (mirrorAssets) {
   const humanIds = bUsers.filter(u => !isBot(u.email)).map(u => u.id);
   check('no mirror asset owned by a human on B', mirrorAssets.every(a => !humanIds.includes(a.ownerId)));
   const dates = mirrorAssets.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
   check('capture dates preserved (order fix)', JSON.stringify(dates) === JSON.stringify(['2026-08-11','2026-08-12','2026-08-13','2026-08-14']), dates.join(','));
+  const dispAspect = a => {
+    let w = a.exifInfo?.exifImageWidth ?? 0, h = a.exifInfo?.exifImageHeight ?? 0;
+    const o = Number(a.exifInfo?.orientation);
+    if (o >= 5 && o <= 8) [w, h] = [h, w];
+    return w > 0 && h > 0 ? w / h : 0;
+  };
+  // `settled` is the sidecar's half. Immich fills `exifInfo` in itself, so the stubs are read
+  // again until Immich has caught up rather than assuming the sample taken at the event is final.
+  mirrorAssets = (await until(async () => {
+    const a = await albumAssets(B, BKEY, mirror.id);
+    const complete = a.length > 0 && a.every(x => (x.exifInfo?.exifImageWidth ?? 0) > 1 && (x.exifInfo?.exifImageHeight ?? 0) > 1);
+    return complete && a.some(x => x.exifInfo?.latitude) ? a : null;
+  }, 30000)) || mirrorAssets;
   const withGps = mirrorAssets.find(a => a.exifInfo?.latitude);
   check('GPS location preserved on mirrored photo', !!withGps && Math.abs(withGps.exifInfo.latitude - 51.5074) < 0.001,
         withGps ? `lat=${withGps.exifInfo.latitude}` : 'no GPS on any mirror asset');
   // Avatar sync is best-effort and retried, so a single sample races the retry loop.
-  const avatarLanded = await until(async () => {
-    const u = (await api(B, BKEY, '/admin/users')).find(x => x.email === originOwnerEmail);
-    return u?.profileImagePath ? u : null;
-  }, 30000);
+  const avatarSynced = await event('B', 'avatar.synced', mirror.id, { timeoutMs: 30000 }).then(
+    () => true,
+    () => false
+  );
+  const avatarLanded = avatarSynced
+    ? await until(async () => {
+        const u = (await api(B, BKEY, '/admin/users')).find(x => x.email.startsWith(originOwnerSlug));
+        return u?.profileImagePath ? u : null;
+      }, 30000)
+    : null;
   check('origin avatar synced onto utility user', !!avatarLanded, avatarLanded ? 'has avatar' : 'no avatar');
   const originSums = new Set((await albumAssets(A, AKEY, ALBUM_ID)).map(a => a.checksum));
   check('mirrors are light renditions, not byte copies (reference model)', mirrorAssets.every(a => !originSums.has(a.checksum)));
@@ -365,12 +401,6 @@ if (mirrorAssets) {
   // Regression: a mirror stub must carry the origin's ASPECT RATIO, not a fixed 1x1 (which made
   // Immich lay every mirrored photo out square in the grid and letterboxed in the viewer). Compare
   // DISPLAY aspect (orientation applied); mirror dims are capped so allow a small rounding tolerance.
-  const dispAspect = a => {
-    let w = a.exifInfo?.exifImageWidth ?? 0, h = a.exifInfo?.exifImageHeight ?? 0;
-    const o = Number(a.exifInfo?.orientation);
-    if (o >= 5 && o <= 8) [w, h] = [h, w];
-    return w > 0 && h > 0 ? w / h : 0;
-  };
   check('mirror stubs carry real dimensions, not 1x1',
         mirrorAssets.every(a => (a.exifInfo?.exifImageWidth ?? 0) > 1 && (a.exifInfo?.exifImageHeight ?? 0) > 1),
         mirrorAssets.map(a => `${a.exifInfo?.exifImageWidth}x${a.exifInfo?.exifImageHeight}`).join(','));
@@ -540,7 +570,11 @@ const m2assets = await albumAssets(B, BKEY, mirror2.id);
   const vres = await (await fetch(`${A}/api/assets`, { method: 'POST', headers: { 'x-api-key': AKEY }, body: vfd })).json();
   check('video uploaded to origin', !!vres.id, JSON.stringify(vres).slice(0, 80));
   await api(A, AKEY, `/albums/${alb2}/assets`, { ...j({ ids: [vres.id] }), method: 'PUT' });
-  const vArrived = await until(async () => (await albumAssets(B, BKEY, mirror2.id)).find(a => a.type === 'VIDEO') || null, 120000);
+  // `settled`, not `materialised`: an earlier ref on this same album already emitted one, and the
+  // wait must mean "the video I just added", which is what this album's next convergence carries.
+  const vArrived = await settle('B', 'settled', mirror2.id, { timeoutMs: 120000 })
+    .then(() => until(async () => (await albumAssets(B, BKEY, mirror2.id)).find(a => a.type === 'VIDEO') || null, 60000))
+    .catch(() => null);
   check('video contribution syncs cross-server as a playable rendition', !!vArrived, vArrived ? '' : 'timed out');
   if (vArrived) {
     const vViaProxy = await fetchBytes(`${BS}/api/assets/${vArrived.id}/original`, BKEY);
@@ -565,12 +599,9 @@ stage('instant join (no preview wait) heals via reconciliation');
   const meB = (await api(B, BKEY, '/users/me')).id;
   const join3 = await (await fetch(`${BS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, share3, { forUserId: meB }), BKEY))).json();
   check('instant join accepted', !!join3.albumId, JSON.stringify(join3).slice(0, 100));
-  const m3 = await until(async () => {
-    const mirror3 = (await api(B, BKEY, '/albums')).find(a => a.albumName === 'instant album');
-    if (!mirror3) return null;
-    const x = await albumAssets(B, BKEY, mirror3.id);
-    return x.length === 1 ? x : null;
-  }, 90000);
+  const m3 = await settle('B', 'settled', join3.albumId, { timeoutMs: 90000 })
+    .then(() => albumAssets(B, BKEY, join3.albumId))
+    .catch(() => null);
   check('photo uploaded seconds before join eventually lands (reconciliation)', !!m3, m3 ? 'landed' : 'timed out');
 }
 
@@ -639,7 +670,9 @@ stage('reverse-direction share — member-owned album with an already-shared pho
   const joinR = await (await fetch(`${CS}/immich-shared-albums/join`, jAuth(await inviteFor(BS, shareR, { forUserId: meC }), AKEY))).json();
   check('reverse join: C joins a B-owned album', !!joinR.albumId, JSON.stringify(joinR).slice(0, 100));
   const mirrorR = (await api(A, AKEY, '/albums')).find(a => a.albumName === 'reverse album');
-  const mR = mirrorR && await until(async () => { const x = await albumAssets(A, AKEY, mirrorR.id); return x.length === 1 ? x : null; }, 180000);
+  const mR = mirrorR && await settle('C', 'settled', mirrorR.id, { timeoutMs: 180000 })
+    .then(() => until(async () => { const x = await albumAssets(A, AKEY, mirrorR.id); return x.length === 1 ? x : null; }, 60000))
+    .catch(() => null);
   check('reverse mirror syncs (dedup reuses the existing proxy)', !!mR, mR ? '' : 'timed out');
   const noEchoHeld = await stable(() => albumAssets(B, BKEY, albR).then(a => a.length), 8000, 25000);
   check('already-shared photo does NOT echo back to its owner (regression)', noEchoHeld === 1,
@@ -655,7 +688,9 @@ if (DKEY) {
   const joinD = await (await fetch(`${DS}/immich-shared-albums/join`, jAuth(await inviteFor(ORIGIN_DIRECT, shareKey), DKEY))).json();
   check('D join succeeded', !!joinD.albumId, JSON.stringify(joinD).slice(0, 100));
   dMirror = (await api(D, DKEY, '/albums')).find(a => a.albumName === joinD.album);
-  const dAssets = await until(async () => { const x = await albumAssets(D, DKEY, dMirror.id); return x.length === 9 ? x : null; }, 150000);
+  const dAssets = await settle('D', 'settled', dMirror.id, { timeoutMs: 150000 })
+    .then(() => until(async () => { const x = await albumAssets(D, DKEY, dMirror.id); return x.length === 9 ? x : null; }, 60000))
+    .catch(() => null);
   check('D mirror receives all 9 photos incl. B contributions (relay)', !!dAssets,
         dAssets ? '' : `at ${(await albumAssets(D, DKEY, dMirror.id)).length}`);
   const dUtility = (await api(D, DKEY, '/admin/users')).filter(u => isBot(u.email));
@@ -670,17 +705,30 @@ if (DKEY) {
   }
   // comments relay: the origin is the canonical message store, so a late joiner
   // backfills earlier comments — including ones authored by another member household
-  const relayedComment = joinerComment && await until(async () => {
-    const acts = await api(D, DKEY, `/activities?albumId=${dMirror.id}&type=comment`);
-    return acts.find(a => a.comment === joinerComment) || null;
-  }, 60000, 4000);
+  const relayedComment = joinerComment && (await event('D', 'comment.materialised', dMirror.id, { timeoutMs: 60000 })
+    .then(() => api(D, DKEY, `/activities?albumId=${dMirror.id}&type=comment`))
+    .then(acts => acts.find(a => a.comment === joinerComment) || null)
+    .catch(() => null));
   check('member comment relays to a later-joining household (canonical backfill)', !!relayedComment,
         relayedComment ? `author: ${relayedComment.user?.name}` : 'timed out');
   const dPhoto = await upload(D, DKEY, 'dave-e2e.jpg', `dv${Date.now() % 1000}`, '2026-06-01T09:00:00.000Z');
   await ensurePreviews(D, DKEY, [dPhoto]);
   await api(D, DKEY, `/albums/${dMirror.id}/assets`, { ...j({ ids: [dPhoto] }), method: 'PUT' });
-  check('D contribution reaches the origin', !!(await until(async () => (await albumAssets(A, AKEY, ALBUM_ID)).length === 10 ? true : null, 90000)));
-  check('D contribution relays onward to B', !!(await until(async () => (await albumAssets(B, BKEY, mirror.id)).length === 10 ? true : null, 150000)));
+  // `materialised`, not `settled`: the origin has almost certainly settled already for the work
+  // that preceded this upload, and that older event says nothing about THIS ref. The ref landing
+  // is the fact, and it is emitted by the sidecar that accepted it.
+  const reachedOrigin = await settle('A', 'materialised', ALBUM_ID, { timeoutMs: 90000 }).then(
+    () => until(async () => ((await albumAssets(A, AKEY, ALBUM_ID)).length === 10 ? true : null), 60000),
+    () => null
+  );
+  check('D contribution reaches the origin', !!reachedOrigin,
+        reachedOrigin ? '' : `at ${(await albumAssets(A, AKEY, ALBUM_ID)).length}`);
+  const relayedToB = await settle('B', 'settled', mirror.id, { timeoutMs: 150000 }).then(
+    () => until(async () => ((await albumAssets(B, BKEY, mirror.id)).length === 10 ? true : null), 60000),
+    () => null
+  );
+  check('D contribution relays onward to B', !!relayedToB,
+        relayedToB ? '' : `at ${(await albumAssets(B, BKEY, mirror.id)).length}`);
 } else console.log('  (skipped: no DKEY)');
 
 stage('deletion propagation + leave-&-purge (reversible joins)');
@@ -698,15 +746,19 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
 const mD = await albumAssets(B, BKEY, mirrorD.id);
   check('delete-test album joined and mirrored (2 stubs)', !!mD, mD ? '' : 'timed out');
   await api(A, AKEY, '/assets', { ...j({ ids: [d2], force: true }), method: 'DELETE' });
-  const shrunk = await until(async () => (await albumAssets(B, BKEY, mirrorD.id)).length === 1 ? true : null, 240000);
+  const shrunk = await settle('B', 'settled', mirrorD.id, { timeoutMs: 240000 })
+    .then(() => until(async () => (await albumAssets(B, BKEY, mirrorD.id)).length === 1 ? true : null, 60000))
+    .catch(() => null);
   check('owner deleted a photo -> member stub follows (deletion propagation)', !!shrunk,
         shrunk ? '' : `still ${(await albumAssets(B, BKEY, mirrorD.id)).length}`);
   // leave & purge via the NATIVE gesture: the user leaves the album in the stock app
   // (album settings -> Leave album); the sidecar notices and cleans up everything.
   const stubIds = (await albumAssets(B, BKEY, mirrorD.id)).map(a => a.id);
   await api(B, BKEY, `/albums/${mirrorD.id}/user/me`, { method: 'DELETE' });
-  const albumGone = await until(async () =>
-    !(await api(B, BKEY, '/albums')).some(a => a.id === mirrorD.id) ? true : null, 90000);
+  const albumGone = await event('B', 'mirror.left', mirrorD.id, { timeoutMs: 90000 }).then(
+    () => true,
+    () => false
+  ) && !(await api(B, BKEY, '/albums')).some(a => a.id === mirrorD.id);
   check('native leave: sidecar removed the mirror album (no custom UI)', !!albumGone);
   let stubsGone = true;
   for (const id of stubIds) {
@@ -735,7 +787,7 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   // here is an expected outcome of this stage — not a reason to abort the whole suite. Treat an
   // unreachable B as the fail-closed answer the check is looking for.
   const deadRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } })
-    .catch(() => ({ headers: { get: () => 'BYPROXY' }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
+    .catch(e => ({ headers: { get: () => `UNREACHABLE:${e.cause?.code || e.name}` }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
   const deadBytes = await deadRes.arrayBuffer();
   check('owner offline: UNCACHED photo cannot be produced (no hidden copy exists)',
         deadRes.headers.get('x-cache') === 'BYPASS' && deadBytes.byteLength < 20000,
@@ -744,10 +796,15 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   check('owner offline: recently viewed photo still renders FROM CACHE',
         cachedRes.headers.get('x-cache') === 'HIT' && sha1(await cachedRes.arrayBuffer()) === cachedSha);
   execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
-  // wait for the owner to answer again instead of guessing how long a start takes
-  await waitFor(async () => (await fetch(`${A}/api/server/ping`).catch(() => ({ ok: false }))).ok, 20000);
+  // Wait for the OWNER'S SIDECAR to answer again, not just its Immich: after a restart the peer
+  // endpoint has to come back before any hotlink can resolve, and a container that is merely "up"
+  // answers the Immich ping seconds earlier.
+  await waitFor(async () => {
+    try { return (await (await fetch(`${A}/immich-shared-albums/health`)).json()).ok === true; }
+    catch { return false; }
+  }, 30000);
   const aliveRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } })
-    .catch(() => ({ headers: { get: () => 'UNREACHABLE' }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
+    .catch(e => ({ headers: { get: () => `UNREACHABLE:${e.cause?.code || e.name}` }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
   check('owner back online: uncached photo streams again (hotlink recovery)',
         aliveRes.headers.get('x-cache') === 'MISS' && (await aliveRes.arrayBuffer()).byteLength > 500,
         `x-cache: ${aliveRes.headers.get('x-cache')}`);
@@ -821,14 +878,17 @@ stage('native album invitations, per person (no share link)');
     // stand-in keys that OWN the mirrors — asserting via the admin only proves it was excluded.
     const standInKeys = () => Object.values(readSidecarContributors('b-sidecar') || {})
       .map(c => c && c.apiKey).filter(Boolean);
-    const findOnB = async (name, timeout = 150000) => until(async () => {
+    // `invitation.mirrored` carries the new mirror's local album id, so nothing has to be searched
+    // for by name — only read back with the key that can see it.
+    const awaitMirror = async name => {
+      const seenInvite = await event('B', 'invitation.mirrored', undefined, { timeoutMs: 150000 }).catch(() => null);
+      if (!seenInvite) return null;
       for (const k of standInKeys()) {
-        const al = await api(B, k, '/albums').catch(() => []);
-        const hit = (al || []).find(a => a.albumName === name);
-        if (hit) return { album: hit, key: k };
+        const album = await api(B, k, `/albums/${seenInvite.albumId}`).catch(() => null);
+        if (album?.albumName === name) return { album, key: k };
       }
       return null;
-    }, timeout);
+    };
     const humansOn = async (found) => {
       const full = await api(B, found.key, `/albums/${found.album.id}?withoutAssets=true`);
       return (full.albumUsers || []).filter(au => !isBot(au.user?.email)).map(au => au.user?.name).sort();
@@ -847,13 +907,15 @@ stage('native album invitations, per person (no share link)');
       check('marker is really a member after the invite',
             (back.albumUsers || []).some(au => au.user?.id === nan.id && au.role === 'editor'));
 
-      const mirrored = await findOnB('natively invited album');
+      const mirrored = await awaitMirror('natively invited album');
       check('member mirrors an invited album automatically, with no link', !!mirrored,
             mirrored ? '' : 'timed out');
       if (mirrored) {
-        const arrived = await until(async () => {
-          const x = await albumAssets(B, mirrored.key, mirrored.album.id); return x.length >= 1 ? x : null;
-        }, 150000);
+        const arrived = await settle('B', 'settled', mirrored.album.id, { timeoutMs: 150000 })
+          .then(() => until(async () => {
+            const x = await albumAssets(B, mirrored.key, mirrored.album.id); return x.length >= 1 ? x : null;
+          }, 60000))
+          .catch(() => null);
         check('invited album\'s photo materialises on the member', !!arrived, arrived ? '' : 'timed out');
         check('an invite reaches ONLY the invited person', (await humansOn(mirrored)).join(',') === bAdmin.name,
               (await humansOn(mirrored)).join(', '));
@@ -884,19 +946,23 @@ stage('native album invitations, per person (no share link)');
       if (second && mirrored) {
         await api(A, AKEY, `/albums/${invAlb}/users`,
           { ...j({ albumUsers: [{ userId: second.id, role: 'editor' }] }), method: 'PUT' });
-        const widened = await until(async () => {
-          const h = await humansOn(mirrored); return h.length === 2 ? h : null;
-        }, 120000);
+        const widened = await settle('B', 'settled', mirrored.album.id, { timeoutMs: 120000 })
+          .then(() => until(async () => {
+            const h = await humansOn(mirrored); return h.length === 2 ? h : null;
+          }, 60000))
+          .catch(() => null);
         check('inviting a second person widens the existing mirror', !!widened,
               widened ? widened.join(', ') : (await humansOn(mirrored)).join(', ') || 'timed out');
 
         // Dropping ONE person while another remains is a revocation for that person only. Without
         // member-side narrowing the sender's action appears to work and silently does nothing.
         await fetch(`${A}/api/albums/${invAlb}/user/${nan.id}`, { method: 'DELETE', headers: { 'x-api-key': AKEY } });
-        const narrowed = await until(async () => {
-          const h = await humansOn(mirrored);
-          return h.length === 1 && h[0] === 'Second Human' ? h : null;
-        }, 150000);
+        const narrowed = await settle('B', 'settled', mirrored.album.id, { timeoutMs: 150000 })
+          .then(() => until(async () => {
+            const h = await humansOn(mirrored);
+            return h.length === 1 && h[0] === 'Second Human' ? h : null;
+          }, 60000))
+          .catch(() => null);
         check('de-inviting one person removes only them, and keeps the album for the rest',
               !!narrowed, narrowed ? narrowed.join(', ') : (await humansOn(mirrored)).join(', ') || 'timed out');
         // Across several watcher cycles the mirror must stay exactly one album owned by a
@@ -1182,7 +1248,7 @@ stage('security (entitlement — a signed peer is not entitled to everything)');
     // otherwise the check above would pass simply by breaking all byte reads.
     const ok = irohProbe(bKeys, originEp, `/assets/${aIds[0]}/original`, { wantBytes: true });
     check('the same peer CAN still read an asset it was offered (no over-blocking)',
-          ok.status === 200 && ok.bytesLength > 0, JSON.stringify(ok));
+          ok.status === 200 && ok.bytesLength > 0, `${JSON.stringify(ok)} body=${ok.body || ''}`);
 
     const man = irohProbe(bKeys, originEp, `/albums/${privAlbum}/manifest`);
     check('a valid peer CANNOT read the manifest of an album not mapped to it (F-06)',
