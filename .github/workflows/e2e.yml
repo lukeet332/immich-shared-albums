@@ -6,6 +6,12 @@ on:
   pull_request:
   schedule:
     - cron: '0 6 * * 1' # weekly: catch breakage in immich-server:release before users do
+  workflow_dispatch:
+    inputs:
+      isa_sync_poll_ms:
+        description: 'Sidecar cadence in ms, for a timing experiment (default: 4000)'
+        required: false
+        default: '4000'
 
 jobs:
   pr-title:
@@ -46,6 +52,10 @@ jobs:
       # push/PR runs pin the known-good Immich BY DIGEST (upstream mutates even version
       # tags — observed live 2026-08-16); the weekly cron chases :release as a canary
       IMMICH_REF: ${{ github.event_name == 'schedule' && ':release' || '@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb' }}
+      # Sidecar cadence, read by both the rig (compose) and the suite (its `stable()` holds are
+      # derived from it). A dispatch input makes a cadence experiment one button, so its runs carry
+      # the same commit and the only variable is the cadence.
+      ISA_SYNC_POLL_MS: ${{ inputs.isa_sync_poll_ms || vars.ISA_SYNC_POLL_MS || '4000' }}
     steps:
       - uses: actions/checkout@v4
 

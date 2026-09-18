@@ -5,6 +5,17 @@ const B = process.env.B_URL || 'http://localhost:2284';
 const BS = process.env.B_SIDECAR || 'http://localhost:8301';
 const AKEY = process.env.AKEY, BKEY = process.env.BKEY;
 const ALBUM = process.env.A_ALBUM || '__CREATE__';
+// The sidecar's cadence, as the rig actually runs it. `stable()` holds a value for two of these, so
+// the hold has to be derived from the same number the sidecars got rather than a literal — with a
+// literal, changing the rig's cadence silently leaves every hold-point at the old duration, and an
+// experiment that varies the cadence measures nothing. Keep the default in step with
+// demo/docker-compose.yml and the household composes.
+const SYNC_POLL_MS = Number(process.env.ISA_SYNC_POLL_MS ?? 4000);
+/** Two sidecar passes: the smallest window in which "nothing changed" means anything. */
+const TWO_CYCLES_MS = 2 * SYNC_POLL_MS;
+/** Deadline for a hold: the hold itself plus room for the change to be seen and settle. Derived so
+ *  a slower cadence cannot make the deadline shorter than the hold it is supposed to allow. */
+const HOLD_DEADLINE_MS = TWO_CYCLES_MS + 25000;
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); console.log(`${ok ? '  ✅' : '  ❌'} ${name}${detail ? ' — ' + detail : ''}`); };
@@ -69,6 +80,24 @@ const readSidecarKv = (stateDir, name) => {
   try { return JSON.parse(JSON.parse(out)[0].value); } catch { return null; }
 };
 // peers and contributors are real tables since schema v1
+/*
+ * A stage that cannot read the state it asserts on must not print a line and pass. The suite used
+ * to treat an unreadable state.db as an empty one, so `native album invitations` and `a revocation
+ * survives content arriving in the same window` could run zero checks and still report green —
+ * which silently removes the two stages that cover per-person invitations. `E2E_ALLOW_SKIP=1`
+ * keeps the old behaviour for a run that knowingly cannot read host state; otherwise it is fatal,
+ * because a green suite that skipped its own coverage is worse than a red one.
+ */
+const requireState = what => {
+  if (process.env.E2E_ALLOW_SKIP === '1') {
+    console.log(`  (skipped: ${what}; E2E_ALLOW_SKIP=1)`);
+    return false;
+  }
+  throw new Error(
+    `cannot read ${what} — the sidecar state.db is missing or unreadable to this test \n` +
+      `  (set E2E_ALLOW_SKIP=1 to skip the affected stages instead of failing; that weakens coverage)`
+  );
+};
 const readSidecarPeers = (stateDir) => {
   const out = sidecarSql(stateDir, 'SELECT * FROM peers');
   try { return out ? JSON.parse(out) : null; } catch { return null; }
@@ -517,7 +546,7 @@ console.log('— stage: view-only share link (allowUpload off) rejects cross-ser
   // Two push cycles with nothing to propagate: require the origin count to HOLD across them
   // rather than trusting one reading after a fixed wait. Runs in ~2 cycles, fails fast if a
   // stray upload ever lands.
-  const viewOnlyHeld = await stable(() => albumAssets(A, AKEY, alb6).then(a => a.length), 8000, 25000);
+  const viewOnlyHeld = await stable(() => albumAssets(A, AKEY, alb6).then(a => a.length), TWO_CYCLES_MS, HOLD_DEADLINE_MS);
   check('view-only album rejects cross-server uploads', viewOnlyHeld === 1,
         `origin held at ${viewOnlyHeld} (want 1)`);
 }
@@ -538,7 +567,7 @@ console.log('— stage: reverse-direction share — member-owned album with an a
   const mirrorR = (await api(A, AKEY, '/albums')).find(a => a.albumName === 'reverse album');
   const mR = mirrorR && await until(async () => { const x = await albumAssets(A, AKEY, mirrorR.id); return x.length === 1 ? x : null; }, 180000);
   check('reverse mirror syncs (dedup reuses the existing proxy)', !!mR, mR ? '' : 'timed out');
-  const noEchoHeld = await stable(() => albumAssets(B, BKEY, albR).then(a => a.length), 8000, 25000);
+  const noEchoHeld = await stable(() => albumAssets(B, BKEY, albR).then(a => a.length), TWO_CYCLES_MS, HOLD_DEADLINE_MS);
   check('already-shared photo does NOT echo back to its owner (regression)', noEchoHeld === 1,
         `B album held at ${noEchoHeld} (want 1)`);
 }
@@ -659,7 +688,7 @@ const counts = async () => [
   (await albumAssets(B, BKEY, mirror.id)).length,
   ...(DKEY && dMirror ? [(await albumAssets(D, DKEY, dMirror.id)).length] : []),
 ];
-const held = await stable(counts, 8000, 35000);
+const held = await stable(counts, TWO_CYCLES_MS, HOLD_DEADLINE_MS + 10000);
 check('no ping-pong: every count holds for two idle cycles', !!held && held[0] === EXPECT, JSON.stringify(held));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -678,8 +707,8 @@ console.log('— stage: native album invitations, per person (no share link)');
 {
   const originPeers = readSidecarPeers('household-c/c-sidecar');
   const bPeer = (originPeers || []).find(p => (p.name || '').includes('(B)'));
-  if (!bPeer) console.log('  (skipped: cannot read the origin\'s peer record for B)');
-  else {
+  // Throws by default; under E2E_ALLOW_SKIP it logs and takes the branch that runs no checks.
+  if (bPeer || requireState("the origin's peer record for B")) {
     const bKeys = readSidecarKv('b-sidecar', 'identity');
     const bAdmin = await api(B, BKEY, '/users/me');
     // Markers are identified by display name — exactly how a human picks one in Immich.
@@ -869,8 +898,7 @@ console.log('— stage: a revocation survives content arriving in the same windo
     (await api(A, AKEY, '/admin/users')).find(
       u => isBot(u.email) && (u.name || '').startsWith(`${bAdmin2.name} (`)
     );
-  if (!nan) console.log('  (skipped: no account representing B\'s admin on the origin)');
-  else {
+  if (nan || requireState("an account representing B's admin on the origin")) {
     const raceAlb = (await api(A, AKEY, '/albums', j({ albumName: 'race album' }))).id;
     const rAsset = await upload(A, AKEY, 'race.jpg', `rc${Date.now() % 10000}`, '2026-03-01T09:00:00.000Z');
     await ensurePreviews(A, AKEY, [rAsset]);
@@ -1059,7 +1087,7 @@ console.log('— stage: security (entitlement — a signed peer is not entitled 
   // CLI rather than node:sqlite — the runner already depends on the CLI, and node:sqlite
   // needs Node 22+, which would make these checks skip silently on an older host.
   const bKeys = readSidecarKv('b-sidecar', 'identity');
-  if (!bKeys) console.log('  (skipped: cannot read B\'s identity from demo/b-sidecar/state.db)');
+  if (!bKeys) requireState("B's identity from demo/b-sidecar/state.db");
 
   if (bKeys) {
     const originEp = await endpointOf(ORIGIN_DIRECT);

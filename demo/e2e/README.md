@@ -50,20 +50,30 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
    pass, and `sync/status.ts` exposes that as `settled` plus a cycle count — so a wait can end when
    the work ends instead of after a guess. Peers can ask the same question over
    `GET /albums/:mappingId/status` (feature `sync-status`; a 404 means an older peer — wait instead).
-4. **The rig's poll interval is the dominant cost.** Every convergence wait is quantised by
-   `ISA_SYNC_POLL_MS`, which is why the demo stacks set it low (`4000`) rather than the production
-   default. Measured: dropping it from 15s saved more than shortening every test-side poll, because
-   the waits end at the *system's* cadence, not the test's.
-5. **Poll frequently, assert invariantly.** `E2E_POLL_MS` (default 1000) only controls how often we
+4. **The rig's cadence reaches the suite through one value, `SYNC_POLL_MS`.** `stable()` proves
+   *"nothing changed"* only over a window, and that window is `TWO_CYCLES_MS` (`2 × SYNC_POLL_MS`,
+   read once from `ISA_SYNC_POLL_MS`, default `4000` to match the composes). It used to be a literal
+   `8000`, which meant changing the rig's cadence left every hold-point at the old duration — an
+   experiment that varied the cadence then measured a constant. `HOLD_DEADLINE_MS` is derived too, so
+   a slower cadence can never make a deadline shorter than the hold it must allow. `ISA_SYNC_POLL_MS`
+   is a `workflow_dispatch` input, so a cadence experiment is one run of the same commit.
+5. **A stage that cannot read its own evidence must fail, not skip.** Some stages read sidecar state
+   through the sqlite3 CLI (`readSidecarPeers`, `readSidecarKv`, …). An unreadable `state.db` used to
+   look identical to an empty one, so `native album invitations` and `a revocation survives content
+   arriving in the same window` could run **zero checks** and still report green — silently dropping
+   the coverage for per-person invitations. `requireState` now throws instead, and the error names
+   the unreadable thing. `E2E_ALLOW_SKIP=1` restores the old behaviour for a run that knowingly
+   cannot read host state; it is a coverage trade, not a convenience, and CI must never set it.
+6. **Poll frequently, assert invariantly.** `E2E_POLL_MS` (default 1000) only controls how often we
    look; it cannot make a test pass that would otherwise fail.
-6. **If a wait times out, fix the wait — not the timeout.** A timeout means either the interval is
+7. **If a wait times out, fix the wait — not the timeout.** A timeout means either the interval is
    too coarse, the hold period too short, or there is a real convergence bug. Raising the number
    hides all three.
-7. **Verify speed changes with repeat runs.** Three consecutive green runs, compared against a
+8. **Verify speed changes with repeat runs.** Three consecutive green runs, compared against a
    recorded per-stage baseline, is the bar for landing anything here — and check the image ID
    changed, since `run-mock-e2e.sh` continues past a failed `docker build` and will happily test
    stale code.
-8. **An external probe must not be able to kill the run.** `irohProbe` spawns a container and does
+9. **An external probe must not be able to kill the run.** `irohProbe` spawns a container and does
    a live round trip, so it can fail transiently — the native addon has exited on SIGBUS mid-run.
    It retries once and then reports a status the check can fail on, because a throw here aborts the
    suite and hides every other result behind one flake. Any new out-of-process helper needs the
