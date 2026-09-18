@@ -41,7 +41,12 @@ const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); c
 const FAIL_FAST = process.env.E2E_FAIL_FAST === '1';
 const summary = () => {
   const fails = results.filter(r => !r.ok);
-  console.log(`\n${fails.length === 0 ? '🎉 ALL PASS' : `💥 ${fails.length} FAILURES`} (${results.length} checks)`);
+  // ISO-stamped like the stage lines, so the last stage has an end time to close on. A summary
+  // without a stamp makes a log undecidable after the fact: the final stage's length can only be
+  // guessed from the file's mtime.
+  console.log(
+    `\n${new Date().toISOString()} ${fails.length === 0 ? '🎉 ALL PASS' : `💥 ${fails.length} FAILURES`} (${results.length} checks)`
+  );
   return fails.length;
 };
 const stage = name => {
@@ -50,7 +55,9 @@ const stage = name => {
     summary();
     process.exit(1);
   }
-  console.log(`— stage: ${name}`);
+  // ISO-stamped so a local run can be broken down per stage the same way a CI job log is. The
+  // stamp is a prefix, so `— stage: <name>` remains what a reader or a grep looks for.
+  console.log(`${new Date().toISOString()} — stage: ${name}`);
 };
 const api = async (base, key, path, init = {}) => {
   const r = await fetch(`${base}/api${path}`, { ...init, headers: { 'x-api-key': key, Accept: 'application/json', ...(init.headers || {}) } });
@@ -917,6 +924,7 @@ stage('native album invitations, per person (no share link)');
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: 'second-e2e@demo.local', password: 'e2e-pass-123' }),
         });
+        const loginBody = await login.json().catch(() => ({}));
         const sessionCookie = (login.headers.get('set-cookie') || '').split(';')[0];
         check('the rig can sign a non-admin user in for the panel check',
               login.ok && !!sessionCookie, `${login.status} cookie=${sessionCookie ? 'yes' : 'no'}`);
@@ -930,6 +938,34 @@ stage('native album invitations, per person (no share link)');
         check('the panel answers the caller, not the admin: the non-admin sees only their own albums',
               asSecond.status === 200 && secondNames.length > 0 && adminPanel.albums.length > secondNames.length,
               `second=${asSecond.status} ${JSON.stringify(secondNames)} vs admin=${adminPanel.albums?.length}`);
+
+        // Reunification matches on the OWNER, and Takeout flattens ownership — the Google Photos
+        // importer creates an album per Google album through the importing account's key. So a
+        // person's own Takeout half must come back to them as an album THEY own, while an album
+        // they were merely added to must not. Both facts come from Immich, never inferred: an
+        // album response carries no ownerId, so role inside albumUsers is the only answer.
+        const secondUser = (await api(B, BKEY, '/admin/users')).find(u => u.email === 'second-e2e@demo.local');
+        // Minted with the login token directly: Immich prefers x-api-key over a bearer, so going
+        // through api() (which always sets that header) would authenticate as nobody.
+        const secondKey = (await (await fetch(`${B}/api/api-keys`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${loginBody.accessToken}` },
+          body: JSON.stringify({ name: 'e2e-owned-albums', permissions: ['all'] }),
+        })).json()).secret;
+        const ownProbe = await api(B, secondKey, '/albums', j({ albumName: 'PROBE the half they brought' }));
+        const adminAlbum = await api(B, BKEY, '/albums', j({ albumName: 'PROBE administered by the admin' }));
+        await api(B, BKEY, `/albums/${adminAlbum.id}/users`,
+              { ...j({ albumUsers: [{ userId: secondUser.id, role: 'editor' }] }), method: 'PUT' });
+        const secondAlbums = await api(B, secondKey, '/albums');
+        const roleOf = (a, userId) => (a?.albumUsers || []).find(au => au.user?.id === userId)?.role;
+        const ownedHalves = secondAlbums.filter(a => roleOf(a, secondUser.id) === 'owner');
+        const joinedHalves = secondAlbums.filter(a => roleOf(a, secondUser.id) !== 'owner');
+        check('a person\'s own album comes back to them as owner, so it is theirs to offer for reunification',
+              roleOf(secondAlbums.find(a => a.id === ownProbe.id), secondUser.id) === 'owner',
+              `their own albums: ${ownedHalves.map(a => a.albumName).join(', ') || 'none'}`);
+        check('an album they were merely added to is not theirs to offer',
+              roleOf(secondAlbums.find(a => a.id === adminAlbum.id), secondUser.id) === 'editor',
+              `joined but not owned: ${joinedHalves.map(a => a.albumName).join(', ') || 'none'}`);
       }
 
       // Withdrawal is asserted against the /invitations CONTRACT rather than state.db: the running
