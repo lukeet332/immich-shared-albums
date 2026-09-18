@@ -72,6 +72,9 @@ services:
       - isa-data:/data
     ports:
       - $HOST_PORT:8300
+      # Server-to-server traffic uses UDP 8300 (ISA_P2P_PORT). It works without publishing this;
+      # uncomment (and forward it on your router) only for a guaranteed direct path between servers.
+      # - 8300:8300/udp
     networks: [immich]
 EOF
 if [ -n "$WANT_IPP" ]; then

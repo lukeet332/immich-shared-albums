@@ -85,7 +85,13 @@ Notes for you, the agent:
   cross-server sync stop; Immich keeps working. Never modify Immich's own
   compose services, database, or upload folders.
 - State lives in the ./data volume (state.db: household keypair, peers, album
-  mappings, ledgers). Losing it breaks existing cross-server links.
+  mappings, ledgers). Losing it breaks existing cross-server links. Back up the WHOLE
+  directory (state.db plus its -wal/-shm files, which carry recent writes), and never open
+  a running sidecar's state.db with a host sqlite3 on macOS — it deletes the WAL under the
+  process. Inspect it through the container instead.
+- Server-to-server traffic uses UDP 8300 inside the container (ISA_P2P_PORT). Nothing needs
+  opening for it to work; publishing `8300:8300/udp` is optional and only buys a guaranteed
+  direct path.
 - The API key is a live credential: keep it out of shell history, logs, and
   world-readable files.
 - The three routes only need to be reachable by this household's own devices; exposing
