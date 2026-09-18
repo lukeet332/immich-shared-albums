@@ -14,7 +14,7 @@
  */
 import http from 'node:http';
 import { CFG, log, ROUTE_PREFIX } from '../config.ts';
-import { store, storeSharedAssetsLocally } from '../state.ts';
+import { state, store, storeSharedAssetsLocally } from '../state.ts';
 import { publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
@@ -26,6 +26,7 @@ import { proxyToImmich } from './passthrough.ts';
 import { callerIdentity, signInRequired } from './auth.ts';
 import { join } from '../p2p/join.ts';
 import { leaveAlbum } from '../sync/leave.ts';
+import { syncStatus, loopTicks } from '../sync/status.ts';
 import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
 import {
   mintPairing,
@@ -272,6 +273,20 @@ export const server = http.createServer(async (req, res) => {
       const caller = await callerIdentity(req);
       if (!caller) return send(401, signInRequired('see your albums'));
       return send(200, { albums: await myAlbums(caller.id) });
+    }
+    // Rig-only progress read for the e2e suite: the same derivation `/albums/:id/status` answers
+    // over iroh (`sync/status.ts`), plus the loop tick counts, so a test can wait for "the sidecar
+    // has looked N more times" without speaking the peer protocol. Gated like every hook must be:
+    // absent unless ISA_TEST_HOOKS is set, admin-only, and it names nothing the caller did not
+    // already identify by album id.
+    if (CFG.testHooks && path === `${ROUTE_PREFIX}/sync/status` && req.method === 'GET') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('read sync status'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can read sync status' });
+      const albumId = u.searchParams.get('albumId');
+      const mapping = state.mappings.find(m => m.albumId === albumId);
+      if (!mapping) return send(404, { error: 'no mapping for that album' });
+      return send(200, { ...syncStatus(mapping), ticks: loopTicks() });
     }
     // Liveness only. The join banner probes this cross-origin to discover a sidecar, so
     // it stays open — which is exactly why it must not name the household or count peers.

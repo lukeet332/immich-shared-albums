@@ -42,6 +42,8 @@ services:
       ISA_HOUSEHOLD_NAME: "Mock household (C)"
       # Rig only: the suite waits on convergence, so the production 15s interval is pure test latency.
       ISA_SYNC_POLL_MS: "${ISA_SYNC_POLL_MS:-4000}"
+      # Rig only: lets the suite read this sidecar's own progress (loop ticks). Off in every real install.
+      ISA_TEST_HOOKS: "true"
     networks:
       - default
       - isa-demo

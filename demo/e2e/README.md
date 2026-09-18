@@ -83,4 +83,12 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
    It retries once and then reports a status the check can fail on, because a throw here aborts the
    suite and hides every other result behind one flake. Any new out-of-process helper needs the
    same shape: bounded retry, structured failure, never an uncaught throw.
+10. **"It must survive N cycles" needs a count, not a duration.** A sleep cannot tell five cycles
+    from none — a watcher that died on its first pass passes a 55s sleep identically. The sidecar
+    counts every evaluation of its watcher and invite loops (`recordLoopTick` in `sync/status.ts`,
+    called at the **top** of each tick, before any skip — unlike `cycles`, which counts passes that
+    did work and therefore stops the moment a mapping settles). The rig reads it over
+    `GET /immich-shared-albums/sync/status?albumId=` — present only with `ISA_TEST_HOOKS`,
+    admin-only, absent from every real install. Wait for both counts to advance by N, then assert
+    the value held. This is why the suite has no literal `sleep` left.
 
