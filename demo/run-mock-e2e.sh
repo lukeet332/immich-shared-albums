@@ -8,8 +8,9 @@ BKEY=$(grep -m1 "^B_API_KEY=" "$DIR/demo/.env" | cut -d= -f2-)
 B_SIDECAR_API_KEY=$(grep -m1 "^B_SIDECAR_API_KEY=" "$DIR/demo/.env" | cut -d= -f2-)
 CKEY=$(grep -m1 "^C_API_KEY=" "$DIR/demo/household-c/.env" | cut -d= -f2-)
 
+# The shared peer network is needed whether or not the image is rebuilt (CI prebuilds it).
+docker network inspect isa-demo >/dev/null 2>&1 || docker network create isa-demo
 if [ -z "${SKIP_BUILD:-}" ]; then
-  docker network inspect isa-demo >/dev/null 2>&1 || docker network create isa-demo
 echo "== build image =="
   cd "$DIR" && docker build -q -t immich-shared-albums:demo . >/dev/null
 else
