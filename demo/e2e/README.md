@@ -113,4 +113,13 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
     now run `node -e` with `node:sqlite` **inside** the sidecar's container (a proper lock
     participant), and `E2E_SIDECAR_CONTAINER_{B,C,D}` overrides the container names for a rig that
     names its projects differently.
+12. **A red run stops at the end of the failing stage.** `E2E_FAIL_FAST=1` (CI's default for pull
+    requests) makes `stage()` exit after the first stage that failed a check, once that stage has
+    finished — so the failing check's neighbours are still there, but the ~30 stages after it are
+    not run against a rig nobody asserted on. A red run costs ~4 minutes instead of ~12, and the
+    later checks it would have printed mostly describe the fallout of the first failure anyway
+    (2026-09-18: one duplicate stub on D produced six more red checks over the next nine minutes).
+    The summary line still prints, so per-stage timing parsers keep working. When the full failure
+    pattern IS the evidence, dispatch the workflow with `fail_fast=0` or run locally with
+    `E2E_FAIL_FAST=0`; a local run defaults to running everything.
 
