@@ -694,6 +694,16 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   const uncachedProxy = all.find(a => !a.exifInfo?.latitude && (a.fileCreatedAt || '').startsWith('2026-08-1'));
   const { execSync } = await import('node:child_process');
   const dockerEnv = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
+  // Who the origin IS and WHERE it is, before and after the restart. Recovery can only work if the
+  // restarted sidecar comes back with the same iroh identity (its persisted identity) at an address
+  // the member can still reach; if either changed, the recovery check's detail says which, so a red
+  // run explains itself instead of reading like a transport bug.
+  const originWhere = async () => {
+    const ip = (() => { try { return execSync("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' household-c-sidecar-c-1", { env: dockerEnv, encoding: 'utf8' }).trim(); } catch { return '?'; } })();
+    const ep = await endpointOf(ORIGIN_DIRECT).catch(() => null);
+    return { pub: ep?.pub ? ep.pub.slice(0, 12) : '?', addrs: ep?.addrs ?? '?', ip };
+  };
+  const before = await originWhere();
   // `kill`, not `stop`: this stage simulates the owner VANISHING, so SIGKILL is the faithful
   // signal and it returns at once. `stop` would additionally wait out the grace period the sidecar
   // now uses to exit cleanly — a graceful exit is covered by a unit test, and paying for it here
@@ -716,13 +726,15 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   check('owner offline: recently viewed photo still renders FROM CACHE',
         cachedRes.headers.get('x-cache') === 'HIT' && sha1(await cachedRes.arrayBuffer()) === cachedSha);
   execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
-  // wait for the owner to answer again instead of guessing how long a start takes
-  await waitFor(async () => (await fetch(`${A}/api/server/ping`).catch(() => ({ ok: false }))).ok, 20000);
+  // Wait for the thing that restarted — the origin SIDECAR — to answer again, instead of guessing
+  // how long a start takes. (This used to ping the origin's Immich, which never went down.)
+  await waitFor(async () => (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`).catch(() => ({ ok: false }))).ok, 20000);
+  const after = await originWhere();
   const aliveRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } })
     .catch(() => ({ headers: { get: () => 'UNREACHABLE' }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
   check('owner back online: uncached photo streams again (hotlink recovery)',
         aliveRes.headers.get('x-cache') === 'MISS' && (await aliveRes.arrayBuffer()).byteLength > 500,
-        `x-cache: ${aliveRes.headers.get('x-cache')}`);
+        `x-cache: ${aliveRes.headers.get('x-cache')}; origin before ${JSON.stringify(before)} after ${JSON.stringify(after)}`);
 }
 
 stage('loop prevention (the counts must HOLD, not merely read true once)');
