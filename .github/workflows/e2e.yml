@@ -59,17 +59,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Work that needs only the checkout starts here and runs UNDER the ~50s Immich boot instead
+      # of after it: the sidecar image build and the browser tooling install. Each writes its exit
+      # code to a file when done; the step that needs the result waits on that file, so a failure
+      # still fails the run — it just no longer costs its own wall clock.
+      - name: Start background work (sidecar image build, browser tooling)
+        run: |
+          mkdir -p /tmp/bg
+          ( docker build -q -t immich-shared-albums:demo . > /tmp/bg/build.log 2>&1; echo $? > /tmp/bg/build.rc ) &
+          ( cd demo/e2e && npm install --silent && npx playwright install --with-deps chromium; echo $? > /tmp/bg/playwright.rc ) > /tmp/bg/playwright.log 2>&1 &
+          echo "started"
+
       - name: Start mock Immich instances (B + C + D)
         run: |
           echo "B_API_KEY=placeholder" > demo/.env
           echo "C_API_KEY=placeholder" > demo/household-c/.env
           echo "D_API_KEY=placeholder" > demo/household-d/.env
           # pre-pull everything with retries — runners share registry rate limits
-          # (Docker Hub anonymous quota AND ghcr per-minute throttles)
+          # (Docker Hub anonymous quota AND ghcr per-minute throttles). The three pulls are
+          # independent, so they run at once; the wall is the slowest pull, not their sum.
           pull() { for i in 1 2 3 4 5 6; do docker pull "$1" && return 0; echo "pull $1 throttled, retrying"; sleep 30; done; return 1; }
-          pull valkey/valkey:8
-          pull "ghcr.io/immich-app/immich-server${IMMICH_REF:-:release}"
-          pull ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+          pull valkey/valkey:8 & p1=$!
+          pull "ghcr.io/immich-app/immich-server${IMMICH_REF:-:release}" & p2=$!
+          pull ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0 & p3=$!
+          wait $p1 && wait $p2 && wait $p3
           (cd demo && docker compose up -d immich-b db-b redis-b)
           (cd demo/household-c && docker compose up -d immich-c db-c redis-c)
           (cd demo/household-d && docker compose up -d immich-d db-d redis-d)
@@ -86,23 +99,32 @@ jobs:
 
       - name: Recycle Immich (DB pools born mid-migration serialize enums wrongly on slow stacks)
         run: |
-          (cd demo && docker compose restart immich-b)
-          (cd demo/household-c && docker compose restart immich-c)
-          (cd demo/household-d && docker compose restart immich-d)
+          # Three independent stacks: restart them together, then wait for all three to answer.
+          (cd demo && docker compose restart immich-b) &
+          (cd demo/household-c && docker compose restart immich-c) &
+          (cd demo/household-d && docker compose restart immich-d) &
+          wait
           for p in 2284 2285 2286; do
             for i in $(seq 1 60); do curl -sf http://localhost:$p/api/server/ping >/dev/null && break; sleep 2; done
           done
 
       - name: Run E2E suite
-        run: bash demo/run-mock-e2e.sh
+        run: |
+          # The image was built in the background at the start of the job; a failed build fails
+          # here, loudly, instead of the rig quietly testing whatever image was lying around.
+          until [ -f /tmp/bg/build.rc ]; do sleep 1; done
+          if [ "$(cat /tmp/bg/build.rc)" != "0" ]; then cat /tmp/bg/build.log; echo "::error::sidecar image build failed"; exit 1; fi
+          echo "sidecar image: $(docker images -q immich-shared-albums:demo)"
+          SKIP_BUILD=1 bash demo/run-mock-e2e.sh
 
       - name: Browser tests (banner + accept flows)
         run: |
           # one hostname that works for the runner's browser AND inside containers
           echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
+          # Browser tooling was installed in the background at the start of the job.
+          until [ -f /tmp/bg/playwright.rc ]; do sleep 1; done
+          if [ "$(cat /tmp/bg/playwright.rc)" != "0" ]; then cat /tmp/bg/playwright.log; echo "::error::browser tooling install failed"; exit 1; fi
           cd demo/e2e
-          npm install --silent
-          npx playwright install --with-deps chromium
           CKEY=$(grep -m1 C_API_KEY ../household-c/.env | cut -d= -f2-) \
           B_EMAIL=admin@e2e.local B_PASS=e2e-admin-pass-1 node browser-test.mjs
 

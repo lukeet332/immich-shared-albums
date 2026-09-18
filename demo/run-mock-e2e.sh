@@ -8,8 +8,9 @@ BKEY=$(grep -m1 "^B_API_KEY=" "$DIR/demo/.env" | cut -d= -f2-)
 B_SIDECAR_API_KEY=$(grep -m1 "^B_SIDECAR_API_KEY=" "$DIR/demo/.env" | cut -d= -f2-)
 CKEY=$(grep -m1 "^C_API_KEY=" "$DIR/demo/household-c/.env" | cut -d= -f2-)
 
+# The shared peer network is needed whether or not the image is rebuilt (CI prebuilds it).
+docker network inspect isa-demo >/dev/null 2>&1 || docker network create isa-demo
 if [ -z "${SKIP_BUILD:-}" ]; then
-  docker network inspect isa-demo >/dev/null 2>&1 || docker network create isa-demo
 echo "== build image =="
   cd "$DIR" && docker build -q -t immich-shared-albums:demo . >/dev/null
 else
@@ -51,27 +52,46 @@ purge() { # base key statedir : delete all albums, sidecar users, non-admin asse
   [ "${IDS:-[]}" != "[]" ] && curl -s -X DELETE $BASE/api/assets -H "x-api-key: $KEY" -H 'Content-Type: application/json' -d "{\"ids\":$IDS,\"force\":true}" -o /dev/null
 }
 
-echo "== redeploy + purge B =="
-cd "$DIR/demo" && docker compose up -d --force-recreate sidecar-b >/dev/null 2>&1
-purge http://localhost:2284 "$BKEY" b-sidecar
-reset_state "$DIR/demo" sidecar-b
-
-echo "== redeploy + purge C =="
-cd "$DIR/demo/household-c" && docker compose up -d --force-recreate sidecar-c >/dev/null 2>&1
-purge http://localhost:2285 "$CKEY" c-sidecar
-reset_state "$DIR/demo/household-c" sidecar-c
-
-echo "== redeploy + purge D (third household — relay coverage) =="
+# D (third household — relay coverage): a first-time local rig provisions its key here; CI
+# writes it beforehand.
 cd "$DIR/demo/household-d"
 if [ ! -f .env ]; then
   docker compose up -d immich-d db-d redis-d >/dev/null 2>&1
   echo "D_API_KEY=$("$DIR/demo/ci/provision-mock.sh" http://localhost:2286 "Demo Dave")" > .env
 fi
 DKEY=$(grep -m1 "^D_API_KEY=" .env | cut -d= -f2-)
-docker compose up -d --force-recreate sidecar-d >/dev/null 2>&1
-purge http://localhost:2286 "$DKEY" d-sidecar
-reset_state "$DIR/demo/household-d" sidecar-d
-sleep 4
+
+# Redeploy the sidecar, purge its Immich, reset its state — for one household, in a subshell so
+# the cd is contained (purge reads state.db RELATIVE to the compose dir).
+# Compose output is kept (prefixed per household) rather than discarded: a redeploy that fails
+# here used to be invisible, and the run then died later with a message about something else.
+redeploy() { # redeploy <compose-dir> <service> <immich-url> <admin-key> <state-dir>
+  (
+    cd "$1" && docker compose up -d --force-recreate "$2" 2>&1 | sed "s/^/  [$2] /"
+    purge "$3" "$4" "$5"
+    reset_state "$1" "$2"
+  )
+}
+# The three households are independent stacks on separate ports and separate compose projects,
+# so they redeploy at once: the wall is the slowest one, not the sum.
+echo "== redeploy + purge B, C, D (in parallel) =="
+redeploy "$DIR/demo" sidecar-b http://localhost:2284 "$BKEY" b-sidecar &
+redeploy "$DIR/demo/household-c" sidecar-c http://localhost:2285 "$CKEY" c-sidecar &
+redeploy "$DIR/demo/household-d" sidecar-d http://localhost:2286 "$DKEY" d-sidecar &
+wait
+# The reset restarts each sidecar from nothing; the preflight below reads a state.db a booting
+# sidecar may not have created yet. The sidecar opens its store at import, before it listens, so
+# "health answers" is also "that file exists" — wait on that, bounded, rather than on a sleep.
+# On failure, say what the containers were actually doing instead of guessing later.
+for pair in "8301:$DIR/demo:sidecar-b" "8302:$DIR/demo/household-c:sidecar-c" "8303:$DIR/demo/household-d:sidecar-d"; do
+  port=${pair%%:*}; rest=${pair#*:}; cdir=${rest%:*}; svc=${rest##*:}
+  for i in $(seq 1 60); do curl -sf "http://localhost:$port/immich-shared-albums/health" >/dev/null && break; sleep 1; done
+  if ! curl -sf "http://localhost:$port/immich-shared-albums/health" >/dev/null; then
+    echo "  !! $svc on :$port did not come up after the reset — aborting before the suite"
+    ( cd "$cdir" && docker compose ps -a && docker compose logs --tail 40 "$svc" ) 2>&1 | sed 's/^/     /'
+    exit 1
+  fi
+done
 
 # Fail fast on a rig that did not actually reset. A stale state.db carries bot keys whose
 # Immich accounts the purge already deleted, and every later assertion then fails with
