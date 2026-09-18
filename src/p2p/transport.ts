@@ -19,6 +19,10 @@ const DEADLINE_MS = 120_000;
  *  OFFLINE owner made every uncached photo hang in the member's Immich for that long before
  *  the local stub was served. The byte path fails closed to the stub in seconds instead. */
 const DIAL_DEADLINE_MS = 10_000;
+/** The byte path's response HEADER — see peerByteRequest. Bodies keep DEADLINE_MS semantics
+ *  (none: they stream to FIN). JSON requests keep DEADLINE_MS for their header too, because a
+ *  ref push is processed before it is answered and can legitimately take that long. */
+const BYTE_HEAD_DEADLINE_MS = 15_000;
 const withDeadline = <T>(p: Promise<T>, what: string, ms = DEADLINE_MS): Promise<T> => {
   let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
@@ -262,9 +266,20 @@ export async function peerByteRequest(
   recv: { read(size: number): Promise<number[]> };
 }> {
   const bi = await roundTrip(peer, { path, range, mapping }, Buffer.alloc(0));
-  // Deadline covers the header only: byte BODIES may stream for as long as a video runs.
+  // Deadline covers the header only: byte BODIES may stream for as long as a video runs. The
+  // header gets the SHORT budget: a peer answers a byte request the moment its Immich returns
+  // headers, so a header that has not arrived in seconds means the peer is gone — and a cached
+  // QUIC connection to a peer that died without closing still looks open (closeReason() null),
+  // so the dial deadline never fires for it; QUIC's own loss detection takes ~45s. This is the
+  // wait a member's Immich showed on every uncached photo while the owner was offline.
   const head = JSON.parse(
-    (await withDeadline(readPrefixed(bi.recv, 64 * 1024), `byte response from "${peer.name}"`)).toString()
+    (
+      await withDeadline(
+        readPrefixed(bi.recv, 64 * 1024),
+        `byte response from "${peer.name}"`,
+        BYTE_HEAD_DEADLINE_MS
+      )
+    ).toString()
   ) as ResponseHeader;
   return { status: head.status, headers: head.headers ?? {}, recv: bi.recv };
 }
