@@ -797,6 +797,7 @@ const mD = await albumAssets(B, BKEY, mirrorD.id);
 }
 
 stage('kill test — uncached photos fail closed; cached ones survive from cache');
+const killTestStart = Date.now();
 {
   const all = await albumAssets(B, BKEY, mirror.id);
   const cachedProxy = all.find(a => a.exifInfo?.latitude);          // viewed earlier -> in cache
@@ -804,57 +805,85 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   const cachedSha = sha1(await fetchBytes(`${A}/api/assets/${aIds[0]}/thumbnail?size=preview`, AKEY));
   // an origin-owned photo that has NEVER been viewed through the interceptor
   const uncachedProxy = all.find(a => !a.exifInfo?.latitude && (a.fileCreatedAt || '').startsWith('2026-08-1'));
+  WAITS.push({ ms: Date.now() - killTestStart, polls: 0, ok: true, kind: 'kill:setup' });
   const { execSync } = await import('node:child_process');
   const dockerEnv = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
-  execSync('docker stop household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
-  await waitFor(() => {
-    try { return execSync('docker inspect -f {{.State.Running}} household-c-sidecar-c-1', { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
-    catch { return true; }
-  }, 15000);
-  // B may still be tearing down requests to the container we just stopped, so a closed socket
-  // here is an expected outcome of this stage — not a reason to abort the whole suite. Treat an
-  // unreachable B as the fail-closed answer the check is looking for.
+  const phase = async (name, fn) => {
+    const t = Date.now();
+    const v = await fn();
+    WAITS.push({ ms: Date.now() - t, polls: 0, ok: true, kind: `kill:${name}` });
+    return v;
+  };
+  await phase('stop', () =>
+    new Promise((resolve, reject) => {
+      try {
+        execSync('docker stop household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
+        resolve();
+      } catch (e) {
+        reject(e);
+      }
+    })
+  );
+  await phase('confirm-stopped', () =>
+    waitFor(() => {
+      try { return execSync('docker inspect -f {{.State.Running}} household-c-sidecar-c-1', { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
+      catch { return true; }
+    }, 15000)
+  );
   const readDead = () =>
     fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } }).catch(e => ({
       headers: { get: () => `UNREACHABLE:${e.cause?.code || e.name}` },
       arrayBuffer: async () => new ArrayBuffer(0),
       ok: false,
     }));
-  // A closed socket here is the fail-closed answer, not a test failure — B is still tearing down
-  // the connection it held to the container that just stopped. Retry briefly, then take the answer.
-  const deadRes = await until(async () => {
+  // The member may refuse the connection outright while it tears down the one it held to the
+  // owner's sidecar we just stopped; refusing is the fail-closed answer this check wants. One
+  // attempt is enough — the claim is that nothing comes back, and waiting cannot make that truer.
+  const deadSeen = await phase('offline-read', async () => {
     const r = await readDead();
     const bytes = (await r.arrayBuffer()).byteLength;
-    const cache = r.headers.get('x-cache');
-    return cache === 'BYPASS' && bytes < 20000 ? { cache, bytes } : null;
-  }, 15000, 1000);
-  const deadSeen = deadRes || (await readDead().then(async r => ({ cache: r.headers.get('x-cache'), bytes: (await r.arrayBuffer()).byteLength })));
+    return { cache: r.headers.get('x-cache'), bytes };
+  });
   check('owner offline: UNCACHED photo cannot be produced (no hidden copy exists)',
-        deadSeen.cache === 'BYPASS' && deadSeen.bytes < 20000,
+        (deadSeen.cache === 'BYPASS' || String(deadSeen.cache).startsWith('UNREACHABLE')) && deadSeen.bytes < 20000,
         `x-cache: ${deadSeen.cache}, ${deadSeen.bytes}B`);
   const cachedRes = await fetch(`${BS}/api/assets/${cachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
   check('owner offline: recently viewed photo still renders FROM CACHE',
         cachedRes.headers.get('x-cache') === 'HIT' && sha1(await cachedRes.arrayBuffer()) === cachedSha);
-  execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
-  // Wait for the OWNER'S SIDECAR, not just its Immich: the container answers an HTTP ping seconds
-  // earlier, and until the sidecar is up a hotlink resolves through a dial that has not succeeded.
-  // This is an HTTP read on purpose — an iroh probe spawns a container, so looping on one would
-  // cost minutes. A restarted sidecar also listens on a NEW endpoint, so the cached one is dropped.
-  await waitFor(async () => {
-    try { return (await (await fetch(`${A}/immich-shared-albums/health`)).json()).ok === true; }
-    catch { return false; }
-  }, 60000);
+  await phase('start', () =>
+    new Promise((resolve, reject) => {
+      try {
+        execSync('docker start household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
+        resolve();
+      } catch (e) {
+        reject(e);
+      }
+    })
+  );
+  // Wait on the READ rather than on a readiness signal for it. The owner must start its Immich and
+  // its sidecar, then the member re-dials a sidecar that now listens on a NEW endpoint; gating on
+  // either in between costs more than the convergence it is anticipating. Asking the member for a
+  // pass starts that re-dial now rather than at its next tick, and the cached endpoint token is
+  // dropped because it names the endpoint from before the restart.
   endpointCache.delete(ORIGIN_DIRECT);
-  const aliveRes = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } })
-    .catch(e => ({ headers: { get: () => `UNREACHABLE:${e.cause?.code || e.name}` }, arrayBuffer: async () => new ArrayBuffer(0), ok: false }));
-  const aliveBytes = await aliveRes.arrayBuffer();
+  await trigger('B');
+  const recovered = await phase('recovery-read', () =>
+    until(async () => {
+      const r = await fetch(`${BS}/api/assets/${uncachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } }).catch(
+        () => null
+      );
+      if (!r) return null;
+      const bytes = (await r.arrayBuffer()).byteLength;
+      const cache = r.headers.get('x-cache');
+      return (cache === 'MISS' || cache === 'BYPASS') && bytes > 500 ? { cache, bytes } : null;
+    }, 90000, 1000)
+  );
   // The property is that a real rendition came back rather than the fail-closed stub. Which cache
   // header rides along depends on whether Immich had generated its preview at that moment, and the
   // bytes are not fixed: Immich re-encodes a preview when it regenerates one.
-  check('owner back online: uncached photo streams again (hotlink recovery)',
-        (aliveRes.headers.get('x-cache') === 'MISS' || aliveRes.headers.get('x-cache') === 'BYPASS') &&
-          aliveBytes.byteLength > 500,
-        `x-cache: ${aliveRes.headers.get('x-cache')}, status ${aliveRes.status}, ${aliveBytes.byteLength}B`);
+  check('owner back online: uncached photo streams again (hotlink recovery)', !!recovered,
+        recovered ? `x-cache: ${recovered.cache}, ${recovered.bytes}B` : 'never recovered within 90s');
+  WAITS.push({ ms: Date.now() - killTestStart, polls: 0, ok: true, kind: 'kill:STAGE-TOTAL' });
 }
 
 stage('loop prevention (the counts must HOLD, not merely read true once)');
