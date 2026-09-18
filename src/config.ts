@@ -46,6 +46,13 @@ export const CFG = {
   apiKey: apiKey as string,
   name: process.env.ISA_HOUSEHOLD_NAME || 'Unnamed household',
   port: envInt('ISA_PORT', 8300, 1),
+  // The UDP port the peer transport binds. STABLE by default (the same number as the HTTP port,
+  // on UDP) rather than random: a peer remembers where it last reached us, and after a restart —
+  // an update, a reboot — a random port makes that memory wrong, so the peer can only find us
+  // again once we happen to dial it or a relay brokers the path. A fixed port keeps the address
+  // true across restarts, lets an operator forward it for guaranteed direct paths, and makes
+  // ISA_RELAY=false deployments survive restarts. 0 restores a random port.
+  p2pPort: envInt('ISA_P2P_PORT', 8300, 0),
   dataDir: process.env.ISA_DATA_DIR || '/data',
   // The album/asset watch cadence. Invite detection rides the same tick today; if the two
   // ever want different cadences, mint ISA_INVITE_POLL_MS rather than overloading this one.

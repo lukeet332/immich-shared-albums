@@ -109,6 +109,9 @@ export const localAddr = () => {
 export async function startTransport(handler: PeerHandler): Promise<void> {
   const builder = Endpoint.builder();
   presetMinimal(builder);
+  // A stable UDP port (see CFG.p2pPort): peers remember ip:port, and a restart must not make
+  // that memory wrong. 0 keeps iroh's random port for the rare host where the fixed one is taken.
+  if (CFG.p2pPort) builder.bindAddr(`0.0.0.0:${CFG.p2pPort}`);
   // Relays assist hole-punching and carry end-to-end-encrypted traffic when a direct path
   // fails — the one disclosed third party, and only ever a fallback. ISA_RELAY=off runs dark.
   if (CFG.relay) builder.relayMode(RelayMode.defaultMode());
