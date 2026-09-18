@@ -13,15 +13,22 @@ export const SERVED_ALPNS = [PROTOCOL_ALPN];
 /** Reject a hung request instead of blocking a sync loop forever — a v0-style peer that
  *  abandons a stream mid-request must cost one timeout, not a wedged process. */
 const DEADLINE_MS = 120_000;
-const withDeadline = <T>(p: Promise<T>, what: string): Promise<T> => {
+/** Reaching a peer is a different budget from streaming a body. A dial either completes in a
+ *  few seconds (direct, hole-punched, or via the relay) or the peer is not there; QUIC's own
+ *  give-up is ~45s and the stream deadline above is two minutes, and until this existed an
+ *  OFFLINE owner made every uncached photo hang in the member's Immich for that long before
+ *  the local stub was served. The byte path fails closed to the stub in seconds instead. */
+const DIAL_DEADLINE_MS = 10_000;
+/** The byte path's response HEADER — see peerByteRequest. Bodies keep DEADLINE_MS semantics
+ *  (none: they stream to FIN). JSON requests keep DEADLINE_MS for their header too, because a
+ *  ref push is processed before it is answered and can legitimately take that long. */
+const BYTE_HEAD_DEADLINE_MS = 15_000;
+const withDeadline = <T>(p: Promise<T>, what: string, ms = DEADLINE_MS): Promise<T> => {
   let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
     p.finally(() => clearTimeout(timer)),
     new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`${what} timed out after ${DEADLINE_MS / 1000}s`)),
-        DEADLINE_MS
-      );
+      timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms / 1000}s`)), ms);
     }),
   ]);
 };
@@ -215,7 +222,7 @@ async function connectionFor(peer: Peer): Promise<any> {
 async function roundTrip(peer: Peer, header: FrameHeader, body: Buffer) {
   if (!endpoint) throw new Error('transport not started');
   try {
-    const conn = await withDeadline(connectionFor(peer), `dial to "${peer.name}"`);
+    const conn = await withDeadline(connectionFor(peer), `dial to "${peer.name}"`, DIAL_DEADLINE_MS);
     const bi = await conn.openBi();
     await bi.send.writeAll(lenPrefixed(Buffer.from(JSON.stringify(header))));
     await bi.send.writeAll(lenPrefixed(body));
@@ -238,13 +245,18 @@ export async function peerRequest(
     { path },
     jsonBody === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(jsonBody))
   );
-  const head = JSON.parse(
-    (await withDeadline(readPrefixed(bi.recv, 64 * 1024), `response from "${peer.name}"`)).toString()
-  ) as ResponseHeader;
-  const raw = Buffer.from(
-    await withDeadline(bi.recv.readToEnd(64 * 1024 * 1024), `response body from "${peer.name}"`)
-  );
-  return { status: head.status, json: raw.length ? JSON.parse(raw.toString()) : null };
+  try {
+    const head = JSON.parse(
+      (await withDeadline(readPrefixed(bi.recv, 64 * 1024), `response from "${peer.name}"`)).toString()
+    ) as ResponseHeader;
+    const raw = Buffer.from(
+      await withDeadline(bi.recv.readToEnd(64 * 1024 * 1024), `response body from "${peer.name}"`)
+    );
+    return { status: head.status, json: raw.length ? JSON.parse(raw.toString()) : null };
+  } catch (e) {
+    connections.delete(peer.pub); // a connection that stopped answering must not be reused
+    throw e;
+  }
 }
 
 /** Byte request with a peer — previews, originals, playback. Range rides the frame header. */
@@ -259,10 +271,30 @@ export async function peerByteRequest(
   recv: { read(size: number): Promise<number[]> };
 }> {
   const bi = await roundTrip(peer, { path, range, mapping }, Buffer.alloc(0));
-  // Deadline covers the header only: byte BODIES may stream for as long as a video runs.
-  const head = JSON.parse(
-    (await withDeadline(readPrefixed(bi.recv, 64 * 1024), `byte response from "${peer.name}"`)).toString()
-  ) as ResponseHeader;
+  // Deadline covers the header only: byte BODIES may stream for as long as a video runs. The
+  // header gets the SHORT budget: a peer answers a byte request the moment its Immich returns
+  // headers, so a header that has not arrived in seconds means the peer is gone — and a cached
+  // QUIC connection to a peer that died without closing still looks open (closeReason() null),
+  // so the dial deadline never fires for it; QUIC's own loss detection takes ~45s. This is the
+  // wait a member's Immich showed on every uncached photo while the owner was offline.
+  let head: ResponseHeader;
+  try {
+    head = JSON.parse(
+      (
+        await withDeadline(
+          readPrefixed(bi.recv, 64 * 1024),
+          `byte response from "${peer.name}"`,
+          BYTE_HEAD_DEADLINE_MS
+        )
+      ).toString()
+    ) as ResponseHeader;
+  } catch (e) {
+    // A header that never came means the connection is dead even though QUIC has not said so
+    // yet. Evict it, or every request until QUIC's own loss detection would time out the same
+    // way — including the first one after the peer comes back.
+    connections.delete(peer.pub);
+    throw e;
+  }
   return { status: head.status, headers: head.headers ?? {}, recv: bi.recv };
 }
 
