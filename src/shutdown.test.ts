@@ -48,8 +48,34 @@ test('the handler stops listening, and exits when close reports done', () => {
   }
 });
 
-test('a hung close still exits, so the container is never left waiting', () => {
-  // A server with an open connection can leave close() pending; the process must not follow it into
-  // the runtime's grace period. Driven through FORCE_EXIT_MS rather than a real socket.
-  assert.ok(FORCE_EXIT_MS > 0 && FORCE_EXIT_MS <= 10_000, 'force-exit must be bounded and short');
+test('a hung close still exits, so the container is never left waiting', t => {
+  // A server with an open keep-alive or SSE connection can leave close() pending forever. If that
+  // were the only exit path, the container would sit until the runtime SIGKILLed it — the same
+  // slow stop this module exists to remove, just moved. Driven on mock timers so the test asserts
+  // the force-exit actually fires rather than that a constant has a sensible value.
+  const exits: number[] = [];
+  const originalExit = process.exit;
+  // Throwing is what lets the assertion run: the real process.exit never returns, so a test that
+  // called it directly would simply end the runner.
+  process.exit = ((code?: number) => {
+    exits.push(code ?? 0);
+    throw new Error('process.exit called');
+  }) as typeof process.exit;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const tickPastForceExit = () => {
+    try {
+      t.mock.timers.tick(FORCE_EXIT_MS);
+    } catch (e) {
+      if ((e as Error).message !== 'process.exit called') throw e;
+    }
+  };
+  try {
+    stopListening({ close: () => {} }); // never calls back — a stuck listener
+    assert.deepEqual(exits, [], 'must NOT exit before the force timer is due');
+    tickPastForceExit();
+    assert.deepEqual(exits, [0], 'the force timer must exit 0 rather than wait on close()');
+  } finally {
+    process.exit = originalExit;
+    t.mock.timers.reset();
+  }
 });
