@@ -622,7 +622,11 @@ console.log('— stage: kill test — uncached photos fail closed; cached ones s
   const uncachedProxy = all.find(a => !a.exifInfo?.latitude && (a.fileCreatedAt || '').startsWith('2026-08-1'));
   const { execSync } = await import('node:child_process');
   const dockerEnv = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
-  execSync('docker stop household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
+  // `kill`, not `stop`: this stage simulates the owner VANISHING, so SIGKILL is the faithful
+  // signal and it returns at once. `stop` would additionally wait out the grace period the sidecar
+  // now uses to exit cleanly — a graceful exit is covered by a unit test, and paying for it here
+  // would only make the crash simulation slower, not more realistic.
+  execSync('docker kill household-c-sidecar-c-1', { env: dockerEnv, stdio: 'ignore' });
   await waitFor(() => {
     try { return execSync('docker inspect -f {{.State.Running}} household-c-sidecar-c-1', { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
     catch { return true; }

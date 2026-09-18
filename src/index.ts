@@ -10,6 +10,7 @@ import { peerRoutes } from './p2p/routes.ts';
 import { startWatchLoop } from './sync/engine.ts';
 import { startCommentLoop } from './sync/comments.ts';
 import { startInviteLoop } from './sync/invites.ts';
+import { exitOnTerminationSignals } from './shutdown.ts';
 
 // A sidecar must never die silently: an unhandled async error should be logged and swallowed
 // (the loops are all independently retrying), not take the process down with no trace. A truly
@@ -20,6 +21,11 @@ process.on('unhandledRejection', reason => {
 process.on('uncaughtException', err => {
   log('UNCAUGHT EXCEPTION (kept alive):', err.stack || String(err));
 });
+
+// Node is PID 1 here (exec-form CMD, no init), and the kernel ignores a signal a PID-1 process has
+// no handler for — so without this a `docker stop` waits out its whole grace period and SIGKILLs us.
+// See shutdown.ts for why that matters; the handler itself must never be replaced.
+exitOnTerminationSignals(server, log);
 
 // Protocol upgrades bypass the request router entirely — see web/upgrade.ts. Without this
 // the sidecar cannot front Immich on its own, because live web updates break.
