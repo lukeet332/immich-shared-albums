@@ -26,6 +26,16 @@ reviews:
     enabled: true
     drafts: false
     auto_incremental_review: true
+    # Reviews are a limited resource, so they are SPENT rather than spent by default: label a PR
+    # `skip-coderabbit` when a human has already decided the diff is safe (mechanical, size-only,
+    # a doc tweak) and a review would be noise. Removing the label puts it back in the queue.
+    # Docs and release chores are skipped by title, because a review of prose is not a review and
+    # release-please's PR is generated.
+    labels:
+      - '!skip-coderabbit'
+    ignore_title_keywords:
+      - 'docs:'
+      - 'chore(main): release'
 
   # Compiled output, not source. scripts/build-web.mjs writes src/web/dist/** and the pre-commit
   # hook stages it; the .bundle.js files are bundles from the same pipeline. Plus the lockfile.
