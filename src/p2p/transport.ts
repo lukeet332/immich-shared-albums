@@ -245,13 +245,18 @@ export async function peerRequest(
     { path },
     jsonBody === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(jsonBody))
   );
-  const head = JSON.parse(
-    (await withDeadline(readPrefixed(bi.recv, 64 * 1024), `response from "${peer.name}"`)).toString()
-  ) as ResponseHeader;
-  const raw = Buffer.from(
-    await withDeadline(bi.recv.readToEnd(64 * 1024 * 1024), `response body from "${peer.name}"`)
-  );
-  return { status: head.status, json: raw.length ? JSON.parse(raw.toString()) : null };
+  try {
+    const head = JSON.parse(
+      (await withDeadline(readPrefixed(bi.recv, 64 * 1024), `response from "${peer.name}"`)).toString()
+    ) as ResponseHeader;
+    const raw = Buffer.from(
+      await withDeadline(bi.recv.readToEnd(64 * 1024 * 1024), `response body from "${peer.name}"`)
+    );
+    return { status: head.status, json: raw.length ? JSON.parse(raw.toString()) : null };
+  } catch (e) {
+    connections.delete(peer.pub); // a connection that stopped answering must not be reused
+    throw e;
+  }
 }
 
 /** Byte request with a peer — previews, originals, playback. Range rides the frame header. */
@@ -272,15 +277,24 @@ export async function peerByteRequest(
   // QUIC connection to a peer that died without closing still looks open (closeReason() null),
   // so the dial deadline never fires for it; QUIC's own loss detection takes ~45s. This is the
   // wait a member's Immich showed on every uncached photo while the owner was offline.
-  const head = JSON.parse(
-    (
-      await withDeadline(
-        readPrefixed(bi.recv, 64 * 1024),
-        `byte response from "${peer.name}"`,
-        BYTE_HEAD_DEADLINE_MS
-      )
-    ).toString()
-  ) as ResponseHeader;
+  let head: ResponseHeader;
+  try {
+    head = JSON.parse(
+      (
+        await withDeadline(
+          readPrefixed(bi.recv, 64 * 1024),
+          `byte response from "${peer.name}"`,
+          BYTE_HEAD_DEADLINE_MS
+        )
+      ).toString()
+    ) as ResponseHeader;
+  } catch (e) {
+    // A header that never came means the connection is dead even though QUIC has not said so
+    // yet. Evict it, or every request until QUIC's own loss detection would time out the same
+    // way — including the first one after the peer comes back.
+    connections.delete(peer.pub);
+    throw e;
+  }
   return { status: head.status, headers: head.headers ?? {}, recv: bi.recv };
 }
 
