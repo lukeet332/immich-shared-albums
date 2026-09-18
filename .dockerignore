@@ -1,0 +1,10 @@
+# The image needs exactly what the Dockerfile copies; everything else is excluded up front.
+# Not a size optimisation: the mock rig writes root-owned Postgres data under demo/ (b-pg, c-pg,
+# d-pg), and a `docker build .` run as a normal user on Linux fails while merely STAT-ing them
+# ("checking context: can't stat 'demo/b-pg'"). Excluding the tree means the walk never descends.
+*
+!package.json
+!package-lock.json
+!src/
+src/**/*.test.ts
+src/web/ui/

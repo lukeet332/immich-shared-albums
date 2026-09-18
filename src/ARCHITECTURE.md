@@ -153,7 +153,7 @@ src/
   config.ts           settings (CFG), the logger, string constants
   state.ts            the store instance, household keypair, seen-ledger accessors
   store.ts            the raw SQLite layer
-  p2p/transport.ts    the iroh transport: dial-by-key, framing, the three deadlines, stable port
+  peers.ts            peer lookups (peerByPub, mappingFor) and the fire-and-forget nudge → peers.md
   types.ts            wire types shared by both ends
   invariants.test.ts  pure-logic unit tests
   immich/             the local Immich API layer        → local-immich-api.md
