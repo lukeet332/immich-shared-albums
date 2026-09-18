@@ -1451,6 +1451,47 @@ stage('panel manages server links (unlink)');
   }
 }
 
+if (DKEY) {
+  stage('a peer that lost its mappings is retired after repeated 404s, not retried forever');
+  // A member that unlinks or leaves TELLS the origin (see the "left" notices above). The case this
+  // guards is the silent one: a peer that lost its mappings without notice — a state restore, the
+  // frozen-WAL bug of 2026-09-18 — and answers every push with 404 ("unknown mapping"). The origin
+  // used to retry, and log, that push every cycle forever. A 404 is transient by protocol (the
+  // mirror may simply not exist yet), so the bar is many consecutive cycles, not a few.
+  // Reproduce it exactly: stop D's sidecar, delete ONLY its mapping rows — identity and peers stay,
+  // so D still answers C as the same peer — and start it again.
+  const dDir = new URL('../household-d', import.meta.url).pathname;
+  const { execSync: dsh } = await import('node:child_process');
+  const dockerEnv2 = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
+  const dPub = readSidecarKv('household-d/d-sidecar', 'identity')?.pub;
+  const liveMappingsForD = () => {
+    const out = sidecarSql('household-c/c-sidecar',
+      `SELECT COUNT(*) AS n FROM mappings WHERE role='owner' AND peer='${dPub}' AND COALESCE(dead, 0) NOT IN (1, 'true')`);
+    try { return out ? Number(JSON.parse(out)[0].n) : null; } catch { return null; }
+  };
+  const liveBefore = liveMappingsForD();
+  check('rig: the origin holds live owner mappings for D', (liveBefore ?? 0) > 0, `live: ${liveBefore}`);
+  let wiped = false;
+  try {
+    dsh('docker compose stop sidecar-d', { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
+    dsh(`docker compose run --rm --no-deps --entrypoint node sidecar-d -e 'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db");db.exec("DELETE FROM mappings");console.log("mappings wiped")'`,
+        { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
+    dsh('docker compose start sidecar-d', { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
+    wiped = true;
+  } catch (e) { console.log(`  (could not wipe D's mappings: ${String(e.message).split('\n')[0].slice(0, 100)})`); }
+  check("rig: D's sidecar restarted with its mappings wiped and its identity intact", wiped);
+  if (wiped && (liveBefore ?? 0) > 0) {
+    await waitFor(async () => (await fetch(`${DS}/immich-shared-albums/health`).catch(() => ({ ok: false }))).ok, 30000);
+    // Something for the origin to push, so the 404s actually happen.
+    const nudge = await upload(A, AKEY, 'after-loss.jpg', `al${Date.now() % 10000}`, '2026-08-20T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [nudge]);
+    await api(A, AKEY, `/albums/${ALBUM_ID}/assets`, { ...j({ ids: [nudge] }), method: 'PUT' });
+    const retired = await until(async () => liveMappingsForD() === 0 ? true : null, 120000);
+    check('the origin retires a mapping its peer keeps answering 404 to, instead of retrying forever',
+          !!retired, retired ? `${liveBefore} -> 0 live` : `still ${liveMappingsForD()} live after 120s`);
+  }
+}
+
 if (process.env.E2E_PROFILE) {
   const total = WAITS.reduce((s, w) => s + w.ms, 0);
   const polls = WAITS.reduce((s, w) => s + w.polls, 0);
