@@ -12,28 +12,36 @@
  * accept page's client-side whoami, which the server previously trusted on faith.
  */
 import { CFG } from '../config.ts';
+import { credsFromHeaders, type Creds } from '../immich/access.ts';
 
 export type Caller = { id: string; name: string; isAdmin: boolean };
+/** A signed-in caller and the credential that proved it. Per-user surfaces must read Immich AS
+ *  this caller — filtering someone else's read for them is how a panel ends up empty. */
+export type SignedIn = { caller: Caller; creds: Creds };
 
-const CRED_HEADERS = ['cookie', 'x-api-key', 'authorization'] as const;
+/** The caller's forwarded credential, or null when they sent none. */
+export const callerCreds = (req): Creds | null => credsFromHeaders(req.headers);
 
 /** Resolve the caller against Immich, or null if they are not signed in. */
-export async function callerIdentity(req): Promise<Caller | null> {
-  const headers: Record<string, string> = {};
-  for (const h of CRED_HEADERS) if (req.headers[h]) headers[h] = req.headers[h] as string;
-  if (!Object.keys(headers).length) return null;
+export async function callerSignedIn(req): Promise<SignedIn | null> {
+  const creds = callerCreds(req);
+  if (!creds) return null;
   try {
     const r = await fetch(`${CFG.immichUrl}/api/users/me`, {
-      headers: { ...headers, Accept: 'application/json' },
+      headers: { ...creds.headers, Accept: 'application/json' },
       signal: AbortSignal.timeout(15000),
     });
     if (!r.ok) return null;
     const u = await r.json();
-    return u?.id ? { id: u.id, name: u.name, isAdmin: !!u.isAdmin } : null;
+    return u?.id ? { caller: { id: u.id, name: u.name, isAdmin: !!u.isAdmin }, creds } : null;
   } catch {
     return null;
   }
 }
+
+/** Who is calling, when the credential itself is not needed. */
+export const callerIdentity = async (req): Promise<Caller | null> =>
+  (await callerSignedIn(req))?.caller ?? null;
 
 /** 401 body that tells a browser where to go to fix it. */
 export const signInRequired = (what: string) => ({

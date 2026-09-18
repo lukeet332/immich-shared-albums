@@ -908,6 +908,28 @@ stage('native album invitations, per person (no share link)');
         check('invited album\'s photo materialises on the member', !!arrived, arrived ? '' : 'timed out');
         check('an invite reaches ONLY the invited person', (await humansOn(mirrored)).join(',') === bAdmin.name,
               (await humansOn(mirrored)).join(', '));
+
+        // The per-user panel must answer AS the caller. This user belongs to the one album they
+        // joined and none of the others the admin can see — so a filtered admin read, which
+        // refuses a mirror the admin is not in, can only return the wrong list.
+        const login = await fetch(`${B}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: 'second-e2e@demo.local', password: 'e2e-pass-123' }),
+        });
+        const sessionCookie = (login.headers.get('set-cookie') || '').split(';')[0];
+        check('the rig can sign a non-admin user in for the panel check',
+              login.ok && !!sessionCookie, `${login.status} cookie=${sessionCookie ? 'yes' : 'no'}`);
+        const asSecond = await fetch(`${BS}/immich-shared-albums/me/albums`, {
+          headers: { Cookie: sessionCookie },
+        });
+        const secondPanel = await asSecond.json().catch(() => ({}));
+        const asAdmin = await fetch(`${BS}/immich-shared-albums/me/albums`, { headers: { 'x-api-key': BKEY } });
+        const adminPanel = await asAdmin.json().catch(() => ({}));
+        const secondNames = (secondPanel.albums || []).map(a => a.name);
+        check('the panel answers the caller, not the admin: the non-admin sees only their own albums',
+              asSecond.status === 200 && secondNames.length > 0 && adminPanel.albums.length > secondNames.length,
+              `second=${asSecond.status} ${JSON.stringify(secondNames)} vs admin=${adminPanel.albums?.length}`);
       }
 
       // Withdrawal is asserted against the /invitations CONTRACT rather than state.db: the running

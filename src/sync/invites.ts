@@ -28,6 +28,7 @@ import type { Mapping, Peer } from '../store.ts';
 import { state, save, store, addedHas, addedForget } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
 import { ensureUtilityUser } from '../immich/contributors.ts';
+import { readCredsFor, callAs } from '../immich/access.ts';
 import { peerRequest } from '../p2p/transport.ts';
 import { ensureMirror, fillMirrorInBackground } from '../p2p/mirror.ts';
 import { leaveAlbum } from './leave.ts';
@@ -307,7 +308,7 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
   if (!host?.apiKey) return;
   let alb;
   try {
-    alb = await immichJson(`/albums/${mapping.albumId}`, {}, host.apiKey);
+    alb = await callAs(readCredsFor(mapping), `/albums/${mapping.albumId}`);
   } catch {
     return;
   } // album gone: the withdrawal path will clean up
