@@ -123,9 +123,14 @@ by the saving user, and the one deliberate way a copy lands on your disk.
 
 `index.ts` is the composition root: start the server, start the loops. Everything else is a helper.
 
+`shutdown.ts` registers SIGTERM/SIGINT. Node is PID 1 in the image (exec-form `CMD`, no init) and
+the kernel ignores a signal a PID-1 process has no handler for, so without it a `docker stop` waits
+out the runtime's whole grace period and SIGKILLs the sidecar instead.
+
 ```
 src/
   index.ts            entry / composition root
+  shutdown.ts         exits on the signals a container runtime sends
   config.ts           settings (CFG), the logger, string constants
   state.ts            the store instance, household keypair, seen-ledger accessors
   store.ts            the raw SQLite layer
