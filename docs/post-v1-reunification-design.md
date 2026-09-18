@@ -49,6 +49,10 @@ contributions as real photos, and holds the other's as hotlink stubs.** So the s
    creates a fresh empty mirror" — so nobody ends up with two copies of the album.
 3. **Bidirectional initial contribute** with non-destructive dedup (§3).
 
+Each person **stays the owner of their own album**. Neither album is copied, transferred or
+re-created, so no step ever produces a second album on either server: the album you own is the
+album that changes, and the mapping that carries the share points at it (§4).
+
 ### Honest ceiling
 "Exact original Google state" is **best-effort**. Google Takeout re-encodes/strips EXIF per export,
 so the *same* shared photo exported by both people can arrive with **different bytes → different
@@ -118,6 +122,34 @@ stubs, and every restored server looks like an owner of everything (bots/stubs n
 - For the **lost-`state.db` restore subset** (§9): ownership survives as long as **one** side kept
   its record; on re-pair, whichever still holds `role: 'owner'` re-asserts it. Only if **both**
   lost it is ownership truly gone → a human "who owns this?" decision. Never machine-guessed.
+
+### Each person keeps their own album **[decided]**
+Immich has no ownership transfer, and the sidecar's only way to make someone a "member" of an
+album is to create a mirror album owned by a stand-in account (`ensureMirror`). So a reunification
+that re-assigned ownership would have to **create a second album on one server** — the duplicate
+the feature exists to avoid. Instead:
+
+- **The album's own owner stays its owner**, on their own server. Nothing is transferred, and no
+  album is created for the merge.
+- The peer's photos materialise into that album as **stand-in-owned stubs**, exactly as a
+  `contribute` share already does — so one album legitimately holds the owner's real photos *and*
+  the other person's stubs. Ownership of a real photo never changes hands.
+- **Overlaps are suppressed, not resolved**: a photo both sides hold stays each side's own real
+  asset, with no stub for the peer's copy (§3). That is what keeps the union from double-showing.
+- Consequence: no alias account is mirroring a person here. The merge writes **only the stub
+  assets** into the album, and attribution stays on the ref (`contributor.originUserId`), so no
+  Immich account is created for a person we have not been asked to share with.
+
+### What a side publishes, and what "owned" means **[decided]**
+Matching runs against albums each side **owns** — never ones merely visible to them.
+
+- "Owned" is `albumUsers` containing the caller at `role: 'owner'`. An album response carries no
+  `ownerId`; the owner is only inside `albumUsers`.
+- Owned-only is sufficient because Takeout **flattens ownership**: the Google Photos importer
+  creates an Immich album per Google album through *your* API key (`--sync-albums`, default on), so
+  a Google album that was someone else's arrives in your library as an album you own.
+- Owned-only is also the minimal disclosure, and it cannot publish the same album twice when two
+  local people are both members of it.
 
 ### The album owner must travel in the match metadata
 Match metadata is **name + date + metadata + OWNER**. The owner field is required because:
@@ -213,14 +245,25 @@ Revised from "pair-private" to **public**: an album's history is legitimate shar
 everyone in it, like an edit history; members see contents change anyway, so hiding *why* is the odd
 choice. This also removes the wrinkle that **Immich has no native per-user-private comment.**
 
-- **Comments** hold the full public trail + discoverable prompts: *"Repair requested by X,"
-  "accepted by Y," "Repair successful — 3 photos merged by non-destructive dedupe, reply `un-dedupe`
-  to see all."*
-- **User panel** holds the actionable bits (pending requests, repair button, settings) and can keep
-  a private per-user history if wanted.
-- Impl: bot-authored audit comments are sync-excluded, so **each side posts the trail locally** as
-  the coordinated request/accept events complete (both servers know both events via the peer
-  protocol) — all members on both servers see the same history without syncing comments.
+- **Comments** hold the trail + discoverable prompts: *"Repair requested by X," "accepted by Y,"
+  "Repair successful — 3 photos merged by non-destructive dedupe, reply `un-dedupe` to see all."*
+- **User panel** holds the actionable bits (pending requests, repair button, settings); a request
+  that is **rejected or times out** has a line only there, because it never created an album the
+  two sides share, and writing to the peer's album is not something an ungranted request may do.
+- **Every line is authored by a utility account** (`ensureContributor`, message posted with that
+  account's key). That is what keeps it local: `syncCommentsOnce` drops any comment whose
+  `user.id` is in `utilityIds` before pushing, so the trail cannot cross servers or echo back. A
+  line authored as the human who clicked would sync as that person's comment onto the peer's album.
+- **Each side posts its own copy** as the coordinated event completes — both servers know the
+  request, the accept, the merge and the withdrawal from the peer protocol, so no trail line is
+  ever transmitted. Each side's comment thread ends up showing the same events.
+- **Idempotent by ledger, not by hope**: a line is written once per event, tagged through
+  `seenActAdd`/`seenActHas`, because the loops retry a step until it settles and a naive write
+  would accumulate a second "Repair requested by Alice" on every pass.
+- **Comments sync covers the human replies** on both albums (owner mapping pushes, member mapping
+  pulls canonical) — the trail is what stays put, not the conversation.
+- Panel link in a comment is a **plain URL**: copy-pasteable, and Immich rendering it clickable is
+  not something we control.
 
 ---
 
