@@ -14,7 +14,7 @@ const ALBUM = process.env.A_ALBUM || '__CREATE__';
 // an empty or bad value must not become a zero-length hold, which would let every stable() pass on
 // its first reading.
 const rawPollMs = Number(process.env.ISA_SYNC_POLL_MS);
-const SYNC_POLL_MS = Number.isFinite(rawPollMs) && rawPollMs >= 1000 ? rawPollMs : 4000;
+const SYNC_POLL_MS = Number.isFinite(rawPollMs) && rawPollMs >= 1000 ? rawPollMs : 1000;
 /** Two sidecar passes: the smallest window in which "nothing changed" means anything. */
 const TWO_CYCLES_MS = 2 * SYNC_POLL_MS;
 /** Deadline for a hold: the hold itself plus room for the change to be seen and settle. Derived so

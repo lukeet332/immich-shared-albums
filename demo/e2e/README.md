@@ -52,14 +52,20 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
    `GET /albums/:mappingId/status` (feature `sync-status`; a 404 means an older peer — wait instead).
 4. **The rig's cadence reaches the suite through one value, `SYNC_POLL_MS`.** `stable()` proves
    *"nothing changed"* only over a window, and that window is `TWO_CYCLES_MS` (`2 × SYNC_POLL_MS`,
-   read once from `ISA_SYNC_POLL_MS`, default `4000` to match the composes). It used to be a literal
+   read once from `ISA_SYNC_POLL_MS`, default `1000` to match the composes). It used to be a literal
    `8000`, which meant changing the rig's cadence left every hold-point at the old duration — an
    experiment that varied the cadence then measured a constant. `HOLD_DEADLINE_MS` is derived too, so
    a slower cadence can never make a deadline shorter than the hold it must allow. The value is
    clamped like the sidecar clamps it (floor 1000, else the default), so an empty or bad env can never
    produce a zero-length hold. `ISA_SYNC_POLL_MS` is a `workflow_dispatch` input, so a cadence
    experiment is one run of the same commit. History: PR #55's 15s→4s drop was the largest single
-   reduction the suite has had (~499s→~320s wall); whether 4s→1s pays is the open experiment.
+   reduction the suite has had (~499s→~320s wall). 4s→1s was then measured in CI on one commit
+   (`a20e96b`, 155/155 in every run): in-suite wall 226.5s / 216.0s at 4000 (runs 35337343715,
+   35331230313), 205.6s at 2000 (35337341989), 192.4s / 193.4s at 1000 (35337337732, 35337339988).
+   Per stage, 1000 vs 4000: view-only 13.2→7.2, reverse-direction 9.2→3.2, loop prevention 8.2→2.1,
+   revocation 11.6→7.8, invitations ~78→67; deletion+kill unchanged (~60s combined — the kill test
+   is container lifecycle, not cadence); no stage slower. The sidecar refuses anything below 1000, so
+   this is the floor: further gains are structural, not cadence.
 5. **A stage that cannot read its own evidence must fail, not skip.** Some stages read sidecar state
    through the sqlite3 CLI (`readSidecarPeers`, `readSidecarKv`, …). An unreadable `state.db` used to
    look identical to an empty one, so `native album invitations` and `a revocation survives content

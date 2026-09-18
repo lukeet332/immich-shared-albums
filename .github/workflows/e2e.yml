@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       isa_sync_poll_ms:
-        description: 'Sidecar cadence in ms, for a timing experiment (default: 4000)'
+        description: 'Sidecar cadence in ms, for a timing experiment (default: 1000)'
         required: false
-        default: '4000'
+        default: '1000'
 
 jobs:
   pr-title:
@@ -55,7 +55,7 @@ jobs:
       # Sidecar cadence, read by both the rig (compose) and the suite (its `stable()` holds are
       # derived from it). A dispatch input makes a cadence experiment one button, so its runs carry
       # the same commit and the only variable is the cadence.
-      ISA_SYNC_POLL_MS: ${{ inputs.isa_sync_poll_ms || vars.ISA_SYNC_POLL_MS || '4000' }}
+      ISA_SYNC_POLL_MS: ${{ inputs.isa_sync_poll_ms || vars.ISA_SYNC_POLL_MS || '1000' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -105,6 +105,15 @@ jobs:
           npx playwright install --with-deps chromium
           CKEY=$(grep -m1 C_API_KEY ../household-c/.env | cut -d= -f2-) \
           B_EMAIL=admin@e2e.local B_PASS=e2e-admin-pass-1 node browser-test.mjs
+
+      # Informational, every run: a faster cadence must not be bought with API strain. Counts, not a gate.
+      - name: Sidecar API strain (429/5xx in sidecar logs)
+        if: always()
+        run: |
+          for d in demo demo/household-c demo/household-d; do
+            n=$(cd "$d" && docker compose logs --no-log-prefix 2>/dev/null | grep -cE "( 429 | 5[0-9]{2} |status 429|status 5[0-9]{2}|failed: 429|failed: 5[0-9]{2})" || true)
+            echo "$d: ${n:-0} line(s) mentioning 429/5xx"
+          done
 
       - name: Dump sidecar logs on failure
         if: failure()

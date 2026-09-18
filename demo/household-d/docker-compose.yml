@@ -40,8 +40,10 @@ services:
       ISA_IMMICH_URL: http://immich-d:2283
       ISA_IMMICH_API_KEY: ${D_SIDECAR_API_KEY:-${D_API_KEY}}
       ISA_HOUSEHOLD_NAME: "Mock household (D)"
-      # Rig only: the suite waits on convergence, so the production 15s interval is pure test latency.
-      ISA_SYNC_POLL_MS: "${ISA_SYNC_POLL_MS:-4000}"
+      # Rig only: the suite waits on convergence, so the production interval is pure test latency.
+      # 1000 measured against 4000 in CI (same commit, 2 runs each): ~30s less wall, no stage slower,
+      # 155/155 — see demo/e2e/README.md rule 4. The sidecar refuses anything below 1000.
+      ISA_SYNC_POLL_MS: "${ISA_SYNC_POLL_MS:-1000}"
       # Rig only: lets the suite read this sidecar's own progress (loop ticks). Off in every real install.
       ISA_TEST_HOOKS: "true"
     networks:
