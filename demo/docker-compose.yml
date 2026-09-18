@@ -49,6 +49,9 @@ services:
       ISA_SYNC_POLL_MS: "${ISA_SYNC_POLL_MS:-1000}"
       # Rig only: lets the suite read this sidecar's own progress (loop ticks). Off in every real install.
       ISA_TEST_HOOKS: "true"
+      # Rig only: comment sync cadence (production default 5000, floor 500). The comment stages wait on
+      # this loop, not the watcher, so the watcher cadence above does not reach them.
+      ISA_COMMENT_POLL_MS: "${ISA_COMMENT_POLL_MS:-1000}"
     networks:
       - default
       - isa-demo
