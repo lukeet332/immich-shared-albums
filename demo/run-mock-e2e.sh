@@ -51,26 +51,31 @@ purge() { # base key statedir : delete all albums, sidecar users, non-admin asse
   [ "${IDS:-[]}" != "[]" ] && curl -s -X DELETE $BASE/api/assets -H "x-api-key: $KEY" -H 'Content-Type: application/json' -d "{\"ids\":$IDS,\"force\":true}" -o /dev/null
 }
 
-echo "== redeploy + purge B =="
-cd "$DIR/demo" && docker compose up -d --force-recreate sidecar-b >/dev/null 2>&1
-purge http://localhost:2284 "$BKEY" b-sidecar
-reset_state "$DIR/demo" sidecar-b
-
-echo "== redeploy + purge C =="
-cd "$DIR/demo/household-c" && docker compose up -d --force-recreate sidecar-c >/dev/null 2>&1
-purge http://localhost:2285 "$CKEY" c-sidecar
-reset_state "$DIR/demo/household-c" sidecar-c
-
-echo "== redeploy + purge D (third household — relay coverage) =="
+# D (third household — relay coverage): a first-time local rig provisions its key here; CI
+# writes it beforehand.
 cd "$DIR/demo/household-d"
 if [ ! -f .env ]; then
   docker compose up -d immich-d db-d redis-d >/dev/null 2>&1
   echo "D_API_KEY=$("$DIR/demo/ci/provision-mock.sh" http://localhost:2286 "Demo Dave")" > .env
 fi
 DKEY=$(grep -m1 "^D_API_KEY=" .env | cut -d= -f2-)
-docker compose up -d --force-recreate sidecar-d >/dev/null 2>&1
-purge http://localhost:2286 "$DKEY" d-sidecar
-reset_state "$DIR/demo/household-d" sidecar-d
+
+# Redeploy the sidecar, purge its Immich, reset its state — for one household, in a subshell so
+# the cd is contained (purge reads state.db RELATIVE to the compose dir).
+redeploy() { # redeploy <compose-dir> <service> <immich-url> <admin-key> <state-dir>
+  (
+    cd "$1" && docker compose up -d --force-recreate "$2" >/dev/null 2>&1
+    purge "$3" "$4" "$5"
+    reset_state "$1" "$2"
+  )
+}
+# The three households are independent stacks on separate ports and separate compose projects,
+# so they redeploy at once: the wall is the slowest one, not the sum (~30s -> ~12s in CI).
+echo "== redeploy + purge B, C, D (in parallel) =="
+redeploy "$DIR/demo" sidecar-b http://localhost:2284 "$BKEY" b-sidecar &
+redeploy "$DIR/demo/household-c" sidecar-c http://localhost:2285 "$CKEY" c-sidecar &
+redeploy "$DIR/demo/household-d" sidecar-d http://localhost:2286 "$DKEY" d-sidecar &
+wait
 sleep 4
 
 # Fail fast on a rig that did not actually reset. A stale state.db carries bot keys whose
