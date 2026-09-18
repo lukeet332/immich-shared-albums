@@ -54,10 +54,20 @@ export async function assetToRef(a): Promise<AssetRef> {
 // with known provenance). This is what manifests advertise — members diff against it,
 // so it must NOT exclude already-synced assets.
 export async function offerableAssets(assets) {
-  const users = await usersById();
-  return assets.filter(
-    a => (a.type === 'IMAGE' || a.type === 'VIDEO') && (!users[a.ownerId]?.utility || !!ledgerByAsset(a.id))
-  );
+  let users = await usersById();
+  // An owner the cache has never heard of is NOT a human by default. The cache is refreshed on a
+  // timer, so an account created since — a utility user provisioned seconds ago, a stub written by
+  // a duplicate materialisation — has no entry, and treating "unknown" as "human" offered such a
+  // stub to the origin as a fresh contribution: the origin materialised a stub of its own photo
+  // and every household's count went up by one (issue #70). Refresh once for unknown owners; an
+  // owner still unknown after that is left out of this cycle and reconsidered on the next.
+  if (assets.some(a => a.ownerId && !users[a.ownerId])) users = await usersById(0);
+  return assets.filter(a => {
+    if (a.type !== 'IMAGE' && a.type !== 'VIDEO') return false;
+    const owner = users[a.ownerId];
+    if (!owner) return false;
+    return !owner.utility || !!ledgerByAsset(a.id);
+  });
 }
 // The push queue: offerable minus what this mapping has already sent.
 export async function shareableAssets(assets, mappingId) {

@@ -594,6 +594,42 @@ stage('view-only share link (allowUpload off) rejects cross-server uploads');
         `origin held at ${viewOnlyHeld} (want 1)`);
 }
 
+stage('a photo owned by a bot account the sidecar has not seen yet is never offered onward');
+{
+  // Regression for issue #70: the offer filter excludes utility-owned assets by looking the owner
+  // up in a cached user list. An owner the cache had never heard of — a bot provisioned seconds
+  // ago, a stub from a duplicate materialisation — was treated as a HUMAN, and its stub went to
+  // the origin as a fresh contribution: a stub of the origin's own photo, +1 in every household.
+  // Here a brand-new utility-domain account (created behind the sidecar's back, so its cache
+  // cannot know it) drops a photo into the mirror; the origin's count must hold.
+  const originBefore = (await albumAssets(A, AKEY, ALBUM_ID)).length;
+  const botEmail = `stub-echo-${Date.now() % 100000}@immich-shared-albums.internal`;
+  const botPass = 'e2e-echo-bot-pass-1';
+  const bot = await api(B, BKEY, '/admin/users', j({ email: botEmail, name: 'Echo Stub Bot', password: botPass }));
+  // Only the mirror's OWNER (a stand-in account) may add members; find its key in B's state.
+  let added = false;
+  for (const c of Object.values(readSidecarContributors('b-sidecar') || {})) {
+    if (!c.apiKey) continue;
+    const r = await fetch(`${B}/api/albums/${mirror.id}/users`, { ...j({ albumUsers: [{ userId: bot.id, role: 'editor' }] }), method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-api-key': c.apiKey } });
+    if (r.ok) { added = true; break; }
+  }
+  check('rig: the unknown bot could be made an editor of the mirror', added);
+  const login = await (await fetch(`${B}/api/auth/login`, j({ email: botEmail, password: botPass }))).json();
+  const botKey = login.accessToken
+    ? (await (await fetch(`${B}/api/api-keys`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.accessToken}` }, body: JSON.stringify({ name: 'e2e-echo', permissions: ['all'] }) })).json()).secret
+    : null;
+  check('rig: the unknown bot has a key', !!botKey, botKey ? '' : JSON.stringify(login).slice(0, 80));
+  if (added && botKey) {
+    const echoId = await upload(B, botKey, 'echo-stub.jpg', `es${Date.now() % 10000}`, '2026-05-05T09:00:00.000Z');
+    await api(B, botKey, `/albums/${mirror.id}/assets`, { ...j({ ids: [echoId] }), method: 'PUT' });
+    const held = await stable(() => albumAssets(A, AKEY, ALBUM_ID).then(x => x.length), TWO_CYCLES_MS, HOLD_DEADLINE_MS);
+    check("a bot-owned photo never reaches the origin, even before the sidecar's user cache knows the bot",
+          held === originBefore, `origin ${originBefore} -> held at ${held}`);
+    // Leave the album as the suite found it so the later count-based stages are unaffected.
+    await api(B, botKey, `/albums/${mirror.id}/assets`, { ...j({ ids: [echoId] }), method: 'DELETE' }).catch(() => {});
+  }
+}
+
 stage('reverse-direction share — member-owned album with an already-shared photo must not echo');
 {
   // regression: a deduped proxy carries ledger rows from several albums/eras; the wire
