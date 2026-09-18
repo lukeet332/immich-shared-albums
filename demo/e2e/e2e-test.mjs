@@ -228,7 +228,13 @@ const endpointOf = async pageBase => {
 };
 // One iroh request from INSIDE the rig's network (the host cannot dial container IPs).
 const { execSync } = await import('node:child_process');
-const REPO = new URL('../..', import.meta.url).pathname.replace(/\/$/, '');
+const E2E_DIR = new URL('.', import.meta.url).pathname.replace(/\/$/, '');
+// The probe runs in the sidecar's own image: it already holds the one dependency the probe needs
+// (`@number0/iroh`, pinned by the same lockfile the sidecar runs on), so there is no install step.
+// It used to run `npm ci` inside a bare node image on every call — ~3.5s of pure overhead per
+// probe, seven probes a run — and the rig has already built this image before the suite starts.
+// Only demo/e2e is mounted, read-only, so a probe can see nothing but its own client code.
+const PROBE_IMAGE = process.env.PROBE_IMAGE || 'immich-shared-albums:demo';
 // A probe spawns a container and does a live iroh round trip, so it can fail transiently — the
 // native addon has been seen to exit on SIGBUS (135) mid-run. That used to throw out of execSync
 // and kill the whole suite, hiding every other result behind one flake. Retry once, then report a
@@ -236,10 +242,9 @@ const REPO = new URL('../..', import.meta.url).pathname.replace(/\/$/, '');
 const irohProbe = (keys, endpoint, path, opts = {}) => {
   const job = JSON.stringify({ keys, peerPub: endpoint.pub, addrs: endpoint.addrs, path, ...opts });
   const cmd =
-    `docker run --rm --network isa-demo -e ISA_ROOT=/repo -e RELAY=off ` +
-    `-v "${REPO}":/repo -v isa-node-modules:/repo/node_modules node:24-alpine ` +
-    `sh -c 'cd /repo && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1; ` +
-    `node demo/e2e/probe.mjs ${JSON.stringify(job).replace(/'/g, String.raw`'\''`)}'`;
+    `docker run --rm --network isa-demo -e ISA_ROOT=/app -e RELAY=off ` +
+    `-v "${E2E_DIR}":/probe:ro ${PROBE_IMAGE} ` +
+    `node /probe/probe.mjs '${job.replace(/'/g, String.raw`'\''`)}'`;
   let last;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
