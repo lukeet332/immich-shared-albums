@@ -68,14 +68,33 @@ const sha1 = (buf) => crypto.createHash('sha1').update(Buffer.from(buf)).digest(
 const fetchBytes = async (url, key) => (await fetch(url, { headers: { 'x-api-key': key } })).arrayBuffer();
 // A helper must not be able to kill the run: no out-of-process or network call in this suite
 // may throw past its check (see demo/e2e/README.md rule 9).
-// Read a JSON value out of a sidecar's SQLite state, via the sqlite3 CLI the runner
-// already uses. Returns null (rather than throwing) when the rig is not local.
+// Sidecar state is read THROUGH the sidecar's own container — never by opening state.db from the
+// host. The database is in WAL mode, and SQLite's WAL protocol relies on POSIX locks to know who
+// else has the file open. Across a Docker Desktop bind mount those locks do not reach the VM, so a
+// host-side sqlite3 (this suite's old reader, or a curious `sqlite3 state.db`) believes it is the
+// LAST connection and deletes state.db-wal/-shm on close. The running sidecar then writes into an
+// unlinked WAL forever: every later read — from the host OR from a fresh connection inside the
+// container — sees the tables frozen at the last checkpoint, and a restarted sidecar loses
+// everything since. Seen 2026-09-18 as `state.db-wal (deleted)` on PID 1's fd table of all three
+// rig sidecars; it produced every "local-only" failure this suite ever had (empty peers, a
+// missing identity, a kill test whose restarted origin had forgotten its entitlements). A reader
+// inside the container is a proper lock participant, so it is safe. Linux bind mounts (CI) share
+// the locks and never had the problem — which is why it looked like flakiness instead of a bug.
+// Returns the rows as JSON text ('[]' when the query matches nothing), or null when the read
+// itself failed (no container, no docker), so a caller can tell "empty" from "unreadable".
 import { execFileSync } from 'node:child_process';
+const DOCKER_ENV = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
+const containerFor = stateDir => {
+  const letter = (stateDir.match(/([a-z])-sidecar$/) || [])[1];
+  return process.env[`E2E_SIDECAR_CONTAINER_${String(letter).toUpperCase()}`] || `household-${letter}-sidecar-${letter}-1`;
+};
+const SQLITE_ROWS_JSON =
+  'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db",{readOnly:true});' +
+  'process.stdout.write(JSON.stringify(db.prepare(process.argv[1]).all()))';
 const sidecarSql = (stateDir, sql) => {
   try {
-    const path = new URL(`../${stateDir}/state.db`, import.meta.url).pathname;
-    return execFileSync('sqlite3', ['-json', path, sql],
-                        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return execFileSync('docker', ['exec', containerFor(stateDir), 'node', '-e', SQLITE_ROWS_JSON, sql],
+                        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
   } catch { return null; }
 };
 const readSidecarKv = (stateDir, name) => {
@@ -117,19 +136,11 @@ const readSidecarContributors = (stateDir) => {
 // Rows in the `added` ledger — memberships the sidecar created rather than a human. Security
 // property: after unlinking, the memberships left behind must be recorded here.
 const readSidecarAdded = (stateDir, albumId) => {
-  try {
-    const path = new URL(`../${stateDir}/state.db`, import.meta.url).pathname;
-    const sql = albumId
-      ? `SELECT COUNT(*) FROM added WHERE al='${albumId}'`
-      : 'SELECT COUNT(*) FROM added';
-    const out = execFileSync('sqlite3', [path, sql], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return out ? Number(out) : 0;
-  } catch {
-    return null;
-  }
+  const sql = albumId
+    ? `SELECT COUNT(*) AS n FROM added WHERE al='${albumId}'`
+    : 'SELECT COUNT(*) AS n FROM added';
+  const out = sidecarSql(stateDir, sql);
+  try { return out ? Number(JSON.parse(out)[0].n) : null; } catch { return null; }
 };
 
 // Profile every wait: a suite that sleeps blindly cannot be made faster without knowing which

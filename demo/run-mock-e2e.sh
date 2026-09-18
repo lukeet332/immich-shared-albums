@@ -32,11 +32,24 @@ reset_state() { # reset_state <compose-dir> <service>
   ( cd "$dir" && docker compose start "$svc" >/dev/null 2>&1 )
 }
 
-purge() { # base key statedir : delete all albums, sidecar users, non-admin assets, reset sidecar state
-  local BASE=$1 KEY=$2 STATEDIR=${3:-}
+# Sidecar state is read THROUGH the sidecar's container, never with a host sqlite3. The database is
+# WAL-mode and SQLite's WAL protocol relies on POSIX locks to know who else has it open; across a
+# Docker Desktop bind mount those locks never reach the VM, so a host-side sqlite3 thinks it is the
+# LAST connection and deletes state.db-wal/-shm when it exits. The running sidecar then writes into
+# an unlinked WAL that nobody can read, and a restarted sidecar has forgotten everything since.
+# (2026-09-18: `state.db-wal (deleted)` on PID 1 of all three rig sidecars — the cause of every
+# local-only e2e failure.) A reader inside the container shares the locks and is safe. Linux (CI)
+# never had the problem, which is why it looked like flakiness. One row per line, first column.
+SQLITE_COL='const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db",{readOnly:true});process.stdout.write(db.prepare(process.argv[1]).all().map(r=>Object.values(r)[0]).join("\n"))'
+sidecar_col() { # sidecar_col <service> <sql> — run from that household's compose dir
+  docker compose exec -T "$1" node -e "$SQLITE_COL" "$2" 2>/dev/null
+}
+
+purge() { # base key service : delete all albums, sidecar users, non-admin assets (run from the compose dir)
+  local BASE=$1 KEY=$2 SVC=${3:-}
   # mirror albums are owned by utility users — only their own keys (in the state store) can delete them
   local CONTRIB=""
-  [ -f "$STATEDIR/state.db" ] && CONTRIB=$(sqlite3 "$STATEDIR/state.db" "SELECT apiKey FROM contributors" 2>/dev/null)
+  [ -n "$SVC" ] && CONTRIB=$(sidecar_col "$SVC" "SELECT apiKey FROM contributors")
   if [ -n "$CONTRIB" ]; then
     for CK in $CONTRIB; do
       for AL in $(curl -s $BASE/api/albums -H "x-api-key: $CK" | python3 -c "import json,sys;[print(a['id']) for a in json.load(sys.stdin)]" 2>/dev/null); do
@@ -62,22 +75,22 @@ fi
 DKEY=$(grep -m1 "^D_API_KEY=" .env | cut -d= -f2-)
 
 # Redeploy the sidecar, purge its Immich, reset its state — for one household, in a subshell so
-# the cd is contained (purge reads state.db RELATIVE to the compose dir).
+# the cd is contained (purge and the state reads run from the compose dir).
 # Compose output is kept (prefixed per household) rather than discarded: a redeploy that fails
 # here used to be invisible, and the run then died later with a message about something else.
-redeploy() { # redeploy <compose-dir> <service> <immich-url> <admin-key> <state-dir>
+redeploy() { # redeploy <compose-dir> <service> <immich-url> <admin-key>
   (
     cd "$1" && docker compose up -d --force-recreate "$2" 2>&1 | sed "s/^/  [$2] /"
-    purge "$3" "$4" "$5"
+    purge "$3" "$4" "$2"
     reset_state "$1" "$2"
   )
 }
 # The three households are independent stacks on separate ports and separate compose projects,
 # so they redeploy at once: the wall is the slowest one, not the sum.
 echo "== redeploy + purge B, C, D (in parallel) =="
-redeploy "$DIR/demo" sidecar-b http://localhost:2284 "$BKEY" b-sidecar &
-redeploy "$DIR/demo/household-c" sidecar-c http://localhost:2285 "$CKEY" c-sidecar &
-redeploy "$DIR/demo/household-d" sidecar-d http://localhost:2286 "$DKEY" d-sidecar &
+redeploy "$DIR/demo" sidecar-b http://localhost:2284 "$BKEY" &
+redeploy "$DIR/demo/household-c" sidecar-c http://localhost:2285 "$CKEY" &
+redeploy "$DIR/demo/household-d" sidecar-d http://localhost:2286 "$DKEY" &
 wait
 # The reset restarts each sidecar from nothing; the preflight below reads a state.db a booting
 # sidecar may not have created yet. The sidecar opens its store at import, before it listens, so
@@ -98,9 +111,9 @@ done
 # "Invalid API key" — which reads exactly like a product bug and has cost whole runs. Cheap to
 # check, so check it before spending nine minutes finding out the hard way.
 echo "== preflight: sidecars start from empty state =="
-for pair in "b-sidecar:B" "household-c/c-sidecar:C" "household-d/d-sidecar:D"; do
-  dir=${pair%%:*}; label=${pair##*:}
-  n=$(sqlite3 "$DIR/demo/$dir/state.db" "SELECT COUNT(*) FROM mappings" 2>/dev/null || echo "?")
+for triple in "$DIR/demo:sidecar-b:B" "$DIR/demo/household-c:sidecar-c:C" "$DIR/demo/household-d:sidecar-d:D"; do
+  cdir=${triple%%:*}; rest=${triple#*:}; svc=${rest%%:*}; label=${rest##*:}
+  n=$( (cd "$cdir" && sidecar_col "$svc" "SELECT COUNT(*) FROM mappings") || echo "?")
   if [ "$n" != "0" ]; then
     echo "  !! $label sidecar kept $n mapping(s) across the reset — aborting before the suite"
     exit 1
