@@ -1,0 +1,67 @@
+# .github/ISSUE_TEMPLATE/bug_report.yml — what triage actually needs. See AGENTS.md.
+#
+# Most reports against this addon turn out to be environment-specific, so the fields below decide
+# whether a report is actionable. Deliberately no free-text "describe your setup" box: the answers
+# that matter are enumerable, and a dropdown is not skipped the way prose is.
+name: Bug report
+description: Something in the addon is not behaving as documented
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not paste API keys, the pairing string, or anything out of `state.db`. If what you
+        have looks like a vulnerability rather than a bug, use [SECURITY.md](../SECURITY.md) instead.
+  - type: input
+    id: addon-version
+    attributes:
+      label: Addon version
+      description: The release or image tag you are running.
+      placeholder: v1.1.1
+    validations:
+      required: true
+  - type: input
+    id: immich-version
+    attributes:
+      label: Immich version
+      description: Shown under Settings → About in Immich.
+    validations:
+      required: true
+  - type: dropdown
+    id: relay
+    attributes:
+      label: RELAY setting
+      description: Which peer transport the sidecar is running with.
+      options:
+        - default (n0 public map)
+        - RELAY=off (direct only)
+        - not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment shape
+      description: How the sidecar is reached from outside its own container.
+      options:
+        - docker compose, nothing in front
+        - behind a reverse proxy (Caddy, nginx, Traefik, …)
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happens, and what you expected
+      description: >
+        If a photo or an album is involved, say which side owns it and whether the owner server was
+        reachable — that is usually the answer.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Redact keys and the pairing string before pasting.
+      render: shell
+    validations:
+      required: false

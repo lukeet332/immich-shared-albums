@@ -6,7 +6,7 @@
 #
 # Updates are grouped and weekly on purpose: every Dependabot PR runs both e2e lanes (~7 minutes),
 # so a week of small PRs costs the runner queue more than it returns. It also keeps the SHA-pinned
-# `uses:` lines current and preserves each one's `# vX` comment.
+# `uses:` lines and the digest-pinned base image current.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -15,6 +15,20 @@ updates:
       interval: weekly
     groups:
       actions:
+        patterns: ['*']
+    commit-message:
+      prefix: chore
+      prefix-development: chore
+      include: scope
+
+  # The Dockerfile's base image, pinned by digest. Nothing else watches it: the tag is mutable, so
+  # without this the image shipped to ghcr could change with no commit here.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      docker:
         patterns: ['*']
     commit-message:
       prefix: chore

@@ -29,9 +29,12 @@ jobs:
         with:
           languages: javascript-typescript
           # Generated output is not source — the same two paths .coderabbit.yaml excludes, so the
-          # committed bundles cannot produce findings nobody can act on.
+          # committed bundles cannot produce findings nobody can act on. security-extended over the
+          # default suite, because this addon holds household keys and speaks its own wire protocol.
           config: |
             paths-ignore:
               - src/web/dist
               - '**/*.bundle.js'
+            queries:
+              - uses: security-extended
       - uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
