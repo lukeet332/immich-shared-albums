@@ -146,6 +146,9 @@ export const s = {
     color: 'var(--isa-ink)',
     cursor: 'pointer',
   },
+  /** Destructive in a LIST: tonal, so a page of rows is not a wall of red. The filled form is for a
+   *  confirmation, where the action is the only thing on screen. */
+  buttonDangerTonal: { background: 'var(--isa-danger-surface)', color: 'var(--isa-danger)' },
   buttonDanger: { background: 'var(--isa-danger)', color: 'var(--isa-surface)' },
   /** A row's own rhythm: what it is, what it is made of, what you can do about it — 4px apart. */
   title: { fontSize: 15, fontWeight: 600, letterSpacing: '-.01em' },

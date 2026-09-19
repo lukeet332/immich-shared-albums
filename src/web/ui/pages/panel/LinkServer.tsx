@@ -59,7 +59,7 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
         <button style={s.button} onClick={createLink}>
           Create a link
         </button>
-        <button style={s.button} onClick={() => setShowPasteBox(true)}>
+        <button style={s.buttonQuiet} onClick={() => setShowPasteBox(true)}>
           I have a link
         </button>
       </div>
