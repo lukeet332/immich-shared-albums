@@ -19,6 +19,7 @@ import { immichJson, publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
 import { myAlbums, myMatches, publishAlbumsForPeer } from './me.ts';
+import { invitePeerToReunite } from '../sync/album-invite.ts';
 import { unifyOwnAlbum } from '../p2p/mirror.ts';
 import { readCallerAlbums, visibleAlbumIds } from '../immich/access.ts';
 import { findAdoptableAlbum } from '../sync/adoption.ts';
@@ -440,12 +441,47 @@ export const server = http.createServer(async (req, res) => {
         return send(400, { error: e.message });
       }
     }
-    // Albums the caller could reunite. Read-only and computed on demand: nothing here changes an
-    // album, which is why the panel offers no action yet.
+    // Albums the caller could reunite. Read-only and computed on demand: the action on each row is
+    // decided by the share behind it (`reunionStepFor`), so what the panel renders and what it may
+    // call come from the same answer.
     if (path === `${ROUTE_PREFIX}/me/matches` && req.method === 'GET') {
       const signedIn = await callerSignedIn(req);
       if (!signedIn) return send(401, signInRequired('see possible reunions'));
       return send(200, { matches: await myMatches(signedIn.creds, signedIn.caller.id) });
+    }
+    // Invite: share one of the caller's OWN albums with the person on a linked server who owns the
+    // other half, which is how a reunion starts. The same membership Immich's picker creates, on the
+    // caller's own album and their own credential — the row used to send them to Immich to do it.
+    if (path === `${ROUTE_PREFIX}/me/invite` && req.method === 'POST') {
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('invite someone to reunite an album'));
+      let asked: { peer?: unknown; albumName?: unknown; ownerUserId?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (
+        typeof asked.peer !== 'string' ||
+        typeof asked.albumName !== 'string' ||
+        typeof asked.ownerUserId !== 'string'
+      )
+        return send(400, { error: 'name the linked server, the album, and whose half it is' });
+      const peer = state.peers.find(p => p.pub === asked.peer);
+      if (!peer) return send(404, { error: 'no such linked server', code: 'unknown_peer' });
+      try {
+        // Both the album and the person are re-derived inside: the album from the caller's own
+        // Immich list, the person from the index the peer itself published. The body names them; it
+        // does not establish either.
+        const invited = await invitePeerToReunite(signedIn.creds, signedIn.caller.id, peer, {
+          albumName: asked.albumName,
+          ownerUserId: asked.ownerUserId,
+        });
+        log(`${signedIn.caller.name} invited "${invited.invited}" to reunite "${invited.album}"`);
+        return send(200, invited);
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
     }
     // Rig-only progress read for the e2e suite: the same derivation `/albums/:id/status` answers
     // over iroh (`sync/status.ts`), plus the loop tick counts, so a test can wait for "the sidecar

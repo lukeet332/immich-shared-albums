@@ -74,6 +74,31 @@ export function matchesWithPeer(
 /** One row of the ledger a mapping keeps, as adoption seeds it. */
 export type SeedRow = { checksum: string; localAsset: string; originAsset?: string };
 
+/** The share a pairing is about, as the panel has it: enough to say what a person may do next. */
+export type ShareForReunion = {
+  id: string;
+  role: 'owner' | 'member';
+  adopted?: boolean;
+  reunified?: boolean;
+  dead?: boolean;
+};
+
+/** What a person can do about one candidate.
+ *
+ *  Four cases rather than two, because a share has a DIRECTION and only the one they RECEIVED is
+ *  theirs to accept: `accept` is the mirror they were given, `waiting` is the one they gave away —
+ *  where adopting their own album is not an adoption at all, since `canUnifyOwnAlbum` refuses a
+ *  share that already points at the album asked for. `reunited` is not a button at all: that pairing
+ *  belongs to the reunified list, and leaving it here offered a reunion that had already happened. */
+export type ReunionStep =
+  { kind: 'invite' } | { kind: 'accept'; mappingId: string } | { kind: 'waiting' } | { kind: 'reunited' };
+
+export function reunionStepFor(share: ShareForReunion | undefined): ReunionStep {
+  if (!share || share.dead) return { kind: 'invite' }; // an ended share is no share: invite again
+  if (share.reunified || share.adopted) return { kind: 'reunited' };
+  return share.role === 'member' ? { kind: 'accept', mappingId: share.id } : { kind: 'waiting' };
+}
+
 /**
  * The ledger rows an ADOPTED mapping must start with, from the album it is adopting.
  *

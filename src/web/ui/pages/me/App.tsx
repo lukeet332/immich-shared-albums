@@ -1,14 +1,26 @@
-/** web/ui/pages/me/App.tsx — the per-user panel. Read-only "your shared albums" for now; the
- *  reunification/repair surfaces (matches, repair, pending requests) hang off this. See
- *  ../../../http-router.md. */
+/** web/ui/pages/me/App.tsx — the per-user panel: your shared albums, the possible reunions and what
+ *  can be done about each one, and the albums you have reunited. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
 import { s } from '../../lib/theme.ts';
 import { t } from '../../lib/theme.ts';
-import { myAlbums, myMatches, reunite, unreunite, type ActionableMatch, type MyAlbum } from './api.ts';
+import {
+  invite,
+  myAlbums,
+  myMatches,
+  reunite,
+  unreunite,
+  type ActionableMatch,
+  type MyAlbum,
+} from './api.ts';
 
 /** The admin panel, for a caller who can actually open it. A link an ordinary user cannot follow
  *  would bounce them to a sign-in page they will never pass. */
 const ROUTE_PREFIX = '/immich-shared-albums';
+
+/** One row's identity: two candidates that agree on all of this are the same row (`asOneRow` on the
+ *  server collapses them), so it is also what React needs to keep them apart. */
+const rowKey = (m: ActionableMatch) =>
+  `${m.peer}:${m.mine.name}:${m.theirs.ownerName}:${m.theirs.assetCount}:${m.theirs.startDate ?? ''}:${m.theirs.endDate ?? ''}`;
 
 export const App = () => {
   const [albums, setAlbums] = useState<MyAlbum[] | null>(null);
@@ -17,6 +29,7 @@ export const App = () => {
   const [matches, setMatches] = useState<ActionableMatch[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reuniting, setReuniting] = useState('');
+  const [inviting, setInviting] = useState('');
   const [detaching, setDetaching] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -48,7 +61,7 @@ export const App = () => {
 
   const onReunite = async (m: ActionableMatch) => {
     if (!m.mappingId) return; // no share to reunite: this pairing has never been shared
-    setReuniting(`${m.peer}:${m.mine.name}`);
+    setReuniting(rowKey(m));
     setNotice(null);
     try {
       const r = await reunite(m.mappingId, m.mine.name);
@@ -60,6 +73,22 @@ export const App = () => {
       setNotice(`Could not reunite: ${(e as Error).message}`);
     } finally {
       setReuniting('');
+    }
+  };
+
+  /** Share MY album with them, which is what a reunion starts from. The server does the membership;
+   *  the other person then sees this pairing as an invitation they can accept. */
+  const onInvite = async (m: ActionableMatch) => {
+    setInviting(rowKey(m));
+    setNotice(null);
+    try {
+      const r = await invite(m.peer, m.mine.name, m.theirs.ownerUserId);
+      setNotice(`Invited ${r.invited} to reunite “${r.album}” — it is now in their panel to accept.`);
+      await refreshBoth();
+    } catch (e) {
+      setNotice(`Could not invite: ${(e as Error).message}`);
+    } finally {
+      setInviting('');
     }
   };
 
@@ -123,11 +152,13 @@ export const App = () => {
           <p style={{ ...s.muted, marginTop: 6 }}>
             If you and someone on a linked server uploaded the same Google Photos album separately, you each
             ended up with half of it. These look like that — the same name, owned by a different person on
-            each server. Reuniting them comes next, once both owners agree.
+            each server. <b>Invite</b> shares your album with them so they can accept it; if they invited you,{' '}
+            <b>Accept invite</b> merges their half into the album you already own. It stays yours either way,
+            and you can undo it.
           </p>
           <div style={s.card}>
             {matches.map(m => (
-              <div style={s.item} key={`${m.peer}:${m.mine.name}:${m.theirs.ownerName}`}>
+              <div style={s.item} key={rowKey(m)}>
                 <div>{m.mine.name}</div>
                 <div style={s.sub}>
                   yours: {m.mine.assetCount} {m.mine.assetCount === 1 ? 'photo' : 'photos'} ·{' '}
@@ -135,14 +166,24 @@ export const App = () => {
                   {m.theirs.assetCount === 1 ? 'photo' : 'photos'}
                   {m.sameDates ? ' · dates line up' : ''}
                 </div>
-                {m.mappingId ? (
-                  <button style={s.button} disabled={!!reuniting} onClick={() => onReunite(m)}>
-                    {reuniting === `${m.peer}:${m.mine.name}` ? 'Reuniting…' : 'Reunite these albums'}
+                {m.step.kind === 'invite' && (
+                  // Nothing shared between the two of you yet. This shares MY album with them, the
+                  // same membership Immich's own picker makes — so the reunion can start from here.
+                  <button style={s.button} disabled={!!inviting} onClick={() => onInvite(m)}>
+                    {inviting === rowKey(m) ? 'Inviting…' : `Invite ${m.theirs.ownerName}`}
                   </button>
-                ) : (
-                  // No share to reunite yet. An enabled button here would do nothing when clicked,
-                  // because the handler has no mapping to act on — say what is missing instead.
-                  <div style={s.muted}>Share this album with them in Immich, then reunite it here.</div>
+                )}
+                {m.step.kind === 'accept' && (
+                  <button style={s.button} disabled={!!reuniting} onClick={() => onReunite(m)}>
+                    {reuniting === rowKey(m) ? 'Reuniting…' : 'Accept invite'}
+                  </button>
+                )}
+                {m.step.kind === 'waiting' && (
+                  // I shared mine with them; adopting my own album is not an adoption at all, so
+                  // there is nothing to click until they accept on their side.
+                  <div style={s.muted}>
+                    Invited {m.theirs.ownerName} — waiting for them to accept in their panel.
+                  </div>
                 )}
               </div>
             ))}

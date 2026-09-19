@@ -20,16 +20,20 @@ it as Immich's problem. Concretely, and these are design rules not sentiments:
   stays off — the pairing string itself carries the address, so no registry learns a server
   exists.
 - **Sharing is per person, and the person is their own server's account.** Not a "household", not
-  an identity this addon invents. Accounts here are keyed by the person's id on *their* server.
+  an identity this addon invents. Accounts here are keyed by the person's id on _their_ server.
 - **Anything shared can be fully withdrawn, and withdrawal reclaims the space.** `leaveAlbum`
-  purges every stub a join created; unlinking deletes a peer's people *and their proxied photos*,
+  purges every stub a join created; unlinking deletes a peer's people _and their proxied photos_,
   because holding someone's content after they have gone is exactly the thing this opposes.
-- **Every sharing ACTION happens in Immich's own UI.** The addon adds
-  no second way to share, so nobody has to learn our surface to use their own photos.
+- **Every sharing ACTION happens in Immich's own UI**, with one stated exception: the panel's
+  **Invite** button (`POST /me/invite`) shares the caller's OWN album with the single person a
+  reunion is about, because the reunion cannot start without that share and the panel is where the
+  pair is shown. It makes the same one membership Immich's picker makes, on the caller's own album
+  and credential, and it adds no way to share anything else — everything else still happens in
+  Immich, so nobody has to learn our surface to use their own photos.
 - **Minimise the footprint in someone else's instance.** Every user, album, and permission this
   addon creates is a liability the operator did not ask for.
 
-Two known costs contradict this today — a key on the admin *account* (scoped, but still able to
+Two known costs contradict this today — a key on the admin _account_ (scoped, but still able to
 manage users), and one real Immich account per remote person. They are listed in
 [src/ARCHITECTURE.md](./src/ARCHITECTURE.md) "Where this falls short today". **Do not make either
 worse without saying so.**
@@ -43,8 +47,8 @@ worse without saying so.**
   "Iron rules".)
 - **Keep the docs in sync — and this rule is load-bearing, not housekeeping.** Any behaviour change
   updates the relevant doc(s) **in the same change**. A doc that lies is worse than no doc: treat
-  drift as a bug and fix it with the code that caused it. Which doc, and at what level, is *Where a
-  doc lives* below.
+  drift as a bug and fix it with the code that caused it. Which doc, and at what level, is _Where a
+  doc lives_ below.
 
   This is load-bearing because explanation deliberately lives in those docs rather than in
   comments. The further an explanation sits from what it explains, the more strictly the rule
@@ -69,6 +73,7 @@ worse without saying so.**
     Applies to this file as much as to any other.
   - **Boy-scout, never batch** — see the section below. Verify a doc when you touch the code it
     describes; do not mass-rewrite docs you are not otherwise changing.
+
 - **Never enforce in prose what code can enforce.** An instruction in this file relies on being
   read, remembered and obeyed every time; a hook, a lint rule, a test or an npm script does not.
   Before adding a "remember to…" here, try to make it impossible to forget instead — and when a
@@ -153,7 +158,7 @@ Either lane:
 **Prefer a column in `state.db` over a rule in someone's head.** An inference is correct when
 written and wrong later. Three shapes to avoid:
 
-- deriving "who added this membership" from *which account* it is, instead of recording it
+- deriving "who added this membership" from _which account_ it is, instead of recording it
 - a boolean saying "we know where this person lives" instead of storing **where**
 - pointing at an account by a name-derived slug instead of its id — it stops resolving the moment
   the account is keyed differently
@@ -161,7 +166,7 @@ written and wrong later. Three shapes to avoid:
 Two constraints, because a stored fact is also a stored liability:
 
 - **Only store what is safe to hold.** `state.db` holds this household's ed25519 private key and
-  the bot accounts' API keys, so anything added inherits that blast radius. (The *admin* key is
+  the bot accounts' API keys, so anything added inherits that blast radius. (The _admin_ key is
   not in there — it comes from `IMMICH_API_KEY` in the environment.) Two rules follow, neither
   about compliance:
   - **No retained bot password.** Rolled to a value nobody keeps (`ensureUtilityUser`) once the
@@ -169,18 +174,18 @@ Two constraints, because a stored fact is also a stored liability:
     actions and no more; a password logs in interactively and can mint an unrestricted key for that
     account. Pure downside rather than a tradeoff. The e2e asserts it.
   - **The directory sends names, not emails.** Not because an email is dangerous to store, but
-    because an Immich email is a *login identifier* — sending it hands a linked household, or
+    because an Immich email is a _login identifier_ — sending it hands a linked household, or
     whoever later compromises it, the first half of a credential for every user here. A picker
     needs only names, so nothing is given up.
   - Both scale with exposure: little on a single-user LAN box, more on a public domain with several
     linked households. Default to caution when it is free, and say which it is rather than
     implying everything is critical.
 - **Order the writes so a crash fails safe.** A missing stored fact must lead somewhere harmless.
-  `added` records a membership *before* creating it, so a crash in between makes the sidecar ignore
+  `added` records a membership _before_ creating it, so a crash in between makes the sidecar ignore
   an invitation rather than read its own membership as a human's. Work out which way each new
   record fails before writing it, and say so in a one-line comment.
 
-Corollary: a fact only counts as known if something *proved* it. `Contributor.homePeer` is set
+Corollary: a fact only counts as known if something _proved_ it. `Contributor.homePeer` is set
 only by a linked server's directory, never by an incoming photo — a relayed ref names the person
 but not their server, and guessing would route someone's album to the wrong household.
 
@@ -199,16 +204,16 @@ it fires.
 
 **The test:** would a reader who has never seen the code guess right from the name alone?
 
-| Name, with the comment it needs | Should be |
-| --- | --- |
-| `POLL` — *"how often to re-check whether they have signed in"* | `SIGN_IN_POLL_MS` |
-| `peer` — *"the server this person actually lives on"* | `homePeer` |
-| `(cacheMaxMb * 1024 * 1024) / 10` — *"no single item past 10% of cap"* | a named divisor |
-| `WATCH_RUNNING` — *"overlapping cycles stampede the host"* | `watchCycleInFlight` |
-| `mayAdd` — *"missing members are revoked, do not re-add"* | `reAddIfMissing` |
+| Name, with the comment it needs                                        | Should be            |
+| ---------------------------------------------------------------------- | -------------------- |
+| `POLL` — _"how often to re-check whether they have signed in"_         | `SIGN_IN_POLL_MS`    |
+| `peer` — _"the server this person actually lives on"_                  | `homePeer`           |
+| `(cacheMaxMb * 1024 * 1024) / 10` — _"no single item past 10% of cap"_ | a named divisor      |
+| `WATCH_RUNNING` — _"overlapping cycles stampede the host"_             | `watchCycleInFlight` |
+| `mayAdd` — _"missing members are revoked, do not re-add"_              | `reAddIfMissing`     |
 
 `mayAdd` is the instructive one: a name can survive a rename and still be wrong — it said
-*permission* where the meaning is "if they are missing, put them back", hence `reAddIfMissing`.
+_permission_ where the meaning is "if they are missing, put them back", hence `reAddIfMissing`.
 Needing a comment after a rename means go again, not settle.
 
 How to choose the name:
@@ -222,13 +227,13 @@ How to choose the name:
 - **Magic numbers get a named constant with a unit**: `SIGN_IN_POLL_MS`, `SYNC_WAIT_LIMIT_MS`. A
   bare `2500` tells the reader nothing about whether it is safe to change.
 - **Extract the condition rather than commenting it.** `const waitedTooLong = Date.now() - since >
-  LIMIT_MS` beats the inequality inline, and puts the reasoning in the name.
+LIMIT_MS` beats the inequality inline, and puts the reasoning in the name.
 - **Reach for a longer name before reaching for a comment.** A name is read every time it is used;
   a comment is read once, if at all, and then rots.
 
 If you are writing "this does X", the name should have said X. If you are writing "this is needed
 because…", that is doc material. What may stay inline regardless is only what a name cannot carry —
-the categories in *What survives, concretely* below.
+the categories in _What survives, concretely_ below.
 
 ## Comments: a paired doc is the default, inline is the exception
 
@@ -236,7 +241,7 @@ the categories in *What survives, concretely* below.
 else.** If a file you are working in carries more than a couple of comments, the explanation
 belongs in its doc and the rest belongs in better names.
 
-Naming carries the *what*; the doc carries the *why*. Code that reads cleanly plus a doc that
+Naming carries the _what_; the doc carries the _why_. Code that reads cleanly plus a doc that
 explains fully beats a file where both are tangled — and a doc holds far more context than anyone
 would tolerate inline.
 
@@ -247,8 +252,8 @@ Almost always the answer is no, so it moves. Three cases where it is yes:
 - **A hazard at the trigger line.** `record BEFORE the add`, `splice, never reassign`,
   `ORDER IS LOAD-BEARING`. The person editing that exact statement must see the warning without
   knowing a doc exists. One line, and it may point at the doc for the reasoning.
-- **A test case's rationale.** *"the doubled form a relay hop produces, which is what this exists
-  to prevent"* — that sentence IS the case's meaning. Without it the assertion is a bare comparison
+- **A test case's rationale.** _"the doubled form a relay hop produces, which is what this exists
+  to prevent"_ — that sentence IS the case's meaning. Without it the assertion is a bare comparison
   that a later reader deletes as redundant, or "fixes" to match new behaviour. The reader who needs
   it is looking at the assertion, so it cannot live anywhere else.
 
@@ -269,15 +274,15 @@ stopped being true several changes ago.
 Every comment that stays must fall into one of these categories. If the one you are about to keep
 fits none of them, it belongs in the doc:
 
-| Category | Example |
-| --- | --- |
-| Deliberate-swallow marker on an empty `catch` | `/* already gone */`, `/* fail-open */` |
-| Ordering or aliasing hazard at the line | `record BEFORE the add`, `Splice, NEVER reassign` |
+| Category                                        | Example                                           |
+| ----------------------------------------------- | ------------------------------------------------- |
+| Deliberate-swallow marker on an empty `catch`   | `/* already gone */`, `/* fail-open */`           |
+| Ordering or aliasing hazard at the line         | `record BEFORE the add`, `Splice, NEVER reassign` |
 | A revocation rule (fails towards under-sharing) | `missing member on an invitation album = REVOKED` |
-| A test contract other tooling depends on | `#who/#go/#out are a TEST CONTRACT` |
-| A wire route a type name cannot hold | `POST …/albums/:mappingId/refs` |
-| An external contract we do not get to name | the Immich API's response shape, a CGNAT regex |
-| A tooling marker | `// x-release-please-version` |
+| A test contract other tooling depends on        | `#who/#go/#out are a TEST CONTRACT`               |
+| A wire route a type name cannot hold            | `POST …/albums/:mappingId/refs`                   |
+| An external contract we do not get to name      | the Immich API's response shape, a CGNAT regex    |
+| A tooling marker                                | `// x-release-please-version`                     |
 
 A bare `catch {}` reads as a forgotten branch, so three words saying the swallow is intended is
 load-bearing — that is why the first row exists and why it is the largest group.
@@ -336,14 +341,14 @@ Two rules keep it honest:
 per-change, not by sweeping the tree, so the codebase converges as work moves through it. This
 checklist is the recap:
 
-| Check | Standard | Where it is written |
-| --- | --- | --- |
-| Header | line 1 is `path — description. See doc.md.`, and a whole sentence | *Every source file opens with one line* |
-| Comments | the header, load-bearing lines and TODOs — nothing else | *Comments: a paired doc is the default* |
-| Names | **rename rather than explain** — any name you must explain is not descriptive enough | *A name that needs a comment* |
-| Doc placement | one exists at the right level for what you touched | *Where a doc lives* |
-| Doc truth | you re-read it against the code you just changed | *Keep the docs in sync* |
-| Doc style | dense bullets, every claim naming a real symbol | *Keep the docs in sync* |
+| Check         | Standard                                                                             | Where it is written                     |
+| ------------- | ------------------------------------------------------------------------------------ | --------------------------------------- |
+| Header        | line 1 is `path — description. See doc.md.`, and a whole sentence                    | _Every source file opens with one line_ |
+| Comments      | the header, load-bearing lines and TODOs — nothing else                              | _Comments: a paired doc is the default_ |
+| Names         | **rename rather than explain** — any name you must explain is not descriptive enough | _A name that needs a comment_           |
+| Doc placement | one exists at the right level for what you touched                                   | _Where a doc lives_                     |
+| Doc truth     | you re-read it against the code you just changed                                     | _Keep the docs in sync_                 |
+| Doc style     | dense bullets, every claim naming a real symbol                                      | _Keep the docs in sync_                 |
 
 Two things this rule is deliberately **not**:
 
@@ -355,10 +360,10 @@ Two things this rule is deliberately **not**:
 **Removing a comment is a move, never a delete.** Its content goes to one of two places, and
 choosing is the whole job:
 
-- **Into the name**, when it explained *what* something is. Renaming a parameter, extracting a
+- **Into the name**, when it explained _what_ something is. Renaming a parameter, extracting a
   named constant and splitting a condition into a named boolean are all in scope of the change that
-  deleted the comment — worked examples are the table in *A name that needs a comment* above.
-- **Into the doc**, when it explained *why* — design reasoning, an Immich quirk, history.
+  deleted the comment — worked examples are the table in _A name that needs a comment_ above.
+- **Into the doc**, when it explained _why_ — design reasoning, an Immich quirk, history.
 
 If neither fits and the line is a hazard at its trigger point, it stays inline as one line.
 
@@ -371,7 +376,7 @@ Enforced by lint or tests wherever that is possible.
 - **Bot namespaces stay disjoint** — no `BOT_PREFIX` may prefix another (`invariants.test.ts`
   asserts it).
 - **Album membership is not intent.** One account per remote person does both jobs: it owns their
-  mirrored photos *and* is what a human picks to share with them, so the sidecar adds these
+  mirrored photos _and_ is what a human picks to share with them, so the sidecar adds these
   accounts to albums itself. Two records carry the distinction instead of the namespace:
   - `added` (`store.addedRecord`) — memberships **we** created, so only a human's reads as an
     invitation. Record before the add.
@@ -379,6 +384,7 @@ Enforced by lint or tests wherever that is possible.
     proves where a person lives. Without it an account is attribution-only.
 
   Getting this wrong in the unsafe direction shares an album nobody offered.
+
 - **Never reassign shared state arrays.** `state.mappings = state.mappings.filter(...)` discards
   whatever a concurrent loop pushed onto the old reference. Splice in place. (ESLint enforces it.)
 - **Never inline a single-source-of-truth constant** — the bot email domain, `PROTOCOL_VERSION`.
@@ -393,5 +399,5 @@ Enforced by lint or tests wherever that is possible.
 
 One principle: **group by concern, and let the shape evolve.** New files, new folders and
 reshaped boundaries are expected as the project grows — nothing here freezes the tree. The
-*current* module map and data flow live in [src/ARCHITECTURE.md](./src/ARCHITECTURE.md); when a
+_current_ module map and data flow live in [src/ARCHITECTURE.md](./src/ARCHITECTURE.md); when a
 change moves the shape, it moves that map in the same change.

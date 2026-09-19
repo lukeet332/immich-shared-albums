@@ -1622,6 +1622,77 @@ stage('reunification matching: two servers each find the other half of an album'
   }
 }
 
+// The panel's Invite, end to end. It is the ONE sharing act the sidecar performs for a human, so it
+// is pinned where it would do damage: a request must not be able to share an album the caller does
+// not own, nor reach a person the peer never named. The invitation then travels the ordinary
+// channel, and the fact comes back over the wire so the inviter's own list clears.
+stage('panel invite: the panel shares the album, the other side accepts');
+{
+  const bPeerPubs = (readSidecarPeers('b-sidecar') || []).map(p => p.pub);
+  const cPeers = readSidecarPeers('c-sidecar') || [];
+  const cPub = bPeerPubs[0];
+  const bPub = (cPeers.find(p => bPeerPubs.includes(p.pub)) || {}).pub || (cPeers[0] || {}).pub;
+  if (!cPub || !bPub) requireState("both sides' peer lists from their state.db");
+
+  if (cPub && bPub) {
+    const cSidecar = process.env.C_SIDECAR || `http://localhost:${PORT('PORT_SIDECAR_C', 8302)}`;
+    const name = `Invite probe ${Date.now() % 100000}`;
+    const bAlbum = await api(B, BKEY, '/albums', j({ albumName: name }));
+    await api(A, AKEY, '/albums', j({ albumName: name }));
+    const aMe = await api(A, AKEY, '/users/me');
+    const bMe = await api(B, BKEY, '/users/me');
+
+    const invite = (sidecar, key, body) =>
+      fetch(`${sidecar}/immich-shared-albums/me/invite`, jAuth(body, key)).then(async r => ({ status: r.status, json: await r.json().catch(() => null) }));
+    const matchesFor = async (sidecar, key, ownerName) =>
+      (await (await fetch(`${sidecar}/immich-shared-albums/me/matches`, { headers: { 'x-api-key': key } })).json()).matches
+        .find(m => m.mine.name === name && m.theirs.ownerName === ownerName);
+
+    const notMine = await invite(BS, BKEY, { peer: cPub, albumName: `${name} (not mine)`, ownerUserId: aMe.id });
+    check('an invite for an album the caller does not own is refused', notMine.status === 400,
+          `status=${notMine.status} ${JSON.stringify(notMine.json)}`);
+    const stranger = await invite(BS, BKEY, { peer: 'not-a-linked-peer', albumName: name, ownerUserId: aMe.id });
+    check('an invite to a server this household is not linked to is refused', stranger.status === 404,
+          `status=${stranger.status}`);
+
+    const invited = await invite(BS, BKEY, { peer: cPub, albumName: name, ownerUserId: aMe.id });
+    check('the invite is accepted for the caller\'s own album and that person', invited.status === 200,
+          `status=${invited.status} ${JSON.stringify(invited.json)}`);
+    const shared = await api(B, BKEY, `/albums/${bAlbum.id}?withoutAssets=true`);
+    const members = (shared.albumUsers || []).map(au => `${au.user && au.user.name}:${au.role}`);
+    check('and it is a real membership on the album in Immich, added as the caller',
+          (shared.albumUsers || []).some(au => au.user && au.user.id !== bMe.id && au.role === 'editor'),
+          `albumUsers=${JSON.stringify(members)}`);
+
+    const waiting = await matchesFor(BS, BKEY, aMe.name);
+    check("the inviter's row now waits instead of offering the button again",
+          !!waiting && waiting.step && waiting.step.kind === 'waiting',
+          `step=${JSON.stringify(waiting && waiting.step)}`);
+
+    let accept = null;
+    for (let waited = 0; waited < HOLD_DEADLINE_MS && !accept; waited += SYNC_POLL_MS) {
+      const m = await matchesFor(cSidecar, AKEY, bMe.name);
+      if (m && m.step && m.step.kind === 'accept' && m.mappingId) accept = m;
+      else await sleep(SYNC_POLL_MS);
+    }
+    check('the other side is offered an invitation it can accept', !!accept,
+          accept ? `mapping=${String(accept.mappingId).slice(0, 8)}` : 'no accept step appeared');
+
+    if (accept) {
+      const taken = await fetch(`${cSidecar}/immich-shared-albums/me/reunite`, jAuth({ mappingId: accept.mappingId, albumName: name }, AKEY));
+      check('accepting it reunites the pair', taken.ok, `status=${taken.status} ${JSON.stringify(await taken.json().catch(() => null))}`);
+
+      let cleared = false;
+      for (let waited = 0; waited < HOLD_DEADLINE_MS && !cleared; waited += SYNC_POLL_MS) {
+        cleared = !(await matchesFor(BS, BKEY, aMe.name));
+        if (!cleared) await sleep(SYNC_POLL_MS);
+      }
+      check("the inviter's list stops offering the pair, told over the wire", cleared,
+            cleared ? '' : 'the row survived the reunion');
+    }
+  }
+}
+
 stage('route prefix rename + legacy compatibility');
 {
   const code = async (u, init) => (await fetch(u, init).catch(() => ({ status: 0 }))).status;

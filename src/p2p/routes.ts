@@ -13,6 +13,7 @@ import {
   handleHello,
   handleLeave,
   handlePublishedAlbums,
+  handleReunified,
 } from './protocol.ts';
 import { handlePair } from './pair.ts';
 import { handleActivity, handleComments } from '../sync/comments.ts';
@@ -48,6 +49,8 @@ export const peerRoutes: PeerHandler = async (callerPub, path, bodyBuf, range) =
   if ((m = path.match(/^\/albums\/([^/]+)\/manifest$/))) return json(await handleManifest(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/status$/))) return json(await handleStatus(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/leave$/))) return json(handleLeave(callerPub, m[1]));
+  // A fact the origin cannot see for itself: the receiver merged this share into its own album.
+  if ((m = path.match(/^\/albums\/([^/]+)\/reunified$/))) return json(handleReunified(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/comments$/))) return json(await handleComments(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/nudge$/))) return json(await handleNudge(callerPub, m[1]));
   // The album index, for matching a split album's other half. Same gate as /directory: an enrolled

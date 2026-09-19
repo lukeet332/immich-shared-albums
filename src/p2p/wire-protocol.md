@@ -14,8 +14,8 @@ certificates, and no listening HTTP surface for peers at all.
   successful dial — **hints, never identity**. First contact gets them from the pairing ticket or
   the share page's endpoint token.
 - Connections are cached per peer and redialed when they close — including when one turns out to
-  be a zombie after its peer restarted, which `closeReason()` alone does not report (see *Pushed
-  refs report partial success*). The accept loop hands `routes.ts` the caller's proven key
+  be a zombie after its peer restarted, which `closeReason()` alone does not report (see _Pushed
+  refs report partial success_). The accept loop hands `routes.ts` the caller's proven key
   (`remoteId()`), never a header.
 - **Relays**: n0's public map assists hole-punching and carries end-to-end-encrypted traffic when
   a direct path fails — the one disclosed third party, fallback only; `RELAY=off` runs dark.
@@ -40,8 +40,16 @@ field, so an older build stays wire-identical rather than gaining a field it doe
 (evolution rule 1). It is a category, not a permission — the local mapping is an ordinary member
 mirror either way, and nothing about access changes because of it.
 
+**The receiver reports the reunion back** with `POST /albums/:mappingId/reunified`
+(`handleReunified`), addressed by the origin's mapping id, its album id, or the id the origin sent —
+whichever the caller has. It is a fact, not a command: nothing about the origin's own album changes
+when the other half merges into the album over there, so without this the origin keeps offering a
+pairing it has already had in its own panel. Sent best-effort under `TELL_ORIGIN_DEADLINE_MS`, since
+the person who accepted has already succeeded locally. An older origin answers 404, which costs a
+stale row there and nothing here.
+
 **The album index is published, not derived.** `GET /albums` on the wire answers what the
-caller's people have *published*: each album's owner asked their own server for the albums it says
+caller's people have _published_: each album's owner asked their own server for the albums it says
 they own, because the sidecar holds no credential for a human and Immich scopes `GET /albums` to
 one. Ownership is therefore settled by Immich at publication time and the route only reads back what
 was recorded — a peer that has published nothing gets an empty list, never a server-wide one. It
@@ -156,7 +164,7 @@ processed before it is answered and can legitimately take that long; a dead conn
 `untilClosed`, never by shortening that deadline.
 
 `ISA_TRACE_SYNC` logs every dial, stream write, response wait and local Immich call with its
-elapsed time. Reach for it when a sync hangs: a stalled request is a *silent* wait, so no error
+elapsed time. Reach for it when a sync hangs: a stalled request is a _silent_ wait, so no error
 state distinguishes it from a slow handler, and only the last logged stage says which await stopped
 returning.
 

@@ -20,11 +20,15 @@ import { canUnifyOwnAlbum, findAdoptableAlbum } from '../sync/adoption.ts';
 import { addHouseBotToAlbum } from '../sync/house-bot.ts';
 import { deleteProxyAsset } from '../immich/materialise.ts';
 import { seedRowsFor } from '../sync/matches.ts';
+import { peerRequest, withDeadline } from './transport.ts';
 import { albumTeardown } from '../sync/album-teardown.ts';
 import { grantAlbumWriters, grantInvitedHumans, peerContributors } from '../sync/album-grant.ts';
 import { auditLine } from '../sync/audit.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
+/** How long the invited side waits to tell the origin its share is reunited. Short on purpose: the
+ *  click has already succeeded locally, and a peer that is down must not hold the panel's spinner. */
+const TELL_ORIGIN_DEADLINE_MS = 3000;
 export type MirrorRequest = {
   peer: Peer;
   album: { id: string; name: string };
@@ -319,6 +323,7 @@ export async function unifyOwnAlbum(
     );
     delete mapping.remoteVersion;
     save();
+    await tellOriginReunited(mapping, peer);
     // `void`: deliberately unawaited. The loops retry, so a lost pull costs a tick, not the move.
     void reconcileMapping(mapping, peer).catch(e =>
       log(`post-reunion reconcile for "${own.name}": ${e.message} — the loops will retry`)
@@ -329,6 +334,28 @@ export async function unifyOwnAlbum(
       `DBG reunion landed: mapping.albumId=${mapping.albumId.slice(0, 8)} was=${previousAlbumId.slice(0, 8)} name="${own.name}"`
     );
   return { album: own.name, seeded: assets.length };
+}
+
+/**
+ * Tell the origin its share is now part of a reunion here — the fact that clears the pairing from
+ * ITS "Possible album reunions" list, which nothing on this side can see.
+ *
+ * Bounded and best-effort: the person who just accepted must not wait on a peer that is down, and a
+ * lost notice costs a stale row on the inviter's panel, not the reunion. `handleReunified` records
+ * it and asks for nothing back.
+ */
+async function tellOriginReunited(mapping: Mapping, peer: Peer) {
+  const remoteId = mapping.remoteMappingId || mapping.remoteAlbumId;
+  if (!remoteId) return;
+  try {
+    await withDeadline(
+      peerRequest(peer, `/albums/${remoteId}/reunified`, {}),
+      `reunified notice to "${peer.name}"`,
+      TELL_ORIGIN_DEADLINE_MS
+    );
+  } catch (e) {
+    log(`could not tell "${peer.name}" that "${mapping.albumName}" is reunited: ${(e as Error).message}`);
+  }
 }
 
 /** Remove what the mirror held. Its stubs are ours and the ledger says so, so removal is

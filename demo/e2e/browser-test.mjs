@@ -196,7 +196,10 @@ if (nonAdminLogin.accessToken) {
 const C_PANEL_WEB = process.env.C_PANEL_WEB || `http://localhost:${PORT('PORT_SIDECAR_C', 8302)}`;
 const panelName = `panel offer ${Date.now()}`;
 const panelText = async (p) => (await p.locator('body').innerText().catch(() => '')) || '';
-const seesPair = (t) => new RegExp(`Possible album reunions[\\s\\S]*?${panelName}`).test(t);
+/** Only the candidates section: the panel prints album names in three places, so finding one
+ *  anywhere on the page says nothing about whether this list still offers it. */
+const candidates = (t) => (t.split('Possible album reunions')[1] || '').split('Your shared albums')[0];
+const seesPair = (t) => new RegExp(panelName).test(candidates(t));
 
 // C is hardened like production by run-mock-e2e.sh (`passwordLogin.enabled = false`), which is why no
 // lane has ever driven its panel — the panel needs a session, and there was no way to mint one. Open
@@ -296,6 +299,65 @@ check('and the peer stops matching against the album that is gone',
 await soloPanel.c.close();
 await bPanel.c.close();
 await cPanel.c.close();
+
+// 8. The reunion round trip through the PANELS alone: one side invites — which shares its own album
+//    with the other person, in Immich — the other accepts, and both lists drop the pair. The
+//    inviter's row clears over the wire (`handleReunified`), which nothing local could observe.
+const inviteName = `panel invite ${Date.now()}`;
+const bInviteAlbum = await (await fetch(`${B_PANEL_WEB}/api/albums`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bLogin.accessToken}` },
+  body: JSON.stringify({ albumName: inviteName }) })).json();
+const cInviteAlbum = await api('/albums', { albumName: inviteName });
+check('the lane can give both households a pair to reunite by invitation',
+  !!bInviteAlbum?.id && !!cInviteAlbum?.id,
+  `${bInviteAlbum?.id ? 'B ok' : 'B failed'}, ${cInviteAlbum?.id ? 'C ok' : 'C failed'}`);
+
+/** Click the button labelled `label` in the row that names this album — the row is the smallest
+ *  ancestor that mentions it, because the panel repeats the same two labels down the list. */
+const clickInRow = (p, label, name) => p.evaluate(([label, name]) => {
+  const buttons = [...document.querySelectorAll('button,a')]
+    .filter(x => new RegExp(label).test(x.textContent || ''));
+  let best = null, size = Infinity;
+  for (const b of buttons) {
+    for (let el = b, i = 0; el && i < 6; el = el.parentElement, i++) {
+      const t = el.innerText || '';
+      if (t.includes(name)) { if (t.length < size) { size = t.length; best = b; } break; }
+    }
+  }
+  if (!best) return false;
+  best.click();
+  return true;
+}, [label, name]);
+
+// C looks first so its offer is in B's index; B is the household that invites.
+await cPanel.p.goto(`${C_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'domcontentloaded' });
+await cPanel.p.waitForTimeout(3000);
+await bPanel.p.goto(`${B_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'domcontentloaded' });
+await bPanel.p.waitForTimeout(3000);
+check('a pair with nothing shared yet is offered an invitation',
+  new RegExp(`${inviteName}[\\s\\S]*?Invite `).test(candidates(await panelText(bPanel.p))));
+
+check('Invite was clicked', await clickInRow(bPanel.p, '^Invite ', inviteName));
+await bPanel.p.waitForTimeout(5000);
+check("the inviter's own row now waits on the other person",
+  /waiting for them to accept/.test(await panelText(bPanel.p)));
+
+let acceptOffered = false;
+for (let waited = 0; waited < 60000 && !acceptOffered; waited += 5000) {
+  await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
+  await cPanel.p.waitForTimeout(3000);
+  acceptOffered = /Accept invite/.test(candidates(await panelText(cPanel.p)));
+}
+check('the other person is offered Accept invite, having done nothing themselves', acceptOffered);
+check('Accept invite was clicked', await clickInRow(cPanel.p, '^Accept invite', inviteName));
+
+let gone = false;
+for (let waited = 0; waited < 60000 && !gone; waited += 5000) {
+  await bPanel.p.reload({ waitUntil: 'domcontentloaded' });
+  await bPanel.p.waitForTimeout(3000);
+  gone = !new RegExp(inviteName).test(candidates(await panelText(bPanel.p)));
+}
+check("and the pair leaves the inviter's list once it is done", gone);
 
 if (cWasHardened) {
   await setPasswordLogin(false);

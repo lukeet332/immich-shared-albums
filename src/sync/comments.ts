@@ -10,6 +10,7 @@ import { peerRequest } from '../p2p/transport.ts';
 import { immichJson, jsonBody, usersById } from '../immich/client.ts';
 import { readCredsFor, albumReadKey } from '../immich/access.ts';
 import { ensureContributor } from '../immich/contributors.ts';
+import { ensureHouseBot } from './house-bot.ts';
 
 export const getComments = (albumId, key?: string) =>
   immichJson(`/activities?albumId=${albumId}&type=comment`, {}, key);
@@ -33,15 +34,24 @@ export async function materialiseComments(mapping, peer, comments) {
     const tag = `remote:${cm.id}`;
     if (seenActHas(tag)) continue;
     const hostKey = albumReadKey(readCredsFor(mapping));
-    const c = await ensureContributor(
-      cm.author || peer.name,
-      mapping.albumId,
-      hostKey,
-      peer,
-      cm.authorUserId,
-      mapping.peer
-    );
-    const posted = await postComment(mapping.albumId, cm.comment, c.apiKey);
+    let posted;
+    try {
+      const c = await ensureContributor(
+        cm.author || peer.name,
+        mapping.albumId,
+        hostKey,
+        peer,
+        cm.authorUserId,
+        mapping.peer
+      );
+      posted = await postComment(mapping.albumId, cm.comment, c.apiKey);
+    } catch {
+      // The author is one this household cannot PUT on the album — the peer's own BOT, whose account
+      // only an album's owner can add — so the line is mirrored as ours instead. The trail is the
+      // point and the text names who said it; without this an audit line never follows a reunion.
+      const bot = await ensureHouseBot();
+      posted = await postComment(mapping.albumId, cm.comment, bot.apiKey);
+    }
     ids[cm.id] = posted.id;
     seenActAdd(tag, mapping.id);
     seenActAdd(`local:${posted.id}`, mapping.id); // don't echo it back

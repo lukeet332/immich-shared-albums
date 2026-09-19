@@ -11,7 +11,14 @@ import type { Mapping } from '../store.ts';
 import type { Creds } from '../immich/access.ts';
 import { readCallerAlbums, visibleAlbumIds } from '../immich/access.ts';
 import { offerAlbumsTo, publishOwnedAlbums, refreshPeerAlbums } from '../sync/album-index.ts';
-import { albumsIPublish, matchesWithPeer, type PeerMatch } from '../sync/matches.ts';
+import {
+  albumsIPublish,
+  matchesWithPeer,
+  normaliseAlbumName,
+  reunionStepFor,
+  type PeerMatch,
+  type ReunionStep,
+} from '../sync/matches.ts';
 
 export type MyAlbum = {
   name: string;
@@ -30,15 +37,17 @@ export type MyAlbum = {
 export type MePage = { albums: MyAlbum[]; household: string; isAdmin: boolean };
 
 /**
- * A match as the panel needs it: the pairing, plus the LOCAL id of the share to reunite, when there
- * is one. Both are optional, because a match does not require a share — two people holding halves of
- * the same Google album have no Immich share between them at all, and that is the pair this list
- * exists to show.
+ * A match as the panel needs it: the pairing, plus WHAT THIS PERSON CAN DO ABOUT IT.
  *
- * `PeerMatch` carries neither on purpose: the matcher decides on names and owner, and an album id on
- * the wire would be disclosure with no use. The id here comes from a mapping the caller is part of.
+ * `step` is derived from the share behind the pairing, not from the pairing itself — see
+ * `reunionStepFor`, which is where the rule lives and is unit-tested. A candidate with no share is
+ * still worth showing (two people holding halves of the same Google album have no Immich share
+ * between them at all), so the step is carried rather than the row being filtered out.
+ *
+ * `mappingId` comes with the `accept` step and only there: it is the local share to merge into, and
+ * the other steps have nothing to act on.
  */
-export type ActionableMatch = PeerMatch & { mappingId?: string };
+export type ActionableMatch = PeerMatch & { step: ReunionStep; mappingId?: string };
 
 /**
  * Offer the caller's OWN albums to one linked peer for matching.
@@ -97,17 +106,21 @@ export async function myMatches(creds: Creds, callerUserId: string): Promise<Act
   for (const peer of state.peers) {
     const theirs = await refreshPeerAlbums(peer);
     for (const candidate of matchesWithPeer(mine, theirs, peer)) {
-      // The share this pairing is about, if one exists yet: this peer's mapping on an album of that
-      // name. Absent is the ordinary case for two halves that have never been shared — the match is
-      // still worth showing, and the panel simply offers no action without a share to act on.
-      // An ADOPTED mapping means this pairing is already reunited, so there is nothing left to
-      // offer: the row used to render "Reunite these albums" anyway, and clicking it could only fail
-      // ("cannot be reunited with that album"). The album is listed under the reunified albums
-      // instead, which is where its Un-reunite lives.
-      const mapping = state.mappings.find(
-        m => !m.dead && !m.adopted && m.peer === peer.pub && m.albumName === candidate.mine.name
+      // The share this pairing is about, if one exists: the peer's mapping whose local album carries
+      // that name. Names fold the way the matcher folds them, so a share named with different case or
+      // spacing is still recognised as the share for the pairing it obviously is.
+      const share = state.mappings.find(
+        m =>
+          !m.dead &&
+          m.peer === peer.pub &&
+          normaliseAlbumName(m.albumName) === normaliseAlbumName(candidate.mine.name)
       );
-      out.push({ ...candidate, ...(mapping ? { mappingId: mapping.id } : {}) });
+      const step = reunionStepFor(share);
+      // A pairing that was already reunited is not a candidate: it belongs to the reunified albums,
+      // with its way out. Leaving it here offered a reunion that had already happened, and the row
+      // never went away — the one place a candidate must NOT be listed.
+      if (step.kind === 'reunited') continue;
+      out.push({ ...candidate, step, ...(step.kind === 'accept' ? { mappingId: step.mappingId } : {}) });
     }
   }
   return out;
