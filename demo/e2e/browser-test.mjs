@@ -368,9 +368,10 @@ check('a pair with nothing shared yet is offered an invitation', inviteRowShown,
 
 check('Invite was clicked', await clickInRow(bPanel.p, '^Invite ', inviteName));
 check('and it asked first, rather than sharing on the click alone', await confirmDialog(bPanel.p, 'Invite'));
-await bPanel.p.waitForTimeout(5000);
+// The panel fetches on mount and does not poll, so a row whose state changed on the server can only
+// show it after a reload — waiting on the page as it stands reads a state that is already gone.
 check("the inviter's own row now waits on the other person",
-  /waiting for them to accept/.test(await panelText(bPanel.p)));
+  await waitForRow(bPanel.p, /waiting for them to accept/));
 
 let acceptOffered = false;
 for (let waited = 0; waited < 60000 && !acceptOffered; waited += 5000) {
