@@ -152,7 +152,16 @@ export const s = {
   buttonDanger: { background: 'var(--isa-danger)', color: 'var(--isa-surface)' },
   /** A row's own rhythm: what it is, what it is made of, what you can do about it — 4px apart. */
   title: { fontSize: 15, fontWeight: 600, letterSpacing: '-.01em' },
-  h2: { display: 'block', fontSize: 18, margin: 'var(--isa-space-6) 0 var(--isa-space-2)' },
+  /** A real `<h2>`, reset to the page's own type: the padding/margins a heading element brings would
+   *  otherwise land on top of the rhythm above. */
+  h2: {
+    display: 'block',
+    fontSize: 18,
+    fontWeight: 700,
+    lineHeight: 'inherit',
+    margin: 'var(--isa-space-6) 0 var(--isa-space-2)',
+    padding: 0,
+  },
   muted: { color: t.muted, fontSize: 13 },
   sub: { color: t.muted, fontSize: 12 },
   input: {

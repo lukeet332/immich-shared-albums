@@ -165,7 +165,7 @@ export const App = () => {
       )}
       {albums && albums.some(a => a.reunified) && (
         <section style={{ marginBottom: 22 }}>
-          <b style={s.h2}>Reunified albums</b>
+          <h2 style={s.h2}>Reunified albums</h2>
           <div style={s.card}>
             {albums
               .filter(a => a.reunified)
@@ -197,7 +197,7 @@ export const App = () => {
       )}
       {matches.length > 0 && (
         <section style={{ marginBottom: 22 }}>
-          <b style={s.h2}>Possible album reunions</b>
+          <h2 style={s.h2}>Possible album reunions</h2>
           <p style={{ ...s.muted, marginTop: 6 }}>The same album, half on each server.</p>
           <div style={s.card}>
             {matches.map(m => (
@@ -257,7 +257,7 @@ export const App = () => {
           </div>
         </section>
       )}
-      <b style={s.h2}>Your shared albums</b>
+      <h2 style={s.h2}>Your shared albums</h2>
       {error && <div style={s.card}>Couldn't load your albums: {error}</div>}
       {!error && albums === null && <div style={s.card}>Loading…</div>}
       {albums && albums.length === 0 && (
@@ -271,9 +271,11 @@ export const App = () => {
         <div style={s.card}>
           {albums.map(a => (
             <div style={s.item} key={`${a.peer}:${a.name}`}>
-              <div style={s.title}>{a.name}</div>
-              <div style={s.sub}>
-                {a.role === 'owner' ? 'shared by you' : 'shared with you'} · with {a.peer}
+              <div style={s.grow}>
+                <div style={s.title}>{a.name}</div>
+                <div style={s.sub}>
+                  {a.role === 'owner' ? 'shared by you' : 'shared with you'} · with {a.peer}
+                </div>
               </div>
             </div>
           ))}
