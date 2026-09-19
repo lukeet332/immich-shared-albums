@@ -36,12 +36,12 @@ export const App = () => {
   return (
     <>
       <h1 style={{ fontSize: 20, letterSpacing: '-.02em' }}>🔗 Shared albums</h1>
-      <p style={{ ...s.muted, marginBottom: 4 }}>Which would you like to open?</p>
+      <p style={{ ...s.muted, marginBottom: 4 }}></p>
       <div style={s.card}>
         <a href={`${ROUTE_PREFIX}/me`} style={{ color: 'inherit', textDecoration: 'none' }}>
           <div style={s.item}>
             <div>Your shared albums</div>
-            <div style={s.sub}>Albums you share across servers, and possible reunions</div>
+            <div style={s.sub}>Albums you share across servers</div>
           </div>
         </a>
         <a href={`${ROUTE_PREFIX}/admin`} style={{ color: 'inherit', textDecoration: 'none' }}>
