@@ -41,12 +41,32 @@ const browser = await chromium.launch({ args: launchArgs });
 const ctx = await browser.newContext();
 const page = await ctx.newPage();
 
+// Collect the framed document's own status. Visibility is not enough: an iframe renders happily
+// while its document 404s, which is exactly what happened when our `?native=1` marker reached
+// Immich — the album still booted client-side, so a screenshot looked right, but the
+// SERVER-rendered share metadata was gone (a copied link previewed as nothing) and the status was
+// 404. The lane asserted `isVisible()` and saw none of it.
+const frameStatuses = [];
+page.on('response', (r) => {
+  if (r.url().includes('?native=1')) frameStatuses.push(r.status());
+});
+
 // 1. our share document: the join card floats over the framed native album
 await page.goto(`${SHARE_HOST}${SHARE_PATH}`, { waitUntil: 'networkidle' });
 const banner = page.locator('#immich-shared-albums-banner .card');
 check('join card renders on the share page', await banner.isVisible().catch(() => false));
 check('the native album is framed behind it',
   await page.locator('iframe.native-album').isVisible().catch(() => false));
+
+// ...and the frame contains the ALBUM, not just our own error page rendered inside it.
+const framed = await page
+  .frameLocator('iframe.native-album')
+  .locator('body')
+  .innerText()
+  .catch(() => '');
+check('the framed album is really the album: 200, and it names itself',
+  frameStatuses.includes(200) && framed.includes(album.albumName),
+  `status=${JSON.stringify(frameStatuses)} frame names the album=${framed.includes(album.albumName)}`);
 
 // 1b. dismiss -> clean handoff to the untouched native page
 await page.locator('#immich-shared-albums-banner .dismiss').click();
