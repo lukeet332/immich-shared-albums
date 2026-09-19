@@ -4,6 +4,7 @@ import { log } from '../config.ts';
 import type { Creds } from '../immich/access.ts';
 import { readCallerAlbums } from '../immich/access.ts';
 import { ensureContributor } from '../immich/contributors.ts';
+import { immichJson } from '../immich/client.ts';
 import { state, store } from '../state.ts';
 import type { Peer } from '../store.ts';
 import { findAdoptableAlbum } from './adoption.ts';
@@ -50,7 +51,7 @@ export async function invitePeerToReunite(
   // make that work: `invitation` keeps it out of the attribution ledger (`addedRecord`), and
   // `homePeer` is set because the peer's own published index named this person as that album's owner
   // THERE, which is the same proof a directory exchange gives.
-  await ensureContributor(
+  const person = await ensureContributor(
     theirs.ownerName || `someone on ${peer.name}`,
     mine.albumId,
     creds,
@@ -59,6 +60,14 @@ export async function invitePeerToReunite(
     peer.pub,
     { homePeer: peer.pub, invitation: true }
   );
+
+  // Read it back rather than trust the call. `ensureContributor` deliberately swallows a failed add —
+  // attribution can retry — but a panel that says "Invited" for someone who is not on the album is a
+  // lie the person cannot see through, and the peer is never told either.
+  const after = await immichJson(`/albums/${mine.albumId}?withoutAssets=true`, {}, creds).catch(() => null);
+  const isMember = (after?.albumUsers || []).some(au => au.user?.id === person?.userId);
+  if (!isMember)
+    throw new Error(`could not share “${mine.name}” with ${theirs.ownerName} — nothing was changed`);
   // Run the scanner now rather than on its next tick: the mapping it records is what turns the row
   // into "waiting" and tells the peer, and the person is looking at that row.
   await detectInvitesOnce().catch(e => log(`invite: could not re-read memberships yet: ${e.message}`));
@@ -69,6 +78,12 @@ export async function invitePeerToReunite(
   const mapping = state.mappings.find(
     m => m.role === 'owner' && m.peer === peer.pub && m.albumId === mine.albumId && !m.dead
   );
+  // No mapping means the peer is never told, and the inviter's row would sit on "Invite" forever
+  // after a success notice. That is a failure, and it has to read as one.
+  if (!mapping)
+    throw new Error(
+      `“${mine.name}” is shared with ${theirs.ownerName}, but the invitation was not recorded — open the panel again`
+    );
   if (mapping) {
     await addHouseBotToAlbum(mine.albumId, creds).catch(e =>
       log(`could not put the bot on "${mine.name}" to record the invite: ${e.message}`)
