@@ -87,5 +87,14 @@ test('a mapping with neither fact set reads back with neither set', () => {
     const back = store.state.mappings.find(m => m.id === 'm-ordinary');
     assert.equal(back?.adopted, undefined, 'adopted must not default to false');
     assert.equal(back?.reunified, undefined, 'reunified must not default to false');
+    // The loaded object cannot tell NULL from 0, because the reader maps both to undefined. The
+    // stored VALUE is what a migration or a query would act on, so assert it: 0 would mean an
+    // existing mapping had been explicitly recorded as "not adopted", which is a different claim
+    // from "never stated".
+    const raw = store.db
+      .prepare('SELECT adopted, reunified FROM mappings WHERE id = ?')
+      .get('m-ordinary') as { adopted: unknown; reunified: unknown };
+    assert.equal(raw.adopted, null, 'an unset fact must be SQL NULL, not 0');
+    assert.equal(raw.reunified, null, 'an unset fact must be SQL NULL, not 0');
   });
 });

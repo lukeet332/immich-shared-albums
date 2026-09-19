@@ -28,6 +28,11 @@ export type TeardownPlan = {
  * withdraw and are not this decision's concern.
  */
 export function albumTeardown(mapping: TeardownMapping): TeardownPlan {
+  // Role FIRST, and independently of `adopted` on purpose: only a mirror this sidecar created is
+  // ever ours to delete, so a caller that forgets to record adoption still cannot delete a real
+  // album. The two facts answer different questions and must not be folded into one check.
+  if (mapping.role !== 'member')
+    return { deleteAlbum: false, reason: 'owner mapping — this household’s own album' };
   if (mapping.adopted) return { deleteAlbum: false, reason: 'adopted album belongs to its owner' };
   return { deleteAlbum: true, reason: 'mirror created by this sidecar' };
 }

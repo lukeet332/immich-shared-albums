@@ -80,6 +80,16 @@ test('the asset guard refuses anything a HUMAN owns, whatever teardown decides',
   assert.equal(mayDelete('bot-user-1'), true, 'a stub we materialised is ours to remove');
 });
 
+// Owner mappings are this household's own albums. Nothing teardown does may delete one — the
+// deletion is for the MIRROR this sidecar created. Stated independently of `adopted` so the two
+// facts cannot be confused: a future caller that forgets to set `adopted` must still be safe.
+test('an owner mapping is never deleted, adopted or not', () => {
+  for (const adopted of [true, false, undefined]) {
+    const plan = albumTeardown({ role: 'owner', adopted, albumName: 'Summer 2024' });
+    assert.equal(plan.deleteAlbum, false, `an owner album was deletable with adopted=${adopted}`);
+  }
+});
+
 // The old behaviour, preserved: a mirror this sidecar created is ours to remove, which is what
 // makes a join fully reversible. Narrowing the guard must not widen onto this case.
 test('a mirror this sidecar created is still removed on leave', () => {

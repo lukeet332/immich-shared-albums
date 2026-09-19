@@ -156,6 +156,10 @@ export type Collections = {
 
 const bool = (v: unknown) => (v ? 1 : 0);
 const orNull = <T extends string | number>(v: T | undefined): T | null => (v === undefined ? null : v);
+/** A nullable boolean column: unset stays SQL NULL, and the value is stored as 0/1 because
+ *  `node:sqlite` accepts no other type. `bool()` cannot do this — it coerces unset to 0, which
+ *  would make "never stated" indistinguishable from "stated false". */
+const triBool = (v: boolean | undefined): number | null => (v === undefined ? null : v ? 1 : 0);
 const jsonOrNull = (v: unknown) => (v === undefined || v === null ? null : JSON.stringify(v));
 
 /**
@@ -446,8 +450,10 @@ export class Store {
           jsonOrNull(m.forPeerUserIds),
           orNull(m.albumOwnerName),
           orNull(m.albumOwnerId),
-          bool(m.adopted),
-          bool(m.reunified),
+          // NOT bool(): unset must stay SQL NULL — see triBool. `dead` keeps bool() because its
+          // column is NOT NULL and has no third state.
+          triBool(m.adopted),
+          triBool(m.reunified),
           bool(m.dead),
           orNull(m.deadAt),
           orNull(m.deadReason),
