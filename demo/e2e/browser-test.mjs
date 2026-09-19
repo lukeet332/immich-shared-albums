@@ -311,6 +311,28 @@ check('the lane can give both households a pair to reunite by invitation',
 
 /** Click the button labelled `label` in the row that names this album — the row is the smallest
  *  ancestor that mentions it, because the panel repeats the same two labels down the list. */
+// The panel renders its reunions only once its own fetch lands, and that fetch refreshes the peer's
+// index over iroh — a round trip, not a tick. A fixed sleep reads the page before it has an answer
+// and blames the product; this waits for the answer.
+const waitForRow = async (p, rowRegex, ms = 45000) => {
+  for (let waited = 0; waited < ms; waited += 3000) {
+    if (rowRegex.test(candidates(await panelText(p)))) return true;
+    await p.waitForTimeout(1500);
+    await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    await p.waitForTimeout(2500);
+  }
+  return false;
+};
+
+// Actions ask before they act, so a row's button opens a dialog and the dialog's button is what
+// runs it. Clicking the row and walking away is the bug this helper exists to prevent.
+const confirmDialog = async (p, label) => {
+  const dialog = p.locator('[role=dialog]');
+  if (!(await dialog.count())) return false;
+  await dialog.getByRole('button', { name: label, exact: true }).click();
+  return true;
+};
+
 const clickInRow = (p, label, name) => p.evaluate(([label, name]) => {
   const buttons = [...document.querySelectorAll('button,a')]
     .filter(x => new RegExp(label).test(x.textContent || ''));
@@ -330,11 +352,12 @@ const clickInRow = (p, label, name) => p.evaluate(([label, name]) => {
 await cPanel.p.goto(`${C_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'domcontentloaded' });
 await cPanel.p.waitForTimeout(3000);
 await bPanel.p.goto(`${B_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'domcontentloaded' });
-await bPanel.p.waitForTimeout(3000);
-check('a pair with nothing shared yet is offered an invitation',
-  new RegExp(`${inviteName}[\\s\\S]*?Invite `).test(candidates(await panelText(bPanel.p))));
+const inviteRowShown = await waitForRow(bPanel.p, new RegExp(`${inviteName}[\\s\\S]*?Invite `));
+check('a pair with nothing shared yet is offered an invitation', inviteRowShown,
+  (await panelText(bPanel.p)).split('\n').filter(l => /^Invite /.test(l)).slice(0, 2).join(' | ') || '(none)');
 
 check('Invite was clicked', await clickInRow(bPanel.p, '^Invite ', inviteName));
+check('and it asked first, rather than sharing on the click alone', await confirmDialog(bPanel.p, 'Invite'));
 await bPanel.p.waitForTimeout(5000);
 check("the inviter's own row now waits on the other person",
   /waiting for them to accept/.test(await panelText(bPanel.p)));
@@ -347,6 +370,7 @@ for (let waited = 0; waited < 60000 && !acceptOffered; waited += 5000) {
 }
 check('the other person is offered Accept invite, having done nothing themselves', acceptOffered);
 check('Accept invite was clicked', await clickInRow(cPanel.p, '^Accept invite', inviteName));
+check('and it asked first, rather than merging on the click alone', await confirmDialog(cPanel.p, 'Accept'));
 
 let gone = false;
 for (let waited = 0; waited < 60000 && !gone; waited += 5000) {
