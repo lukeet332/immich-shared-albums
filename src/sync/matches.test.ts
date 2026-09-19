@@ -128,6 +128,54 @@ test('the same name on both sides of three people yields one candidate per other
   assert.deepEqual(found.map(f => f.theirs.ownerName).sort(), ['Bob', 'Carol']);
 });
 
+// A peer's Immich can hold the same name twice — a Takeout imported twice, a name reused two years
+// running — and the panel renders a row per PAIRING, so both would read identically: same owner,
+// same counts, same dates, same button. Every action here is resolved by NAME (`canUnifyOwnAlbum`
+// for the album, the mapping for the share), so the two rows would also DO the same thing. A row a
+// person can neither tell from another nor act on differently is noise in the one list they read.
+test('the same name twice on the peer, with nothing to tell them apart, shows once', () => {
+  const found = matchAlbums(
+    [album({})],
+    [
+      album({ ownerUserId: 'u-bob', ownerName: 'Bob', assetCount: 20 }),
+      album({ ownerUserId: 'u-bob', ownerName: 'Bob', assetCount: 20 }),
+    ]
+  );
+  assert.equal(found.length, 1, `the same pairing twice: ${JSON.stringify(found)}`);
+});
+
+test('but same-named albums holding different things are each their own candidate', () => {
+  const found = matchAlbums(
+    [album({})],
+    [
+      album({ ownerUserId: 'u-bob', ownerName: 'Bob', assetCount: 20 }),
+      album({ ownerUserId: 'u-bob', ownerName: 'Bob', assetCount: 41 }),
+    ]
+  );
+  assert.equal(
+    found.length,
+    2,
+    `a person can tell these apart: ${JSON.stringify(found.map(f => f.theirs.assetCount))}`
+  );
+});
+
+test('and so are the same name and count under different dates', () => {
+  const found = matchAlbums(
+    [album({})],
+    [
+      album({ ownerUserId: 'u-bob', ownerName: 'Bob', assetCount: 20 }),
+      album({
+        ownerUserId: 'u-bob',
+        ownerName: 'Bob',
+        assetCount: 20,
+        startDate: '2025-06-01T00:00:00.000Z',
+        endDate: '2025-08-31T00:00:00.000Z',
+      }),
+    ]
+  );
+  assert.equal(found.length, 2, 'the dates are how a person tells two otherwise identical albums apart');
+});
+
 // Rows arrive from a peer's client or from Immich, so a malformed album is skipped rather than
 // thrown over: the sidecar has to fail open.
 test('a malformed album is dropped, never thrown over', () => {

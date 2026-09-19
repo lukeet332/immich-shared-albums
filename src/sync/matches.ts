@@ -117,11 +117,28 @@ function datesOverlap(mine: OwnedAlbum, theirs: OwnedAlbum): boolean {
   return mineFrom <= theirsTo && theirsFrom <= mineTo;
 }
 
+/** The facts one row is made of: what a person reads, and what the server acts on. Two candidates
+ *  that agree on all of them are the same row — the panel would print them identically — and the
+ *  same action, because both are resolved by NAME: `canUnifyOwnAlbum` picks the album, the mapping
+ *  picks the share. Nothing is hidden by keeping one, and the list stays readable. */
+const asOneRow = (c: AlbumCandidate): string =>
+  JSON.stringify(
+    [c.mine, c.theirs].map(a => [
+      a.name,
+      a.ownerUserId,
+      a.ownerName,
+      a.assetCount,
+      a.startDate ?? '',
+      a.endDate ?? '',
+    ])
+  );
+
 /** Same-named albums owned by different people on the two servers — the candidate halves.
  *
  *  The name is the only requirement. Date overlap and photo count are ORDERING signals, never a
  *  filter: §3 makes a miss cost a redundant stub and a false positive hide one photo reversibly,
- *  and §6 puts a human in front of every candidate, so a wide list is cheaper than a missed pair. */
+ *  and §6 puts a human in front of every candidate, so a wide list is cheaper than a missed pair.
+ *  A name held twice, with nothing to tell the two apart, is one row rather than two. */
 export function matchAlbums(mine: OwnedAlbum[], theirs: OwnedAlbum[]): AlbumCandidate[] {
   const byName = new Map<string, OwnedAlbum[]>();
   for (const album of theirs) {
@@ -131,18 +148,23 @@ export function matchAlbums(mine: OwnedAlbum[], theirs: OwnedAlbum[]): AlbumCand
     else byName.set(key, [album]);
   }
   const candidates: AlbumCandidate[] = [];
+  const shown = new Set<string>();
   for (const album of mine) {
     for (const peerAlbum of byName.get(normaliseAlbumName(album.name)) || []) {
       // A shared album restored on both servers is owned by a different person on each — the same
       // owner on both sides is the same library, not two halves.
       if (peerAlbum.ownerUserId === album.ownerUserId) continue;
       const sameDates = datesOverlap(album, peerAlbum);
-      candidates.push({
+      const candidate = {
         mine: album,
         theirs: peerAlbum,
         sameDates,
         why: sameDates ? 'same album name, overlapping dates' : 'same album name',
-      });
+      };
+      const row = asOneRow(candidate);
+      if (shown.has(row)) continue;
+      shown.add(row);
+      candidates.push(candidate);
     }
   }
   return candidates.sort(
