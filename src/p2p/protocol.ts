@@ -202,7 +202,10 @@ export function handlePublishedAlbums(callerPub: string) {
 export function handleReunified(callerPub: string, albumMappingId: string) {
   const peer = peerByPub(callerPub);
   if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
-  const mapping = mappingFor(peer.pub, albumMappingId, 'member');
+  // The share WE gave them: adoption only ever happens on the receiving side, so the mapping this
+  // lands on is the one whose album is ours. Scoping to the caller is what stops a peer naming a
+  // mapping that is not theirs; the role keeps it to shares we actually handed over.
+  const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
   if (!mapping || mapping.dead) return goneOr404(peer.pub, albumMappingId);
   mapping.reunified = true;
   save();
