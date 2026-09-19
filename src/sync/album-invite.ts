@@ -7,6 +7,7 @@ import { ensureContributor } from '../immich/contributors.ts';
 import { immichJson } from '../immich/client.ts';
 import { state, store } from '../state.ts';
 import type { Peer } from '../store.ts';
+import { refreshPeerAlbums } from './album-index.ts';
 import { findAdoptableAlbum } from './adoption.ts';
 import { addHouseBotToAlbum } from './house-bot.ts';
 import { auditLine } from './audit.ts';
@@ -32,8 +33,11 @@ export async function invitePeerToReunite(
   asked: { albumName: string; ownerUserId: string }
 ): Promise<{ album: string; invited: string }> {
   const wanted = normaliseAlbumName(asked.albumName || '');
-  // What the peer published, as the loop last read it. The panel this row was rendered from reads
-  // the same cache, so the invitation is checked against exactly what the person was looking at.
+  // What the peer published, read NOW: the panel's rows come from the index the loop keeps, which
+  // may not have pulled this peer since they published — and an invitation is an explicit act, so it
+  // may wait briefly for the truth where a page load must not. Bounded, and the cache stands on
+  // failure. Follow-up: nudge the peer when a panel publishes, and this dial can go.
+  await refreshPeerAlbums(peer).catch(() => store.publishedAlbumsFor(peer.pub, 'from-them'));
   const theirs = store
     .publishedAlbumsFor(peer.pub, 'from-them')
     .find(a => a.ownerUserId === asked.ownerUserId && normaliseAlbumName(a.name) === wanted);
