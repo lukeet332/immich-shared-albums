@@ -1010,6 +1010,14 @@ stage('native album invitations, per person (no share link)');
       check('/invitations offers ONLY invitation-shaped shares, never link ones',
             !!listedBefore && listedBefore.every(i => i.album?.name === 'natively invited album'),
             `${listedBefore?.length} entries`);
+
+      // The reunified category is ADDITIVE: absent means "an ordinary share". An ordinary
+      // invitation must therefore carry no trace of it — a build that always sent the field would
+      // make every share look reunified to a peer that understands it, which is the failure this
+      // pins. The present case needs a real reunification, and lands with adoption.
+      check('an ordinary invitation carries no reunified category, so absent still means ordinary',
+            !!listedBefore?.length && listedBefore.every(i => !('reunified' in i)),
+            JSON.stringify(listedBefore?.map(i => Object.keys(i).sort())));
       check('an invitation names the people it is for, not just the household',
             !!listedBefore?.[0]?.forUserIds?.length, JSON.stringify(listedBefore?.[0]?.forUserIds));
 
