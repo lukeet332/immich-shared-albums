@@ -23,12 +23,6 @@ import { seedRowsFor } from '../sync/matches.ts';
 import { albumTeardown } from '../sync/album-teardown.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
-/** How hard a reunion tries to bring the other half across before leaving it to the loops. A move
- *  that returns with the album short is a reunion the person cannot see; a few short attempts cost
- *  seconds and cover the search-index lag that made one attempt unreliable. */
-const POST_MOVE_RECONCILE_ATTEMPTS = 4;
-const POST_MOVE_RECONCILE_WAIT_MS = 1500;
-
 export type MirrorRequest = {
   peer: Peer;
   album: { id: string; name: string };
@@ -260,27 +254,22 @@ export async function unifyOwnAlbum(
   log(`reunited "${own.name}" — ${assets.length} photo(s) were already here, seeded so none is offered back`);
 
   await retireMirror(mapping, previousAlbumId, previousHostSlug);
-  // Bring the other half into the album it now points at, HERE rather than at the next tick.
-  // Retiring the mirror removes the peer's stubs — they lived in the album the mapping left — so
-  // until they are materialised again the album is visibly missing that half, and the person would
-  // watch their reunion strip photos out and put them back minutes later.
+  // Kick the reconcile off, but do NOT await it. This pull crosses the wire, and a peer response
+  // that never arrives costs the transport's full deadline — `DEADLINE_MS` in p2p/transport.ts is
+  // 120s, measured on the rig as a 124s stall that left the album without the other half and made
+  // the reunion request look hung. Awaiting a peer call here makes the move's latency someone
+  // else's uptime, which is the one thing this operation must not depend on.
   //
-  // Retried rather than attempted once: a single pull can legitimately return nothing to do, since
-  // the manifest is served from a search index that lags a write, and a reconciliation whose
-  // version read races that index is skipped as already-clean. One attempt looked correct and left
-  // the album short for two minutes on the rig, so the move must not depend on winning that race.
+  // Clearing the cursor first makes the pull do work: `reconcileMapping` returns early when the
+  // origin's version is unchanged, and moving an album changes nothing at the origin.
   const peer = state.peers.find(p => p.pub === mapping.peer);
   if (peer) {
-    for (let attempt = 1; attempt <= POST_MOVE_RECONCILE_ATTEMPTS; attempt++) {
-      delete mapping.remoteVersion;
-      save();
-      await reconcileMapping(mapping, peer).catch(e => log(`post-reunion reconcile: ${e.message}`));
-      // The peer's photos are the ledger rows carrying an origin asset. Any of them present means
-      // the move has carried the other half across, which is the whole point of doing this here.
-      if (store.seenForMapping(mapping.id).some(entry => entry.originAsset)) break;
-      if (attempt < POST_MOVE_RECONCILE_ATTEMPTS) log(`post-reunion: "${own.name}" still short — retrying`);
-      await new Promise(r => setTimeout(r, POST_MOVE_RECONCILE_WAIT_MS));
-    }
+    delete mapping.remoteVersion;
+    save();
+    // `void`: deliberately unawaited. The loops retry, so a lost pull costs a tick, not the move.
+    void reconcileMapping(mapping, peer).catch(e =>
+      log(`post-reunion reconcile for "${own.name}": ${e.message} — the loops will retry`)
+    );
   }
   log(
     `DBG reunion landed: mapping.albumId=${mapping.albumId.slice(0, 8)} was=${previousAlbumId.slice(0, 8)} name="${own.name}"`
