@@ -176,7 +176,7 @@ iframe.native-album {
   margin: 14px 0 0;
   font-size: 12px;
   line-height: 1.55;
-  color: var(--isa-ink-subtle);
+  color: var(--isa-ink-muted);
 }
 #immich-shared-albums-banner .hint a {
   color: var(--isa-accent);
@@ -200,7 +200,7 @@ iframe.native-album {
     color: var(--isa-ink);
   }
   #immich-shared-albums-banner input::placeholder {
-    color: var(--isa-ink-subtle);
+    color: var(--isa-ink-muted);
   }
   #immich-shared-albums-banner input:focus {
     background: var(--isa-sunken);
@@ -212,7 +212,7 @@ iframe.native-album {
     background: var(--isa-line);
   }
   #immich-shared-albums-banner .hint {
-    color: var(--isa-ink-subtle);
+    color: var(--isa-ink-muted);
   }
   #immich-shared-albums-banner .hint a {
     color: var(--isa-accent);

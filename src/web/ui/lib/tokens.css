@@ -6,7 +6,6 @@
   --isa-sunken: #f1f3f4;
   --isa-ink: #202124;
   --isa-ink-muted: #5f6368;
-  --isa-ink-subtle: #80868b;
   --isa-line: rgba(0, 0, 0, 0.06);
   --isa-hairline: rgba(0, 0, 0, 0.08);
   --isa-accent: #4250af;
@@ -45,7 +44,6 @@
     --isa-sunken: #262b33;
     --isa-ink: #e8eaed;
     --isa-ink-muted: #9aa0a6;
-    --isa-ink-subtle: #7d8590;
     --isa-line: rgba(255, 255, 255, 0.08);
     --isa-hairline: rgba(255, 255, 255, 0.06);
     --isa-accent: #a8c7fa;
