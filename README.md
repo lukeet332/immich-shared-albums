@@ -35,6 +35,7 @@
 
 ## Links
 
+- [The panels — one URL for everything](./docs/using-the-panels.md)
 - [Setup guide](./deploy/SETUP.md)
 - [Demo video](https://www.youtube.com/watch?v=c3GO-YFchYo)
 - [Features](#features)
@@ -52,6 +53,7 @@
 
 | Doc | What it answers |
 | :--- | :--- |
+| [Using the panels](./docs/using-the-panels.md) | the one URL to remember, what each panel does, and where sharing actually happens |
 | [Setup guide](./deploy/SETUP.md) | the recommended install, step by step, nothing on the internet |
 | [AI-agent install](./deploy/INSTALL-AI.md) | paste-into-your-agent instructions that adapt to any reverse proxy |
 | [Manual install](./deploy/) | compose example, Caddy snippet, the three proxy routes |
@@ -108,8 +110,11 @@ You need Docker, an Immich admin API key, and a reverse proxy in front of Immich
    - Point an AI coding agent (Claude Code, Cursor, etc.) at [deploy/INSTALL-AI.md](./deploy/INSTALL-AI.md). It adapts the proxy routes to whatever reverse proxy you run.
    - Run `bash deploy/install.sh`. It detects your Immich, starts the addon and prints the routes to add.
    - Or do it by hand: see [deploy/](./deploy/).
-2. **Link the two servers.** In a web browser, go to `https://<your-immich>/immich-shared-albums/` while signed in to Immich as an admin — that's the addon's admin panel. Click *Create pairing link*, and send the code to the other family over WhatsApp or wherever. Their admin pastes it into their own panel at the same address.
-3. **Share an album.** Open it in Immich, tap share, pick the person. Done. Remove them from the album to unshare, or unlink the whole server from the panel.
+2. **Open the hub.** In a web browser go to `https://<your-immich>/immich-shared-albums/` while signed in to Immich. That one URL is the whole surface — bookmark it. An admin sees a choice between *Your shared albums* and *Server settings and pairings*; everyone else goes straight to their own albums.
+3. **Link the two servers.** From *Server settings and pairings*, click *Create pairing link* and send the code to the other household over WhatsApp or wherever. Their admin pastes it into their own hub at the same address.
+4. **Share an album.** Open it in Immich, tap share, pick the person. Done. Remove them from the album to unshare, or unlink the whole server from the hub.
+
+What each panel does, and what a person can do in it: [docs/using-the-panels.md](./docs/using-the-panels.md).
 
 ### Public share links (optional)
 
