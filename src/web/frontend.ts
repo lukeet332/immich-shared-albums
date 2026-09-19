@@ -13,7 +13,7 @@
  * authenticates on its own.
  */
 import { ROUTE_PREFIX } from '../config.ts';
-import { DIST, panelPage, acceptPage, mePage } from './assets.ts';
+import { DIST, panelPage, acceptPage, mePage, rootPage } from './assets.ts';
 
 const HTML = 'text/html';
 const JS = 'application/javascript';
@@ -34,8 +34,14 @@ export type Surface = {
 };
 
 export const SURFACES: Record<string, Surface> = {
-  [ROUTE_PREFIX]: { type: HTML, body: panelPage, admin: true, action: 'manage shared albums' },
-  [`${ROUTE_PREFIX}/`]: { type: HTML, body: panelPage, admin: true, action: 'manage shared albums' },
+  // The root is the one URL to remember, so it cannot be gated on admin: an ordinary user typing it
+  // would meet a sign-in page. It asks who is calling and either offers the two panels (admin) or
+  // opens the personal one directly. See pages/root/App.tsx.
+  [ROUTE_PREFIX]: { type: HTML, body: rootPage, signedIn: true, action: 'open your shared albums' },
+  [`${ROUTE_PREFIX}/`]: { type: HTML, body: rootPage, signedIn: true, action: 'open your shared albums' },
+  // The admin panel keeps its own path now that the root is the chooser: a choice has to point
+  // somewhere, and "the panel" is still the only surface that acts on the server.
+  [`${ROUTE_PREFIX}/admin`]: { type: HTML, body: panelPage, admin: true, action: 'manage shared albums' },
   [`${ROUTE_PREFIX}/me`]: { type: HTML, body: mePage, signedIn: true, action: 'see your shared albums' },
   [`${ROUTE_PREFIX}/me/`]: { type: HTML, body: mePage, signedIn: true, action: 'see your shared albums' },
   [`${ROUTE_PREFIX}/accept`]: { type: HTML, body: acceptPage },

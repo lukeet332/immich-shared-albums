@@ -941,6 +941,23 @@ stage('native album invitations, per person (no share link)');
         // The page renders itself from the same call: the household to name in its heading, and
         // whether this caller may open the admin panel at all. A link a non-admin cannot follow
         // would bounce them to a sign-in page, so the flag has to be Immich's answer, not a guess.
+        // The root is the one URL to remember, so it must not answer an ordinary user with 403 —
+        // which is exactly what gating the landing page on admin did. It asks who is calling.
+        const root = await fetch(`${BS}/immich-shared-albums/`, { headers: { 'x-api-key': BKEY } });
+        const rootHtml = await root.text();
+        check('the root answers any signed-in caller instead of refusing a non-admin',
+              root.status === 200, `status=${root.status}`);
+        // Both documents begin identically (same title, same mount point), so the discriminator is
+        // which page's script they load — the panel's own text is rendered client-side and appears
+        // in neither.
+        check('the root serves the chooser, not one of the panels',
+              /assets\/root\.js/.test(rootHtml) && !/assets\/panel\.js/.test(rootHtml),
+              `root.js=${/assets\/root\.js/.test(rootHtml)} panel.js=${/assets\/panel\.js/.test(rootHtml)}`);
+        // No session at all, which is a different question from the admin link above: the root is
+        // public to signed-in people, not to everyone.
+        const signedOut = await fetch(`${BS}/immich-shared-albums/`);
+        check('the root still refuses someone with no session at all',
+              signedOut.status === 401, `status=${signedOut.status}`);
         check('the panel is told the household to name in its heading',
               secondPanel.household === 'Demo household (B)',
               `household=${JSON.stringify(secondPanel.household)}`);
