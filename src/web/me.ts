@@ -86,15 +86,15 @@ export async function myAlbums(creds: Creds): Promise<MyAlbum[]> {
  */
 export async function myMatches(creds: Creds, callerUserId: string): Promise<ActionableMatch[]> {
   const mine = albumsIPublish(await readCallerAlbums(creds), callerUserId);
+  // OFFER what this person owns, here and now, and offer even when the list is EMPTY. A panel visit
+  // is the only moment the sidecar holds their credential, so it is the only moment an offer can be
+  // made — and without one the peer has nothing to match against and "Possible album reunions" stays
+  // empty for everyone. An offer of NOTHING is still an offer: it is how a peer learns that every
+  // album this person had is gone, so this runs before the empty check, not inside the match loop.
+  for (const peer of state.peers) offerAlbumsTo(mine, callerUserId, peer.pub);
   if (!mine.length) return [];
   const out: ActionableMatch[] = [];
   for (const peer of state.peers) {
-    // OFFER what this person owns, here and now. This is the only moment the sidecar holds their
-    // credential, so it is the only moment an offer can be made — and without it the peer has nothing
-    // to match against and "Possible album reunions" is empty for everyone, forever. The route exists
-    // for this; nothing in the UI ever called it, which made the whole matching surface unreachable
-    // outside the test suite.
-    offerAlbumsTo(mine, callerUserId, peer.pub);
     const theirs = await refreshPeerAlbums(peer);
     for (const candidate of matchesWithPeer(mine, theirs, peer)) {
       // The share this pairing is about, if one exists yet: this peer's mapping on an album of that

@@ -122,6 +122,20 @@ test('offering and receiving are separate rows for the same peer', () => {
   });
 });
 
+test('an owner who now owns nothing clears their own offer, and only theirs', () => {
+  withStore(store => {
+    store.publishedAlbumsSet('peer-1', 'to-them', bobAlbum.ownerUserId, [bobAlbum]);
+    store.publishedAlbumsSet('peer-1', 'to-them', carolAlbum.ownerUserId, [carolAlbum]);
+    store.publishedAlbumsSet('peer-1', 'to-them', bobAlbum.ownerUserId, []);
+    const back = store.publishedAlbumsFor('peer-1', 'to-them');
+    assert.deepEqual(
+      back,
+      [asStored(carolAlbum)],
+      `an empty offer is an offer: bob's must go while carol's stays: ${JSON.stringify(back)}`
+    );
+  });
+});
+
 test('a peer withdrawing everything clears only what we received', () => {
   withStore(store => {
     store.publishedAlbumsSet('peer-1', 'to-them', bobAlbum.ownerUserId, [bobAlbum]);
