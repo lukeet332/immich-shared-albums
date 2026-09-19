@@ -10,6 +10,7 @@ import { log } from '../config.ts';
 import { state, store, save } from '../state.ts';
 import { readCredsFor, callAs } from '../immich/access.ts';
 import { deleteProxyAsset } from '../immich/materialise.ts';
+import { albumTeardown } from './album-teardown.ts';
 import { forgetOffered } from '../p2p/entitlement.ts';
 import { peerRequest } from '../p2p/transport.ts';
 import { forgetWatcherCycles } from './status.ts';
@@ -18,10 +19,15 @@ import { forgetWatcherCycles } from './status.ts';
 // (utility-owner-guarded), the mirror album, the mapping and its ledger — a join is
 // fully reversible and reclaims all space it ever took, except for an asset another
 // mapping still claims.
+//
+// An ADOPTED mapping is the exception, and `albumTeardown` is what decides it: that album existed
+// before the share and holds a person's OWN photos, so leaving gives up the mapping and the peer's
+// stubs and nothing else. A mistaken reunification therefore costs exactly the stubs.
 export async function leaveAlbum(mappingId: string) {
   const mapping = state.mappings.find(mp => mp.id === mappingId);
   if (!mapping || mapping.role !== 'member')
     throw new Error('unknown mapping (only joined albums can be left)');
+  const plan = albumTeardown(mapping);
   let removed = 0;
   for (const entry of store.seenForMapping(mapping.id)) {
     if (!entry.originAsset) continue;
@@ -33,7 +39,9 @@ export async function leaveAlbum(mappingId: string) {
     if (await deleteProxyAsset(entry.localAsset)) removed++;
   }
   try {
-    await callAs(readCredsFor(mapping), `/albums/${mapping.albumId}`, { method: 'DELETE' });
+    if (plan.deleteAlbum)
+      await callAs(readCredsFor(mapping), `/albums/${mapping.albumId}`, { method: 'DELETE' });
+    else log(`kept "${mapping.albumName}" — ${plan.reason}`);
   } catch (e) {
     log(`mirror album delete failed: ${e.message}`);
   }

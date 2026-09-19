@@ -139,8 +139,9 @@ export const server = http.createServer(async (req, res) => {
     if (path === `${ROUTE_PREFIX}/join` && req.method === 'POST') {
       // The account being joined is the SIGNED-IN one. The request body may name a
       // different user only if the caller is an admin acting on their behalf.
-      const caller = await callerIdentity(req);
-      if (!caller) return send(401, signInRequired('join a shared album'));
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('join a shared album'));
+      const caller = signedIn.caller;
       try {
         const b = JSON.parse(body);
         const forUserId = b.forUserId || caller.id;
@@ -150,7 +151,13 @@ export const server = http.createServer(async (req, res) => {
         const endpoint = JSON.parse(
           Buffer.from(String(b.invite?.endpointToken ?? ''), 'base64url').toString()
         );
-        return send(200, await join({ endpoint, key: b.invite?.key }, forUserId, b.password));
+        // A reunification may only adopt the caller's OWN album, and only on their own credential.
+        // Both are re-checked in ensureMirror; naming an id here is a request, not a decision.
+        const adopt =
+          b.adopt && typeof b.adopt.albumId === 'string' && b.adopt.albumId && forUserId === caller.id
+            ? { albumId: b.adopt.albumId, ownerCreds: signedIn.creds }
+            : undefined;
+        return send(200, await join({ endpoint, key: b.invite?.key }, forUserId, b.password, adopt));
       } catch (e) {
         return send(
           e.passwordRequired ? 401 : 400,
