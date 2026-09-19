@@ -237,6 +237,43 @@ await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
 await cPanel.p.waitForTimeout(3000);
 check('so the pair is gone from the other person\'s list', !seesPair(await panelText(cPanel.p)));
 
+// And now the case that a person who ends up owning NOTHING is still heard. B above owns plenty, so
+// his offer simply got shorter; a household's loneliest member is the one whose panel stops offering
+// entirely if the offer is skipped for an empty list, leaving the peer matching against albums that
+// no longer exist. Driven as a freshly minted non-admin, who owns exactly one album and then none.
+const soloName = `panel solo ${Date.now()}`;
+const soloEmail = 'panel-solo@e2e.local';
+const soloPass = 'panel-solo-pass-1';
+await fetch(`${B_PANEL_WEB}/api/admin/users`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bLogin.accessToken}` },
+  body: JSON.stringify({ email: soloEmail, name: 'Panel Solo', password: soloPass }) });
+const soloLogin = await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: soloEmail, password: soloPass }) })).json();
+const soloAlbum = await (await fetch(`${B_PANEL_WEB}/api/albums`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${soloLogin.accessToken}` },
+  body: JSON.stringify({ albumName: soloName }) })).json();
+const cSoloAlbum = await api('/albums', { albumName: soloName });
+check('a person with a single album, and the other half of it on the peer', !!soloLogin.accessToken && !!soloAlbum?.id && !!cSoloAlbum?.id,
+  `${soloLogin.accessToken ? 'signed in' : 'no session'}, ${soloAlbum?.id ? 'album ok' : 'album failed'}, ${cSoloAlbum?.id ? 'peer half ok' : 'peer half failed'}`);
+
+const soloPanel = await panelOf(B_PANEL_WEB, soloLogin.accessToken);
+await soloPanel.p.waitForTimeout(3000);
+await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
+await cPanel.p.waitForTimeout(3000);
+check('a non-admin\'s own panel offers their album too, so the pair appears',
+  new RegExp(`Possible album reunions[\\s\\S]*?${soloName}`).test(await panelText(cPanel.p)));
+
+await fetch(`${B_PANEL_WEB}/api/albums/${soloAlbum.id}`, { method: 'DELETE',
+  headers: { Authorization: `Bearer ${soloLogin.accessToken}` } });
+await soloPanel.p.reload({ waitUntil: 'domcontentloaded' });
+await soloPanel.p.waitForTimeout(3000);
+check('with nothing left to offer, the panel still loads', !/Loading/.test(await panelText(soloPanel.p)));
+await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
+await cPanel.p.waitForTimeout(3000);
+check('and the peer stops matching against the album that is gone',
+  !new RegExp(`Possible album reunions[\\s\\S]*?${soloName}`).test(await panelText(cPanel.p)));
+
+await soloPanel.c.close();
 await bPanel.c.close();
 await cPanel.c.close();
 
