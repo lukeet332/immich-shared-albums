@@ -48,8 +48,13 @@ const UTILITY_PERMISSIONS = [
  *  server, beats a robot. Best effort by design — the picture is garnish, and the account it
  *  decorates has work to do whether or not it lands.
  */
+/** Accounts this process has already given a picture. Immich's own `profileImagePath` is the fact,
+ *  but the user list it comes from is cached, so a provisioning burst would re-upload the same
+ *  picture for every ref materialised. */
+const gavePicture = new Set<string>();
+
 async function ensureBotAvatar(c: Contributor, alreadyHasPicture: boolean) {
-  if (alreadyHasPicture || !c.apiKey) return;
+  if (alreadyHasPicture || !c.apiKey || gavePicture.has(c.userId)) return;
   try {
     const form = new FormData();
     form.set(
@@ -62,7 +67,10 @@ async function ensureBotAvatar(c: Contributor, alreadyHasPicture: boolean) {
       headers: { 'x-api-key': c.apiKey },
       body: form,
     });
-    if (r.ok) log(`gave "${c.userId.slice(0, 8)}" the addon's own picture`);
+    if (r.ok) {
+      gavePicture.add(c.userId);
+      log(`gave "${c.userId.slice(0, 8)}" the addon's own picture`);
+    }
   } catch {
     /* garnish */
   }

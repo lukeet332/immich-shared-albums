@@ -45,10 +45,12 @@ export async function materialiseComments(mapping, peer, comments) {
         mapping.peer
       );
       posted = await postComment(mapping.albumId, cm.comment, c.apiKey);
-    } catch {
-      // The author is one this household cannot PUT on the album — the peer's own BOT, whose account
-      // only an album's owner can add — so the line is mirrored as ours instead. The trail is the
-      // point and the text names who said it; without this an audit line never follows a reunion.
+    } catch (e) {
+      // Only a failure that CANNOT succeed falls back: the author is an account this household is
+      // not allowed to put on the album — the peer's own bot, which only an album's owner can add.
+      // A transient failure is rethrown so the loop retries it: mirroring one as our bot would
+      // attribute words to it permanently, on the strength of a timeout.
+      if (!/activity\.create|not a member|forbidden|403/i.test((e as Error).message)) throw e;
       const bot = await ensureHouseBot();
       posted = await postComment(mapping.albumId, cm.comment, bot.apiKey);
     }

@@ -115,7 +115,11 @@ export async function myMatches(creds: Creds, callerUserId: string): Promise<Act
         m =>
           !m.dead &&
           m.peer === peer.pub &&
-          normaliseAlbumName(m.albumName) === normaliseAlbumName(candidate.mine.name)
+          normaliseAlbumName(m.albumName) === normaliseAlbumName(candidate.mine.name) &&
+          // The share this pairing is about is the one FOR that person. A peer can publish
+          // same-named albums for several owners, and binding on the name alone would attach the row
+          // to someone else's share — an action on a pairing the person was never shown.
+          (m.role === 'member' || (m.forPeerUserIds || []).includes(candidate.theirs.ownerUserId))
       );
       const step = reunionStepFor(share);
       // A pairing that was already reunited is not a candidate: it belongs to the reunified albums,

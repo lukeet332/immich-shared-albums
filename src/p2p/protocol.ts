@@ -202,7 +202,7 @@ export function handlePublishedAlbums(callerPub: string) {
 export function handleReunified(callerPub: string, albumMappingId: string) {
   const peer = peerByPub(callerPub);
   if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
-  const mapping = mappingFor(peer.pub, albumMappingId);
+  const mapping = mappingFor(peer.pub, albumMappingId, 'member');
   if (!mapping || mapping.dead) return goneOr404(peer.pub, albumMappingId);
   mapping.reunified = true;
   save();
