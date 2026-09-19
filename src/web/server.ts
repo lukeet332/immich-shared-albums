@@ -346,11 +346,18 @@ export const server = http.createServer(async (req, res) => {
         // here. A leftover membership would keep our read access to a private album and make it
         // read as a live mirror to anything enumerating albums by stand-in key.
         const left = await leaveAlbum(mapping.id, { notifyOrigin: false });
-        const stripped = await stripAlbumBots(albumId, signedIn.creds).catch(e => {
+        // Reported, never swallowed: the owner's credential is gone the moment this request ends, so
+        // an account we failed to remove keeps reading a private album and NOTHING can retry it. The
+        // caller is told, and `stripFailed` names what is still on the album.
+        const { removed, failed } = await stripAlbumBots(albumId, signedIn.creds).catch(e => {
           log(`un-reunify could not take our accounts off "${albumName}": ${e.message}`);
-          return 0;
+          return { removed: 0, failed: ['unknown'] };
         });
-        return send(200, { ...left, stripped });
+        if (failed.length)
+          log(
+            `un-reunify left ${failed.length} of our account(s) on "${albumName}" — they still read it; remove them in Immich`
+          );
+        return send(200, { ...left, stripped: removed, ...(failed.length ? { stripFailed: failed } : {}) });
       } catch (e) {
         return send(400, { error: e.message });
       }

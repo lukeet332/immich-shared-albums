@@ -122,19 +122,34 @@ export async function grantInvitedHumans(
  * had none before the reunion — and leaving them behind keeps the sidecar's read access to a private
  * album AND makes it look like a live mirror to anything enumerating albums by stand-in key.
  */
-export async function stripAlbumBots(albumId: string, ownerCreds: Creds): Promise<number> {
+export async function stripAlbumBots(
+  albumId: string,
+  ownerCreds: Creds
+): Promise<{ removed: number; failed: string[] }> {
   const album = await immichJson(`/albums/${albumId}?withoutAssets=true`, {}, ownerCreds);
   const ours = (album?.albumUsers || []).filter(
     (au: any) => au.user?.id && au.role !== 'owner' && isUtilityEmail(au.user.email || '')
   );
   let removed = 0;
+  const failed: string[] = [];
   for (const au of ours) {
-    try {
-      await immichJson(`/albums/${albumId}/user/${au.user.id}`, { method: 'DELETE' }, ownerCreds);
-      removed++;
-    } catch (e) {
-      log(`could not take our account off album ${albumId.slice(0, 8)}: ${(e as Error).message}`);
+    // Retried once here, because this is the LAST moment the credential that can do it exists: the
+    // owner's key is deliberately never stored, so nothing can retry this later. A failure is
+    // therefore REPORTED rather than swallowed — a silent one leaves our account reading a private
+    // album for good, which is the opposite of what this path is for.
+    let done = false;
+    for (let attempt = 1; attempt <= 2 && !done; attempt++) {
+      try {
+        await immichJson(`/albums/${albumId}/user/${au.user.id}`, { method: 'DELETE' }, ownerCreds);
+        done = true;
+      } catch (e) {
+        log(
+          `could not take our account off album ${albumId.slice(0, 8)} (attempt ${attempt}): ${(e as Error).message}`
+        );
+      }
     }
+    if (done) removed++;
+    else failed.push(au.user.id);
   }
-  return removed;
+  return { removed, failed };
 }
