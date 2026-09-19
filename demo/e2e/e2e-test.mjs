@@ -962,6 +962,28 @@ stage('native album invitations, per person (no share link)');
           check("A's photos appear in B's album as stubs, not as B's own",
                 !!union, union ? `${union.length} asset(s)` : 'timed out');
 
+          // NO DUPLICATES, and it must HOLD. A second stub for one photo is exactly what
+          // album-level suppression prevents, and it shows up the same way the echo does: a count
+          // that climbs rather than a single wrong reading. Two peers offering one photo is the
+          // 3-household case, so this is the assertion that stops the mesh double-showing.
+          const foreignStubs = async () =>
+            [(await albumAssets(B, BKEY, bOwnBefore.id)).filter(a => a.ownerId !== bAdmin.id).length];
+          const noDupes = await stable(foreignStubs, TWO_CYCLES_MS, HOLD_DEADLINE_MS);
+          check("A's photo is in B's album exactly once, across cycles",
+                !!noDupes && noDupes[0] === 1, `stub count ${JSON.stringify(noDupes)}`);
+
+          // THE PEOPLE LIST. Who is in the album has to be exactly who should be: the person who
+          // owns it, and the accounts we added to carry the other side's photos. This is the
+          // assertion behind "the correct people show for all linked servers", and the duplicate
+          // check is what catches an account added twice by two different code paths.
+          const members = (bOwnAfter.albumUsers || []).map(au => au.user?.id).filter(Boolean);
+          check('the reunified album names no account twice',
+                members.length === new Set(members).size,
+                `${members.length} entries, ${new Set(members).size} distinct`);
+          check("the reunified album keeps its owner and adds only our own accounts",
+                (bOwnAfter.albumUsers || []).every(au => au.user?.id === bAdmin.id || isBot(au.user?.email)),
+                (bOwnAfter.albumUsers || []).map(au => `${au.user?.name}:${au.role}`).join(', '));
+
           // ECHO: A's count must HOLD, not merely read true once. An unseeded ledger offers B's
           // whole album back, which shows up as a count that keeps climbing.
           const aCounts = async () => [(await albumAssets(A, AKEY, invAlb)).length];
@@ -985,6 +1007,13 @@ stage('native album invitations, per person (no share link)');
           }, 120000);
           check("un-reuniting removes the other server's photos from the album",
                 !!after, after ? '' : 'stubs still present after 120s');
+          // Our accounts came off on the way out. They were added on the owner's credential, and
+          // only the owner can remove them, so a miss here leaves us reading a private album for
+          // good — and makes that album look like a live mirror to anything enumerating by bot key.
+          const afterDetach = await api(B, BKEY, `/albums/${bOwnBefore.id}`);
+          check('un-reuniting takes our accounts back off the album',
+                (afterDetach.albumUsers || []).every(au => !isBot(au.user?.email)),
+                (afterDetach.albumUsers || []).map(au => au.user?.name).join(', '));
           check('the album still exists, holding exactly the photos it held before',
                 !!after && JSON.stringify(after.map(a => a.id).sort()) === JSON.stringify(bOwnAssetsBefore.map(a => a.id).sort()),
                 `before=${bOwnAssetsBefore.length} after=${after?.length}`);
