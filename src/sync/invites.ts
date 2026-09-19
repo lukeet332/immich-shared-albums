@@ -471,7 +471,11 @@ export function startInviteLoop() {
     void (async () => {
       try {
         await detectInvitesOnce();
-        await refreshPeerIndexes().catch(e => log(`peer album indexes: ${e.message}`));
+        // `void`: the index refresh dials every peer (bounded at INDEX_REFRESH_DEADLINE_MS each), and
+        // the tick must not wait on that — a reconcile that has 404s to retire shares this loop, and
+        // holding the tick open for a peer's dial is how a retirement that should take a cycle takes
+        // two minutes. Fire it and let it land.
+        void refreshPeerIndexes().catch(e => log(`peer album indexes: ${e.message}`));
       } catch (e) {
         log(`invite detection error: ${e.message}`);
       }
