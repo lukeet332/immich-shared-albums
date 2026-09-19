@@ -108,6 +108,13 @@ check('app button enables once the album is filled (gated deeplink)', btnReady);
 // is decided by the chooser's useEffect, which needs a browser to run. This lane has B's admin
 // credentials, so it can mint a genuine non-admin session rather than assume one exists.
 const sidecarRoot = `${B_PANEL_WEB}/immich-shared-albums/`;
+// Cookies are ORIGIN-scoped: the session set above belongs to `host.docker.internal` (the address
+// typed into the banner), and this navigates to `localhost`. Without its own cookie the sidecar
+// sees no session, the chooser's fetch 401s, and the admin gets the error card instead.
+await ctx.addCookies(['immich_access_token', 'immich_auth_type', 'immich_is_authenticated'].map((name) => ({
+  name, url: B_PANEL_WEB,
+  value: name === 'immich_access_token' ? login.accessToken : (name === 'immich_auth_type' ? 'password' : 'true'),
+})));
 await page.goto(sidecarRoot, { waitUntil: 'networkidle' });
 const chooserShown = await page.locator('text=Server settings and pairings').count();
 check('an admin at the root is offered both panels', chooserShown > 0, `grep=${chooserShown}`);
