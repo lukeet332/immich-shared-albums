@@ -37,6 +37,11 @@ origin's **endpoint token** (so a visitor's sidecar can dial it over iroh), and 
 over the native album in a same-origin iframe. `?native=1` is the untouched Immich page — what
 the iframe loads, and where dismissing the card navigates.
 
+**The join page is `/accept`; the action it calls is `POST /join`.** The page is named for the
+invitation it consumes, the route for what that does. Every string the visitor reads says "Join" —
+title, heading, button — so the two paths are an internal distinction rather than one to expose,
+and a path a share link already points at is not worth renaming for symmetry.
+
 **The per-user routes answer as the caller.** `/me/albums` and `/me/matches` read Immich with the
 caller's own forwarded credential (`immich/access.ts` decides that once), so membership and
 ownership are Immich's answers rather than a filtered admin read — and `/me/albums/publish` reads

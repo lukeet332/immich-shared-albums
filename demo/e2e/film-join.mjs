@@ -45,7 +45,7 @@ await page.waitForURL('**/immich-shared-albums/accept*', { timeout: 20000 });
 await page.waitForFunction(() => document.getElementById('who')?.textContent?.includes('Joining as'), null, { timeout: 20000 });
 await page.waitForTimeout(2500);
 
-console.log('scene 4: Accept & join (spinner while photos materialise)');
+console.log('scene 4: Join (spinner while photos materialise)');
 await page.locator('#go').click();
 await page.waitForFunction(() => document.getElementById('out')?.textContent?.includes('Joined'), null, { timeout: 120000 });
 await page.waitForTimeout(3000);

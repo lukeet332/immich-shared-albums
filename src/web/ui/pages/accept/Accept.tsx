@@ -136,7 +136,7 @@ export const Accept = ({ household }: { household: string }) => {
             Joining — syncing photos…
           </>
         ) : (
-          'Accept & join'
+          'Join'
         )}
       </button>
       <div id="out" class="out">
