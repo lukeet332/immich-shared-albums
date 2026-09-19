@@ -22,6 +22,7 @@ import { deleteProxyAsset } from '../immich/materialise.ts';
 import { seedRowsFor } from '../sync/matches.ts';
 import { albumTeardown } from '../sync/album-teardown.ts';
 import { grantAlbumWriters, grantInvitedHumans, peerContributors } from '../sync/album-grant.ts';
+import { auditLine } from '../sync/audit.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
 export type MirrorRequest = {
@@ -154,6 +155,12 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     log(
       `reunited "${adoptable.name}" with "${peer.name}" — ${assets.length} photo(s) already here, seeded so none is offered back`
     );
+    await auditLine(
+      mapping.id,
+      albumId,
+      'reunited',
+      `Reunited with "${peer.name}" — photos both sides hold now show once. Undo any time from your shared-albums page.`
+    );
     return { mapping, created: true };
   }
   let mirror;
@@ -271,6 +278,17 @@ export async function unifyOwnAlbum(
   // `seenHas` is false, the album-level suppression finds nothing, and the next reconcile
   // materialises a stub right beside the person's own photo.
   for (const row of seedRowsFor(assets, mapping.id)) seenAdd(mapping.id, row.checksum, row.localAsset);
+
+  // The trail, left once the move is done and the bot is a member — it was granted above, on the
+  // owner's credential, which is the only moment an album belonging to a human can gain it.
+  await auditLine(
+    mapping.id,
+    own.albumId,
+    'reunited',
+    `Reunited with "${state.peers.find(p => p.pub === mapping.peer)?.name ?? 'a linked server'}" — photos ` +
+      `both sides hold now show once. Undo any time from your shared-albums page.`
+  );
+
   // Kick the reconcile off, but do NOT await it: the album must be reunited the moment the move is
   // made, and awaiting a peer call would make the move's latency someone else's uptime.
   //

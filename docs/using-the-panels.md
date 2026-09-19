@@ -63,6 +63,17 @@ When someone sends you a share link, the join card on that page hands you to
 `/immich-shared-albums/accept`. Sign in to your own Immich there, accept, and the album fills with
 the other server's photos. Anyone can reach this page; it does not require the addon's panels.
 
+**If you already have an album with the same name**, the page offers to reunite the two instead of
+joining separately — because joining separately is what would leave you holding two albums of one
+name. Reuniting keeps the album yours, shows a photo you both hold once, and can be undone from your
+shared-albums page afterwards. The other button joins as a separate album, which is the right choice
+when the two albums only happen to share a name.
+
+Albums that have been reunited carry a line in their own comments saying so, written by the addon's
+"Shared albums" account rather than by the person who clicked. That is the record of what happened to
+the album, and it is there because the two albums were paired by name alone — which can be wrong, and
+only the people in the album can tell.
+
 ## Related
 
 - [Setup guide](../deploy/SETUP.md) — installing and linking, step by step

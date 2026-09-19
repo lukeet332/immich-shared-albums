@@ -20,7 +20,8 @@ import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
 import { myAlbums, myMatches, publishAlbumsForPeer } from './me.ts';
 import { unifyOwnAlbum } from '../p2p/mirror.ts';
-import { visibleAlbumIds } from '../immich/access.ts';
+import { readCallerAlbums, visibleAlbumIds } from '../immich/access.ts';
+import { findAdoptableAlbum } from '../sync/adoption.ts';
 import { parseRequestedPeer } from '../sync/matches.ts';
 import { sharePage, signInPage } from './assets.ts';
 import { localAddr } from '../p2p/transport.ts';
@@ -139,6 +140,38 @@ export const server = http.createServer(async (req, res) => {
     const body = await readCappedBody(req);
     if (body === null) return send(413, { error: `request body exceeds ${CFG.maxBodyKb}KB` });
 
+    // Would joining this link leave the caller with a SECOND album of a name they already own? The
+    // accept page asks BEFORE it joins, because a plain join would create the duplicate this feature
+    // exists to remove, and the person would have to reunite the two afterwards in the panel.
+    //
+    // It deliberately does NOT redeem the link to find out. Redeeming pins the caller as a peer on
+    // the ORIGIN and writes an owner mapping there, so a preview that redeemed would enrol a
+    // household on someone else's server merely because a page opened. The album's name is all this
+    // needs, and it arrives from the share page the person just came from.
+    if (path === `${ROUTE_PREFIX}/join/preview` && req.method === 'POST') {
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('check this album against your own'));
+      let asked: { albumName?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (typeof asked.albumName !== 'string') return send(400, { error: 'name the album the link is for' });
+      try {
+        // The SAME function the join itself re-derives with, so a preview can never offer a marriage
+        // the adoption would refuse — and the caller's own album list is read on THEIR credential,
+        // because only Immich can say which albums are theirs.
+        const reunion = findAdoptableAlbum(
+          { albumName: asked.albumName, peerOwnerUserId: '' },
+          await readCallerAlbums(signedIn.creds),
+          signedIn.caller.id
+        );
+        return send(200, { albumName: asked.albumName, ...(reunion ? { reunion } : {}) });
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
+    }
     if (path === `${ROUTE_PREFIX}/join` && req.method === 'POST') {
       // The account being joined is the SIGNED-IN one. The request body may name a
       // different user only if the caller is an admin acting on their behalf.

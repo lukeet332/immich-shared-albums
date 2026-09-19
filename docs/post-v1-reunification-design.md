@@ -1,10 +1,11 @@
 # Post-v1 design spec: Google shared-album reunification & the user-level surface
 
-> Status: **the merge is built; the discovery surface is not.** §2's match and the panel surface
-> exist — `sync/matches.ts` pairs the halves, `sync/album-index.ts` records what each side offers,
-> and the per-user panel lists matches and reunites each one (`POST /me/reunite`, reversing with
-> `/me/unreunite`). Both directions adopt: at join time (`POST /join` with `adopt`) and from the
-> panel. The audit trail and `/commands` remain design. Everything here is post-v1 and confirmed
+> Status: **the merge is built end to end.** §2's match and both surfaces exist — `sync/matches.ts`
+> pairs the halves, `sync/album-index.ts` records what each side offers, the per-user panel lists
+> matches and reunites each one (`POST /me/reunite`, reversing with `/me/unreunite`), and the accept
+> flow asks before it acts (`POST /join/preview`, then `POST /join` with `adopt`). §3's suppression
+> is scoped to the album (`sync/album-suppression.ts`), and §7's trail is left in the album's own
+> comments by `sync/audit.ts`. `/commands` remains design. Everything here is post-v1 and confirmed
 > **non-breaking** — it rides surfaces and identities that v1 already ships and freezes. Captured
 > from the 2026-08-25 design discussion. Decisions are marked **[decided]**; open choices
 > **[open]**; things considered and dropped are in "Rejected alternatives" with rationale.
@@ -301,7 +302,12 @@ choice. This also removes the wrinkle that **Immich has no native per-user-priva
   ever transmitted. Each side's comment thread ends up showing the same events.
 - **Idempotent by ledger, not by hope**: a line is written once per event, tagged through
   `seenActAdd`/`seenActHas`, because the loops retry a step until it settles and a naive write
-  would accumulate a second "Repair requested by Alice" on every pass.
+  would accumulate a second "Repair requested by Alice" on every pass. `sync/audit.ts` is where this
+  lives: `auditLine(mappingId, albumId, event, text)` writes the tag for the event and a `local:` tag
+  for the activity it posted, so the line is neither repeated nor pushed back to the peer.
+- **The reunion's line is posted at adoption** (`unifyOwnAlbum`, and `ensureMirror`'s adopt branch),
+  because that is the request carrying the album owner's credential — the same reason the stub
+  accounts are granted there (§4). A line on an album a human owns cannot be written by a later loop.
 - **Comments sync covers the human replies** on both albums (owner mapping pushes, member mapping
   pulls canonical) — the trail is what stays put, not the conversation.
 - **A trail line needs a membership, and only the album's owner can grant one.** Posting to

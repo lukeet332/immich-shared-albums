@@ -947,6 +947,32 @@ stage('native album invitations, per person (no share link)');
         );
         await api(B, BKEY, `/albums/${bOwnBefore.id}/assets`, { ...j({ ids: [bOwnPhoto] }), method: 'PUT' });
         const bOwnAssetsBefore = await albumAssets(B, BKEY, bOwnBefore.id);
+
+        // THE PREVIEW the accept page asks before it joins: does this household already own an album
+        // of the name the link is for? This is the answer that stops a late reunifier ending up with
+        // two albums. It must come back WITHOUT the sidecar redeeming the link — redeeming pins us as
+        // a peer on the ORIGIN and writes a mapping there, which opening a page must never do.
+        const preview = async (albumName) =>
+          (
+            await fetch(`${BS}/immich-shared-albums/join/preview`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+              body: JSON.stringify({ albumName }),
+            })
+          ).json();
+        const previewHit = await preview('natively invited album');
+        check('the accept preview offers the reunion for a name this person already owns',
+              previewHit?.reunion?.albumId === bOwnBefore.id, JSON.stringify(previewHit));
+        const previewMiss = await preview(`nothing called this ${Date.now()}`);
+        check('the accept preview offers nothing for a name they do not own',
+              !previewMiss?.reunion, JSON.stringify(previewMiss));
+        const previewAnon = await fetch(`${BS}/immich-shared-albums/join/preview`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ albumName: 'natively invited album' }),
+        });
+        check('the accept preview refuses a caller with no session, like the join it precedes',
+              previewAnon.status === 401, `status=${previewAnon.status}`);
         const aBefore = (await albumAssets(A, AKEY, invAlb)).length;
 
         // The share B holds for this peer, with the local album it currently points at.
@@ -1011,6 +1037,21 @@ stage('native album invitations, per person (no share link)');
           check("the reunified album keeps its owner and adds only our own accounts",
                 (bOwnAfter.albumUsers || []).every(au => au.user?.id === bAdmin.id || isBot(au.user?.email)),
                 (bOwnAfter.albumUsers || []).map(au => `${au.user?.name}:${au.role}`).join(', '));
+
+          // THE AUDIT TRAIL, and the reason it exists: the two albums were paired by NAME alone, so
+          // when the pairing is wrong the people involved are the only ones who can tell — and they
+          // can only tell if the album says what happened to it. Exactly ONE line, authored by our
+          // bot: a line in the name of the person who clicked would be a comment they never wrote,
+          // and a second copy is what a retry loop leaves when idempotency is hoped for rather than
+          // recorded.
+          const audit = await until(async () => {
+            const acts = await api(B, BKEY, `/activities?albumId=${bOwnBefore.id}&type=comment`);
+            const lines = (acts || []).filter(a => /^Reunited with /.test(a.comment || ''));
+            return lines.length ? lines : null;
+          }, 60000);
+          check('the reunion leaves one audit line in the album, authored by our bot',
+                !!audit && audit.length === 1 && audit.every(a => isBot(a.user?.email)),
+                audit ? `${audit.length} line(s) from ${audit.map(a => a.user?.name).join(', ')}` : 'none');
 
           // ECHO: A's count must HOLD, not merely read true once. An unseeded ledger offers B's
           // whole album back, which shows up as a count that keeps climbing.
