@@ -12,12 +12,29 @@ export type AlbumCandidate = {
   why: string;
 };
 
+/** The peer a publish is addressed to, or null when the body does not name one. The ONLY thing a
+ *  publish body is read for: the albums come from Immich, never from the request. */
+export function parseRequestedPeer(body: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body || 'null');
+  } catch {
+    return null; // not JSON at all: nothing to address
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const peer = (parsed as { peer?: unknown }).peer;
+  return typeof peer === 'string' && peer ? peer : null;
+}
+
 /** The album the given user owns, or undefined when they do not own it.
  *
  *  Immich decides this and says so inside `albumUsers` — an album response carries no `ownerId`.
  *  An album with no owner entry is nobody's: skipping it is what keeps a guess out of the index. */
 function ownedAlbumFrom(album, userId: string): OwnedAlbum | undefined {
-  const owner = (album?.albumUsers || []).find(au => au.role === 'owner' && au.user?.id);
+  // A malformed album (albumUsers as an object, a null member) is skipped, not thrown over: this
+  // runs against what a peer or a peer's client produced, and the sidecar fails open.
+  const members = Array.isArray(album?.albumUsers) ? album.albumUsers : [];
+  const owner = members.find(au => au && au.role === 'owner' && au.user?.id);
   if (!owner || owner.user.id !== userId) return undefined;
   return {
     name: String(album.albumName ?? ''),
@@ -35,13 +52,6 @@ function ownedAlbumFrom(album, userId: string): OwnedAlbum | undefined {
 export function albumsIPublish(albums, userId: string): OwnedAlbum[] {
   if (!userId || !Array.isArray(albums)) return [];
   return albums.map((album: unknown) => ownedAlbumFrom(album, userId)).filter(Boolean) as OwnedAlbum[];
-}
-
-/** Entries claiming an owner OTHER than the caller are dropped, because a request body is not
- *  evidence of ownership: a caller can only ever offer what Immich says they own. */
-export function albumsOwnedByCaller(albums: OwnedAlbum[], callerUserId: string): OwnedAlbum[] {
-  if (!callerUserId) return [];
-  return albums.filter(album => album?.ownerUserId === callerUserId);
 }
 
 /** Lowercase and collapse whitespace — recall, not privacy (§3). Everything else is significant:

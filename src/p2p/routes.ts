@@ -30,18 +30,20 @@ const json = ([status, obj]: any[]) => ({
 
 /** Every peer-callable operation. The transport already proved WHO callerPub is. */
 export const peerRoutes: PeerHandler = async (callerPub, path, bodyBuf, range) => {
-  const body = bodyBuf.toString();
+  // Decoded lazily: a bodyless route must dispatch before any peer-supplied body is turned into a
+  // string (the ordering rule this file's doc states), so `body` is a call, not a value.
+  const body = () => bodyBuf.toString();
   let m;
   if (path === '/hello') return json(handleHello());
-  if (path === '/pair') return json(await handlePair(callerPub, body));
+  if (path === '/pair') return json(await handlePair(callerPub, body()));
   if (path === '/invites/redeem') {
     if (!shareLinkJoiningEnabled())
       return json([403, { error: 'this server does not accept album joins via shared links' }]);
-    return json(await handleRedeem(callerPub, body));
+    return json(await handleRedeem(callerPub, body()));
   }
-  if ((m = path.match(/^\/albums\/([^/]+)\/refs$/))) return json(await handleRefs(callerPub, body, m[1]));
+  if ((m = path.match(/^\/albums\/([^/]+)\/refs$/))) return json(await handleRefs(callerPub, body(), m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/activity$/)))
-    return json(await handleActivity(callerPub, body, m[1]));
+    return json(await handleActivity(callerPub, body(), m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/version$/))) return json(await handleVersion(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/manifest$/))) return json(await handleManifest(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/status$/))) return json(await handleStatus(callerPub, m[1]));

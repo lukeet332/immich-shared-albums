@@ -10,20 +10,23 @@ import { state } from '../state.ts';
 import type { Mapping } from '../store.ts';
 import type { Creds } from '../immich/access.ts';
 import { visibleAlbumIds } from '../immich/access.ts';
-import { parsePublishedAlbums, recordPublishedAlbums } from '../sync/album-index.ts';
+import { publishOwnedAlbums } from '../sync/album-index.ts';
 
 export type MyAlbum = { name: string; role: Mapping['role']; via: Mapping['via']; peer: string };
 
 /**
- * Record what the caller published for a linked peer, scoped to the caller.
+ * Offer the caller's OWN albums to one linked peer for matching.
  *
- * The body comes from the panel, which built it from the caller's own album list — so it is
- * filtered to albums the caller OWNS before anything is stored (`parsePublishedAlbums`), because
- * a body is not evidence of ownership. Nothing is written for a signed-out caller.
+ * The albums come from Immich, read with the caller's own forwarded credential, never from the
+ * request — so the set is exactly what Immich says the caller owns, and a client cannot widen or
+ * narrow it. See sync/album-index.ts.
  */
-export function publishAlbumsForPeer(peer: string, body: string, callerUserId: string): number {
-  const albums = parsePublishedAlbums(body, callerUserId);
-  recordPublishedAlbums(peer, callerUserId, albums);
+export async function publishAlbumsForPeer(
+  creds: Creds,
+  callerUserId: string,
+  peer: string
+): Promise<number> {
+  const albums = await publishOwnedAlbums(creds, callerUserId, peer);
   return albums.length;
 }
 

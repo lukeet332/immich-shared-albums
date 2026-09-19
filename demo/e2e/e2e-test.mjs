@@ -1217,25 +1217,35 @@ stage('album index: what a person offered for matching, recorded only for the pe
       method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key }, body: JSON.stringify(body),
     }).then(async r => ({ status: r.status, json: await r.json().catch(() => ({})) }));
 
-    const offered = await routeCall({ peer: linkedPeer, albums: ownList });
+    const ownedNames = ownList
+      .filter(a => (a.albumUsers || []).some(au => au.role === 'owner' && au.user?.id === meSecond.id))
+      .map(a => a.albumName)
+      .sort();
+
+    const offered = await routeCall({ peer: linkedPeer });
     const after = storedIndex();
-    check("a person's owned albums are recorded for the linked peer to match against",
-          offered.status === 200 && offered.json?.published > 0 && !!after.find(a => a.name === 'PROBE my takeout half'),
-          `status=${offered.status} published=${offered.json?.published} names=${JSON.stringify(after.map(a => a.name))}`);
+    check(
+      "the index is what IMMICH says the caller owns, not what the request claimed",
+      offered.status === 200 &&
+        JSON.stringify(after.map(a => a.name).sort()) === JSON.stringify(ownedNames),
+      `status=${offered.status} published=${offered.json?.published} stored=${JSON.stringify(after.map(a => a.name).sort())} owned=${JSON.stringify(ownedNames)}`
+    );
     check('the index names the album OWNER, which is what routes a repair request owner-to-owner',
           !!after.length && after.every(a => a.ownerUserId === meSecond.id),
           JSON.stringify(after.map(a => ({ name: a.name, mine: a.ownerUserId === meSecond.id }))));
 
-    // Nothing about the request body is trusted: the same session may not offer someone else's album.
-    await routeCall({ peer: linkedPeer, albums: [
-      { albumName: 'claimed but not owned', albumUsers: [{ user: { id: 'someone-else', name: 'X' }, role: 'owner' }] },
-    ] });
-    check('a caller cannot publish an album Immich says they do not own',
+    // A body cannot add an album or name someone else's: the list is read from Immich on the
+    // caller's own credential, so this must change nothing at all.
+    await routeCall({
+      peer: linkedPeer,
+      albums: [{ albumName: 'claimed but not owned', albumUsers: [{ user: { id: 'someone-else', name: 'X' }, role: 'owner' }] }],
+    });
+    check('an album the caller does not own cannot be injected through the request body',
           !storedIndex().find(a => a.name === 'claimed but not owned'),
           `names=${JSON.stringify(storedIndex().map(a => a.name))}`);
 
     // The peer has to be linked: a pubkey this household has no relationship with is refused.
-    const stranger = await routeCall({ peer: 'not-a-linked-peer', albums: ownList });
+    const stranger = await routeCall({ peer: 'not-a-linked-peer' });
     check('publishing to a server this household is not linked to is refused',
           stranger.status === 404, `status=${stranger.status} ${JSON.stringify(stranger.json)}`);
   }

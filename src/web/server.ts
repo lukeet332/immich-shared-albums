@@ -19,6 +19,7 @@ import { publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
 import { myAlbums, publishAlbumsForPeer } from './me.ts';
+import { parseRequestedPeer } from '../sync/matches.ts';
 import { sharePage, signInPage } from './assets.ts';
 import { localAddr } from '../p2p/transport.ts';
 import { keys } from '../state.ts';
@@ -281,15 +282,11 @@ export const server = http.createServer(async (req, res) => {
     if (path === `${ROUTE_PREFIX}/me/albums/publish` && req.method === 'POST') {
       const signedIn = await callerSignedIn(req);
       if (!signedIn) return send(401, signInRequired('offer your albums for reunification'));
-      let asked: { peer?: string };
-      try {
-        asked = JSON.parse(body || '{}');
-      } catch {
-        return send(400, { error: 'malformed request body' });
-      }
-      const peer = state.peers.find(p => p.pub === asked.peer);
+      const peerPub = parseRequestedPeer(body);
+      if (!peerPub) return send(400, { error: 'name the linked server to offer albums to' });
+      const peer = state.peers.find(p => p.pub === peerPub);
       if (!peer) return send(404, { error: 'no such linked server', code: 'unknown_peer' });
-      const published = publishAlbumsForPeer(peer.pub, body, signedIn.caller.id);
+      const published = await publishAlbumsForPeer(signedIn.creds, signedIn.caller.id, peer.pub);
       log(`${signedIn.caller.name} offered ${published} owned album(s) to "${peer.name}" for matching`);
       return send(200, { published });
     }

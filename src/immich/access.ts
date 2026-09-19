@@ -114,6 +114,14 @@ export async function readAlbumAssetsAs(albumId: string, access: AlbumAccess): P
   return out;
 }
 
+/** The caller's own album list, exactly as Immich returns it to them. `GET /albums` is scoped to
+ *  the credential, so this is membership as Immich sees it — the whole basis for "which albums do
+ *  I own", and the reason the publish path reads here instead of trusting a request body. */
+export async function readCallerAlbums(creds: Creds): Promise<any[]> {
+  const albums = await immichJson('/albums', {}, creds);
+  return Array.isArray(albums) ? albums : [];
+}
+
 /** The albums a caller may see, by id. Immich scopes the list to the credential, so this is the
  *  caller's own membership — not a list to filter for them. */
 export async function visibleAlbumIds(creds: Creds): Promise<Set<string>> {
