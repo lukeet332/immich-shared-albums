@@ -1,8 +1,7 @@
 /** web/ui/pages/me/App.tsx — the per-user panel: your shared albums, the possible reunions and what
  *  can be done about each one, and the albums you have reunited. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
-import { s } from '../../lib/theme.ts';
-import { t } from '../../lib/theme.ts';
+import { s, t, toastStyle } from '../../lib/theme.ts';
 import {
   invite,
   myAlbums,
@@ -31,7 +30,9 @@ export const App = () => {
   const [reuniting, setReuniting] = useState('');
   const [inviting, setInviting] = useState('');
   const [detaching, setDetaching] = useState('');
-  const [notice, setNotice] = useState<string | null>(null);
+  // An action's outcome, kept apart from the lists it describes: `kind` is what makes "done" and
+  // "refused" look different, which a bare string could not.
+  const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     myAlbums()
@@ -59,18 +60,30 @@ export const App = () => {
     if (freshAlbums.status === 'fulfilled') setAlbums(freshAlbums.value.albums);
   };
 
+  const NOTICE_MS = 6000;
+
+  // A success fades; a failure stays, because it is asking for something.
+  useEffect(() => {
+    if (notice?.kind !== 'ok') return;
+    const timer = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
   const onReunite = async (m: ActionableMatch) => {
     if (!m.mappingId) return; // no share to reunite: this pairing has never been shared
     setReuniting(rowKey(m));
     setNotice(null);
     try {
       const r = await reunite(m.mappingId, m.mine.name);
-      setNotice(`Reunited into "${r.album}" — ${r.seeded} photo(s) were already there.`);
+      setNotice({
+        kind: 'ok',
+        text: `Reunited into "${r.album}" — ${r.seeded} photo(s) were already there.`,
+      });
       // BOTH lists: a reunion moves a share out of the matches list and into the reunified one, so
       // refreshing only the matches leaves the albums below describing a state that no longer holds.
       await refreshBoth();
     } catch (e) {
-      setNotice(`Could not reunite: ${(e as Error).message}`);
+      setNotice({ kind: 'ok', text: `Could not reunite: ${(e as Error).message}` });
     } finally {
       setReuniting('');
     }
@@ -83,10 +96,13 @@ export const App = () => {
     setNotice(null);
     try {
       const r = await invite(m.peer, m.mine.name, m.theirs.ownerUserId);
-      setNotice(`Invited ${r.invited} to reunite “${r.album}” — it is now in their panel to accept.`);
+      setNotice({
+        kind: 'ok',
+        text: `Invited ${r.invited} to reunite “${r.album}” — it is now in their panel to accept.`,
+      });
       await refreshBoth();
     } catch (e) {
-      setNotice(`Could not invite: ${(e as Error).message}`);
+      setNotice({ kind: 'ok', text: `Could not invite: ${(e as Error).message}` });
     } finally {
       setInviting('');
     }
@@ -97,10 +113,13 @@ export const App = () => {
     setNotice(null);
     try {
       const r = await unreunite(album.mappingId);
-      setNotice(`"${r.left}" is yours again — ${r.purged} shared photo(s) removed from it.`);
+      setNotice({
+        kind: 'ok',
+        text: `"${r.left}" is yours again — ${r.purged} shared photo(s) removed from it.`,
+      });
       await refreshBoth(); // same reason, the other way round
     } catch (e) {
-      setNotice(`Could not un-reunite: ${(e as Error).message}`);
+      setNotice({ kind: 'ok', text: `Could not un-reunite: ${(e as Error).message}` });
     } finally {
       setDetaching('');
     }
@@ -123,7 +142,25 @@ export const App = () => {
           </>
         )}
       </p>
-      {notice && <div style={s.card}>{notice}</div>}
+      {notice && (
+        // A snackbar: it says what just happened without moving what the person is reading. Success
+        // fades on its own; a failure stays until dismissed, because it is asking for something.
+        <div
+          id="notice"
+          data-kind={notice.kind}
+          role={notice.kind === 'ok' ? 'status' : 'alert'}
+          aria-live={notice.kind === 'ok' ? 'polite' : 'assertive'}
+          style={{ ...s.toast, ...toastStyle(notice.kind) }}
+        >
+          <span style={{ ...s.badge, background: toastStyle(notice.kind).badge }}>
+            {toastStyle(notice.kind).glyph}
+          </span>
+          <span>{notice.text}</span>
+          <button style={s.dismiss} aria-label="Dismiss" onClick={() => setNotice(null)}>
+            ×
+          </button>
+        </div>
+      )}
       {albums && albums.some(a => a.reunified) && (
         <section style={{ marginBottom: 22 }}>
           <b style={{ fontSize: 18 }}>Reunified albums</b>
