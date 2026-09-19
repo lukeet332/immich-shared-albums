@@ -35,6 +35,7 @@ import { leaveAlbum } from './leave.ts';
 import { diffInvitees, invitationMirrorWasWithdrawn } from './invitees.ts';
 import { recordLoopTick } from './status.ts';
 import crypto from 'node:crypto';
+import { refreshPeerIndexes } from './album-index.ts';
 
 /**
  * Our own human users, as offered to a paired household so they can invite one of us
@@ -460,6 +461,7 @@ export function startInviteLoop() {
     void (async () => {
       try {
         await detectInvitesOnce();
+        await refreshPeerIndexes().catch(e => log(`peer album indexes: ${e.message}`));
       } catch (e) {
         log(`invite detection error: ${e.message}`);
       }

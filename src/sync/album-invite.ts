@@ -6,7 +6,6 @@ import { readCallerAlbums } from '../immich/access.ts';
 import { ensureContributor } from '../immich/contributors.ts';
 import { state, store } from '../state.ts';
 import type { Peer } from '../store.ts';
-import { refreshPeerAlbums } from './album-index.ts';
 import { findAdoptableAlbum } from './adoption.ts';
 import { addHouseBotToAlbum } from './house-bot.ts';
 import { auditLine } from './audit.ts';
@@ -32,10 +31,8 @@ export async function invitePeerToReunite(
   asked: { albumName: string; ownerUserId: string }
 ): Promise<{ album: string; invited: string }> {
   const wanted = normaliseAlbumName(asked.albumName || '');
-  // Read the peer's index the way the panel does before reading it: the row was rendered from an
-  // index this server refreshed, but that may be minutes old by the time someone clicks, and a peer
-  // that has since published the album would otherwise be refused by our own staleness.
-  await refreshPeerAlbums(peer).catch(() => store.publishedAlbumsFor(peer.pub, 'from-them'));
+  // What the peer published, as the loop last read it. The panel this row was rendered from reads
+  // the same cache, so the invitation is checked against exactly what the person was looking at.
   const theirs = store
     .publishedAlbumsFor(peer.pub, 'from-them')
     .find(a => a.ownerUserId === asked.ownerUserId && normaliseAlbumName(a.name) === wanted);

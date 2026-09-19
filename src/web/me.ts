@@ -6,11 +6,11 @@
  * see, and a mapping only appears if that list contains its local album — reading as the admin
  * and then filtering for the caller refuses the very mirrors this panel exists for.
  */
-import { state } from '../state.ts';
+import { state, store } from '../state.ts';
 import type { Mapping } from '../store.ts';
 import type { Creds } from '../immich/access.ts';
 import { readCallerAlbums, visibleAlbumIds } from '../immich/access.ts';
-import { offerAlbumsTo, publishOwnedAlbums, refreshPeerAlbums } from '../sync/album-index.ts';
+import { offerAlbumsTo, publishOwnedAlbums } from '../sync/album-index.ts';
 import {
   albumsIPublish,
   matchesWithPeer,
@@ -104,7 +104,9 @@ export async function myMatches(creds: Creds, callerUserId: string): Promise<Act
   if (!mine.length) return [];
   const out: ActionableMatch[] = [];
   for (const peer of state.peers) {
-    const theirs = await refreshPeerAlbums(peer);
+    // Local read: `refreshPeerIndexes` on the invite loop keeps this current, and a person
+    // opening their own panel must not wait on a peer's dial.
+    const theirs = store.publishedAlbumsFor(peer.pub, 'from-them');
     for (const candidate of matchesWithPeer(mine, theirs, peer)) {
       // The share this pairing is about, if one exists: the peer's mapping whose local album carries
       // that name. Names fold the way the matcher folds them, so a share named with different case or

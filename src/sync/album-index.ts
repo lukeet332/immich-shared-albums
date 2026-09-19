@@ -11,7 +11,7 @@ import { peerRequest, withDeadline } from '../p2p/transport.ts';
  *  seconds — measured at the transport's own 10s dial deadline, every time. Matching is a pull, so
  *  an index a visit or two stale is the ordinary case; a blank section for ten seconds is not. */
 export const INDEX_REFRESH_DEADLINE_MS = 2500;
-import { store } from '../state.ts';
+import { state, store } from '../state.ts';
 import { albumsIPublish } from './matches.ts';
 
 /**
@@ -64,6 +64,24 @@ export async function refreshPeerAlbums(peer: Peer): Promise<OwnedAlbum[]> {
   } catch {
     return store.publishedAlbumsFor(peer.pub, 'from-them'); // unreachable right now: keep what we have
   }
+}
+
+/**
+ * Refresh what every linked peer offers us, bounded and best-effort.
+ *
+ * The index is a PULL like every other cross-server fact — manifests, invitations, comments — so it
+ * belongs on the loop, not on a page. A panel that dials cannot be faster than the slowest peer it
+ * is linked to (measured: 10.06s against 15ms for the same page's local read), and a person opening
+ * their own albums has no business waiting on someone else's server.
+ */
+export async function refreshPeerIndexes(): Promise<number> {
+  let refreshed = 0;
+  for (const peer of state.peers) {
+    const before = store.publishedAlbumsFor(peer.pub, 'from-them').length;
+    const after = await refreshPeerAlbums(peer);
+    if (after.length !== before || after.length) refreshed++;
+  }
+  return refreshed;
 }
 
 /** What this server OFFERS the given peer — the index its `/albums` route answers with. */
