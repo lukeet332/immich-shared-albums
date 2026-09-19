@@ -524,6 +524,13 @@ export class Store {
   seenRemoveMapping(mappingId: string) {
     this.db.prepare('DELETE FROM seen WHERE mapping = ?').run(mappingId);
   }
+  /** Every mapping's row for one photo. Cross-mapping because an album-level duplicate is only
+   *  visible that way: the mapping about to materialise has no row of its own to notice. */
+  seenForChecksum(checksum: string): SeenEntry[] {
+    return this.db
+      .prepare('SELECT mapping, checksum, localAsset, originAsset, storedFull FROM seen WHERE checksum = ?')
+      .all(checksum) as SeenEntry[];
+  }
   seenForMapping(mappingId: string): SeenEntry[] {
     return this.db
       .prepare('SELECT mapping, checksum, localAsset, originAsset, storedFull FROM seen WHERE mapping = ?')

@@ -86,6 +86,15 @@ directions are cheap and reversible:**
 
 So cross-server match precision becomes a **soft optimisation, not a correctness requirement.**
 
+### Suppression is scoped to the ALBUM, not the mapping **[decided]**
+A mesh can offer one photo through two shares that land on the same album — three households holding
+the same Google album is the case this design exists for. Suppressing per mapping would materialise
+two stubs for it, and Immich cannot collapse them, because each stub carries a random tail so that it
+is a distinct asset. `existingCopyInAlbum` (`../src/sync/album-suppression.ts`) therefore asks
+whether *the album* already holds the photo, whichever mapping put it there, and `materialiseRef`
+records the row against the second mapping rather than uploading again. Two ledger rows then carry
+one stub, so withdrawing one share's copy leaves the other's claim standing.
+
 ### It also dissolves ownership ambiguity for co-owned assets
 For photos **both** own, ownership is moot — each uses its own copy. Ownership only has to be
 resolved for photos that live on **one** side (those get the normal owner→member hotlink).

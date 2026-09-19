@@ -5,11 +5,12 @@
  */
 import crypto from 'node:crypto';
 import { log, trace } from '../config.ts';
-import { state, seenHas, seenAdd, storeSharedAssetsLocally } from '../state.ts';
+import { state, store, seenHas, seenAdd, storeSharedAssetsLocally } from '../state.ts';
 import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 import { STUB_JPEG, immichJson, jsonBody, uploadAsset, addToAlbum, applyRefMetadata } from './client.ts';
 import { ensureContributor } from './contributors.ts';
 import { jpegOfSize } from '../media/jpeg.ts';
+import { existingCopyInAlbum } from '../sync/album-suppression.ts';
 
 // Store-shared-locally: cap on a full copy we will buffer into heap. Bigger originals (long 4K
 // videos) keep the hotlink stub instead — buffering GB on a small box is worse than one asset
@@ -69,6 +70,27 @@ export async function fetchFullOriginal(
 const inFlight = new Set<string>();
 export async function materialiseRef(mapping, peer, ref) {
   if (seenHas(mapping.id, ref.checksum)) return true;
+  // ALBUM-LEVEL SUPPRESSION, before the in-flight guard: a mesh can offer one photo through two
+  // shares that land on the same album, so the second mapping must find the FIRST one's stub rather
+  // than upload another. Immich cannot collapse them itself — the stubs differ by a random tail on
+  // purpose — so without this the album shows the photo twice.
+  const alreadyHere = existingCopyInAlbum(
+    mapping.albumId,
+    ref.checksum,
+    state.mappings,
+    store.seenForChecksum(ref.checksum)
+  );
+  if (alreadyHere) {
+    // Point at the stub the album already has instead of making a second one. The row is recorded
+    // for THIS mapping because the version cursor and the deletion sweep both read it: when this
+    // mapping's peer stops offering the photo, its sweep retracts the row, and the stub survives on
+    // the other mapping's claim (deleteProxyAsset is guarded by the authoritative ledger row).
+    seenAdd(mapping.id, ref.checksum, alreadyHere.localAsset, ref.originAsset, !!alreadyHere.storedFull);
+    trace(
+      `materialise ${ref.checksum.slice(0, 8)}: already in album ${mapping.albumId.slice(0, 8)} via ${alreadyHere.mapping.slice(0, 8)} — not uploaded again`
+    );
+    return true;
+  }
   const flightKey = `${mapping.id}:${ref.checksum}`;
   if (inFlight.has(flightKey)) {
     trace(`materialise ${ref.checksum.slice(0, 8)}: skipped, already in flight`);
