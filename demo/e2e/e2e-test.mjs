@@ -925,6 +925,14 @@ stage('native album invitations, per person (no share link)');
       let mirrored = await findOnB('natively invited album');
       check('member mirrors an invited album automatically, with no link', !!mirrored,
             mirrored ? '' : 'timed out');
+
+      // Read the invitation contract HERE, while the invitation is still an ordinary one. This stage
+      // goes on to reunite this album, and the origin then legitimately learns about it
+      // (`POST /albums/:mappingId/reunified`), so a later read can no longer answer the question the
+      // additive rule asks: does an ORDINARY invitation carry no trace of the category?
+      const asInvited = irohProbe(bKeys, await endpointOf(ORIGIN_DIRECT), '/invitations');
+      const ordinaryInvitation =
+        asInvited.status === 200 ? asInvited.json?.invitations || [] : null;
       if (mirrored) {
         const arrived = await until(async () => {
           const x = await albumAssets(B, mirrored.key, mirrored.album.id); return x.length >= 1 ? x : null;
@@ -1232,10 +1240,16 @@ stage('native album invitations, per person (no share link)');
       // The reunified category is ADDITIVE: absent means "an ordinary share". An ordinary
       // invitation must therefore carry no trace of it — a build that always sent the field would
       // make every share look reunified to a peer that understands it, which is the failure this
-      // pins. The present case needs a real reunification, and lands with adoption.
+      // pins. Read at invitation time (`ordinaryInvitation`), because this stage reunites the album
+      // later on and the origin is told.
       check('an ordinary invitation carries no reunified category, so absent still means ordinary',
-            !!listedBefore?.length && listedBefore.every(i => !('reunified' in i)),
-            JSON.stringify(listedBefore?.map(i => Object.keys(i).sort())));
+            !!ordinaryInvitation?.length && ordinaryInvitation.every(i => !('reunified' in i)),
+            JSON.stringify(ordinaryInvitation?.map(i => Object.keys(i).sort())));
+      // And the present case: after the adoption above, the receiver reports the reunion back, so
+      // the ORIGIN's own invitation carries the category — which is what clears its panel row.
+      check('a reunited invitation carries the category, so the origin learns it happened',
+            !!listedBefore?.some(i => i.album?.name === 'natively invited album' && i.reunified === true),
+            JSON.stringify(listedBefore?.map(i => [i.album?.name, i.reunified])));
       check('an invitation names the people it is for, not just the household',
             !!listedBefore?.[0]?.forUserIds?.length, JSON.stringify(listedBefore?.[0]?.forUserIds));
 
