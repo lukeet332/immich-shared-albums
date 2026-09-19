@@ -97,7 +97,7 @@ export const Share = () => {
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
-                stroke="#fff"
+                stroke="var(--isa-surface)"
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"

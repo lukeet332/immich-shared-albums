@@ -25,6 +25,7 @@ import { syncStatus } from '../sync/status.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 import { recordOfferedRefs } from './entitlement.ts';
 import { publishedAlbumsFor } from '../sync/album-index.ts';
+import { auditLine } from '../sync/audit.ts';
 
 /** Constant-time string compare that tolerates unequal lengths. */
 function secretEquals(a: string, b: string): boolean {
@@ -188,6 +189,37 @@ export function handlePublishedAlbums(callerPub: string) {
   const peer = peerByPub(callerPub);
   if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
   return [200, { albums: publishedAlbumsFor(callerPub) }];
+}
+
+/**
+ * The receiver telling the origin that its share is now part of a reunion on THEIR side.
+ *
+ * Nobody else can know: nothing about the origin's own album changes when the other half merges into
+ * the album over there. Without this the origin keeps a pairing in "Possible album reunions" that it
+ * has already had — the one state that list must never show. A fact, not a command: it records what
+ * happened and asks for nothing back.
+ */
+export function handleReunified(callerPub: string, albumMappingId: string) {
+  const peer = peerByPub(callerPub);
+  if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
+  // The share WE gave them: adoption only ever happens on the receiving side, so the mapping this
+  // lands on is the one whose album is ours. Scoping to the caller is what stops a peer naming a
+  // mapping that is not theirs; the role keeps it to shares we actually handed over.
+  const mapping = mappingFor(peer.pub, albumMappingId, 'owner');
+  if (!mapping || mapping.dead) return goneOr404(peer.pub, albumMappingId);
+  mapping.reunified = true;
+  save();
+  log(`"${peer.name}" reunited the share of "${mapping.albumName}" — it is no longer a possible reunion`);
+  // The trail on OUR album too, where the invitation was made: the person who invited is told in the
+  // album itself, not only in their panel. `void` — the peer's request is answered either way, and
+  // the line is worth a retry rather than worth holding their panel open for.
+  void auditLine(
+    mapping.id,
+    mapping.albumId,
+    'accepted',
+    `${peer.name} accepted — the two albums are merged, and the photos both sides hold show once.`
+  );
+  return [200, { ok: true }];
 }
 
 export async function handleRefs(callerPub: string, body: string, albumMappingId: string) {

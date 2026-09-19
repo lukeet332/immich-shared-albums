@@ -60,9 +60,7 @@ export const Settings = () => {
         Allow other Immich users to join albums via shared links
       </label>
       <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>
-        On, share pages carry the join card and this server accepts joins. Off, visitors get Immich's share
-        page exactly as if this addon were not installed, and join attempts are refused. Linked servers and
-        pairing are unaffected.
+        Off, share pages are Immich's own and joins are refused. Linked servers and pairing are unaffected.
       </p>
       <label
         style={{
@@ -78,10 +76,8 @@ export const Settings = () => {
         Store shared photos on this server
       </label>
       <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>
-        On, this server keeps a full local copy of photos shared with it, so albums stay complete even if the
-        other server goes offline. Off (the default), shared photos are lightweight placeholders that stream
-        from the owner on demand. Turning this on uses real disk space, and existing shared photos are copied
-        over gradually in the background.
+        On, shared photos are copied here and use real disk space. Off, they stream from their owner. Turning
+        this on uses real disk space, and existing shared photos are copied over gradually in the background.
       </p>
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, marginTop: 12 }}>
         Pairing links stay valid for
@@ -94,8 +90,8 @@ export const Settings = () => {
         </select>
       </label>
       <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>
-        A pairing link is shown exactly once, works once, and cannot be recovered after you close it — if it
-        gets lost, just create another. Longer validity only widens how long a lost link would matter.
+        Shown once. If it is lost, create another. Longer validity only widens how long a lost link would
+        matter.
       </p>
     </div>
   );

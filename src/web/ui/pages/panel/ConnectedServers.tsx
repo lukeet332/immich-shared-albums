@@ -11,8 +11,7 @@ export const ConnectedServers = ({ peers, onChange }: { peers: Peer[]; onChange:
   const unlink = async (peer: Peer) => {
     if (
       !confirm(
-        `Unlink "${peer.name}"?\n\nTheir photos and albums are removed from this server, and ` +
-          `albums you shared with them stop syncing. Your own photos are untouched.`
+        `Unlink "${peer.name}"?\n\nRemoves their photos and albums here. Your own photos are untouched.`
       )
     ) {
       return;
@@ -31,8 +30,7 @@ export const ConnectedServers = ({ peers, onChange }: { peers: Peer[]; onChange:
     <div style={s.card}>
       <b style={{ fontSize: 14 }}>Connected servers</b>
       <p style={s.muted}>
-        Their people appear in Immich's own “share album” picker. Unlinking removes them and everything they
-        shared here.
+        Their people appear in Immich's share picker. Unlinking removes them and everything they shared here.
       </p>
       {peers.length === 0 && <p style={s.muted}>None yet — use “Link a server” above.</p>}
       {peers.map(p => (

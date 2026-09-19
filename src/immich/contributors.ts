@@ -8,6 +8,8 @@ import { CFG, log, UTILITY_SUFFIX, UTILITY_EMAIL_DOMAIN, BOT_PREFIX } from '../c
 import { state, save, addedRecord, peerIsLinked } from '../state.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
 import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
+import { botAvatarPng } from './bot-avatar.ts';
+import type { Contributor } from '../store.ts';
 
 /**
  * Exactly what a utility user does, and nothing else. These are non-admin accounts, so an
@@ -39,6 +41,41 @@ const UTILITY_PERMISSIONS = [
   'userProfileImage.create',
   'userProfileImage.update',
 ];
+
+/** Our own face on an account of ours, once.
+ *
+ *  Skipped when Immich already holds a picture for it: a person's own avatar, synced from their
+ *  server, beats a robot. Best effort by design — the picture is garnish, and the account it
+ *  decorates has work to do whether or not it lands.
+ */
+/** Accounts this process has already given a picture. Immich's own `profileImagePath` is the fact,
+ *  but the user list it comes from is cached, so a provisioning burst would re-upload the same
+ *  picture for every ref materialised. */
+const gavePicture = new Set<string>();
+
+async function ensureBotAvatar(c: Contributor, alreadyHasPicture: boolean) {
+  if (alreadyHasPicture || !c.apiKey || gavePicture.has(c.userId)) return;
+  try {
+    const form = new FormData();
+    form.set(
+      'file',
+      new Blob([new Uint8Array(botAvatarPng())], { type: 'image/png' }),
+      'immich-shared-albums.png'
+    );
+    const r = await fetch(`${CFG.immichUrl}/api/users/profile-image`, {
+      method: 'POST',
+      headers: { 'x-api-key': c.apiKey },
+      body: form,
+    });
+    if (r.ok) {
+      gavePicture.add(c.userId);
+      log(`gave "${c.userId.slice(0, 8)}" the addon's own picture`);
+    }
+  } catch {
+    /* garnish */
+  }
+}
+
 /**
  * Provision (or heal) a utility user.
  *
@@ -93,7 +130,8 @@ export async function ensureUtilityUser(
     // which server to name. An attribution ref arriving later must not rename them back to the
     // generic suffix, or the two would overwrite each other on every poll.
     const directoryOwnsName = !!c.homePeer && !opts.fullName;
-    const current = (await usersById(10000))[c.userId]?.name;
+    const cached = (await usersById(10000))[c.userId];
+    const current = cached?.name;
     if (!directoryOwnsName && current && current !== wantedName) {
       try {
         await immichJson(`/admin/users/${c.userId}`, { ...jsonBody({ name: wantedName }), method: 'PUT' });
@@ -103,6 +141,7 @@ export async function ensureUtilityUser(
         /* cosmetic — retry next time */
       }
     }
+    await ensureBotAvatar(c, !!cached?.profileImagePath);
     return c;
   }
   // Creating an account is a commitment on behalf of a linked server. If that server is being
@@ -212,6 +251,7 @@ export async function ensureUtilityUser(
     peerUserId: peerUserId ?? c?.peerUserId,
     homePeer: opts.homePeer ?? c?.homePeer,
   };
+  await ensureBotAvatar(c as Contributor, false);
   if (!passwordRetired)
     c.password = password; // keep it only if the roll failed, so a retry can resume
   else delete c.password;
@@ -284,16 +324,19 @@ export async function ensureContributor(
   peer,
   originUserId,
   peerPub?: string,
-  opts: { reAddIfMissing?: boolean } = {}
+  opts: { reAddIfMissing?: boolean; homePeer?: string; invitation?: boolean } = {}
 ) {
   // Key on the person's id on their OWN server — required, so this is the same account the
-  // directory creates rather than a second entry for one human. No `fullName` and no
-  // `homePeer`: a ref proves neither what to call them nor where they live.
+  // directory creates rather than a second entry for one human. `homePeer` is passed only by a
+  // caller that PROVED where the person lives — a directory exchange, or the panel's invite, where
+  // the peer's own published index named them as an album's owner there. A ref proves neither what
+  // to call them nor where they live, which is why it sets neither.
   if (!originUserId)
     throw new Error(`ref from "${displayName}" carries no contributor id — refusing a name-keyed account`);
   const c = await ensureUtilityUser(displayName, {
     peerPub,
     peerUserId: originUserId,
+    homePeer: opts.homePeer,
     stateKey: `${BOT_PREFIX.person}${originUserId}`,
     email: `${BOT_PREFIX.person}${originUserId}@${UTILITY_EMAIL_DOMAIN}`,
   });
@@ -316,7 +359,9 @@ export async function ensureContributor(
     return c;
   }
   if (!alreadyMember) {
-    addedRecord(albumId, c.userId); // record BEFORE the add — see the note above
+    // An INVITATION is not one of ours to disown: the scanner must read it as the intent it is, or
+    // the peer is never told. Everything else we add here is attribution, and is recorded as such.
+    if (!opts.invitation) addedRecord(albumId, c.userId); // record BEFORE the add — see the note above
     try {
       await immichJson(
         `/albums/${albumId}/users`,

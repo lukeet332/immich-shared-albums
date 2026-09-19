@@ -24,7 +24,15 @@ The personal panel. It answers: _what am I sharing, and with whom?_
 - **Possible album reunions** — albums that look like two halves of one Google Photos album. If you
   and a relative each imported a Takeout of "Summer 2024", that album shows up on both servers as a
   partial copy; this lists the pairs it finds, with how many photos each side holds and whether the
-  dates line up. **Reunite** merges the pair into the album you already own.
+  dates line up. Each row says what you can do about it:
+  - **Invite <name>** — shares YOUR album with them, so the reunion can start. This is the one
+    sharing action the panel performs itself: it adds that one person to that one album, exactly as
+    Immich's own picker would, and nothing else about sharing moves here.
+  - **Accept invite** — they shared their half with you. Accepting takes their photos into the album
+    you already own; it stays yours, and it can be undone.
+  - **Invited … waiting** — you shared yours. There is nothing to click until they accept on their
+    side.
+  - A pair that has been reunited leaves this list and appears under **Reunified albums** instead.
 - Opening this page is also what offers **the albums you own** to each connected server, so they can
   look for the other half of one. The pair appears for whoever opens their panel second, and for both
   of you on every visit after that — nothing is published until someone opens their own panel.
@@ -57,8 +65,11 @@ Sharing is done in **Immich's own app**, not here:
 2. Pick the person on the linked server. They appear by name, e.g. "Nan (via The Smiths server)".
 3. Done. Remove them from the album to unshare it.
 
-That is deliberate: the addon adds no second way to share, so nobody has to learn our surface to
-use their own photos.
+One exception, and it is narrow: **Invite** on a row under _Possible album reunions_ does the same
+thing for that row's album and that row's person — one membership, on an album you own, for the
+person the pair is about. It exists because the reunion cannot start without the share and the panel
+is where the pair is shown. Everything else — every other album, every other person, and unsharing —
+still happens in Immich, so nobody has to learn our surface to use their own photos.
 
 ## Joining an album someone shared with you (`/accept`)
 

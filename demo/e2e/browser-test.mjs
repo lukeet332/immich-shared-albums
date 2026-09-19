@@ -196,7 +196,10 @@ if (nonAdminLogin.accessToken) {
 const C_PANEL_WEB = process.env.C_PANEL_WEB || `http://localhost:${PORT('PORT_SIDECAR_C', 8302)}`;
 const panelName = `panel offer ${Date.now()}`;
 const panelText = async (p) => (await p.locator('body').innerText().catch(() => '')) || '';
-const seesPair = (t) => new RegExp(`Possible album reunions[\\s\\S]*?${panelName}`).test(t);
+/** Only the candidates section: the panel prints album names in three places, so finding one
+ *  anywhere on the page says nothing about whether this list still offers it. */
+const candidates = (t) => (t.split('Possible album reunions')[1] || '').split('Your shared albums')[0];
+const seesPair = (t) => new RegExp(panelName).test(candidates(t));
 
 // C is hardened like production by run-mock-e2e.sh (`passwordLogin.enabled = false`), which is why no
 // lane has ever driven its panel — the panel needs a session, and there was no way to mint one. Open
@@ -293,6 +296,151 @@ await cPanel.p.waitForTimeout(3000);
 check('and the peer stops matching against the album that is gone',
   !new RegExp(`Possible album reunions[\\s\\S]*?${soloName}`).test(await panelText(cPanel.p)));
 
+
+// 8. The reunion round trip through the PANELS alone: one side invites — which shares its own album
+//    with the other person, in Immich — the other accepts, and both lists drop the pair. The
+//    inviter's row clears over the wire (`handleReunified`), which nothing local could observe.
+const inviteName = `panel invite ${Date.now()}`;
+const bInviteAlbum = await (await fetch(`${B_PANEL_WEB}/api/albums`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bLogin.accessToken}` },
+  body: JSON.stringify({ albumName: inviteName }) })).json();
+const cInviteAlbum = await api('/albums', { albumName: inviteName });
+check('the lane can give both households a pair to reunite by invitation',
+  !!bInviteAlbum?.id && !!cInviteAlbum?.id,
+  `${bInviteAlbum?.id ? 'B ok' : 'B failed'}, ${cInviteAlbum?.id ? 'C ok' : 'C failed'}`);
+
+/** Click the button labelled `label` in the row that names this album — the row is the smallest
+ *  ancestor that mentions it, because the panel repeats the same two labels down the list. */
+// The panel renders its reunions only once its own fetch lands, and that fetch refreshes the peer's
+// index over iroh — a round trip, not a tick. A fixed sleep reads the page before it has an answer
+// and blames the product; this waits for the answer.
+const waitForRow = async (p, rowRegex, ms = 45000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    // Give THIS load its chance to answer before replacing it: the panel fetches on mount, and a
+    // reload before that lands throws away the very response being waited for.
+    const shown = await p
+      .waitForFunction(
+        (source) => new RegExp(source).test(document.body.innerText),
+        rowRegex.source,
+        { timeout: Math.min(15000, Math.max(1000, deadline - Date.now())) }
+      )
+      .then(() => true)
+      .catch(() => false);
+    if (shown) return true;
+    await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    await p.waitForTimeout(1000);
+  }
+  return false;
+};
+
+// Actions ask before they act, so a row's button opens a dialog and the dialog's button is what
+// runs it. Clicking the row and walking away is the bug this helper exists to prevent.
+const confirmDialog = async (p, label) => {
+  const dialog = p.locator('[role=dialog]');
+  if (!(await dialog.count())) return false;
+  await dialog.getByRole('button', { name: label, exact: true }).click();
+  return true;
+};
+
+/**
+ * Is there a button labelled `label` in the row that names this album?
+ *
+ * Text-matching the page cannot answer this: the album name and a button label can sit in different
+ * rows and still appear within a few hundred characters of each other, which is how a check passed
+ * while the click that followed found nothing. The question is about the DOM's structure, so the page
+ * is asked structurally.
+ */
+const rowHasButton = (p, label, name) =>
+  p.evaluate(([label, name]) => {
+    const buttons = [...document.querySelectorAll('button,a')].filter(x => new RegExp(label).test((x.textContent || '').trim()));
+    return buttons.some(b => {
+      for (let el = b, i = 0; el && i < 6; el = el.parentElement, i++)
+        if ((el.innerText || '').includes(name)) return true;
+      return false;
+    });
+  }, [label, name]).catch(() => false);
+
+const waitForRowButton = async (p, label, name, ms = 90000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await rowHasButton(p, label, name)) return true;
+    await p.waitForTimeout(2000);
+    await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    await p.waitForTimeout(2500);
+  }
+  return false;
+};
+
+// Why a click did not happen, in the check's own detail: the buttons present, and whether any of
+// them had an ancestor naming the album. A bare false costs a whole round of guessing.
+const clickDetail = (p, label, name) =>
+  p.evaluate(([label, name]) => {
+    const buttons = [...document.querySelectorAll('button,a')].filter(x => new RegExp(label).test(x.textContent || ''));
+    const matched = buttons.some(b => {
+      for (let el = b, i = 0; el && i < 6; el = el.parentElement, i++) if ((el.innerText || '').includes(name)) return true;
+      return false;
+    });
+    return `present=${buttons.length} namesAlbum=${matched} texts=${JSON.stringify(buttons.slice(0, 3).map(b => (b.textContent || '').trim()))}`;
+  }, [label, name]).catch(() => '(could not read the page)');
+
+const clickInRow = (p, label, name) => p.evaluate(([label, name]) => {
+  const buttons = [...document.querySelectorAll('button,a')]
+    .filter(x => new RegExp(label).test(x.textContent || ''));
+  let best = null, size = Infinity;
+  for (const b of buttons) {
+    for (let el = b, i = 0; el && i < 6; el = el.parentElement, i++) {
+      const t = el.innerText || '';
+      if (t.includes(name)) { if (t.length < size) { size = t.length; best = b; } break; }
+    }
+  }
+  if (!best) return false;
+  best.click();
+  return true;
+}, [label, name]);
+
+// C looks first so its offer is in B's index; B is the household that invites.
+await cPanel.p.goto(`${C_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'domcontentloaded' });
+await cPanel.p.waitForTimeout(3000);
+await bPanel.p.goto(`${B_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'domcontentloaded' });
+const inviteRowShown = await waitForRowButton(bPanel.p, '^Invite ', inviteName);
+check('a pair with nothing shared yet is offered an invitation', inviteRowShown,
+  (await panelText(bPanel.p)).split('\n').filter(l => /^Invite /.test(l)).slice(0, 2).join(' | ') || '(none)');
+
+check('Invite was clicked', await clickInRow(bPanel.p, '^Invite ', inviteName), await clickDetail(bPanel.p, '^Invite ', inviteName));
+check('and it asked first, rather than sharing on the click alone', await confirmDialog(bPanel.p, 'Invite'));
+// The panel fetches on mount and does not poll, so a row whose state changed on the server can only
+// show it after a reload — waiting on the page as it stands reads a state that is already gone.
+check("the inviter's own row now waits on the other person",
+  await waitForRow(bPanel.p, /waiting for them to accept/));
+
+let acceptOffered = false;
+for (let waited = 0; waited < 60000 && !acceptOffered; waited += 5000) {
+  await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
+  await cPanel.p.waitForTimeout(3000);
+  acceptOffered = /Accept invite/.test(candidates(await panelText(cPanel.p)));
+}
+check('the other person is offered Accept invite, having done nothing themselves', acceptOffered);
+check('Accept invite was clicked', await clickInRow(cPanel.p, '^Accept invite', inviteName), await clickDetail(cPanel.p, '^Accept invite', inviteName));
+check('and it asked first, rather than merging on the click alone', await confirmDialog(cPanel.p, 'Accept'));
+
+// The accept must have DONE something before the list can be expected to clear: without this the
+// failure reads as 'the list did not clear' when the truth is 'the accept never happened'.
+const merged = await waitForRow(cPanel.p, /Reunited into/);
+check('accepting merges the other half, as the panel says', merged,
+  (await panelText(cPanel.p)).split('\n').find(l => /Reunited|Could not/.test(l)) || '(no notice)');
+
+const cleared = await waitForRow(bPanel.p, new RegExp(`^(?!.*${inviteName}).*$`, 's'), 60000).catch(() => false);
+const goneNow = !new RegExp(inviteName).test(candidates(await panelText(bPanel.p)));
+const survivors = candidates(await panelText(bPanel.p))
+  .split('\n')
+  .map(l => l.trim())
+  .filter(l => l.includes(inviteName))
+  .slice(0, 3);
+check("and the pair leaves the inviter's list once it is done", goneNow,
+  survivors.length ? `still listed: ${JSON.stringify(survivors)}` : '(the name is gone from the candidates)');
+
+// The invite case above is the last to drive them, so the panels close here.
 await soloPanel.c.close();
 await bPanel.c.close();
 await cPanel.c.close();

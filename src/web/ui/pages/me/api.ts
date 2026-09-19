@@ -25,16 +25,35 @@ export const myAlbums = () => json('/me/albums') as Promise<MyPage>;
 /** A pair of same-named albums, one on each server. `mine` is the album this person owns. */
 export type PeerMatch = {
   mine: { name: string; assetCount: number };
-  theirs: { name: string; assetCount: number; ownerName: string };
+  theirs: {
+    name: string;
+    assetCount: number;
+    ownerName: string;
+    ownerUserId: string;
+    startDate?: string;
+    endDate?: string;
+  };
   peer: string;
   peerName: string;
   sameDates: boolean;
   why: string;
 };
 
-export type ActionableMatch = PeerMatch & { mappingId?: string };
+/** What this person can do about the pairing — the same four cases the server decides. */
+export type ReunionStep =
+  { kind: 'invite' } | { kind: 'accept'; mappingId: string } | { kind: 'waiting' } | { kind: 'reunited' };
+
+export type ActionableMatch = PeerMatch & { step: ReunionStep; mappingId?: string };
 
 export const myMatches = () => json('/me/matches') as Promise<{ matches: ActionableMatch[] }>;
+
+/** Ask the person on the other server to reunite this pair: shares my album with them, in Immich. */
+export const invite = (peer: string, albumName: string, ownerUserId: string) =>
+  json('/me/invite', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ peer, albumName, ownerUserId }),
+  }) as Promise<{ album: string; invited: string }>;
 
 /** Replace a share with an album I already own. `albumId` is the local album the match showed. */
 export const unreunite = (mappingId: string) =>

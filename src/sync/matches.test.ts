@@ -6,6 +6,7 @@ import {
   matchAlbums,
   matchesWithPeer,
   normaliseAlbumName,
+  reunionStepFor,
   seedRowsFor,
   type OwnedAlbum,
 } from './matches.ts';
@@ -269,4 +270,33 @@ test('an asset with no checksum cannot be seeded, and is skipped rather than gue
 
 test('an empty album seeds nothing, so adoption of an empty album is the old behaviour', () => {
   assert.deepEqual(seedRowsFor([], 'm1'), []);
+});
+
+// What a person can DO about a pairing is entirely a question of the share behind it, and the panel
+// has exactly three useful states plus the one that belongs somewhere else. Kept pure and separate
+// from the panel because getting a state wrong is a dead button or a row that never goes away —
+// both of which have shipped here before.
+test('a pairing with no share yet offers to invite them', () => {
+  assert.deepEqual(reunionStepFor(undefined), { kind: 'invite' });
+});
+
+test('a share the OTHER person sent is mine to accept', () => {
+  assert.deepEqual(reunionStepFor({ id: 'm1', role: 'member' }), { kind: 'accept', mappingId: 'm1' });
+});
+
+test('a share I sent them leaves me waiting rather than clicking', () => {
+  // Adopting my own album is not an adoption at all: `canUnifyOwnAlbum` refuses when the share
+  // already points at the album asked for, so a button here could only fail.
+  assert.deepEqual(reunionStepFor({ id: 'm1', role: 'owner' }), { kind: 'waiting' });
+});
+
+test('a pairing already reunited belongs to the reunified list, not this one', () => {
+  assert.deepEqual(reunionStepFor({ id: 'm1', role: 'member', reunified: true }), { kind: 'reunited' });
+  assert.deepEqual(reunionStepFor({ id: 'm1', role: 'member', adopted: true }), { kind: 'reunited' });
+  // The side that invited learns it over the wire, and only keeps the flag.
+  assert.deepEqual(reunionStepFor({ id: 'm1', role: 'owner', reunified: true }), { kind: 'reunited' });
+});
+
+test('a share that has ENDED is no share: the pairing can be invited again', () => {
+  assert.deepEqual(reunionStepFor({ id: 'm1', role: 'member', dead: true }), { kind: 'invite' });
 });

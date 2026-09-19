@@ -8,13 +8,16 @@ import type { Creds } from '../immich/access.ts';
 
 /** What the bot may do, and nothing else: read an album and its assets, and comment. Deliberately
  *  no asset write, no album write, no membership write — it joins albums as a VIEWER, so it can
- *  never add, move or remove a photo, and `apiKey.create` is absent so it cannot widen itself. */
+ *  never add, move or remove a photo, and `apiKey.create` is absent so it cannot widen itself. The
+ *  two profile-image scopes set the bot's OWN picture and reach no library. */
 export const HOUSE_BOT_PERMISSIONS = [
   'album.read',
   'asset.read',
   'asset.view',
   'activity.create',
   'activity.read',
+  'userProfileImage.create',
+  'userProfileImage.update',
 ];
 
 /** The bot, provisioned on first use. Lazy on purpose: a household that never reunifies anything

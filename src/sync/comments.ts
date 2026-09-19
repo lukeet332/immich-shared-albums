@@ -10,6 +10,7 @@ import { peerRequest } from '../p2p/transport.ts';
 import { immichJson, jsonBody, usersById } from '../immich/client.ts';
 import { readCredsFor, albumReadKey } from '../immich/access.ts';
 import { ensureContributor } from '../immich/contributors.ts';
+import { ensureHouseBot } from './house-bot.ts';
 
 export const getComments = (albumId, key?: string) =>
   immichJson(`/activities?albumId=${albumId}&type=comment`, {}, key);
@@ -33,15 +34,26 @@ export async function materialiseComments(mapping, peer, comments) {
     const tag = `remote:${cm.id}`;
     if (seenActHas(tag)) continue;
     const hostKey = albumReadKey(readCredsFor(mapping));
-    const c = await ensureContributor(
-      cm.author || peer.name,
-      mapping.albumId,
-      hostKey,
-      peer,
-      cm.authorUserId,
-      mapping.peer
-    );
-    const posted = await postComment(mapping.albumId, cm.comment, c.apiKey);
+    let posted;
+    try {
+      const c = await ensureContributor(
+        cm.author || peer.name,
+        mapping.albumId,
+        hostKey,
+        peer,
+        cm.authorUserId,
+        mapping.peer
+      );
+      posted = await postComment(mapping.albumId, cm.comment, c.apiKey);
+    } catch (e) {
+      // Only a failure that CANNOT succeed falls back: the author is an account this household is
+      // not allowed to put on the album — the peer's own bot, which only an album's owner can add.
+      // A transient failure is rethrown so the loop retries it: mirroring one as our bot would
+      // attribute words to it permanently, on the strength of a timeout.
+      if (!/activity\.create|not a member|forbidden|403/i.test((e as Error).message)) throw e;
+      const bot = await ensureHouseBot();
+      posted = await postComment(mapping.albumId, cm.comment, bot.apiKey);
+    }
     ids[cm.id] = posted.id;
     seenActAdd(tag, mapping.id);
     seenActAdd(`local:${posted.id}`, mapping.id); // don't echo it back

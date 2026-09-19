@@ -54,15 +54,12 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
   return (
     <div style={s.card}>
       <b style={{ fontSize: 14 }}>Link a server</b>
-      <p style={s.muted}>
-        Send your link to the other server's admin, who pastes it into their own panel. It works once, expires
-        (how fast is in Settings), and shares no photos on its own.
-      </p>
+      <p style={s.muted}>Send this to the other admin. One use; shares no photos.</p>
       <div style={{ display: 'flex', gap: 8 }}>
         <button style={s.button} onClick={createLink}>
           Create a link
         </button>
-        <button style={s.button} onClick={() => setShowPasteBox(true)}>
+        <button style={s.buttonQuiet} onClick={() => setShowPasteBox(true)}>
           I have a link
         </button>
       </div>

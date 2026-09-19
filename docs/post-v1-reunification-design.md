@@ -31,8 +31,9 @@ shape:
 ## 2. The core feature: reuniting a former Google shared album
 
 ### The scenario
+
 Two people (e.g. a user and their parent) were in the **same Google Photos shared album**. Each
-migrates independently via **Google Takeout + immich-go** and lands with a *partial* album of the
+migrates independently via **Google Takeout + immich-go** and lands with a _partial_ album of the
 same name:
 
 - Only the assets **they** owned, plus any shared ones **they had saved** to their own Google
@@ -41,16 +42,18 @@ same name:
 - **No immich-shared-albums relationship ever existed** — the album lived on Google.
 
 ### The goal
+
 Link the servers and, with consent, **merge the partial halves back toward the album's original
 Google state.**
 
 ### Why the end-state is already what our model produces
+
 A `contribute` share already yields the target shape: **each side sees the full union, owns its own
-contributions as real photos, and holds the other's as hotlink stubs.** So the sync *primitives*
+contributions as real photos, and holds the other's as hotlink stubs.** So the sync _primitives_
 (contribute-push, materialise, manifest, reconcile) already exist. The novel orchestration is:
 
 1. **Match** the two partial albums (name + metadata + creation date + **owner** — see §4).
-2. **Adopt** each side's *existing populated* album as the mapping — rather than the normal "join
+2. **Adopt** each side's _existing populated_ album as the mapping — rather than the normal "join
    creates a fresh empty mirror" — so nobody ends up with two copies of the album.
 3. **Bidirectional initial contribute** with non-destructive dedup (§3).
 
@@ -59,14 +62,16 @@ re-created, so no step ever produces a second album on either server: the album 
 album that changes, and the mapping that carries the share points at it (§4).
 
 ### Honest ceiling
+
 "Exact original Google state" is **best-effort**. Google Takeout re-encodes/strips EXIF per export,
-so the *same* shared photo exported by both people can arrive with **different bytes → different
+so the _same_ shared photo exported by both people can arrive with **different bytes → different
 checksums**. Reunification converges to "very close, deduped where content or metadata agree," not
 guaranteed pixel-identical where Google diverged the copies.
 
 ---
 
 ### The accept flow offers the reunion, it does not assume the join **[decided]**
+
 A late reunifier is the person this design is most likely to meet: they accepted a share for an album
 they already hold half of, and a plain join would leave them with **two albums of one name** — the
 duplicate the feature exists to remove. So the accept surface asks before it acts:
@@ -101,7 +106,8 @@ its own local real asset and suppresses the incoming ref** (never materialise a 
 - **Reversible:** un-suppress = reveal/materialise the incoming stub so both show ("un-dedupe").
 
 ### Why this is the unlock
-With *destructive* dedup, a false-positive match loses a photo, so matching would have to be near-
+
+With _destructive_ dedup, a false-positive match loses a photo, so matching would have to be near-
 perfect (impossible across mangled Takeout exports). With **non-destructive suppression, both error
 directions are cheap and reversible:**
 
@@ -111,20 +117,24 @@ directions are cheap and reversible:**
 So cross-server match precision becomes a **soft optimisation, not a correctness requirement.**
 
 ### Suppression is scoped to the ALBUM, not the mapping **[decided]**
+
 A mesh can offer one photo through two shares that land on the same album — three households holding
 the same Google album is the case this design exists for. Suppressing per mapping would materialise
 two stubs for it, and Immich cannot collapse them, because each stub carries a random tail so that it
 is a distinct asset. `existingCopyInAlbum` (`../src/sync/album-suppression.ts`) therefore asks
-whether *the album* already holds the photo, whichever mapping put it there, and `materialiseRef`
+whether _the album_ already holds the photo, whichever mapping put it there, and `materialiseRef`
 records the row against the second mapping rather than uploading again. Two ledger rows then carry
 one stub, so withdrawing one share's copy leaves the other's claim standing.
 
 ### It also dissolves ownership ambiguity for co-owned assets
+
 For photos **both** own, ownership is moot — each uses its own copy. Ownership only has to be
 resolved for photos that live on **one** side (those get the normal owner→member hotlink).
 
 ### Matching signals (merge-time, ours to control)
+
 Match an incoming ref to a local asset by:
+
 1. **Checksum** where the original bytes survived Takeout.
 2. Else **Takeout metadata** immich-go writes: original filename + `takenAt` + dimensions. These
    would be added as **optional `AssetRef` fields** (additive, legal under evolution rule 1).
@@ -132,11 +142,13 @@ Match an incoming ref to a local asset by:
 Normalise for recall (lowercase/trim), and **use the Google album date, not the import date.**
 
 ### Already safe
+
 Deletion propagation only ever touches **bot-owned stubs** (`deleteProxyAsset` refuses non-bot
 assets), so an **adopted user-owned copy is never auto-deleted.** The v1 guard already covers the
 "no lost data" requirement.
 
 ### Trade-off
+
 Adopted copies are **independent** — a later edit/caption on one side won't propagate the way a
 hotlink would. Fine for historical reunited photos; worth stating.
 
@@ -145,15 +157,18 @@ hotlink would. Fine for historical reunited photos; worth stating.
 ## 4. Ownership & matching metadata **[decided]**
 
 ### The normal model
+
 A shared album has **one owner** (real photos, `role: 'owner'`) and **members** (stubs,
 `role: 'member'`). Ownership was a deliberate act (the inviter), recorded only in `state.db`.
 
 ### The ambiguity Takeout creates
+
 Takeout **flattens the two distinctions the model depends on** — owner-vs-recipient, and
-my-photo-vs-shared-with-me. A restored server can hold *real copies* of photos it only held as
+my-photo-vs-shared-with-me. A restored server can hold _real copies_ of photos it only held as
 stubs, and every restored server looks like an owner of everything (bots/stubs never export).
 
 ### Resolution
+
 - For **reunification**, ambiguity is resolved by **consent** — it's an owner-to-owner
   request→accept (§6), so nothing is guessed.
 - For the **lost-`state.db` restore subset** (§9): ownership survives as long as **one** side kept
@@ -161,6 +176,7 @@ stubs, and every restored server looks like an owner of everything (bots/stubs n
   lost it is ownership truly gone → a human "who owns this?" decision. Never machine-guessed.
 
 ### Each person keeps their own album **[decided]**
+
 Immich has no ownership transfer, and the sidecar's only way to make someone a "member" of an
 album is to create a mirror album owned by a stand-in account (`ensureMirror`). So a reunification
 that re-assigned ownership would have to **create a second album on one server** — the duplicate
@@ -169,7 +185,7 @@ the feature exists to avoid. Instead:
 - **The album's own owner stays its owner**, on their own server. Nothing is transferred, and no
   album is created for the merge.
 - The peer's photos materialise into that album as **stand-in-owned stubs**, exactly as a
-  `contribute` share already does — so one album legitimately holds the owner's real photos *and*
+  `contribute` share already does — so one album legitimately holds the owner's real photos _and_
   the other person's stubs. Ownership of a real photo never changes hands.
 - **Overlaps are suppressed, not resolved**: a photo both sides hold stays each side's own real
   asset, with no stub for the peer's copy (§3). That is what keeps the union from double-showing.
@@ -178,6 +194,7 @@ the feature exists to avoid. Instead:
   Immich account is created for a person we have not been asked to share with.
 
 ### Only the album's owner can add its writers **[decided]**
+
 Adopting an album does not make the sidecar able to administer it. Immich scopes membership writes to
 the album's owner: the household admin key answers `403 albumUser.create` on an album a different
 person owns, and a viewer — which is what the house bot is — does too. So the accounts that will own
@@ -191,20 +208,22 @@ takes those accounts back off (`stripAlbumBots`): a membership left behind would
 sidecar's read access to a private album and make it indistinguishable from a live mirror.
 
 ### What a side publishes, and what "owned" means **[decided]**
+
 Matching runs against albums each side **owns** — never ones merely visible to them.
 
 - "Owned" is `albumUsers` containing the caller at `role: 'owner'`. An album response carries no
   `ownerId`; the owner is only inside `albumUsers`.
 - Owned-only is sufficient because Takeout **flattens ownership**: the Google Photos importer
-  creates an Immich album per Google album through *your* API key (`--sync-albums`, default on), so
+  creates an Immich album per Google album through _your_ API key (`--sync-albums`, default on), so
   a Google album that was someone else's arrives in your library as an album you own.
 - Owned-only is also the minimal disclosure, and it cannot publish the same album twice when two
   local people are both members of it.
 
 ### The album owner must travel in the match metadata
+
 Match metadata is **name + date + metadata + OWNER**. The owner field is required because:
 
-1. **It scopes the match to a user, not the server** — the match shows only in *that owner's* user
+1. **It scopes the match to a user, not the server** — the match shows only in _that owner's_ user
    panel, not server-wide or to the admin.
 2. **It routes the request owner-to-owner** (Alice's "Summer 2024" owner → Bob's owner).
 
@@ -218,14 +237,15 @@ directory being shared** (directory off → owner can't travel → can't match/r
 
 Each surface has exactly one job:
 
-| Surface | Job |
-|---|---|
-| **Admin panel** | *Server-owned* config: pair/unlink, server settings, API key, the "allow shared album recovery" toggle. |
-| **User panel** *(new — the keystone)* | *My* stuff: albums shared with/by me, the **matches list**, the **repair** button, **pending repair requests**, per-user settings (incl. per-user directory opt-in). |
-| **Native gestures** | Share menu = invite, leave album = leave (existing model, unchanged). |
-| **Comments** | The in-context/recovery escape hatch: discovery nudges, the public audit trail, and `/commands`. |
+| Surface                               | Job                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Admin panel**                       | _Server-owned_ config: pair/unlink, server settings, API key, the "allow shared album recovery" toggle.                                                                                                                                                                                                                                                                                                                                                                                   |
+| **User panel** _(new — the keystone)_ | _My_ stuff: albums shared with/by me, the **matches list**, and the action each row carries — **Invite** (`POST /me/invite`) when nothing is shared yet, **Accept invite** (`POST /me/reunite`) when the other half arrived as a share, and nothing but a waiting line when the invitation is the one they sent. Per-user settings and a separate pending-requests list are **not built**: the row itself is the request, and accepting is the same `/me/reunite` an accepted share uses. |
+| **Native gestures**                   | Share menu = invite, leave album = leave (existing model, unchanged).                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **Comments**                          | The in-context/recovery escape hatch: discovery nudges, the public audit trail, and `/commands`.                                                                                                                                                                                                                                                                                                                                                                                          |
 
 ### The user panel
+
 - **Cheap to build:** reuses `callerIdentity` auth — drop the `isAdmin` gate, scope everything to
   the caller's user id, same page-serving mechanism as the admin panel.
 - **Two real tasks:** (a) rigorous per-user authz scoping, fail-closed, never leak another user's
@@ -241,34 +261,41 @@ Each surface has exactly one job:
 ## 6. Consent, defaults & the repair flow **[decided]**
 
 ### Admin gate
+
 **"Allow shared album recovery"** — a server-level toggle, **default ON**, disclosed at link time.
 
 - **Default-on with disclosure**, not opt-in: most people linking servers want this, and opt-in has
   a bad failure mode (miss the popup → feature silently absent → confusion). Default-on fails gently
   (it's on, works, turn off if unwanted).
-- The **link-time popup is informational**, not a gate: *"Album recovery is on: linked servers can
-  see album names to find shared albums to reunite. Turn off in settings if you'd rather not."* The
+- The **link-time popup is informational**, not a gate: _"Album recovery is on: linked servers can
+  see album names to find shared albums to reunite. Turn off in settings if you'd rather not."_ The
   popup **writes** the durable toggle; the panel keeps the switch.
 - **Reciprocal:** each admin's link flow shows it; each consents for their side; if either declines,
   matching is off/one-directional.
-- **Caveat (write down, don't act on):** this rests on *trusted family servers*. If the audience
+- **Caveat (write down, don't act on):** this rests on _trusted family servers_. If the audience
   ever broadens to less-trusted peers, revisit the default.
 
 ### The flow **[decided: no auto-merge]**
+
 Albums **never auto-merge.** The flow is always:
 
 1. Matching runs (both sides opted in) and finds candidates.
 2. Each candidate surfaces in the **owner's** user panel (scoped by the owner field, §4), and a
    **local bot-comment nudge** is posted (§7).
-3. The album owner **sends a repair request** to the matching album's owner on the other server.
-4. That owner **accepts in their own panel**.
+3. The album owner **invites** — `POST /me/invite` gives the matching owner's account a membership
+   on that one album, which is the request. It is the same membership Immich's picker makes, and the
+   only sharing action the panel performs.
+4. That owner **accepts in their own panel** (`POST /me/reunite`), which moves the share onto the
+   album they already own, and their side reports it back with `POST /albums/:mappingId/reunified`
+   so the inviter's row leaves its candidate list too.
 5. The merge runs with non-destructive dedup (§3); a **public audit trail** is posted (§7).
 
 ### Why no auto-merge
+
 An unconfirmed auto-merge is where a **false match** bites (generic names like "Photos"/"2024"
 colliding). Keeping owner-to-owner confirmation is exactly where a human catches "those aren't the
 same album." Non-destructive + audit trail make even a bad merge reversible, but confirmation is
-cheap insurance. *(This supersedes an earlier "always repair / auto-reunite" idea — dropped.)*
+cheap insurance. _(This supersedes an earlier "always repair / auto-reunite" idea — dropped.)_
 
 ---
 
@@ -279,10 +306,11 @@ Consistent pattern throughout: **bot comment = the discovery/notification nudge;
 actionable content.**
 
 ### Match-found nudge
-When a match is found, post a **local bot comment** on the owner's album: *"We found a possible
-match to reunite this album — view in your panel [link]."*
 
-- *"Only the local user sees it"* resolves naturally: it's posted on the owner's **own pre-repair
+When a match is found, post a **local bot comment** on the owner's album: _"We found a possible
+match to reunite this album — view in your panel [link]."_
+
+- _"Only the local user sees it"_ resolves naturally: it's posted on the owner's **own pre-repair
   album**, which for a Takeout import is typically **owner-only**, so it's private by album
   membership — no per-user-comment trick needed.
 - Edge case: if the album already has local co-members, they'd see the nudge too — harmless, since
@@ -291,12 +319,13 @@ match to reunite this album — view in your panel [link]."*
   (copy-pasteable even if Immich doesn't render it clickable).
 
 ### Audit trail — **public** in comments
+
 Revised from "pair-private" to **public**: an album's history is legitimate shared context for
-everyone in it, like an edit history; members see contents change anyway, so hiding *why* is the odd
+everyone in it, like an edit history; members see contents change anyway, so hiding _why_ is the odd
 choice. This also removes the wrinkle that **Immich has no native per-user-private comment.**
 
-- **Comments** hold the trail + discoverable prompts: *"Repair requested by X," "accepted by Y,"
-  "Repair successful — 3 photos merged by non-destructive dedupe, reply `un-dedupe` to see all."*
+- **Comments** hold the trail + discoverable prompts: _"Repair requested by X," "accepted by Y,"
+  "Repair successful — 3 photos merged by non-destructive dedupe, reply `un-dedupe` to see all."_
 - **User panel** holds the actionable bits (pending requests, repair button, settings); a request
   that is **rejected or times out** has a line only there, because it never created an album the
   two sides share, and writing to the peer's album is not something an ungranted request may do.
@@ -337,27 +366,30 @@ A user-level control surface that reuses the already-synced comment channel — 
 with no native gesture, without needing admin rights.
 
 ### Governing UX principle
+
 > A user who learns **zero** commands must have a fully working experience. Commands are progressive
 > enhancement / recovery, **never** the happy path.
 
 Order of preference for every interaction:
+
 1. **Automatic** (e.g. dedup runs on merge, no input).
 2. **Native gesture** (share menu = invite, leave = leave).
 3. **Discoverable panel button** (a "Reunite these albums" button beats a memorised `/merge`).
-4. **In-context prompted command** — a bot comment that says *"reply `un-dedupe` to see all"* is
+4. **In-context prompted command** — a bot comment that says _"reply `un-dedupe` to see all"_ is
    discoverable **at the moment it's relevant**; the user reads what to type, never recalls it cold.
 5. **Bare unprompted command** — only for power users who'd rather type it.
 
-*A command you must memorise and issue cold is a design failure.*
+_A command you must memorise and issue cold is a design failure._
 
 ### Security model
+
 - **Only act on comments authored by the server's own local users** — never on bot-materialised
   copies. This single rule gives, at once: cross-server dedup (only one server executes),
   spoof-resistance (materialised comments can't trigger), and natural authz (actor is a real,
   identified local member).
 - **Command comments + bot responses are never synced** — filtered from the push (bot-authored
   comments are already excluded; the new bit is filtering human-authored command comments). This
-  keeps chatter out of the shared conversation *and* collapses the cross-server dedup concern
+  keeps chatter out of the shared conversation _and_ collapses the cross-server dedup concern
   entirely (a command never leaves its origin).
 - **Strictly album-scoped, user-capability-bounded** — never server-level (no pair/unlink/config via
   comments). A comment is a weaker credential than a panel session → strictly smaller capability set.
@@ -366,12 +398,14 @@ Order of preference for every interaction:
   existing `seen_activity` ledger) so edits/re-syncs don't re-run.
 
 ### Architecture line this draws
-**Comments are each user's *local* control surface; the iroh peer protocol is the *cross-server*
+
+**Comments are each user's _local_ control surface; the iroh peer protocol is the _cross-server_
 transport.** So `/repair` executes locally, then initiates reunification over iroh; the other
-household accepts via *their own* local `/accept`. The comment channel never carries cross-server
+household accepts via _their own_ local `/accept`. The comment channel never carries cross-server
 coordination.
 
 ### Candidate command set
+
 `/repair` (kick off reunification without the panel), `/accept`, `/dedup` → `/un-dedupe` / `/show`
 (reveal suppressed dupes — non-destructive), `/status`, `/retry`, `/help`.
 
@@ -381,9 +415,9 @@ coordination.
 
 - **Restore after a rebuild (the lost-`state.db` subset of reunification).** If `state.db` was
   backed up: mappings point at stale Immich ids → a re-anchor pass (re-resolve album by name,
-  refresh ledger `originAsset` when a checksum matches but the id changed). *Note the current
+  refresh ledger `originAsset` when a checksum matches but the id changed). _Note the current
   reconcile short-circuits on a known checksum, so it won't refresh a stale `originAsset` today —
-  that's the additive change.* If `state.db` was lost: re-pair (works today, manual); seamless =
+  that's the additive change._ If `state.db` was lost: re-pair (works today, manual); seamless =
   additive **identity export/import** so a restore keeps the same key and skips re-pairing.
 - **"Store shared assets locally" toggle.** Materialise full bytes instead of ~2KB hotlink stubs —
   real local replication. Additive (the byte path already fetches full originals); wants a
@@ -407,9 +441,9 @@ coordination.
   names would auto-merge unrelated albums. Always owner-to-owner request→accept instead (§6).
 - **Hash tokens / HMAC / PSI / masked album names for matching.** Security theater between trusted,
   deliberately-paired, opted-in servers — you're already streaming full photos/comments; the album
-  *name* is trivially less sensitive, and low-entropy names are brute-forceable by the peer anyway.
+  _name_ is trivially less sensitive, and low-entropy names are brute-forceable by the peer anyway.
   The opt-in (default-on-with-disclosure) is the real control. Match on **plaintext** names past
-  consent; normalise for *recall*, not privacy. *(Normalisation stays; the obfuscation is struck.)*
+  consent; normalise for _recall_, not privacy. _(Normalisation stays; the obfuscation is struck.)_
 - **Native Immich dedup as the cross-server matcher.** Can't work: our stubs are generic ~2KB
   placeholder JPEGs with none of the real photo's visual content, so CLIP can't pair stub↔real (and
   would junk-pair stub↔stub); the pair is also cross-owner (bot vs user), and there's no API to

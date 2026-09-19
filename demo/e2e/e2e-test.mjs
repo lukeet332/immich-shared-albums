@@ -925,6 +925,14 @@ stage('native album invitations, per person (no share link)');
       let mirrored = await findOnB('natively invited album');
       check('member mirrors an invited album automatically, with no link', !!mirrored,
             mirrored ? '' : 'timed out');
+
+      // Read the invitation contract HERE, while the invitation is still an ordinary one. This stage
+      // goes on to reunite this album, and the origin then legitimately learns about it
+      // (`POST /albums/:mappingId/reunified`), so a later read can no longer answer the question the
+      // additive rule asks: does an ORDINARY invitation carry no trace of the category?
+      const asInvited = irohProbe(bKeys, await endpointOf(ORIGIN_DIRECT), '/invitations');
+      const ordinaryInvitation =
+        asInvited.status === 200 ? asInvited.json?.invitations || [] : null;
       if (mirrored) {
         const arrived = await until(async () => {
           const x = await albumAssets(B, mirrored.key, mirrored.album.id); return x.length >= 1 ? x : null;
@@ -1232,10 +1240,16 @@ stage('native album invitations, per person (no share link)');
       // The reunified category is ADDITIVE: absent means "an ordinary share". An ordinary
       // invitation must therefore carry no trace of it — a build that always sent the field would
       // make every share look reunified to a peer that understands it, which is the failure this
-      // pins. The present case needs a real reunification, and lands with adoption.
+      // pins. Read at invitation time (`ordinaryInvitation`), because this stage reunites the album
+      // later on and the origin is told.
       check('an ordinary invitation carries no reunified category, so absent still means ordinary',
-            !!listedBefore?.length && listedBefore.every(i => !('reunified' in i)),
-            JSON.stringify(listedBefore?.map(i => Object.keys(i).sort())));
+            !!ordinaryInvitation?.length && ordinaryInvitation.every(i => !('reunified' in i)),
+            JSON.stringify(ordinaryInvitation?.map(i => Object.keys(i).sort())));
+      // And the present case: after the adoption above, the receiver reports the reunion back, so
+      // the ORIGIN's own invitation carries the category — which is what clears its panel row.
+      check('a reunited invitation carries the category, so the origin learns it happened',
+            !!listedBefore?.some(i => i.album?.name === 'natively invited album' && i.reunified === true),
+            JSON.stringify(listedBefore?.map(i => [i.album?.name, i.reunified])));
       check('an invitation names the people it is for, not just the household',
             !!listedBefore?.[0]?.forUserIds?.length, JSON.stringify(listedBefore?.[0]?.forUserIds));
 
@@ -1622,6 +1636,91 @@ stage('reunification matching: two servers each find the other half of an album'
   }
 }
 
+// The panel's Invite, end to end. It is the ONE sharing act the sidecar performs for a human, so it
+// is pinned where it would do damage: a request must not be able to share an album the caller does
+// not own, nor reach a person the peer never named. The invitation then travels the ordinary
+// channel, and the fact comes back over the wire so the inviter's own list clears.
+stage('panel invite: the panel shares the album, the other side accepts');
+{
+  const bPeerPubs = (readSidecarPeers('b-sidecar') || []).map(p => p.pub);
+  const cPeers = readSidecarPeers('c-sidecar') || [];
+  const cPub = bPeerPubs[0];
+  const bPub = (cPeers.find(p => bPeerPubs.includes(p.pub)) || {}).pub || (cPeers[0] || {}).pub;
+  if (!cPub || !bPub) requireState("both sides' peer lists from their state.db");
+
+  if (cPub && bPub) {
+    const cSidecar = process.env.C_SIDECAR || `http://localhost:${PORT('PORT_SIDECAR_C', 8302)}`;
+    const name = `Invite probe ${Date.now() % 100000}`;
+    const bAlbum = await api(B, BKEY, '/albums', j({ albumName: name }));
+    await api(A, AKEY, '/albums', j({ albumName: name }));
+    const aMe = await api(A, AKEY, '/users/me');
+    const bMe = await api(B, BKEY, '/users/me');
+
+    // A panel visit publishes before it can invite, and the invite is checked against what the peer
+    // published: that is how the operation refuses a pairing the other side never offered. The lane
+    // has to do the same thing a panel does, or it is testing a request no UI would ever make.
+    const publishTo = (sidecar, key, peerPub) =>
+      fetch(`${sidecar}/immich-shared-albums/me/albums/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+        body: JSON.stringify({ peer: peerPub }),
+      }).then(async r => ({ status: r.status, json: await r.json().catch(() => null) }));
+    const offered = [await publishTo(BS, BKEY, cPub), await publishTo(cSidecar, AKEY, bPub)];
+    check('both sides offered their albums first, as a panel visit does',
+          offered.every(o => o.status === 200),
+          JSON.stringify(offered.map(o => `${o.status}:${o.json?.published}`)));
+
+    const invite = (sidecar, key, body) =>
+      fetch(`${sidecar}/immich-shared-albums/me/invite`, jAuth(body, key)).then(async r => ({ status: r.status, json: await r.json().catch(() => null) }));
+    const matchesFor = async (sidecar, key, ownerName) =>
+      (await (await fetch(`${sidecar}/immich-shared-albums/me/matches`, { headers: { 'x-api-key': key } })).json()).matches
+        .find(m => m.mine.name === name && m.theirs.ownerName === ownerName);
+
+    const notMine = await invite(BS, BKEY, { peer: cPub, albumName: `${name} (not mine)`, ownerUserId: aMe.id });
+    check('an invite for an album the caller does not own is refused', notMine.status === 400,
+          `status=${notMine.status} ${JSON.stringify(notMine.json)}`);
+    const stranger = await invite(BS, BKEY, { peer: 'not-a-linked-peer', albumName: name, ownerUserId: aMe.id });
+    check('an invite to a server this household is not linked to is refused', stranger.status === 404,
+          `status=${stranger.status}`);
+
+    const invited = await invite(BS, BKEY, { peer: cPub, albumName: name, ownerUserId: aMe.id });
+    check('the invite is accepted for the caller\'s own album and that person', invited.status === 200,
+          `status=${invited.status} ${JSON.stringify(invited.json)}`);
+    const shared = await api(B, BKEY, `/albums/${bAlbum.id}?withoutAssets=true`);
+    const members = (shared.albumUsers || []).map(au => `${au.user && au.user.name}:${au.role}`);
+    check('and it is a real membership on the album in Immich, added as the caller',
+          (shared.albumUsers || []).some(au => au.user && au.user.id !== bMe.id && au.role === 'editor'),
+          `albumUsers=${JSON.stringify(members)}`);
+
+    const waiting = await matchesFor(BS, BKEY, aMe.name);
+    check("the inviter's row now waits instead of offering the button again",
+          !!waiting && waiting.step && waiting.step.kind === 'waiting',
+          `step=${JSON.stringify(waiting && waiting.step)}`);
+
+    let accept = null;
+    for (let waited = 0; waited < HOLD_DEADLINE_MS && !accept; waited += SYNC_POLL_MS) {
+      const m = await matchesFor(cSidecar, AKEY, bMe.name);
+      if (m && m.step && m.step.kind === 'accept' && m.mappingId) accept = m;
+      else await sleep(SYNC_POLL_MS);
+    }
+    check('the other side is offered an invitation it can accept', !!accept,
+          accept ? `mapping=${String(accept.mappingId).slice(0, 8)}` : 'no accept step appeared');
+
+    if (accept) {
+      const taken = await fetch(`${cSidecar}/immich-shared-albums/me/reunite`, jAuth({ mappingId: accept.mappingId, albumName: name }, AKEY));
+      check('accepting it reunites the pair', taken.ok, `status=${taken.status} ${JSON.stringify(await taken.json().catch(() => null))}`);
+
+      let cleared = false;
+      for (let waited = 0; waited < HOLD_DEADLINE_MS && !cleared; waited += SYNC_POLL_MS) {
+        cleared = !(await matchesFor(BS, BKEY, aMe.name));
+        if (!cleared) await sleep(SYNC_POLL_MS);
+      }
+      check("the inviter's list stops offering the pair, told over the wire", cleared,
+            cleared ? '' : 'the row survived the reunion');
+    }
+  }
+}
+
 stage('route prefix rename + legacy compatibility');
 {
   const code = async (u, init) => (await fetch(u, init).catch(() => ({ status: 0 }))).status;
@@ -1982,12 +2081,23 @@ stage('panel manages server links (unlink)');
     check('no account for that server survives the unlink', survivors.length === 0,
           survivors.map(u => u.name).join(', ') || '(none)');
     // SECURITY: deleting the accounts takes their album memberships with them, and nothing may be
-    // left behind for a later re-link to misread as a fresh invitation.
+    // left behind for a later re-link to misread as a fresh invitation. The hazard is specific to
+    // the accounts this unlink just deleted, so the check is scoped to them — this server holds other
+    // links (it pairs with D two stages up), whose people are members here by design. An account that
+    // is gone from `/admin/users?withDeleted=true` but still listed on an album is exactly the leak.
+    const personIdsBefore = new Set(
+      (await api(B, BKEY, '/admin/users?withDeleted=true').catch(() => []))
+        .filter(u => (u.email || '').startsWith('person-'))
+        .map(u => u.id)
+    );
     const leftBehind = [];
     for (const al of await api(B, BKEY, '/albums').catch(() => [])) {
       const d = await api(B, BKEY, `/albums/${al.id}?withoutAssets=true`).catch(() => null);
       for (const au of d?.albumUsers || []) {
-        if ((au.user?.email || '').startsWith('person-')) leftBehind.push(au.user.email);
+        const uid = au.user?.id;
+        if (personIdsBefore.has(uid) && !afterUsers.some(u => u.id === uid)) {
+          leftBehind.push(`${al.albumName}: ${au.user.email}`);
+        }
       }
     }
     check('no membership is left behind for a re-link to misread as an invitation',

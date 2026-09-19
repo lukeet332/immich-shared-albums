@@ -35,6 +35,7 @@ import { leaveAlbum } from './leave.ts';
 import { diffInvitees, invitationMirrorWasWithdrawn } from './invitees.ts';
 import { recordLoopTick } from './status.ts';
 import crypto from 'node:crypto';
+import { refreshPeerIndexes } from './album-index.ts';
 
 /**
  * Our own human users, as offered to a paired household so they can invite one of us
@@ -282,6 +283,9 @@ export async function detectInvitesOnce() {
  * pushes, because a member with no inbound reachability still syncs perfectly well by pulling
  * and a push-based invite would fail for exactly those households.
  */
+/** The mappings whose membership refusal has already been reported, so it is said once, not per tick. */
+const refusedMemberships = new Set<string>();
+
 export const invitationsFor = (peerPub: string) =>
   state.mappings
     // ONLY invitation-shaped shares. Offering link-redeemed ones here would re-mirror albums
@@ -308,6 +312,20 @@ export const invitationsFor = (peerPub: string) =>
 async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
   const host = mapping.hostSlug ? state.contributors[mapping.hostSlug] : undefined;
   if (!host?.apiKey) return;
+  if (mapping.adopted) {
+    // Adopted means a local human owns it, so the sidecar's key cannot change its membership whoever
+    // the invitation names — say so once instead of reading the album and the user table to reach a
+    // 403 every tick.
+    if (!refusedMemberships.has(mapping.id)) {
+      refusedMemberships.add(mapping.id);
+      const peer = state.peers.find(p => p.pub === mapping.peer);
+      log(
+        `"${mapping.albumName}" is reunified — its members are the local owner's to change, so changes made ` +
+          `at "${peer?.name ?? mapping.peer}" need the reunion re-run from the panel`
+      );
+    }
+    return;
+  }
   let alb;
   try {
     alb = await callAs(readCredsFor(mapping), `/albums/${mapping.albumId}`);
@@ -315,24 +333,11 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
     return;
   } // album gone: the withdrawal path will clean up
   const humans = (await immichJson('/admin/users')).filter(u => !isUtilityEmail(u.email));
-  // The set arithmetic lives in invitees.ts so it can be tested without a container — this is
-  // the only path that removes a real person from a real album.
   const { add, remove } = diffInvitees({
     wanted: forUserIds,
     current: (alb.albumUsers || []).filter(au => au.role !== 'owner' && au.user?.id).map(au => au.user.id),
     local: humans.map(u => u.id),
   });
-  // An adopted album belongs to a local human, so the stand-in key cannot widen it — Immich answers
-  // `403 albumUser.create`, every cycle, forever. The people the invitation NAMES were placed at
-  // adoption on the owner's credential (album-grant.ts); anything the origin changes afterwards
-  // needs that owner again, so say so once per change instead of looping the refusal.
-  if (mapping.adopted && (add.length || remove.length)) {
-    log(
-      `"${mapping.albumName}" is reunified — ${add.length} person(s) to add, ${remove.length} to remove ` +
-        `need the album's owner; re-run the reunion from the panel`
-    );
-    return;
-  }
   if (add.length) {
     try {
       // same vanilla-parity rule as p2p/mirror.ts: the share's permission picks the role
@@ -460,6 +465,11 @@ export function startInviteLoop() {
     void (async () => {
       try {
         await detectInvitesOnce();
+        // `void`: the index refresh dials every peer (bounded at INDEX_REFRESH_DEADLINE_MS each), and
+        // the tick must not wait on that — a reconcile that has 404s to retire shares this loop, and
+        // holding the tick open for a peer's dial is how a retirement that should take a cycle takes
+        // two minutes. Fire it and let it land.
+        void refreshPeerIndexes().catch(e => log(`peer album indexes: ${e.message}`));
       } catch (e) {
         log(`invite detection error: ${e.message}`);
       }
