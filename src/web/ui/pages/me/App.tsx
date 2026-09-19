@@ -36,11 +36,14 @@ export const App = () => {
 
   // The match carries the peer for display and the names for the pair; the ids the server needs
   // come from the same records it built the list from.
-  /** One reload for both lists: they describe one state, and a mutation changes both. */
+  /** One reload for both lists: they describe one state, and a mutation changes both.
+   *
+   *  Settled INDEPENDENTLY. `Promise.all` rejects the pair if either read fails, which would report a
+   *  mutation that succeeded as a failure and leave both lists showing the state before it. */
   const refreshBoth = async () => {
-    const [freshMatches, freshAlbums] = await Promise.all([myMatches(), myAlbums()]);
-    setMatches(freshMatches.matches);
-    setAlbums(freshAlbums.albums);
+    const [freshMatches, freshAlbums] = await Promise.allSettled([myMatches(), myAlbums()]);
+    if (freshMatches.status === 'fulfilled') setMatches(freshMatches.value.matches);
+    if (freshAlbums.status === 'fulfilled') setAlbums(freshAlbums.value.albums);
   };
 
   const onReunite = async (m: ActionableMatch) => {

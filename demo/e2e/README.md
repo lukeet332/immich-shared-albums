@@ -26,9 +26,17 @@ docker run --rm --network host \
    /work/node_modules/.bin/playwright install chromium && node browser-test.mjs'
 ```
 
-Mount the browser cache as a **named volume, not a host path**: the path inside whatever runs the
-command is not the path the Docker daemon sees, so a bind mount there silently resolves to an empty
-directory and the browser reports itself missing.
+Three details that each cost a cycle:
+
+- Mount the browser cache as a **named volume, not a host path**. The path inside whatever runs the
+  command is not the path the Docker daemon sees, so a bind mount there silently resolves to an empty
+  directory and the browser reports itself missing.
+- **Keep `install-deps` in the command.** The browser is cached in the volume; the system libraries
+  are installed by apt and are therefore per-container. Dropping it gives
+  `error while loading shared libraries: libnspr4.so`.
+- `--network host` is what makes the rig reachable at all: its ports are bound to the host's
+  loopback, and a normally-networked container cannot reach those. `--add-host` then points
+  `host.docker.internal` at `127.0.0.1`, which is where the share page is browsed from.
 
 First time only: put admin API keys in `demo/.env` (`B_API_KEY=...`) and
 `demo/household-c/.env` (`C_API_KEY=...`). On a fresh machine or CI,

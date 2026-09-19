@@ -21,6 +21,11 @@ export const Accept = ({ household }: { household: string }) => {
   const [joined, setJoined] = useState<JoinResult | null>(null);
   const [message, setMessage] = useState('');
   const [reunion, setReunion] = useState<Reunion | null>(null);
+  // False while the preview is in flight, because the primary button must not be usable before the
+  // answer exists: a click during that window joins SEPARATELY and creates the second album the
+  // preview was asked about, which is the one thing this page exists to prevent. True already when
+  // there is no album name to ask about (an older share page), so nothing waits for nothing.
+  const [previewSettled, setPreviewSettled] = useState(!invite?.albumName);
 
   // Wait for a session rather than demanding one up front: people arrive here from someone else's
   // share page, sign in to their own Immich in another tab, and come back to this one.
@@ -57,9 +62,16 @@ export const Accept = ({ household }: { household: string }) => {
   useEffect(() => {
     if (!signedInUser || !invite?.albumName) return;
     let unmounted = false;
-    void preview(invite.albumName).then(r => {
-      if (!unmounted) setReunion(r.reunion ?? null);
-    });
+    setPreviewSettled(false);
+    void preview(invite.albumName)
+      .then(r => {
+        if (!unmounted) setReunion(r.reunion ?? null);
+      })
+      // Settled whatever happened, including the timeout inside `preview`: a preview that cannot
+      // answer must fail OPEN, by enabling the ordinary join, not closed by disabling it forever.
+      .finally(() => {
+        if (!unmounted) setPreviewSettled(true);
+      });
     return () => {
       unmounted = true;
     };
@@ -152,7 +164,7 @@ export const Accept = ({ household }: { household: string }) => {
       )}
       <button
         id="go"
-        disabled={!signedInUser || joinInProgress}
+        disabled={!signedInUser || joinInProgress || !previewSettled}
         class={joinInProgress ? 'busy' : ''}
         onClick={() => acceptInvite(reunion?.albumId)}
       >
@@ -160,6 +172,11 @@ export const Accept = ({ household }: { household: string }) => {
           <>
             <span class="spin" />
             Joining — syncing photos…
+          </>
+        ) : !previewSettled ? (
+          <>
+            <span class="spin" />
+            Checking your albums…
           </>
         ) : reunion ? (
           `Reunite with “${reunion.name}” and join`

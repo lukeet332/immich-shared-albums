@@ -70,11 +70,18 @@ guaranteed pixel-identical where Google diverged the copies.
 A late reunifier is the person this design is most likely to meet: they accepted a share for an album
 they already hold half of, and a plain join would leave them with **two albums of one name** — the
 duplicate the feature exists to remove. So the accept surface asks before it acts:
-`POST /join/preview` redeems the invite, reads the caller's OWN albums on their credential, and
-answers with the album plus whether they own one of that name (`findAdoptableAlbum`, the same
-function `unifyOwnAlbum` re-derives server-side, so a preview can never widen what adoption allows).
-The page then offers "reunite with your album" and passes `adopt` to `POST /join`, which is the path
-that already exists and is validated against the caller's own list rather than the browser's word.
+`POST /join/preview` answers whether this household already owns an album of the link's name
+(`findAdoptableAlbum`, the same function `unifyOwnAlbum` re-derives server-side, so a preview can
+never offer a marriage the adoption would refuse). The page then offers "reunite with your album" and
+passes `adopt` to `POST /join`, which is the path that already exists and is validated against the
+caller's own list rather than the browser's word.
+
+**The preview does NOT redeem the link, and that is the whole constraint on it.** Redeeming is not a
+read: it pins the caller as a peer on the ORIGIN and writes an owner mapping there. A preview that
+redeemed would enrol a household on someone else's server merely because a page opened. So the album
+name travels the other way — the share page already knows it and puts it in the accept link, and the
+preview needs nothing else. An older share page that sends no name simply offers no reunion, and the
+person lands in an ordinary share with the panel (§5) to reunite the two halves there.
 
 Sign-in is required, as it is for `/join`: the comparison is made with the caller's credential,
 because only Immich can answer which albums they own, and a caller who is not signed in has nothing
@@ -306,8 +313,9 @@ choice. This also removes the wrinkle that **Immich has no native per-user-priva
   lives: `auditLine(mappingId, albumId, event, text)` writes the tag for the event and a `local:` tag
   for the activity it posted, so the line is neither repeated nor pushed back to the peer.
 - **The reunion's line is posted at adoption** (`unifyOwnAlbum`, and `ensureMirror`'s adopt branch),
-  because that is the request carrying the album owner's credential — the same reason the stub
-  accounts are granted there (§4). A line on an album a human owns cannot be written by a later loop.
+  because that is the request carrying the album owner's credential — the same request that runs
+  `grantAlbumWriters` and `grantInvitedHumans` (§4), which is what puts the bot on the album so it can
+  comment at all. A line on an album a human owns cannot be written by a later loop.
 - **Comments sync covers the human replies** on both albums (owner mapping pushes, member mapping
   pulls canonical) — the trail is what stays put, not the conversation.
 - **A trail line needs a membership, and only the album's owner can grant one.** Posting to

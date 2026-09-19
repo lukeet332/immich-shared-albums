@@ -17,6 +17,10 @@ set -uo pipefail
 OUT=${1:-${E2E_TRACE_OUT:-/tmp/e2e-trace.jsonl}}
 SAMPLE_MS=${E2E_SAMPLE_MS:-1000}
 STATS_EVERY=${E2E_STATS_EVERY:-5}   # docker stats is the expensive part; host figures are cheap
+# A zero (or anything non-numeric) would make the modulo below a division by zero — which `set -u`
+# does not catch, so the sampler would simply die on its first tick with no output at all.
+case "$STATS_EVERY" in ''|*[!0-9]*) STATS_EVERY=1 ;; esac
+[ "$STATS_EVERY" -ge 1 ] || STATS_EVERY=1
 
 # /proc/meminfo and /proc/loadavg describe the whole host even from inside a container, which is
 # what matters here: the rig's peak is only interesting in terms of what it did to the host.

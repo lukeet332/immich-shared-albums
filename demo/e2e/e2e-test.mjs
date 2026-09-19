@@ -1044,14 +1044,22 @@ stage('native album invitations, per person (no share link)');
           // bot: a line in the name of the person who clicked would be a comment they never wrote,
           // and a second copy is what a retry loop leaves when idempotency is hoped for rather than
           // recorded.
-          const audit = await until(async () => {
+          const auditLines = async () => {
             const acts = await api(B, BKEY, `/activities?albumId=${bOwnBefore.id}&type=comment`);
-            const lines = (acts || []).filter(a => /^Reunited with /.test(a.comment || ''));
-            return lines.length ? lines : null;
-          }, 60000);
+            return (acts || []).filter(a => /^Reunited with /.test(a.comment || ''));
+          };
+          // HELD at one, not merely seen to be one. `until` returns the moment a line exists, so a
+          // second copy arriving a cycle later would slip past a single sample — and idempotency is a
+          // claim about every retry, which is exactly what `stable` measures.
+          const heldAudit = await stable(
+            async () => [(await auditLines()).length],
+            TWO_CYCLES_MS,
+            HOLD_DEADLINE_MS
+          );
+          const auditFirst = (await auditLines())[0];
           check('the reunion leaves one audit line in the album, authored by our bot',
-                !!audit && audit.length === 1 && audit.every(a => isBot(a.user?.email)),
-                audit ? `${audit.length} line(s) from ${audit.map(a => a.user?.name).join(', ')}` : 'none');
+                !!heldAudit && heldAudit[0] === 1 && isBot(auditFirst?.user?.email),
+                `count ${JSON.stringify(heldAudit)} from ${auditFirst?.user?.name ?? 'nobody'}`);
 
           // ECHO: A's count must HOLD, not merely read true once. An unseeded ledger offers B's
           // whole album back, which shows up as a count that keeps climbing.

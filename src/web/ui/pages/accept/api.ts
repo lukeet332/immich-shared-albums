@@ -1,6 +1,9 @@
 /** web/ui/pages/accept/api.ts — the accept page's server calls: whoami, join, album fill, deeplink. See ../../../http-router.md. */
 const ROUTE_PREFIX = '/immich-shared-albums';
 
+/** The join button waits for the preview, so the preview has to finish. */
+const PREVIEW_TIMEOUT_MS = 8000;
+
 export type Me = { id: string; name: string };
 
 /** Whoever is signed in to THIS Immich, or null. Their session, not ours to invent. */
@@ -38,6 +41,7 @@ export const preview = async (albumName: string): Promise<{ albumName?: string; 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ albumName }),
+      signal: AbortSignal.timeout(PREVIEW_TIMEOUT_MS),
     });
     return r.ok ? await r.json() : {};
   } catch {
