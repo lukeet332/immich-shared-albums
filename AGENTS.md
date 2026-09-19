@@ -100,6 +100,16 @@ worse without saying so.**
   so a rule changed here changes what it enforces, with no second copy to drift. It is deliberately
   **not** a required status check: the gates stay the fast checks and the two e2e lanes, because a
   bot's request-changes must never block a merge that CI passed.
+- **Answer a review finding in its own thread, not in a PR comment.** A top-level comment hangs off
+  no line: the reviewer sees conversation rather than an answer and cannot mark anything addressed,
+  because the reply carries no `in_reply_to_id`, path or line to review against. Reply inside the
+  thread (`POST /repos/{owner}/{repo}/pulls/{n}/comments/{id}/replies`), saying what changed and
+  where it was verified, and read the reviewer's own replies back before treating a finding as
+  closed — CodeRabbit answers in-thread and says when one is still open. A top-level comment is for
+  what names no line: CI status, why a PR is merging.
+- **Resolve a thread only once its fix is verified.** The reviewer resolves its own; a thread that
+  outlives that closes with `resolveReviewThread` (GraphQL, by `PRRT_…` id) — never before the change
+  is committed and CI has seen it.
 - **Three traps code cannot catch for you:** a rig recreated by hand instead of via
   `run-mock-e2e.sh` keeps stale bot keys in `state.db`, and the resulting `Invalid API key`
   failures look like product bugs; a browser-lane run on a dev machine needs
