@@ -145,7 +145,12 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
       hostSlug,
       via: req.via ?? 'link',
       adopted: true,
-      ...(req.reunified ? { reunified: true } : {}),
+      // ADOPTING IS REUNIFYING, so this records the act rather than only echoing what the origin
+      // claimed. The panel lists reunified albums by this field, so without it a person who reunited
+      // from the accept page has no Un-reunite to undo it with — while that page's own copy promises
+      // them one. The wire flag still travels for an ordinary mirror (below), where it is the only
+      // thing that can say the share is part of a reunion.
+      reunified: true,
     };
     // Seeded rows carry no origin asset, so the deletion sweep skips them: these are this person's
     // own photos, and a peer withdrawing its copy must never remove them.
