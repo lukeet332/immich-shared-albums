@@ -301,9 +301,10 @@ export async function unifyOwnAlbum(
       log(`post-reunion reconcile for "${own.name}": ${e.message} — the loops will retry`)
     );
   }
-  log(
-    `DBG reunion landed: mapping.albumId=${mapping.albumId.slice(0, 8)} was=${previousAlbumId.slice(0, 8)} name="${own.name}"`
-  );
+  if (CFG.reconcileDebug)
+    log(
+      `DBG reunion landed: mapping.albumId=${mapping.albumId.slice(0, 8)} was=${previousAlbumId.slice(0, 8)} name="${own.name}"`
+    );
   return { album: own.name, seeded: assets.length };
 }
 
