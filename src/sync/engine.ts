@@ -194,6 +194,9 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
       // An unchanged version normally means nothing to do. But if store-shared-locally is on and we
       // still hold un-upgraded stubs, pull the manifest anyway so the backfill can keep draining.
       const backfillPending = storeSharedAssetsLocally() && hasStubRows(mapping.id);
+      log(
+        `DBG early-return check "${mapping.albumName}": version=${JSON.stringify(version)} cursor=${JSON.stringify(mapping.remoteVersion)} backfill=${backfillPending} -> wouldReturn=${!!(version && version === mapping.remoteVersion && !backfillPending)}`
+      );
       if (version && version === mapping.remoteVersion && !backfillPending) return;
       // structured field preferred; the packed-string parse remains for protocol-2 peers
       expectedCount = Number.isFinite(vr.json?.assetCount)
@@ -231,11 +234,16 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
       }
     }
     const missing = manifest.filter(ref => !seenHas(mapping.id, ref.checksum));
+    if (manifest.length || missing.length)
+      log(
+        `DBG materialise "${mapping.albumName}": manifest=${manifest.length} missing=${missing.length} ledger=${store.seenForMapping(mapping.id).length}`
+      );
     let allOk = true;
     for (const ref of missing) {
       try {
-        if (await materialiseRef(mapping, peer, ref))
-          log(`reconciled missed ref into "${mapping.albumName}"`);
+        const ok = await materialiseRef(mapping, peer, ref);
+        log(`DBG materialise ref ${ref.checksum?.slice(0, 10)} -> ${ok}`);
+        if (ok) log(`reconciled missed ref into "${mapping.albumName}"`);
         else allOk = false;
       } catch (e) {
         allOk = false;
