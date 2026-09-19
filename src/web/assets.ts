@@ -20,10 +20,12 @@ export const DIST = {
   'accept.js': read('accept.js'),
   'share.js': read('share.js'),
   'me.js': read('me.js'),
+  'root.js': read('root.js'),
   'panel.css': read('panel.css'),
   'accept.css': read('accept.css'),
   'share.css': read('share.css'),
   'me.css': read('me.css'),
+  'root.css': read('root.css'),
   'sign-in.css': read('sign-in.css'),
 } as const;
 
@@ -31,6 +33,7 @@ const PANEL_HTML = read('panel.html');
 const ACCEPT_HTML = read('accept.html');
 const SHARE_HTML = read('share.html');
 const ME_HTML = read('me.html');
+const ROOT_HTML = read('root.html');
 const SIGN_IN_HTML = read('sign-in.html');
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
@@ -40,6 +43,8 @@ export const panelPage = () => PANEL_HTML.replaceAll('%%HOUSEHOLD%%', escapeHtml
 export const acceptPage = () => ACCEPT_HTML.replaceAll('%%HOUSEHOLD%%', escapeHtml(CFG.name));
 
 export const mePage = () => ME_HTML.replaceAll('%%HOUSEHOLD%%', escapeHtml(CFG.name));
+
+export const rootPage = () => ROOT_HTML.replaceAll('%%HOUSEHOLD%%', escapeHtml(CFG.name));
 
 export const signInPage = (what: string) =>
   SIGN_IN_HTML.replaceAll('%%HOUSEHOLD%%', escapeHtml(CFG.name)).replaceAll('%%WHAT%%', escapeHtml(what));

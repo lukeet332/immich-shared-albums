@@ -37,6 +37,11 @@ origin's **endpoint token** (so a visitor's sidecar can dial it over iroh), and 
 over the native album in a same-origin iframe. `?native=1` is the untouched Immich page — what
 the iframe loads, and where dismissing the card navigates.
 
+**`/immich-shared-albums/` is the chooser.** It is the one URL worth remembering, so it is gated on a
+session rather than on admin: it asks Immich who is calling (`pages/root/App.tsx`) and either opens
+the personal panel directly (anyone) or offers the two panels (an admin). The admin panel lives at
+`/admin` because a choice has to point somewhere; `/me` is the personal panel.
+
 **The per-user routes answer as the caller.** `/me/albums` and `/me/matches` read Immich with the
 caller's own forwarded credential (`immich/access.ts` decides that once), so membership and
 ownership are Immich's answers rather than a filtered admin read — and `/me/albums/publish` reads

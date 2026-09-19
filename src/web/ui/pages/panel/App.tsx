@@ -34,6 +34,12 @@ export const App = () => {
       <h1 style={{ fontSize: 20, letterSpacing: '-.02em' }}>
         🔗 Shared albums <span style={{ color: t.muted, fontWeight: 400 }}>· {data.household.name}</span>
       </h1>
+      <p style={{ ...s.muted, marginBottom: 4 }}>
+        Server-side settings and pairings.{' '}
+        <a href="/immich-shared-albums/me" style={{ color: 'inherit' }}>
+          Your own shared albums →
+        </a>
+      </p>
       <LinkServer onLinked={load} />
       <SharedAlbums albums={data.albums} />
       <ConnectedServers peers={data.peers} onChange={load} />

@@ -42,7 +42,7 @@ export const App = () => {
         {isAdmin && (
           <>
             {' '}
-            <a href={`${ROUTE_PREFIX}/`} style={{ color: 'inherit' }}>
+            <a href={`${ROUTE_PREFIX}/admin`} style={{ color: 'inherit' }}>
               🔗 Server settings and pairings →
             </a>
           </>
