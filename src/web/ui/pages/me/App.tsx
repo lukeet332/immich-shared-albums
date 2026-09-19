@@ -24,10 +24,11 @@ export const App = () => {
     <main>
       {matches.length > 0 && (
         <section style={{ marginBottom: 22 }}>
-          <b style={{ fontSize: 18 }}>Possible reunions</b>
+          <b style={{ fontSize: 18 }}>Possible album reunions</b>
           <p style={{ ...s.muted, marginTop: 6 }}>
-            Same-named albums on a linked server. Nothing has changed on either side — reuniting them comes
-            next, once both album owners have agreed.
+            If you and someone on a linked server uploaded the same Google Photos album separately, you each
+            ended up with half of it. These look like that — the same name, owned by a different person on
+            each server. Reuniting them comes next, once both owners agree.
           </p>
           <div style={s.card}>
             {matches.map(m => (
