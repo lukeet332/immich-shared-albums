@@ -22,6 +22,21 @@ export const SCHEMA_VERSION = 3;
  * peer cannot act on an id it has no mapping for, so sending one would be disclosure without a
  * use.
  */
+/** A peer's index arrives as one flat list; the table keys it per owner, so split it here. Entries
+ *  with no owner are dropped: ownership is what routes a match to a person, so one cannot be routed
+ *  without it. */
+const groupPublishedByOwner = (albums: OwnedAlbum[]): Map<string, OwnedAlbum[]> => {
+  const byOwner = new Map<string, OwnedAlbum[]>();
+  for (const album of albums) {
+    const owner = String(album?.ownerUserId ?? '');
+    if (!owner) continue;
+    const bucket = byOwner.get(owner);
+    if (bucket) bucket.push(album);
+    else byOwner.set(owner, [album]);
+  }
+  return byOwner;
+};
+
 export type OwnedAlbum = {
   name: string;
   assetCount: number;
@@ -545,24 +560,43 @@ export class Store {
    *  owner deleted must stop being offered, or the peer keeps matching against an album that no
    *  longer exists. Transactional so a crash cannot serve a half-written index. */
   publishedAlbumsSet(peer: string, ownerUserId: string, albums: OwnedAlbum[]) {
+    this.writePublished(peer, new Map([[ownerUserId, albums]]), () =>
+      this.db
+        .prepare('DELETE FROM published_albums WHERE peer = ? AND ownerUserId = ?')
+        .run(peer, ownerUserId)
+    );
+  }
+  /** Replace a peer's WHOLE index.
+   *
+   *  `publishedAlbumsSet` replaces one OWNER's albums, which cannot express an owner who is simply
+   *  gone: it is called FOR an owner, so one the peer stops mentioning is never called at all and
+   *  the rows they left behind stay. A peer answers `/albums` with its entire index — its people's
+   *  panels published it together — so silence about an owner is an ANSWER, and the rows must go
+   *  with it. Without this, a peer that withdrew everything keeps being matched against. */
+  publishedAlbumsReplacePeer(peer: string, albums: OwnedAlbum[]) {
+    this.writePublished(peer, groupPublishedByOwner(albums), () =>
+      this.db.prepare('DELETE FROM published_albums WHERE peer = ?').run(peer)
+    );
+  }
+  /** The single write path for the index: the two replaces differ only in what they remove first. */
+  private writePublished(peer: string, albumsByOwner: Map<string, OwnedAlbum[]>, remove: () => unknown) {
     const ins = this.db.prepare(
       'INSERT INTO published_albums (peer, ownerUserId, name, assetCount, startDate, endDate, ownerName) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     this.db.exec('BEGIN');
     try {
-      this.db
-        .prepare('DELETE FROM published_albums WHERE peer = ? AND ownerUserId = ?')
-        .run(peer, ownerUserId);
-      for (const album of albums)
-        ins.run(
-          peer,
-          ownerUserId,
-          album.name,
-          album.assetCount ?? 0,
-          album.startDate ?? null,
-          album.endDate ?? null,
-          album.ownerName ?? ''
-        );
+      remove();
+      for (const [ownerUserId, albums] of albumsByOwner)
+        for (const album of albums)
+          ins.run(
+            peer,
+            ownerUserId,
+            album.name,
+            album.assetCount ?? 0,
+            album.startDate ?? null,
+            album.endDate ?? null,
+            album.ownerName ?? ''
+          );
       this.db.exec('COMMIT');
     } catch (e) {
       this.db.exec('ROLLBACK');

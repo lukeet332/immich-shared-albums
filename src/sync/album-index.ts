@@ -34,26 +34,15 @@ export async function refreshPeerAlbums(peer: Peer): Promise<OwnedAlbum[]> {
   try {
     const r = await peerRequest(peer, '/albums');
     if (r.status >= 400 || !Array.isArray(r.json?.albums)) return store.publishedAlbumsFor(peer.pub);
-    groupByOwner(r.json.albums as OwnedAlbum[]).forEach((albums, ownerUserId) =>
-      store.publishedAlbumsSet(peer.pub, ownerUserId, albums)
-    );
+    // REPLACE the peer's whole index rather than one owner at a time. This answer IS the whole
+    // index, so an owner missing from it has withdrawn everything and must stop being matched
+    // against — which the per-owner write cannot express, because it is only ever called FOR an
+    // owner the answer still mentions.
+    store.publishedAlbumsReplacePeer(peer.pub, r.json.albums as OwnedAlbum[]);
     return store.publishedAlbumsFor(peer.pub);
   } catch {
     return store.publishedAlbumsFor(peer.pub); // unreachable right now: keep what we have
   }
-}
-
-/** A peer's index arrives as one flat list; the store keys it per owner, so split it here. */
-function groupByOwner(albums: OwnedAlbum[]): Map<string, OwnedAlbum[]> {
-  const byOwner = new Map<string, OwnedAlbum[]>();
-  for (const album of albums) {
-    const owner = String(album?.ownerUserId ?? '');
-    if (!owner) continue; // an entry with no owner cannot be routed to anyone
-    const bucket = byOwner.get(owner);
-    if (bucket) bucket.push(album);
-    else byOwner.set(owner, [album]);
-  }
-  return byOwner;
 }
 
 /** What this server offers the given peer for matching. */

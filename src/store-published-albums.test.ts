@@ -71,6 +71,37 @@ test("republishing replaces that owner's index instead of accumulating it", () =
   });
 });
 
+// The per-owner replace above cannot cover this one: it is called FOR an owner, so an owner the
+// peer no longer mentions is never called at all and their rows are never removed. A peer answers
+// `/albums` with its whole index, which makes silence about an owner an ANSWER rather than an
+// absence of news — and `handlePublishedAlbums` says so: "a peer that has published nothing gets an
+// empty list".
+test('a peer that withdraws everything stops being matched against', () => {
+  withStore(store => {
+    store.publishedAlbumsReplacePeer('peer-1', [bobAlbum, carolAlbum]);
+    assert.equal(store.publishedAlbumsFor('peer-1').length, 2, 'sanity: both owners went in');
+    store.publishedAlbumsReplacePeer('peer-1', []);
+    assert.deepEqual(
+      store.publishedAlbumsFor('peer-1'),
+      [],
+      'an empty index is an ANSWER: the peer offers nothing, so nothing may be matched against'
+    );
+  });
+});
+
+test('a peer-wide replace drops an owner who withdrew, and keeps the rest', () => {
+  withStore(store => {
+    store.publishedAlbumsReplacePeer('peer-1', [bobAlbum, carolAlbum]);
+    store.publishedAlbumsReplacePeer('peer-1', [bobAlbum]); // carol took hers back
+    const back = store.publishedAlbumsFor('peer-1');
+    assert.deepEqual(
+      back,
+      [asStored(bobAlbum)],
+      `carol's albums must be gone while bob's stay: ${JSON.stringify(back)}`
+    );
+  });
+});
+
 test("one peer never sees another peer's index", () => {
   withStore(store => {
     store.publishedAlbumsSet('peer-1', bobAlbum.ownerUserId, [bobAlbum]);
