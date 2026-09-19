@@ -13,12 +13,19 @@ export type Confirmation = {
 /** A dialog, or nothing. Confirming runs the action; the caller does not have to remember to close. */
 export const Confirm = ({ ask, onClose }: { ask: Confirmation | null; onClose: () => void }) => {
   const confirmButton = useRef<HTMLButtonElement>(null);
+  const opener = useRef<Element | null>(null);
   useEffect(() => {
     if (!ask) return;
+    // Where focus was, so dismissing puts it back: a dialog that eats the caret strands a keyboard
+    // user at the top of the page with no way to tell what they were on.
+    opener.current = document.activeElement;
     confirmButton.current?.focus();
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     addEventListener('keydown', onKey);
-    return () => removeEventListener('keydown', onKey);
+    return () => {
+      removeEventListener('keydown', onKey);
+      (opener.current as HTMLElement | null)?.focus?.();
+    };
   }, [ask]);
   if (!ask) return null;
   return (
