@@ -1,3 +1,4 @@
+@import '../../lib/tokens.css';
 body {
   margin: 0;
   font-family:
@@ -13,12 +14,13 @@ body {
   min-height: 100vh;
 }
 .card {
+  font-family: var(--isa-font);
   width: min(440px, calc(100vw - 32px));
   box-sizing: border-box;
   background: #fff;
   border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 28px;
-  padding: 30px 26px 26px;
+  padding: var(--isa-pad-hero) var(--isa-pad-card) var(--isa-pad-card);
   text-align: center;
   box-shadow:
     0 1px 3px rgba(60, 64, 67, 0.15),
@@ -28,7 +30,7 @@ body {
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  margin: 0 auto 16px;
+  margin: 0 auto var(--isa-space-4);
   display: grid;
   place-items: center;
   background: linear-gradient(135deg, #4250af, #7c3aed);
@@ -45,13 +47,13 @@ p {
   color: #5f6368;
   font-size: 13.5px;
   line-height: 1.55;
-  margin: 6px 0 18px;
+  margin: var(--isa-space-2) 0 var(--isa-space-5);
 }
 button {
   font: inherit;
   font-size: 15px;
   font-weight: 600;
-  padding: 12px 36px;
+  padding: 14px var(--isa-space-6);
   border: 0;
   border-radius: 999px;
   background: #4250af;
@@ -79,7 +81,7 @@ button.busy {
   color: #fff;
   text-decoration: none;
   font-weight: 600;
-  padding: 12px 30px;
+  padding: 14px var(--isa-space-6);
   border-radius: 999px;
 }
 .pw {
@@ -113,7 +115,7 @@ button.busy {
 .who {
   font-size: 12.5px;
   color: #4250af;
-  margin: -6px 0 16px;
+  margin: 0 0 var(--isa-space-3);
   line-height: 1.5;
 }
 .who a {
@@ -152,6 +154,7 @@ button.secondary {
     color: #e8eaed;
   }
   .card {
+    font-family: var(--isa-font);
     background: #1b1f26;
     border-color: rgba(255, 255, 255, 0.08);
     box-shadow:
@@ -179,5 +182,23 @@ button.secondary {
     background: transparent;
     color: #a8c7fa;
     box-shadow: inset 0 0 0 1px rgba(168, 199, 250, 0.45);
+  }
+}
+
+/* Mobile first: the action is the width of the card under a phone's breakpoint, and never a smaller
+   target than a thumb can hit. Desktop keeps the compact pill it was designed as. */
+.card .cta,
+.card button {
+  min-height: 44px;
+  box-sizing: border-box;
+}
+@media (max-width: 560px) {
+  .card {
+    border-radius: var(--isa-radius-card) var(--isa-radius-card) 0 0;
+    padding-bottom: max(var(--isa-pad-card), env(safe-area-inset-bottom));
+  }
+  .card .cta,
+  .card button {
+    width: 100%;
   }
 }

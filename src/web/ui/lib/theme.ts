@@ -1,22 +1,31 @@
 /** web/ui/lib/theme.ts — Shared values, so colours and spacing are not repeated magic numbers across components. See ../../http-router.md. */
 export const t = {
-  bg: '#101216',
-  card: '#1f2229',
-  line: 'rgba(255,255,255,.08)',
-  text: '#e5e7eb',
-  muted: '#6b7280',
-  accent: '#4250af',
-  danger: '#f87171',
+  bg: 'var(--isa-bg)',
+  card: 'var(--isa-surface)',
+  line: 'var(--isa-line)',
+  text: 'var(--isa-ink)',
+  muted: 'var(--isa-ink-muted)',
+  accent: 'var(--isa-accent)',
+  danger: 'var(--isa-danger)',
   radius: 18,
 } as const;
 
 /** One action's outcome, as the panel shows it: green for done, red for refused. */
 export const toastStyle = (kind: 'ok' | 'error') =>
   kind === 'ok'
-    ? { background: '#0f2e22', border: '1px solid #1f7a5a', badge: '#34d399', glyph: '✓' }
-    : { background: '#3a1d1d', border: '1px solid #a13b3b', badge: '#f87171', glyph: '!' };
+    ? { background: 'var(--isa-ok-surface)', border: '1px solid #1f7a5a', badge: 'var(--isa-ok)', glyph: '✓' }
+    : {
+        background: 'var(--isa-danger-surface)',
+        border: '1px solid #a13b3b',
+        badge: 'var(--isa-danger)',
+        glyph: '!',
+      };
 
 export const s = {
+  /** Card and control shape, from the same tokens the stylesheets use. */
+  radiusCard: 'var(--isa-radius-card)' as const,
+  radiusControl: 'var(--isa-radius-control)' as const,
+  font: 'var(--isa-font)' as const,
   /** Bottom-centre, like the snackbar people already know: it reports what just happened without
    *  moving anything they are reading. */
   toast: {
@@ -40,7 +49,7 @@ export const s = {
     width: 20,
     height: 20,
     borderRadius: 10,
-    color: '#0b0b0c',
+    color: 'var(--isa-accent-ink)',
     fontSize: 13,
     fontWeight: 800,
     display: 'flex',
@@ -77,7 +86,7 @@ export const s = {
     padding: '10px 12px',
     borderRadius: 11,
     border: `1px solid rgba(255,255,255,.12)`,
-    background: '#15171c',
+    background: 'var(--isa-sunken)',
     color: 'inherit',
     outline: 'none',
     width: '100%',
