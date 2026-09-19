@@ -12,6 +12,7 @@ import {
   handleStatus,
   handleHello,
   handleLeave,
+  handlePublishedAlbums,
 } from './protocol.ts';
 import { handlePair } from './pair.ts';
 import { handleActivity, handleComments } from '../sync/comments.ts';
@@ -47,6 +48,11 @@ export const peerRoutes: PeerHandler = async (callerPub, path, bodyBuf, range) =
   if ((m = path.match(/^\/albums\/([^/]+)\/leave$/))) return json(handleLeave(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/comments$/))) return json(await handleComments(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/nudge$/))) return json(await handleNudge(callerPub, m[1]));
+  // The album index, for matching a split album's other half. Same gate as /directory: an enrolled
+  // peer may ask what names this household offers, and nothing here grants access to any album.
+  if (path === '/albums') {
+    return json(handlePublishedAlbums(callerPub));
+  }
   if (path === '/directory') {
     if (!peerByPub(callerPub)) return json([403, { error: 'unknown peer' }]);
     return json([200, { users: await localDirectory() }]);

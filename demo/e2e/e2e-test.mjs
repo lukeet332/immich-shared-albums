@@ -1171,9 +1171,77 @@ stage('a revocation survives content arriving in the same window');
   }
 }
 
-// The route prefix moved from /sidecar to /immich-shared-albums — a clean break, no shim, so
-// both peers must agree on it. Pins the panel answering WITHOUT a trailing slash, and that
-// nothing still emits the old prefix.
+// The album index a linked peer reads to find the other half of a split album. The sidecar cannot
+// enumerate a human's albums itself — GET /albums is scoped to one credential and the sidecar holds
+// none for a person — so a person's own panel reports them and this records that. Ownership is
+// therefore settled at publication time, which is the fact this stage pins from both sides.
+stage('album index: what a person offered for matching, recorded only for the peer it was offered to');
+{
+  const linkedPeer = String(readSidecarPeers('b-sidecar')?.[0]?.pub || '');
+  if (!linkedPeer) requireState("B's peer list from demo/b-sidecar/state.db");
+
+  if (linkedPeer) {
+    // Asserts the rows the /albums WIRE route reads — handlePublishedAlbums returns exactly these —
+    // without dialling: a cross-container iroh dial here is a harness concern, and the transport
+    // has its own coverage in the entitlement and probe stages.
+    const storedIndex = () =>
+      JSON.parse(
+        sidecarSql(
+          'b-sidecar',
+          `SELECT ownerUserId, name FROM published_albums WHERE peer = '${linkedPeer}' ORDER BY name`
+        ) || '[]'
+      );
+
+    const before = storedIndex();
+    check('the album index starts empty, so nothing is offered before a person publishes',
+          Array.isArray(before) && before.length === 0, JSON.stringify(before));
+
+    // Published as a real person: this non-admin owns an album, so the panel route records it.
+    // Their key is minted from a login token directly — Immich prefers x-api-key over a bearer,
+    // so api() would authenticate as nobody.
+    const ownerTok = (await (await fetch(`${B}/api/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'second-e2e@demo.local', password: 'e2e-pass-123' }),
+    })).json()).accessToken;
+    const ownKey = (await (await fetch(`${B}/api/api-keys`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerTok}` },
+      body: JSON.stringify({ name: 'e2e-index-owner', permissions: ['all'] }),
+    })).json()).secret;
+    const ownAlbum = await api(B, ownKey, '/albums', j({ albumName: 'PROBE my takeout half' }));
+    const ownList = await api(B, ownKey, '/albums');
+    const meSecond = await (await fetch(`${B}/api/users/me`, { headers: { 'x-api-key': ownKey } })).json();
+    check('the rig has a non-admin who owns an album of their own to offer',
+          !!ownAlbum?.id && ownList.some(a => a.id === ownAlbum.id), `albums=${ownList.length}`);
+
+    const routeCall = (body, key = ownKey) => fetch(`${BS}/immich-shared-albums/me/albums/publish`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key }, body: JSON.stringify(body),
+    }).then(async r => ({ status: r.status, json: await r.json().catch(() => ({})) }));
+
+    const offered = await routeCall({ peer: linkedPeer, albums: ownList });
+    const after = storedIndex();
+    check("a person's owned albums are recorded for the linked peer to match against",
+          offered.status === 200 && offered.json?.published > 0 && !!after.find(a => a.name === 'PROBE my takeout half'),
+          `status=${offered.status} published=${offered.json?.published} names=${JSON.stringify(after.map(a => a.name))}`);
+    check('the index names the album OWNER, which is what routes a repair request owner-to-owner',
+          !!after.length && after.every(a => a.ownerUserId === meSecond.id),
+          JSON.stringify(after.map(a => ({ name: a.name, mine: a.ownerUserId === meSecond.id }))));
+
+    // Nothing about the request body is trusted: the same session may not offer someone else's album.
+    await routeCall({ peer: linkedPeer, albums: [
+      { albumName: 'claimed but not owned', albumUsers: [{ user: { id: 'someone-else', name: 'X' }, role: 'owner' }] },
+    ] });
+    check('a caller cannot publish an album Immich says they do not own',
+          !storedIndex().find(a => a.name === 'claimed but not owned'),
+          `names=${JSON.stringify(storedIndex().map(a => a.name))}`);
+
+    // The peer has to be linked: a pubkey this household has no relationship with is refused.
+    const stranger = await routeCall({ peer: 'not-a-linked-peer', albums: ownList });
+    check('publishing to a server this household is not linked to is refused',
+          stranger.status === 404, `status=${stranger.status} ${JSON.stringify(stranger.json)}`);
+  }
+}
+
+
 stage('route prefix rename + legacy compatibility');
 {
   const code = async (u, init) => (await fetch(u, init).catch(() => ({ status: 0 }))).status;

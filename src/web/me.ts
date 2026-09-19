@@ -10,8 +10,22 @@ import { state } from '../state.ts';
 import type { Mapping } from '../store.ts';
 import type { Creds } from '../immich/access.ts';
 import { visibleAlbumIds } from '../immich/access.ts';
+import { parsePublishedAlbums, recordPublishedAlbums } from '../sync/album-index.ts';
 
 export type MyAlbum = { name: string; role: Mapping['role']; via: Mapping['via']; peer: string };
+
+/**
+ * Record what the caller published for a linked peer, scoped to the caller.
+ *
+ * The body comes from the panel, which built it from the caller's own album list — so it is
+ * filtered to albums the caller OWNS before anything is stored (`parsePublishedAlbums`), because
+ * a body is not evidence of ownership. Nothing is written for a signed-out caller.
+ */
+export function publishAlbumsForPeer(peer: string, body: string, callerUserId: string): number {
+  const albums = parsePublishedAlbums(body, callerUserId);
+  recordPublishedAlbums(peer, callerUserId, albums);
+  return albums.length;
+}
 
 /** The caller's shared albums: mappings whose local album the caller can see, as themselves.
  *  A mapping the caller cannot see is absent from the list Immich returns — never leaked. */

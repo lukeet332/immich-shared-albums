@@ -17,6 +17,22 @@ import path from 'node:path';
 
 export const SCHEMA_VERSION = 2;
 
+/**
+ * One album a person owns, as it is published to a linked peer for matching. No album id: the
+ * peer cannot act on an id it has no mapping for, so sending one would be disclosure without a
+ * use.
+ */
+export type OwnedAlbum = {
+  name: string;
+  assetCount: number;
+  startDate?: string;
+  endDate?: string;
+  /** The person who owns the album HERE, on their own server — the field §4 of the reunification
+   *  design routes a repair request by, so an album without one cannot be offered. */
+  ownerUserId: string;
+  ownerName: string;
+};
+
 export type SeenEntry = {
   mapping: string;
   checksum: string;
@@ -268,6 +284,23 @@ export class Store {
         homePeer TEXT
       );
     `);
+    // The album index a linked peer may read to find the other half of a split album. It is a
+    // CACHE of what each person's own panel reported, not something this server can derive:
+    // GET /albums is scoped to a credential, and the sidecar holds none for a human, so the
+    // person's own session is the only thing that can enumerate their albums. It is written
+    // per owner, so re-publishing one person's list never disturbs another's.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS published_albums (
+        peer TEXT NOT NULL,
+        ownerUserId TEXT NOT NULL,
+        name TEXT NOT NULL,
+        assetCount INTEGER NOT NULL DEFAULT 0,
+        startDate TEXT,
+        endDate TEXT,
+        ownerName TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS published_albums_peer ON published_albums (peer);
+    `);
   }
 
   /**
@@ -449,6 +482,45 @@ export class Store {
   }
   seenRemoveEntry(mappingId: string, checksum: string) {
     this.db.prepare('DELETE FROM seen WHERE mapping = ? AND checksum = ?').run(mappingId, checksum);
+  }
+
+  // ---- the album index a linked peer may read for matching ----
+  /** Replace one owner's published albums for one peer. A replace, never a merge: an album its
+   *  owner deleted must stop being offered, or the peer keeps matching against an album that no
+   *  longer exists. Transactional so a crash cannot serve a half-written index. */
+  publishedAlbumsSet(peer: string, ownerUserId: string, albums: OwnedAlbum[]) {
+    const ins = this.db.prepare(
+      'INSERT INTO published_albums (peer, ownerUserId, name, assetCount, startDate, endDate, ownerName) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
+    this.db.exec('BEGIN');
+    try {
+      this.db
+        .prepare('DELETE FROM published_albums WHERE peer = ? AND ownerUserId = ?')
+        .run(peer, ownerUserId);
+      for (const album of albums)
+        ins.run(
+          peer,
+          ownerUserId,
+          album.name,
+          album.assetCount ?? 0,
+          album.startDate ?? null,
+          album.endDate ?? null,
+          album.ownerName ?? ''
+        );
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+  /** Everything this peer's people have published, by the person who owns each album. Empty for a
+   *  peer we have never received a publication from. */
+  publishedAlbumsFor(peer: string): OwnedAlbum[] {
+    return this.db
+      .prepare(
+        'SELECT name, assetCount, startDate, endDate, ownerUserId, ownerName FROM published_albums WHERE peer = ? ORDER BY name'
+      )
+      .all(peer) as OwnedAlbum[];
   }
 
   // ---- offered index: which assets each mapping's peer is entitled to read ----

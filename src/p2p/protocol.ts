@@ -24,6 +24,7 @@ import { reconcileMapping } from '../sync/engine.ts';
 import { syncStatus } from '../sync/status.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 import { recordOfferedRefs } from './entitlement.ts';
+import { publishedAlbumsFor } from '../sync/album-index.ts';
 
 /** Constant-time string compare that tolerates unequal lengths. */
 function secretEquals(a: string, b: string): boolean {
@@ -172,6 +173,19 @@ const goneOr404 = (peerPub: string, albumMappingId: string) => {
     ? [410, { error: 'this share has ended', code: 'gone' }]
     : [404, { error: 'unknown album mapping', code: 'unknown_mapping' }];
 };
+
+/**
+ * The album index this server offers the caller for matching.
+ *
+ * Ownership here is decided at publication time — a person's own panel reported which albums
+ * Immich says they own — so this answers exactly what those panels published and nothing else.
+ * An enrolled peer that has published nothing gets an empty list, never a server-wide one.
+ */
+export function handlePublishedAlbums(callerPub: string) {
+  const peer = peerByPub(callerPub);
+  if (!peer) return [403, { error: 'unknown peer', code: 'unknown_peer' }];
+  return [200, { albums: publishedAlbumsFor(callerPub) }];
+}
 
 export async function handleRefs(callerPub: string, body: string, albumMappingId: string) {
   const peer = peerByPub(callerPub);

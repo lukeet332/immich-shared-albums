@@ -1,17 +1,8 @@
 /** sync/matches.ts — finding the other half of a split album. See docs/post-v1-reunification-design.md §4. */
 
-/** One album a person owns, as it travels for matching. No album id: the peer cannot act on an
- *  album id it has no mapping for, so sending them would be disclosure without a use. */
-export type OwnedAlbum = {
-  name: string;
-  assetCount: number;
-  startDate?: string;
-  endDate?: string;
-  /** The person who owns the album HERE, on this server. Required: §4 routes the repair
-   *  request owner-to-owner, and the match surfaces only in that owner's panel. */
-  ownerUserId: string;
-  ownerName: string;
-};
+import type { OwnedAlbum } from '../store.ts';
+
+export type { OwnedAlbum };
 
 export type AlbumCandidate = {
   mine: OwnedAlbum;
@@ -29,23 +20,28 @@ function ownedAlbumFrom(album, userId: string): OwnedAlbum | undefined {
   const owner = (album?.albumUsers || []).find(au => au.role === 'owner' && au.user?.id);
   if (!owner || owner.user.id !== userId) return undefined;
   return {
-    name: album.albumName,
-    assetCount: Number(album.assetCount) || 0,
-    startDate: album.startDate,
-    endDate: album.endDate,
+    name: String(album.albumName ?? ''),
+    assetCount: Number.isFinite(Number(album.assetCount)) ? Number(album.assetCount) : 0,
+    startDate: album.startDate || undefined,
+    endDate: album.endDate || undefined,
     ownerUserId: userId,
-    ownerName: owner.user.name || '',
+    ownerName: String(owner.user.name ?? ''),
   };
 }
 
-/** What this server offers a linked peer for matching: ONLY albums the caller owns.
- *
- *  Owned-only is the minimal disclosure, and it cannot offer the same album twice when two local
- *  people are both members of it. It is also sufficient, because Takeout flattens ownership — the
- *  Google Photos importer creates an album per Google album through the importing account's key
- *  (`--sync-albums`), so an album that was someone else's on Google is owned here. */
+/** Immich's own album list as an owned index: the shape the panel has in hand, converted once.
+ *  Unknown entries are dropped rather than guessed at, because a guess here offers someone's
+ *  library to a linked server. */
 export function albumsIPublish(albums, userId: string): OwnedAlbum[] {
+  if (!userId || !Array.isArray(albums)) return [];
   return albums.map((album: unknown) => ownedAlbumFrom(album, userId)).filter(Boolean) as OwnedAlbum[];
+}
+
+/** Entries claiming an owner OTHER than the caller are dropped, because a request body is not
+ *  evidence of ownership: a caller can only ever offer what Immich says they own. */
+export function albumsOwnedByCaller(albums: OwnedAlbum[], callerUserId: string): OwnedAlbum[] {
+  if (!callerUserId) return [];
+  return albums.filter(album => album?.ownerUserId === callerUserId);
 }
 
 /** Lowercase and collapse whitespace — recall, not privacy (§3). Everything else is significant:
