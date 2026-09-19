@@ -11,10 +11,14 @@
 import crypto from 'node:crypto';
 import { CFG, log, isUtilityEmail, BOT_PREFIX, UTILITY_EMAIL_DOMAIN } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
-import { state, save } from '../state.ts';
+import { state, save, seenAdd } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
+import { readAlbumAssetsAs, readCallerAlbums, type Creds } from '../immich/access.ts';
 import { ensureUtilityUser, syncAvatar } from '../immich/contributors.ts';
 import { reconcileMapping } from '../sync/engine.ts';
+import { findAdoptableAlbum } from '../sync/adoption.ts';
+import { addHouseBotToAlbum } from '../sync/house-bot.ts';
+import { seedRowsFor } from '../sync/matches.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
 export type MirrorRequest = {
@@ -36,6 +40,9 @@ export type MirrorRequest = {
   /** The origin says this album is part of a reunion. Recorded, never inferred: the local mapping
    *  is an ordinary member mirror either way, and only the category distinguishes it. */
   reunified?: boolean;
+  /** ADOPT this local album instead of creating a mirror — reunifying, rather than joining. The
+   *  caller's own credentials, because only they can read and add a member to an album they own. */
+  adopt?: { albumId: string; ownerUserId: string; ownerCreds: Creds };
 };
 
 /**
@@ -91,8 +98,52 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     return { mapping: existing, created: false };
   }
 
-  // a freshly-minted utility user/key can 500 its first writes on cold instances — retry
-  // with backoff and log each attempt so failures are diagnosable from CI logs
+  // ---- ADOPTION: this person's own album becomes the mapping's local half ----
+  // The mapping is not pushed to `state.mappings` until its ledger is seeded, because the moment a
+  // loop can see it, `shareableAssets` reads that ledger — and a mapping whose ledger knows nothing
+  // about the album's contents offers every one of them back to the household they came from.
+  if (req.adopt) {
+    const { albumId, ownerUserId, ownerCreds } = req.adopt;
+    const adoptable = findAdoptableAlbum(
+      { albumName: album.name, peerOwnerUserId: req.albumOwnerId ?? '' },
+      await readCallerAlbums(ownerCreds),
+      ownerUserId
+    );
+    // The id came from a panel, so it is checked against the caller's OWN albums: only the album
+    // this person owns, carrying the offered name, may be adopted. Anything else joins normally.
+    if (!adoptable || adoptable.albumId !== albumId)
+      throw new Error(`"${album.name}" is not this person's album to reunite — refusing to adopt it`);
+    // The sidecar reads the album as the house bot, so the bot must be a member first. Added on the
+    // owner's own credential, from their own request: the membership is their act, not one we take.
+    await addHouseBotToAlbum(albumId, ownerCreds);
+    const hostSlug = `${BOT_PREFIX.house}bot`;
+    const hostKey = state.contributors[hostSlug]?.apiKey;
+    if (!hostKey) throw new Error('house bot has no key after provisioning — cannot read the album');
+    const assets = (await readAlbumAssetsAs(albumId, { source: 'mapping', key: hostKey })) ?? [];
+    const mapping: Mapping = {
+      id: crypto.randomUUID(),
+      role: 'member',
+      albumId,
+      albumName: adoptable.name,
+      peer: peer.pub,
+      remoteAlbumId: album.id,
+      remoteMappingId: req.remoteMappingId,
+      permissions,
+      hostSlug,
+      via: req.via ?? 'link',
+      adopted: true,
+      ...(req.reunified ? { reunified: true } : {}),
+    };
+    // Seeded rows carry no origin asset, so the deletion sweep skips them: these are this person's
+    // own photos, and a peer withdrawing its copy must never remove them.
+    for (const row of seedRowsFor(assets, mapping.id)) seenAdd(mapping.id, row.checksum, row.localAsset);
+    state.mappings.push(mapping);
+    save();
+    log(
+      `reunited "${adoptable.name}" with "${peer.name}" — ${assets.length} photo(s) already here, seeded so none is offered back`
+    );
+    return { mapping, created: true };
+  }
   let mirror;
   for (let attempt = 1; ; attempt++) {
     try {
