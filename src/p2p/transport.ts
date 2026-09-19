@@ -41,16 +41,28 @@ export const withDeadline = <T>(p: Promise<T>, what: string, ms = DEADLINE_MS): 
  *  on a connection whose peer is already gone, so a request written into it waits out its whole
  *  deadline. `closed()` is the one signal that does fire, so every wait that can span a restart
  *  races against it. */
-const untilClosed = <T>(conn: Connection, p: Promise<T>, what: string): Promise<T> => {
-  let closed: Promise<string>;
-  try {
-    closed = Promise.resolve(conn.closed());
-  } catch {
-    closed = Promise.reject(new Error('unavailable'));
+const closedOnce = new WeakMap<Connection, Promise<string>>();
+/** One `closed()` promise per connection. Asking per request would register an observer per request,
+ *  and a CACHED connection holds every one of them for as long as it lives — a leak that grows with
+ *  the number of requests served over it. */
+const whenClosed = (conn: Connection): Promise<string> => {
+  let closed = closedOnce.get(conn);
+  if (!closed) {
+    try {
+      closed = Promise.resolve(conn.closed());
+    } catch {
+      closed = Promise.reject(new Error('unavailable'));
+    }
+    closed.catch(() => {}); // every racer observes it; never an unhandled rejection
+    closedOnce.set(conn, closed);
   }
+  return closed;
+};
+
+const untilClosed = <T>(conn: Connection, p: Promise<T>, what: string): Promise<T> => {
   return Promise.race([
     p,
-    closed
+    whenClosed(conn)
       .catch(() => 'peer gone')
       .then((reason: string) => {
         throw new Error(`connection closed before ${what}${reason ? `: ${reason}` : ''}`);
@@ -61,8 +73,7 @@ const untilClosed = <T>(conn: Connection, p: Promise<T>, what: string): Promise<
 /** Log a connection's death and how long after the request began it happened. */
 function traceConnectionDeath(conn: Connection, started: number, what: string): void {
   if (!CFG.traceSync) return;
-  void conn
-    .closed()
+  void whenClosed(conn)
     .then((reason: string) =>
       trace(`${what} connection CLOSED after ${Date.now() - started}ms — ${reason || 'no reason given'}`)
     )

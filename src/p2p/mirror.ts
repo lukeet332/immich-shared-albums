@@ -264,6 +264,13 @@ export async function unifyOwnAlbum(
   log(`reunited "${own.name}" — ${assets.length} photo(s) were already here, seeded so none is offered back`);
 
   await retireMirror(mapping, previousAlbumId, previousHostSlug);
+  // RE-SEED, and it has to be after the retire. `seenAdd` is INSERT OR IGNORE on (mapping,
+  // checksum), so when the peer and the owner both hold a photo — the co-owned case this feature is
+  // built for — the mirror's row was already there and the owner's own asset got no row at all.
+  // retireMirror has just dropped that row, so without this pass the checksum is claimed by nobody,
+  // `seenHas` is false, the album-level suppression finds nothing, and the next reconcile
+  // materialises a stub right beside the person's own photo.
+  for (const row of seedRowsFor(assets, mapping.id)) seenAdd(mapping.id, row.checksum, row.localAsset);
   // Kick the reconcile off, but do NOT await it: the album must be reunited the moment the move is
   // made, and awaiting a peer call would make the move's latency someone else's uptime.
   //
