@@ -293,15 +293,19 @@ async function retireMirror(mapping: Mapping, mirrorAlbumId: string, mirrorHostS
     if (!entry.originAsset) continue;
     const owner = store.ledgerByAsset(entry.localAsset);
     if (!owner || owner.mapping !== mapping.id) continue;
-    // Delete the stub AND forget the row, unlike a teardown that keeps them in step. The mapping
-    // did not end, it moved: the photo still belongs to this share, but its copy lived in the album
-    // the mapping has left. Forgetting it is what makes reconcile materialise it into the album the
-    // mapping now points at — keeping the row would make reconcile skip it as already seen while
-    // its bytes sit in an album nobody looks at any more.
-    if (await deleteProxyAsset(entry.localAsset)) {
-      store.seenRemoveEntry(mapping.id, entry.checksum);
-      removed++;
-    }
+    // FORGET THE ROW FIRST, then delete the stub. The order is the whole point, and the reverse
+    // order is a bug: reconcile skips any ref the ledger already knows (`seenHas`), so a row left
+    // behind because a delete failed keeps the photo from ever being materialised into the album
+    // the mapping now points at — and every retry is skipped for the same reason. Recording the
+    // intent first makes a failed delete merely an orphaned stub (reclaimable, and the loops keep
+    // trying) rather than an album that can never be completed.
+    //
+    // Unlike a teardown, which keeps row and asset in step because the share is ending, here the
+    // share moved: the photo still belongs to it, and forgetting the row is what lets reconcile
+    // put it where the mapping now looks.
+    store.seenRemoveEntry(mapping.id, entry.checksum);
+    if (await deleteProxyAsset(entry.localAsset)) removed++;
+    else log(`could not remove the replaced copy of one photo — the loops will retry`);
   }
   const plan = albumTeardown({ role: 'member', albumName: mapping.albumName });
   const key = mirrorHostSlug ? state.contributors[mirrorHostSlug]?.apiKey : undefined;
