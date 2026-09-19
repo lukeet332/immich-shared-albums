@@ -313,8 +313,9 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
   const host = mapping.hostSlug ? state.contributors[mapping.hostSlug] : undefined;
   if (!host?.apiKey) return;
   if (mapping.adopted) {
-    // NOTHING TO ATTEMPT, so nothing to read: an adopted album belongs to a local human, and only that
-    // owner can add or remove a member — the stand-in key answers `403 albumUser.create` forever.
+    // Adopted means a local human owns it, so the sidecar's key cannot change its membership whoever
+    // the invitation names — say so once instead of reading the album and the user table to reach a
+    // 403 every tick.
     if (!refusedMemberships.has(mapping.id)) {
       refusedMemberships.add(mapping.id);
       const peer = state.peers.find(p => p.pub === mapping.peer);

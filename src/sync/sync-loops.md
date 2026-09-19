@@ -78,7 +78,9 @@ code depends on which one it is in:
   `grantAlbumWriters` and `grantInvitedHumans` in `album-grant.ts`. A reconcile that runs later has
   no owner credential to offer, so a contributor granted nothing fails every cycle instead of being
   repaired in place, and a contributor the peer only starts offering later needs the owner in the
-  loop again. `syncMirrorMembers` reports that case instead of looping the 403.
+  loop again. `syncMirrorMembers` answers an adopted mapping before it reads anything — a local
+  human owns that album, so no key the sidecar holds can widen it — and logs one line per mapping
+  naming the peer whose change needs the reunion re-run, rather than looping the 403.
 - **Un-reunifying** runs on the owner's credential too, so it takes those accounts back off
   (`stripAlbumBots`), after the peer's stubs are purged. A membership left behind keeps the sidecar's
   read access to a private album and makes that album look like a live mirror to anything

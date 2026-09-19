@@ -76,19 +76,17 @@ worse without saying so.**
 
 - **Extract what repeats, and make the extraction the only place it exists.** Twice is the signal:
   a colour, a spacing, a route shape, an account lookup, a prompt, a rule. The second copy is where
-  the two start to drift, and drift is invisible until it is a bug — this repository has two design
-  systems because one page's colours were copied instead of shared, and a duplicated mapping write
-  that had to be found twice. So:
+  the two start to drift, and drift is invisible until it is a bug. So:
   - **Lift it, then delete the copies.** A shared module, a token file, a named function. The
     extraction is not done while a literal of it remains somewhere else.
-  - **The test cases are in the tree.** `src/sync/album-invite.ts` lets `src/sync/invites.ts` record the
-    invitation rather than writing a second owner mapping; `src/web/ui/lib/tokens.css` is the only
-    file in `src/web/ui` that contains a colour, and every page's stylesheet imports it. Both were
-    caught in review for doing it the other way first.
+  - **The test cases are in the tree.** `src/web/ui/lib/tokens.css` is the only file under
+    `src/web/ui` that contains a colour, and every page stylesheet imports it. An invitation's owner
+    mapping is written in one place — `src/sync/album-invite.ts` leaves the write to
+    `detectInvitesOnce` in `src/sync/invites.ts` rather than recording a second one itself.
   - **Make it enforceable where it can be.** `scripts/check-tokens.mjs` fails on a colour literal
-    outside `tokens.css` (it ran as a ratchet while the stylesheets were converted, and lists an
-    empty allowance now); `scripts/check-contrast.mjs` fails when a text pair drops below AA. Both run
-    in `verify:fast` — a rule that a build refuses to let you break beats one you must remember.
+    outside `tokens.css` — its per-file allowances are empty, so the ratchet is a wall;
+    `scripts/check-contrast.mjs` fails when a text pair drops below AA. Both run in `verify:fast` —
+    a rule that a build refuses to let you break beats one you must remember.
 - **Never enforce in prose what code can enforce.** An instruction in this file relies on being
   read, remembered and obeyed every time; a hook, a lint rule, a test or an npm script does not.
   Before adding a "remember to…" here, try to make it impossible to forget instead — and when a
