@@ -108,6 +108,17 @@ export const server = http.createServer(async (req, res) => {
     // The share shell: the native share page framed under the join card. ?native=1 is the
     // passthrough escape hatch (what the iframe loads, and where dismiss navigates).
     const shareHit = u.pathname.match(/^\/share\/([^/]+)$/);
+    if (shareHit && u.searchParams.has('native')) {
+      // Hand Immich the BARE path. Its share route matches the exact path, so any query string
+      // answers 404 with the bare app shell: the album still boots client-side, which is why this
+      // hides, but the SERVER-rendered share metadata is gone (og:title, the photo count) and the
+      // address bar the dismiss link leaves behind is a 404 — so the link a recipient then copies
+      // previews as nothing. Only OUR marker is removed; any other parameter is not ours to drop.
+      const rest = new URLSearchParams(u.searchParams);
+      rest.delete('native');
+      const query = rest.toString();
+      req.url = u.pathname + (query ? `?${query}` : '');
+    }
     if (shareHit && req.method === 'GET' && shareLinkJoiningEnabled() && !u.searchParams.has('native')) {
       const meta = await publicShareLinkMeta(shareHit[1]);
       const addr = localAddr();
