@@ -343,6 +343,47 @@ const confirmDialog = async (p, label) => {
   return true;
 };
 
+/**
+ * Is there a button labelled `label` in the row that names this album?
+ *
+ * Text-matching the page cannot answer this: the album name and a button label can sit in different
+ * rows and still appear within a few hundred characters of each other, which is how a check passed
+ * while the click that followed found nothing. The question is about the DOM's structure, so the page
+ * is asked structurally.
+ */
+const rowHasButton = (p, label, name) =>
+  p.evaluate(([label, name]) => {
+    const buttons = [...document.querySelectorAll('button,a')].filter(x => new RegExp(label).test((x.textContent || '').trim()));
+    return buttons.some(b => {
+      for (let el = b, i = 0; el && i < 6; el = el.parentElement, i++)
+        if ((el.innerText || '').includes(name)) return true;
+      return false;
+    });
+  }, [label, name]).catch(() => false);
+
+const waitForRowButton = async (p, label, name, ms = 90000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await rowHasButton(p, label, name)) return true;
+    await p.waitForTimeout(2000);
+    await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    await p.waitForTimeout(2500);
+  }
+  return false;
+};
+
+// Why a click did not happen, in the check's own detail: the buttons present, and whether any of
+// them had an ancestor naming the album. A bare false costs a whole round of guessing.
+const clickDetail = (p, label, name) =>
+  p.evaluate(([label, name]) => {
+    const buttons = [...document.querySelectorAll('button,a')].filter(x => new RegExp(label).test(x.textContent || ''));
+    const matched = buttons.some(b => {
+      for (let el = b, i = 0; el && i < 6; el = el.parentElement, i++) if ((el.innerText || '').includes(name)) return true;
+      return false;
+    });
+    return `present=${buttons.length} namesAlbum=${matched} texts=${JSON.stringify(buttons.slice(0, 3).map(b => (b.textContent || '').trim()))}`;
+  }, [label, name]).catch(() => '(could not read the page)');
+
 const clickInRow = (p, label, name) => p.evaluate(([label, name]) => {
   const buttons = [...document.querySelectorAll('button,a')]
     .filter(x => new RegExp(label).test(x.textContent || ''));
@@ -362,11 +403,11 @@ const clickInRow = (p, label, name) => p.evaluate(([label, name]) => {
 await cPanel.p.goto(`${C_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'domcontentloaded' });
 await cPanel.p.waitForTimeout(3000);
 await bPanel.p.goto(`${B_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'domcontentloaded' });
-const inviteRowShown = await waitForRow(bPanel.p, new RegExp(`${inviteName}[\\s\\S]*?Invite `));
+const inviteRowShown = await waitForRowButton(bPanel.p, '^Invite ', inviteName);
 check('a pair with nothing shared yet is offered an invitation', inviteRowShown,
   (await panelText(bPanel.p)).split('\n').filter(l => /^Invite /.test(l)).slice(0, 2).join(' | ') || '(none)');
 
-check('Invite was clicked', await clickInRow(bPanel.p, '^Invite ', inviteName));
+check('Invite was clicked', await clickInRow(bPanel.p, '^Invite ', inviteName), await clickDetail(bPanel.p, '^Invite ', inviteName));
 check('and it asked first, rather than sharing on the click alone', await confirmDialog(bPanel.p, 'Invite'));
 // The panel fetches on mount and does not poll, so a row whose state changed on the server can only
 // show it after a reload — waiting on the page as it stands reads a state that is already gone.
@@ -380,16 +421,24 @@ for (let waited = 0; waited < 60000 && !acceptOffered; waited += 5000) {
   acceptOffered = /Accept invite/.test(candidates(await panelText(cPanel.p)));
 }
 check('the other person is offered Accept invite, having done nothing themselves', acceptOffered);
-check('Accept invite was clicked', await clickInRow(cPanel.p, '^Accept invite', inviteName));
+check('Accept invite was clicked', await clickInRow(cPanel.p, '^Accept invite', inviteName), await clickDetail(cPanel.p, '^Accept invite', inviteName));
 check('and it asked first, rather than merging on the click alone', await confirmDialog(cPanel.p, 'Accept'));
 
-let gone = false;
-for (let waited = 0; waited < 60000 && !gone; waited += 5000) {
-  await bPanel.p.reload({ waitUntil: 'domcontentloaded' });
-  await bPanel.p.waitForTimeout(3000);
-  gone = !new RegExp(inviteName).test(candidates(await panelText(bPanel.p)));
-}
-check("and the pair leaves the inviter's list once it is done", gone);
+// The accept must have DONE something before the list can be expected to clear: without this the
+// failure reads as 'the list did not clear' when the truth is 'the accept never happened'.
+const merged = await waitForRow(cPanel.p, /Reunited into/);
+check('accepting merges the other half, as the panel says', merged,
+  (await panelText(cPanel.p)).split('\n').find(l => /Reunited|Could not/.test(l)) || '(no notice)');
+
+const cleared = await waitForRow(bPanel.p, new RegExp(`^(?!.*${inviteName}).*$`, 's'), 60000).catch(() => false);
+const goneNow = !new RegExp(inviteName).test(candidates(await panelText(bPanel.p)));
+const survivors = candidates(await panelText(bPanel.p))
+  .split('\n')
+  .map(l => l.trim())
+  .filter(l => l.includes(inviteName))
+  .slice(0, 3);
+check("and the pair leaves the inviter's list once it is done", goneNow,
+  survivors.length ? `still listed: ${JSON.stringify(survivors)}` : '(the name is gone from the candidates)');
 
 // The invite case above is the last to drive them, so the panels close here.
 await soloPanel.c.close();
