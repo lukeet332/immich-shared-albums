@@ -273,7 +273,11 @@ export const server = http.createServer(async (req, res) => {
     if (path === `${ROUTE_PREFIX}/me/albums` && req.method === 'GET') {
       const signedIn = await callerSignedIn(req);
       if (!signedIn) return send(401, signInRequired('see your albums'));
-      return send(200, { albums: await myAlbums(signedIn.creds) });
+      return send(200, {
+        albums: await myAlbums(signedIn.creds),
+        household: localHousehold().name,
+        isAdmin: signedIn.caller.isAdmin,
+      });
     }
     // The caller offers their OWN albums to one linked peer, so that peer can look for the other
     // half of a split album. The peer must be linked, only the CALLER can be recorded as owner,

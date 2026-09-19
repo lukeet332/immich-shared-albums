@@ -3,16 +3,27 @@
  *  ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
 import { s } from '../../lib/theme.ts';
+import { t } from '../../lib/theme.ts';
 import { myAlbums, myMatches, type MyAlbum, type PeerMatch } from './api.ts';
+
+/** The admin panel, for a caller who can actually open it. A link an ordinary user cannot follow
+ *  would bounce them to a sign-in page they will never pass. */
+const ROUTE_PREFIX = '/immich-shared-albums';
 
 export const App = () => {
   const [albums, setAlbums] = useState<MyAlbum[] | null>(null);
+  const [household, setHousehold] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
   const [matches, setMatches] = useState<PeerMatch[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     myAlbums()
-      .then(r => setAlbums(r.albums))
+      .then(r => {
+        setAlbums(r.albums);
+        setHousehold(r.household);
+        setIsAdmin(r.isAdmin);
+      })
       .catch(e => setError(e.message));
     // Its own request: a linked server being offline must not stop the albums above rendering.
     myMatches()
@@ -22,6 +33,21 @@ export const App = () => {
 
   return (
     <main>
+      <h1 style={{ fontSize: 20, letterSpacing: '-.02em' }}>
+        🔗 Shared albums
+        <span style={{ color: t.muted, fontWeight: 400 }}> · {household || '…'}</span>
+      </h1>
+      <p style={{ ...s.muted, marginBottom: 4 }}>
+        What you can see here is scoped to your own Immich account.
+        {isAdmin && (
+          <>
+            {' '}
+            <a href={`${ROUTE_PREFIX}/`} style={{ color: 'inherit' }}>
+              🔗 Server settings and pairings →
+            </a>
+          </>
+        )}
+      </p>
       {matches.length > 0 && (
         <section style={{ marginBottom: 22 }}>
           <b style={{ fontSize: 18 }}>Possible album reunions</b>

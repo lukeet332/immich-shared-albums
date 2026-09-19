@@ -15,6 +15,11 @@ import { albumsIPublish, matchesWithPeer, type PeerMatch } from '../sync/matches
 
 export type MyAlbum = { name: string; role: Mapping['role']; via: Mapping['via']; peer: string };
 
+/** Everything the panel needs to render itself, in the same call as its albums: who the household
+ *  is (so the heading can name it, as the admin panel's does) and whether this caller may open the
+ *  admin panel at all — a link a non-admin cannot follow is worse than no link. */
+export type MePage = { albums: MyAlbum[]; household: string; isAdmin: boolean };
+
 /**
  * Offer the caller's OWN albums to one linked peer for matching.
  *

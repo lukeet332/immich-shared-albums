@@ -938,6 +938,16 @@ stage('native album invitations, per person (no share link)');
         check('the panel answers the caller, not the admin: the non-admin sees only their own albums',
               asSecond.status === 200 && secondNames.length > 0 && adminPanel.albums.length > secondNames.length,
               `second=${asSecond.status} ${JSON.stringify(secondNames)} vs admin=${adminPanel.albums?.length}`);
+        // The page renders itself from the same call: the household to name in its heading, and
+        // whether this caller may open the admin panel at all. A link a non-admin cannot follow
+        // would bounce them to a sign-in page, so the flag has to be Immich's answer, not a guess.
+        check('the panel is told the household to name in its heading',
+              secondPanel.household === 'Demo household (B)',
+              `household=${JSON.stringify(secondPanel.household)}`);
+        check('a non-admin is told they are NOT an admin, so the panel offers them no admin link',
+              secondPanel.isAdmin === false, `isAdmin=${JSON.stringify(secondPanel.isAdmin)}`);
+        check('an admin is told they ARE, so the panel offers the way back to it',
+              adminPanel.isAdmin === true, `isAdmin=${JSON.stringify(adminPanel.isAdmin)}`);
 
         // Reunification matches on the OWNER, and Takeout flattens ownership — the Google Photos
         // importer creates an album per Google album through the importing account's key. So a
