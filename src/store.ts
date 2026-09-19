@@ -15,7 +15,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * One album a person owns, as it is published to a linked peer for matching. No album id: the
@@ -73,6 +73,14 @@ export type Mapping = {
   /** The album owner's user id ON THE ORIGIN — what keys their stand-in account here and on
    *  every member, so one human never becomes two picker entries. */
   albumOwnerId?: string;
+  /** RECORDED: this mapping was pointed at an album that already existed, instead of creating a
+   *  mirror. Decides whether leaving may delete the album — inferring it from the album's contents
+   *  would mean deciding whose photos they are at the moment of deletion. */
+  adopted?: boolean;
+  /** RECORDED: this album is part of a reunification, rather than an ordinary share. Separate from
+   *  `adopted` on purpose — an ordinary share of an album we did not create is not a reunion — and
+   *  kept for the logic only a reunified album needs. */
+  reunified?: boolean;
   dead?: boolean;
   deadAt?: string;
   deadReason?: string;
@@ -148,7 +156,26 @@ export type Collections = {
 
 const bool = (v: unknown) => (v ? 1 : 0);
 const orNull = <T extends string | number>(v: T | undefined): T | null => (v === undefined ? null : v);
+/** A nullable boolean column: unset stays SQL NULL, and the value is stored as 0/1 because
+ *  `node:sqlite` accepts no other type. `bool()` cannot do this — it coerces unset to 0, which
+ *  would make "never stated" indistinguishable from "stated false". */
+const triBool = (v: boolean | undefined): number | null => (v === undefined ? null : v ? 1 : 0);
 const jsonOrNull = (v: unknown) => (v === undefined || v === null ? null : JSON.stringify(v));
+
+/**
+ * Add a column only if it is missing.
+ *
+ * `createSchema` runs its `CREATE TABLE IF NOT EXISTS` BEFORE the migration chain, and that
+ * statement now names every current column — so on an already-provisioned store the column being
+ * migrated may already be there, and a bare ALTER dies with "duplicate column name". The migration
+ * therefore states the INTENT (this store must end up with this column) and does nothing when the
+ * shape is already right.
+ */
+const addColumnIfMissing = (db: DatabaseSync, table: string, column: string, definition: string) => {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (columns.some(c => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+};
 
 /** Rebuild an object from a row, dropping SQL NULLs so optional fields stay absent. */
 function compact<T>(row: Record<string, unknown>): T {
@@ -183,9 +210,18 @@ export class Store {
     // v1 -> v2: the store-shared-locally flag. Additive column; CREATE TABLE IF NOT EXISTS left the
     // existing table untouched, so an ALTER adds it to already-provisioned stores.
     if (current === 1) {
-      this.db.exec('ALTER TABLE seen ADD COLUMN storedFull INTEGER NOT NULL DEFAULT 0');
+      addColumnIfMissing(this.db, 'seen', 'storedFull', 'INTEGER NOT NULL DEFAULT 0');
       this.db.exec('PRAGMA user_version = 2');
       current = 2;
+    }
+    // v2 -> v3: the two reunification facts, as additive columns. Nullable and unset for every
+    // mapping that already exists, because neither fact is true of a share made the ordinary way:
+    // an existing mirror was created by this sidecar and is not part of a reunion.
+    if (current === 2) {
+      addColumnIfMissing(this.db, 'mappings', 'adopted', 'INTEGER');
+      addColumnIfMissing(this.db, 'mappings', 'reunified', 'INTEGER');
+      this.db.exec('PRAGMA user_version = 3');
+      current = 3;
     }
     if (current !== SCHEMA_VERSION)
       throw new Error(
@@ -263,6 +299,8 @@ export class Store {
         forPeerUserIds TEXT,
         albumOwnerName TEXT,
         albumOwnerId TEXT,
+        adopted INTEGER,
+        reunified INTEGER,
         dead INTEGER NOT NULL DEFAULT 0,
         deadAt TEXT,
         deadReason TEXT,
@@ -335,6 +373,12 @@ export class Store {
       const m = compact<Mapping>(r);
       m.dead = !!r.dead;
       if (!r.dead) delete m.dead;
+      // Both facts are nullable, and unset is meaningful: a mapping written before v3 was neither
+      // adopted nor reunified, which is not the same as being explicitly false.
+      m.adopted = !!r.adopted;
+      if (!r.adopted) delete m.adopted;
+      m.reunified = !!r.reunified;
+      if (!r.reunified) delete m.reunified;
       if (r.forPeerUserIds) m.forPeerUserIds = JSON.parse(r.forPeerUserIds as string);
       return m;
     });
@@ -387,8 +431,9 @@ export class Store {
       const insMap = this.db.prepare(
         `INSERT INTO mappings (id, role, albumId, albumName, peer, remoteAlbumId, remoteMappingId,
            permissions, hostSlug, via, forPeerUserIds, albumOwnerName, albumOwnerId,
+           adopted, reunified,
            dead, deadAt, deadReason, failCount, localVersion, remoteVersion, commentCount, remoteCommentCount)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const m of cols.mappings)
         insMap.run(
@@ -405,6 +450,10 @@ export class Store {
           jsonOrNull(m.forPeerUserIds),
           orNull(m.albumOwnerName),
           orNull(m.albumOwnerId),
+          // NOT bool(): unset must stay SQL NULL — see triBool. `dead` keeps bool() because its
+          // column is NOT NULL and has no third state.
+          triBool(m.adopted),
+          triBool(m.reunified),
           bool(m.dead),
           orNull(m.deadAt),
           orNull(m.deadReason),
