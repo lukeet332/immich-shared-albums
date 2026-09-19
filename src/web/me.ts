@@ -94,8 +94,12 @@ export async function myMatches(creds: Creds, callerUserId: string): Promise<Act
       // The share this pairing is about, if one exists yet: this peer's mapping on an album of that
       // name. Absent is the ordinary case for two halves that have never been shared — the match is
       // still worth showing, and the panel simply offers no action without a share to act on.
+      // An ADOPTED mapping means this pairing is already reunited, so there is nothing left to
+      // offer: the row used to render "Reunite these albums" anyway, and clicking it could only fail
+      // ("cannot be reunited with that album"). The album is listed under the reunified albums
+      // instead, which is where its Un-reunite lives.
       const mapping = state.mappings.find(
-        m => !m.dead && m.peer === peer.pub && m.albumName === candidate.mine.name
+        m => !m.dead && !m.adopted && m.peer === peer.pub && m.albumName === candidate.mine.name
       );
       out.push({ ...candidate, ...(mapping ? { mappingId: mapping.id } : {}) });
     }
