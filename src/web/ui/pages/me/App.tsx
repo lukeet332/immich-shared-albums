@@ -173,8 +173,10 @@ export const App = () => {
               .filter(a => a.reunified)
               .map(a => (
                 <div style={s.item} key={a.mappingId}>
-                  <div style={s.title}>{a.name}</div>
-                  <div style={s.sub}>reunited with {a.peer}</div>
+                  <div style={s.grow}>
+                    <div style={s.title}>{a.name}</div>
+                    <div style={s.sub}>reunited with {a.peer}</div>
+                  </div>
                   <button style={s.button} disabled={!!detaching} onClick={() => onUnreunite(a)}>
                     {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite (keep my album)'}
                   </button>
@@ -196,12 +198,14 @@ export const App = () => {
           <div style={s.card}>
             {matches.map(m => (
               <div style={s.item} key={rowKey(m)}>
-                <div style={s.title}>{m.mine.name}</div>
-                <div style={s.sub}>
-                  yours: {m.mine.assetCount} {m.mine.assetCount === 1 ? 'photo' : 'photos'} ·{' '}
-                  {m.theirs.ownerName} on {m.peerName}: {m.theirs.assetCount}{' '}
-                  {m.theirs.assetCount === 1 ? 'photo' : 'photos'}
-                  {m.sameDates ? ' · dates line up' : ''}
+                <div style={s.grow}>
+                  <div style={s.title}>{m.mine.name}</div>
+                  <div style={s.sub}>
+                    yours: {m.mine.assetCount} {m.mine.assetCount === 1 ? 'photo' : 'photos'} ·{' '}
+                    {m.theirs.ownerName} on {m.peerName}: {m.theirs.assetCount}{' '}
+                    {m.theirs.assetCount === 1 ? 'photo' : 'photos'}
+                    {m.sameDates ? ' · dates line up' : ''}
+                  </div>
                 </div>
                 {m.step.kind === 'invite' && (
                   // Nothing shared between the two of you yet. This shares MY album with them, the

@@ -81,7 +81,19 @@ export const s = {
     margin: '14px 0',
   },
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
-  item: { padding: 'var(--isa-space-4) 0', borderBottom: `1px solid var(--isa-hairline)`, fontSize: 14 },
+  /** One row: what it is on the left, what you can do about it on the right, and the action drops
+   *  below only when the text needs the width — a phone in portrait, or a long album name. */
+  item: {
+    padding: 'var(--isa-space-4) 0',
+    borderBottom: `1px solid var(--isa-hairline)`,
+    fontSize: 14,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 'var(--isa-space-3)',
+    flexWrap: 'wrap',
+  },
+  grow: { flex: '1 1 220px', minWidth: 0 },
   /** A row's own rhythm: what it is, what it is made of, what you can do about it — 4px apart. */
   title: { fontSize: 15, fontWeight: 600, letterSpacing: '-.01em' },
   h2: { display: 'block', fontSize: 18, margin: 'var(--isa-space-6) 0 var(--isa-space-2)' },
@@ -100,6 +112,8 @@ export const s = {
     width: '100%',
   },
   button: {
+    flex: 'none',
+    minHeight: 40,
     font: 'inherit',
     fontSize: 14,
     fontWeight: 600,
