@@ -32,11 +32,26 @@ while :; do
   load=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo '"?"')
 
   containers='[]'
-  if [ $((tick % STATS_EVERY)) -eq 1 ]; then
-    # --no-stream costs a round trip per tick, hence the throttle. Name and bytes only: a JSONL
-    # reader wants numbers, and `docker stats` formatting is locale/width dependent.
+  # `(tick - 1) % STATS_EVERY`, NOT `tick % STATS_EVERY`: the latter is never 1 when STATS_EVERY is
+  # 1, so asking for every tick sampled nothing at all.
+  if [ $(((tick - 1) % STATS_EVERY)) -eq 0 ]; then
+    # --no-stream costs a round trip per tick, hence the throttle. Name and MiB only: a JSONL reader
+    # wants numbers, and `docker stats` formatting is locale/width dependent.
     containers=$(docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' 2>/dev/null \
-      | awk '{split($2,a,"/"); split(a[1],n,"iB"); printf "%s{\"name\":\"%s\",\"mem_mib\":%.1f}", (NR>1?",":""), $1, n[1]}' \
+      | awk '
+          # docker prints a unit per figure ("1.5GiB", "640MiB", "12.3kB"). Stripping the unit and
+          # reporting the number as MiB understated everything above MiB by 1024x.
+          function to_mib(v,   num, unit) {
+            match(v, /^[0-9.]+/); num = substr(v, 1, RLENGTH) + 0; unit = substr(v, RLENGTH + 1);
+            if (unit == "B") return num / 1048576;
+            if (unit ~ /^k/) return num / 1024;
+            if (unit ~ /^M/) return num;
+            if (unit ~ /^G/) return num * 1024;
+            if (unit ~ /^T/) return num * 1024 * 1024;
+            return num;
+          }
+          { split($2, a, "/"); printf "%s{\"name\":\"%s\",\"mem_mib\":%.1f}", (NR>1?",":""), $1, to_mib(a[1]) }
+        ' \
       | sed 's/^/[/; s/$/]/')
     [ -n "$containers" ] || containers='[]'
   fi
