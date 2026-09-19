@@ -81,7 +81,7 @@ worse without saying so.**
   that had to be found twice. So:
   - **Lift it, then delete the copies.** A shared module, a token file, a named function. The
     extraction is not done while a literal of it remains somewhere else.
-  - **The test cases are in the tree.** `sync/album-invite.ts` lets `sync/invites.ts` record the
+  - **The test cases are in the tree.** `src/sync/album-invite.ts` lets `src/sync/invites.ts` record the
     invitation rather than writing a second owner mapping; `src/web/ui/lib/tokens.css` is the only
     file in `src/web/ui` that contains a colour, and every page's stylesheet imports it. Both were
     caught in review for doing it the other way first.

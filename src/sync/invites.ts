@@ -284,7 +284,7 @@ export async function detectInvitesOnce() {
  * and a push-based invite would fail for exactly those households.
  */
 /** The last membership refusal reported per mapping, so a refusal is said once rather than per tick. */
-const refusedMemberships = new Map<string, string>();
+const refusedMemberships = new Set<string>();
 
 export const invitationsFor = (peerPub: string) =>
   state.mappings
@@ -312,6 +312,19 @@ export const invitationsFor = (peerPub: string) =>
 async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
   const host = mapping.hostSlug ? state.contributors[mapping.hostSlug] : undefined;
   if (!host?.apiKey) return;
+  if (mapping.adopted) {
+    // NOTHING TO ATTEMPT, so nothing to read: an adopted album belongs to a local human, and only that
+    // owner can add or remove a member — the stand-in key answers `403 albumUser.create` forever.
+    if (!refusedMemberships.has(mapping.id)) {
+      refusedMemberships.add(mapping.id);
+      const peer = state.peers.find(p => p.pub === mapping.peer);
+      log(
+        `"${mapping.albumName}" is reunified — its members are the local owner's to change, so changes made ` +
+          `at "${peer?.name ?? mapping.peer}" need the reunion re-run from the panel`
+      );
+    }
+    return;
+  }
   let alb;
   try {
     alb = await callAs(readCredsFor(mapping), `/albums/${mapping.albumId}`);
@@ -319,31 +332,11 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
     return;
   } // album gone: the withdrawal path will clean up
   const humans = (await immichJson('/admin/users')).filter(u => !isUtilityEmail(u.email));
-  // The set arithmetic lives in invitees.ts so it can be tested without a container — this is
-  // the only path that removes a real person from a real album.
   const { add, remove } = diffInvitees({
     wanted: forUserIds,
     current: (alb.albumUsers || []).filter(au => au.role !== 'owner' && au.user?.id).map(au => au.user.id),
     local: humans.map(u => u.id),
   });
-  // An adopted album belongs to a local human, so the stand-in key cannot widen it — Immich answers
-  // `403 albumUser.create`, every cycle, forever. The people the invitation NAMES were placed at
-  // adoption on the owner's credential (album-grant.ts); anything the origin changes afterwards
-  // needs that owner again, so say so once per change instead of looping the refusal.
-  if (mapping.adopted && (add.length || remove.length)) {
-    // ONCE PER CHANGE, which is what the note above always claimed: a rig (or a host) on a fast tick
-    // turned one refusal into a line a second, drowning the log it is written to be read in. A real
-    // change — a different set of people — is still reported.
-    const refusal = `${add.length}add/${remove.length}remove`;
-    if (refusedMemberships.get(mapping.id) !== refusal) {
-      refusedMemberships.set(mapping.id, refusal);
-      log(
-        `"${mapping.albumName}" is reunified — ${add.length} person(s) to add, ${remove.length} to remove ` +
-          `need the album's owner; re-run the reunion from the panel`
-      );
-    }
-    return;
-  }
   if (add.length) {
     try {
       // same vanilla-parity rule as p2p/mirror.ts: the share's permission picks the role
