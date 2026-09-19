@@ -310,10 +310,9 @@ async function roundTrip(peer: Peer, header: FrameHeader, body: Buffer) {
   }
 }
 
-/** Run a request, and on a connection death re-dial ONCE and run it again. The peer restarted;
- *  the first attempt may or may not have been processed, and every route here is idempotent by
- *  checksum — a ref push materialises through a ledger and an in-flight guard — so a duplicate
- *  is a no-op rather than a double-write. */
+/** Run a request, and on a connection death re-dial ONCE and run it again. The peer restarted and
+ *  the request may or may not have been processed, so this is offered only to requests that carry
+ *  no body — see the note at the call site. */
 async function withRedialOnDeath<T>(peer: Peer, what: string, attempt: () => Promise<T>): Promise<T> {
   try {
     return await attempt();
@@ -332,7 +331,7 @@ export async function peerRequest(
   jsonBody?: unknown
 ): Promise<{ status: number; json: any }> {
   const body = jsonBody === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(jsonBody));
-  return withRedialOnDeath(peer, `${path} to ${peer.name}`, async () => {
+  const attempt = async () => {
     const { bi, conn, started } = await roundTrip(peer, { path }, body);
     try {
       trace(`← ${peer.name} ${path}: awaiting response header (${Date.now() - started}ms)`);
@@ -362,7 +361,13 @@ export async function peerRequest(
       );
       throw e;
     }
-  });
+  };
+  // REDIAL ONLY A REQUEST THAT CARRIED NO BODY. A body means the peer may already have acted on it
+  // before the connection died, and repeating it is not free: `materialiseRef` records its checksum
+  // only AFTER the upload and the album add, so a second `/refs` can add a second stub — with a
+  // random tail, which is exactly what stops Immich collapsing the two. A bodyless request is a read
+  // and safe to repeat; anything else is left to the caller, which knows what it has recorded.
+  return jsonBody === undefined ? withRedialOnDeath(peer, `${path} to ${peer.name}`, attempt) : attempt();
 }
 
 /** Byte request with a peer — previews, originals, playback. Range rides the frame header. */

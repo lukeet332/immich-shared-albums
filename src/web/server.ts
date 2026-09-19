@@ -15,7 +15,7 @@
 import http from 'node:http';
 import { CFG, log, ROUTE_PREFIX } from '../config.ts';
 import { state, store, storeSharedAssetsLocally } from '../state.ts';
-import { publicShareLinkMeta } from '../immich/client.ts';
+import { immichJson, publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
 import { myAlbums, myMatches, publishAlbumsForPeer } from './me.ts';
@@ -320,12 +320,25 @@ export const server = http.createServer(async (req, res) => {
         return send(400, { error: 'malformed request body' });
       }
       if (typeof asked.mappingId !== 'string') return send(400, { error: 'name the share to un-reunite' });
-      const mapping = state.mappings.find(m => m.id === asked.mappingId && !m.dead);
-      if (!mapping) return send(404, { error: 'no such share', code: 'unknown_mapping' });
-      // Only a share this caller is in: read as themselves, so a mapping they cannot see is one
-      // they cannot name.
+      // ONLY AN ADOPTION, and only its album's owner. Membership is not authority here: on a mapping
+      // that is not an adoption `leaveAlbum` DELETES the album, so an un-reunify that accepted one
+      // would be a leave button wearing the wrong label. `canUnifyOwnAlbum` checks the other
+      // direction (which album may be adopted) and cannot stand in for this.
+      const mapping = state.mappings.find(m => m.id === asked.mappingId && !m.dead && m.adopted === true);
+      if (!mapping) return send(404, { error: 'no such reunified share', code: 'unknown_mapping' });
       const visible = await visibleAlbumIds(signedIn.creds);
       if (!visible.has(mapping.albumId)) return send(403, { error: 'that share is not yours' });
+      // Ownership is the fact that matters: the album is the person's own, and only they may give up
+      // the reunion. Read as the caller, so the answer comes from Immich rather than from a claim.
+      const reunionAlbum = await immichJson(
+        `/albums/${mapping.albumId}?withoutAssets=true`,
+        {},
+        signedIn.creds
+      ).catch(() => null);
+      const callerOwnsIt = (reunionAlbum?.albumUsers || []).some(
+        au => au.user?.id === signedIn.caller.id && au.role === 'owner'
+      );
+      if (!callerOwnsIt) return send(403, { error: "only the album's owner can un-reunite it" });
       try {
         const { albumId, albumName } = mapping;
         // Purge the peer's stubs FIRST, while our accounts still hold the memberships they were
