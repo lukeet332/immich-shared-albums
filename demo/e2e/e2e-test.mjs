@@ -947,13 +947,17 @@ stage('native album invitations, per person (no share link)');
         const rootHtml = await root.text();
         check('the root answers any signed-in caller instead of refusing a non-admin',
               root.status === 200, `status=${root.status}`);
-        check('the root is the chooser, not one of the panels',
-              /id="app"/.test(rootHtml) && !/Connected servers/i.test(rootHtml),
-              `chooser=${/id="app"/.test(rootHtml)} page=${rootHtml.length}b`);
+        // Both documents begin identically (same title, same mount point), so the discriminator is
+        // which page's script they load — the panel's own text is rendered client-side and appears
+        // in neither.
+        check('the root serves the chooser, not one of the panels',
+              /assets\/root\.js/.test(rootHtml) && !/assets\/panel\.js/.test(rootHtml),
+              `root.js=${/assets\/root\.js/.test(rootHtml)} panel.js=${/assets\/panel\.js/.test(rootHtml)}`);
+        // No session at all, which is a different question from the admin link above: the root is
+        // public to signed-in people, not to everyone.
         const signedOut = await fetch(`${BS}/immich-shared-albums/`);
         check('the root still refuses someone with no session at all',
-              signedOut.status === 401 || signedOut.status === 302,
-              `status=${signedOut.status}`);
+              signedOut.status === 401, `status=${signedOut.status}`);
         check('the panel is told the household to name in its heading',
               secondPanel.household === 'Demo household (B)',
               `household=${JSON.stringify(secondPanel.household)}`);
