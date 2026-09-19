@@ -18,7 +18,7 @@ import { state, store, storeSharedAssetsLocally } from '../state.ts';
 import { publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
-import { myAlbums, publishAlbumsForPeer } from './me.ts';
+import { myAlbums, myMatches, publishAlbumsForPeer } from './me.ts';
 import { parseRequestedPeer } from '../sync/matches.ts';
 import { sharePage, signInPage } from './assets.ts';
 import { localAddr } from '../p2p/transport.ts';
@@ -289,6 +289,13 @@ export const server = http.createServer(async (req, res) => {
       const published = await publishAlbumsForPeer(signedIn.creds, signedIn.caller.id, peer.pub);
       log(`${signedIn.caller.name} offered ${published} owned album(s) to "${peer.name}" for matching`);
       return send(200, { published });
+    }
+    // Albums the caller could reunite. Read-only and computed on demand: nothing here changes an
+    // album, which is why the panel offers no action yet.
+    if (path === `${ROUTE_PREFIX}/me/matches` && req.method === 'GET') {
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('see possible reunions'));
+      return send(200, { matches: await myMatches(signedIn.creds, signedIn.caller.id) });
     }
     // Rig-only progress read for the e2e suite: the same derivation `/albums/:id/status` answers
     // over iroh (`sync/status.ts`), plus the loop tick counts, so a test can wait for "the sidecar

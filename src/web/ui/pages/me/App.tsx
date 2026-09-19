@@ -3,20 +3,47 @@
  *  ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
 import { s } from '../../lib/theme.ts';
-import { myAlbums, type MyAlbum } from './api.ts';
+import { myAlbums, myMatches, type MyAlbum, type PeerMatch } from './api.ts';
 
 export const App = () => {
   const [albums, setAlbums] = useState<MyAlbum[] | null>(null);
+  const [matches, setMatches] = useState<PeerMatch[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     myAlbums()
       .then(r => setAlbums(r.albums))
       .catch(e => setError(e.message));
+    // Its own request: a linked server being offline must not stop the albums above rendering.
+    myMatches()
+      .then(r => setMatches(r.matches))
+      .catch(() => setMatches([]));
   }, []);
 
   return (
     <main>
+      {matches.length > 0 && (
+        <section style={{ marginBottom: 22 }}>
+          <b style={{ fontSize: 18 }}>Possible reunions</b>
+          <p style={{ ...s.muted, marginTop: 6 }}>
+            Same-named albums on a linked server. Nothing has changed on either side — reuniting them comes
+            next, once both album owners have agreed.
+          </p>
+          <div style={s.card}>
+            {matches.map(m => (
+              <div style={s.item} key={`${m.peer}:${m.mine.name}:${m.theirs.ownerName}`}>
+                <div>{m.mine.name}</div>
+                <div style={s.sub}>
+                  yours: {m.mine.assetCount} {m.mine.assetCount === 1 ? 'photo' : 'photos'} ·{' '}
+                  {m.theirs.ownerName} on {m.peerName}: {m.theirs.assetCount}{' '}
+                  {m.theirs.assetCount === 1 ? 'photo' : 'photos'}
+                  {m.sameDates ? ' · dates line up' : ''}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       <b style={{ fontSize: 18 }}>Your shared albums</b>
       <p style={{ ...s.muted, marginTop: 6 }}>
         Albums shared between this server and a linked one that you're part of.

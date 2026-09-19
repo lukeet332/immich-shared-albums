@@ -9,8 +9,9 @@
 import { state } from '../state.ts';
 import type { Mapping } from '../store.ts';
 import type { Creds } from '../immich/access.ts';
-import { visibleAlbumIds } from '../immich/access.ts';
-import { publishOwnedAlbums } from '../sync/album-index.ts';
+import { readCallerAlbums, visibleAlbumIds } from '../immich/access.ts';
+import { publishOwnedAlbums, refreshPeerAlbums } from '../sync/album-index.ts';
+import { albumsIPublish, matchesWithPeer, type PeerMatch } from '../sync/matches.ts';
 
 export type MyAlbum = { name: string; role: Mapping['role']; via: Mapping['via']; peer: string };
 
@@ -28,6 +29,25 @@ export async function publishAlbumsForPeer(
 ): Promise<number> {
   const albums = await publishOwnedAlbums(creds, callerUserId, peer);
   return albums.length;
+}
+
+/**
+ * Albums the caller could reunite with a linked server's.
+ *
+ * The caller's own albums are read from Immich on their forwarded credential — the same call the
+ * publish path makes, for the same reason — and each linked peer's index is refreshed first, so a
+ * peer that has published since the last visit is seen now. Panels are visited rarely, so this
+ * spends one request per peer when it is opened rather than on every sync tick.
+ */
+export async function myMatches(creds: Creds, callerUserId: string): Promise<PeerMatch[]> {
+  const mine = albumsIPublish(await readCallerAlbums(creds), callerUserId);
+  if (!mine.length) return [];
+  const out: PeerMatch[] = [];
+  for (const peer of state.peers) {
+    const theirs = await refreshPeerAlbums(peer);
+    out.push(...matchesWithPeer(mine, theirs, peer));
+  }
+  return out;
 }
 
 /** The caller's shared albums: mappings whose local album the caller can see, as themselves.

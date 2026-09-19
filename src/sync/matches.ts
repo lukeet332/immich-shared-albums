@@ -54,6 +54,23 @@ export function albumsIPublish(albums, userId: string): OwnedAlbum[] {
   return albums.map((album: unknown) => ownedAlbumFrom(album, userId)).filter(Boolean) as OwnedAlbum[];
 }
 
+/** One candidate as a person's panel sees it: my album, theirs, and whose server theirs is on.
+ *  Built from `matchAlbums` — the pairing rule lives in one place, and this only names the peer. */
+export type PeerMatch = AlbumCandidate & { peer: string; peerName: string };
+
+/** Candidates on one peer, by that peer's name as this household knows it. */
+export function matchesWithPeer(
+  mine: OwnedAlbum[],
+  theirs: OwnedAlbum[],
+  peer: { pub: string; name: string }
+): PeerMatch[] {
+  return matchAlbums(mine, theirs).map(candidate => ({
+    ...candidate,
+    peer: peer.pub,
+    peerName: peer.name,
+  }));
+}
+
 /** Lowercase and collapse whitespace — recall, not privacy (§3). Everything else is significant:
  *  two albums differing in punctuation or digits are different albums, and treating them as one is
  *  how "Photos" swallows "Photos 2024". */

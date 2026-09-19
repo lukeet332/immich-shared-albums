@@ -1,7 +1,13 @@
 /** matches.test.ts — the pure half of reunification matching. See matches.ts. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { albumsIPublish, matchAlbums, normaliseAlbumName, type OwnedAlbum } from './matches.ts';
+import {
+  albumsIPublish,
+  matchAlbums,
+  matchesWithPeer,
+  normaliseAlbumName,
+  type OwnedAlbum,
+} from './matches.ts';
 
 const album = (over: Partial<OwnedAlbum>): OwnedAlbum => ({
   name: 'Summer 2024',
@@ -145,4 +151,21 @@ test('one malformed album does not hide the good ones beside it', () => {
     published.map(a => a.name),
     ['Mine']
   );
+});
+
+// The panel's view of a candidate: the pairing rule stays in matchAlbums, this only names whose
+// server the other half is on — which is what a repair request will be routed by.
+test('a candidate on a peer carries the peer it was found on', () => {
+  const found = matchesWithPeer([album({})], [album({ ownerUserId: 'u-bob', ownerName: 'Bob' })], {
+    pub: 'peer-pub',
+    name: "Bob's server",
+  });
+  assert.equal(found.length, 1);
+  assert.equal(found[0].peer, 'peer-pub');
+  assert.equal(found[0].peerName, "Bob's server");
+  assert.equal(found[0].theirs.ownerName, 'Bob');
+});
+
+test('no candidates means an empty list, not a peer record', () => {
+  assert.deepEqual(matchesWithPeer([album({})], [], { pub: 'p', name: 'P' }), []);
 });

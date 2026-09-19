@@ -1,9 +1,13 @@
 # Post-v1 design spec: Google shared-album reunification & the user-level surface
 
-> Status: **design, not built.** Everything here is post-v1 and confirmed **non-breaking** — it
-> rides surfaces and identities that v1 already ships and freezes. Captured from the 2026-08-25
-> design discussion. Decisions are marked **[decided]**; open choices **[open]**; things
-> considered and dropped are in "Rejected alternatives" with rationale.
+> Status: **matching is built; the merge is not.** §2's match and the panel surface exist —
+> `sync/matches.ts` pairs the halves, `sync/album-index.ts` records what each side offers, and the
+> matches list shows in the per-user panel with no action attached. Adopting an album, the
+> non-destructive suppression, the audit trail and `/commands` remain design. Everything here is
+> post-v1 and confirmed **non-breaking** — it rides surfaces and identities that v1 already ships
+> and freezes. Captured from the 2026-08-25 design discussion. Decisions are marked **[decided]**;
+> open choices **[open]**; things considered and dropped are in "Rejected alternatives" with
+> rationale.
 
 ## 1. Why this is possible without breaking changes
 
