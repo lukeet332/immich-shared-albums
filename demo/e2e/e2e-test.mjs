@@ -1118,9 +1118,21 @@ stage('native album invitations, per person (no share link)');
         check('un-reunifying gives the share back as a mirror, so the invitation is still live',
               !!remirrored, remirrored ? `mirror ${remirrored.album.id.slice(0, 8)}` : 'no mirror re-created');
 
+        // WAITED FOR, not sampled. The mirror's EXISTENCE and its human membership are two
+        // different moments: the sidecar creates the album and then adds the people it is for, so a
+        // read taken as soon as the album appears can legitimately find it empty. Sampling once here
+        // failed in CI on a freshly re-created mirror, and the same shape of failure appeared
+        // locally and was wrongly written off as a flake — which is what a race looks like from the
+        // outside when you only ever see it once.
+        const invitedOnly = await until(async () => {
+          const humans = await humansOn(mirrored).catch(() => []);
+          return humans.length === 1 && humans[0] === bAdmin.name ? humans : null;
+        }, 60000);
         check('an invite reaches ONLY the invited person',
-              (await humansOn(mirrored).catch(() => [])).join(',') === bAdmin.name,
-              (await humansOn(mirrored).catch(() => [])).join(', '));
+              !!invitedOnly,
+              invitedOnly
+                ? invitedOnly.join(', ')
+                : `${(await humansOn(mirrored).catch(() => [])).join(', ') || 'nobody yet'} — not just ${bAdmin.name}`);
 
         // The per-user panel must answer AS the caller. This user belongs to the one album they
         // joined and none of the others the admin can see — so a filtered admin read, which
