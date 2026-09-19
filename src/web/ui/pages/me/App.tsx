@@ -163,7 +163,7 @@ export const App = () => {
       )}
       {albums && albums.some(a => a.reunified) && (
         <section style={{ marginBottom: 22 }}>
-          <b style={{ fontSize: 18 }}>Reunified albums</b>
+          <b style={s.h2}>Reunified albums</b>
           <p style={{ ...s.muted, marginTop: 6 }}>
             Albums you merged with another server. Leaving one keeps your album and your own photos, and
             removes only the photos that came from the other server.
@@ -173,7 +173,7 @@ export const App = () => {
               .filter(a => a.reunified)
               .map(a => (
                 <div style={s.item} key={a.mappingId}>
-                  <div>{a.name}</div>
+                  <div style={s.title}>{a.name}</div>
                   <div style={s.sub}>reunited with {a.peer}</div>
                   <button style={s.button} disabled={!!detaching} onClick={() => onUnreunite(a)}>
                     {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite (keep my album)'}
@@ -185,7 +185,7 @@ export const App = () => {
       )}
       {matches.length > 0 && (
         <section style={{ marginBottom: 22 }}>
-          <b style={{ fontSize: 18 }}>Possible album reunions</b>
+          <b style={s.h2}>Possible album reunions</b>
           <p style={{ ...s.muted, marginTop: 6 }}>
             If you and someone on a linked server uploaded the same Google Photos album separately, you each
             ended up with half of it. These look like that — the same name, owned by a different person on
@@ -196,7 +196,7 @@ export const App = () => {
           <div style={s.card}>
             {matches.map(m => (
               <div style={s.item} key={rowKey(m)}>
-                <div>{m.mine.name}</div>
+                <div style={s.title}>{m.mine.name}</div>
                 <div style={s.sub}>
                   yours: {m.mine.assetCount} {m.mine.assetCount === 1 ? 'photo' : 'photos'} ·{' '}
                   {m.theirs.ownerName} on {m.peerName}: {m.theirs.assetCount}{' '}
@@ -227,7 +227,7 @@ export const App = () => {
           </div>
         </section>
       )}
-      <b style={{ fontSize: 18 }}>Your shared albums</b>
+      <b style={s.h2}>Your shared albums</b>
       <p style={{ ...s.muted, marginTop: 6 }}>
         Albums shared between this server and a linked one that you're part of.
       </p>
@@ -244,7 +244,7 @@ export const App = () => {
         <div style={s.card}>
           {albums.map(a => (
             <div style={s.item} key={`${a.peer}:${a.name}`}>
-              <div>{a.name}</div>
+              <div style={s.title}>{a.name}</div>
               <div style={s.sub}>
                 {a.role === 'owner' ? 'shared by you' : 'shared with you'} · with {a.peer}
               </div>

@@ -77,11 +77,14 @@ export const s = {
     background: t.card,
     border: `1px solid ${t.line}`,
     borderRadius: t.radius,
-    padding: 18,
+    padding: 'var(--isa-pad-card)',
     margin: '14px 0',
   },
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
-  item: { padding: '9px 0', borderBottom: `1px solid var(--isa-hairline)`, fontSize: 14 },
+  item: { padding: 'var(--isa-space-4) 0', borderBottom: `1px solid var(--isa-hairline)`, fontSize: 14 },
+  /** A row's own rhythm: what it is, what it is made of, what you can do about it — 4px apart. */
+  title: { fontSize: 15, fontWeight: 600, letterSpacing: '-.01em' },
+  h2: { display: 'block', fontSize: 18, margin: 'var(--isa-space-6) 0 var(--isa-space-2)' },
   muted: { color: t.muted, fontSize: 13 },
   sub: { color: t.muted, fontSize: 12 },
   input: {
