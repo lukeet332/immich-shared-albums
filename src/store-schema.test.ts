@@ -70,7 +70,7 @@ test('a v2 database migrates to v3 by adding the reunification facts, keeping ex
   db.close();
 
   const store = new Store(dir);
-  assert.equal(SCHEMA_VERSION, 3, 'this migration targets schema v3');
+  assert.equal(SCHEMA_VERSION, 4, 'this migration chain targets schema v4');
   assert.equal(
     (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
     SCHEMA_VERSION,
@@ -80,6 +80,40 @@ test('a v2 database migrates to v3 by adding the reunification facts, keeping ex
   assert.ok(mapping, 'pre-existing mappings survive the migration');
   assert.equal(mapping.adopted, undefined, 'an existing mapping is not retroactively marked adopted');
   assert.equal(mapping.reunified, undefined, 'nor retroactively marked reunified');
+  store.db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// v3 -> v4: the album index gained a direction. A v3 row is keyed by peer alone, so whether it was
+// what this server OFFERS that peer or what it RECEIVED from them is not recoverable — and guessing
+// wrong serves a peer its own albums back. Both halves rebuild from living sources, so the migration
+// drops them rather than inventing a direction.
+test('a v3 album index loses rows whose direction cannot be known', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'isa-v3-index-'));
+  const db = new DatabaseSync(path.join(dir, 'state.db'));
+  db.exec(`
+    CREATE TABLE kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE published_albums (
+      peer TEXT NOT NULL, ownerUserId TEXT NOT NULL, name TEXT NOT NULL,
+      assetCount INTEGER NOT NULL DEFAULT 0, startDate TEXT, endDate TEXT,
+      ownerName TEXT NOT NULL DEFAULT ''
+    );
+    PRAGMA user_version = 3;
+  `);
+  db.prepare(
+    `INSERT INTO published_albums (peer, ownerUserId, name, ownerName)
+     VALUES ('peer-1', 'u-bob', 'Bob album', 'Bob')`
+  ).run();
+  db.close();
+
+  const store = new Store(dir);
+  assert.equal(
+    (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+    SCHEMA_VERSION,
+    'the v3 db is migrated up, not refused'
+  );
+  assert.deepEqual(store.publishedAlbumsFor('peer-1', 'to-them'), [], 'no invented offer');
+  assert.deepEqual(store.publishedAlbumsFor('peer-1', 'from-them'), [], 'no invented receipt');
   store.db.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

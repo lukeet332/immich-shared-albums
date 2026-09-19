@@ -15,13 +15,18 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * One album a person owns, as it is published to a linked peer for matching. No album id: the
  * peer cannot act on an id it has no mapping for, so sending one would be disclosure without a
  * use.
  */
+/** Which way an index row points. The two are NOT interchangeable: one is what this server offers a
+ *  peer, the other is what it received from them, and serving one as the other hands a peer its own
+ *  albums back. */
+export type Direction = 'to-them' | 'from-them';
+
 /** A peer's index arrives as one flat list; the table keys it per owner, so split it here. Entries
  *  with no owner are dropped: ownership is what routes a match to a person, so one cannot be routed
  *  without it. */
@@ -238,10 +243,25 @@ export class Store {
       this.db.exec('PRAGMA user_version = 3');
       current = 3;
     }
+    // v3 -> v4: the two DIRECTIONS of the album index get their own rows. They were keyed by peer
+    // alone, so one peer's key held both what this server OFFERS them and what it RECEIVED from them
+    // — which meant serving a peer its own albums back, and made it impossible to tell "they
+    // withdrew this" from "I offered this". A row cannot be assigned a direction after the fact, and
+    // both halves rebuild from living sources (the offered one when a panel next offers, the
+    // received one on the next refresh), so the migration clears rather than guesses.
+    if (current === 3) {
+      addColumnIfMissing(this.db, 'published_albums', 'direction', "TEXT NOT NULL DEFAULT 'to-them'");
+      this.db.exec('DELETE FROM published_albums');
+      this.db.exec('PRAGMA user_version = 4');
+      current = 4;
+    }
     if (current !== SCHEMA_VERSION)
       throw new Error(
         `state.db is schema v${current}, this build writes v${SCHEMA_VERSION} — no migration exists for that jump`
       );
+    // Indexes that name a MIGRATED column belong after the chain, not in createSchema: a fresh table
+    // has the column, a v3 one only gains it in the migration above, and CREATE INDEX runs either way.
+    this.db.exec('CREATE INDEX IF NOT EXISTS published_albums_peer ON published_albums (peer, direction)');
     this.state = {
       identity: this.kvGet('identity'),
       peers: this.loadPeers(),
@@ -345,6 +365,7 @@ export class Store {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS published_albums (
         peer TEXT NOT NULL,
+        direction TEXT NOT NULL,
         ownerUserId TEXT NOT NULL,
         name TEXT NOT NULL,
         assetCount INTEGER NOT NULL DEFAULT 0,
@@ -352,7 +373,6 @@ export class Store {
         endDate TEXT,
         ownerName TEXT NOT NULL DEFAULT ''
       );
-      CREATE INDEX IF NOT EXISTS published_albums_peer ON published_albums (peer);
     `);
   }
 
@@ -559,11 +579,11 @@ export class Store {
   /** Replace one owner's published albums for one peer. A replace, never a merge: an album its
    *  owner deleted must stop being offered, or the peer keeps matching against an album that no
    *  longer exists. Transactional so a crash cannot serve a half-written index. */
-  publishedAlbumsSet(peer: string, ownerUserId: string, albums: OwnedAlbum[]) {
-    this.writePublished(peer, new Map([[ownerUserId, albums]]), () =>
+  publishedAlbumsSet(peer: string, direction: Direction, ownerUserId: string, albums: OwnedAlbum[]) {
+    this.writePublished(peer, direction, new Map([[ownerUserId, albums]]), () =>
       this.db
-        .prepare('DELETE FROM published_albums WHERE peer = ? AND ownerUserId = ?')
-        .run(peer, ownerUserId)
+        .prepare('DELETE FROM published_albums WHERE peer = ? AND direction = ? AND ownerUserId = ?')
+        .run(peer, direction, ownerUserId)
     );
   }
   /** Replace a peer's WHOLE index.
@@ -573,15 +593,20 @@ export class Store {
    *  the rows they left behind stay. A peer answers `/albums` with its entire index — its people's
    *  panels published it together — so silence about an owner is an ANSWER, and the rows must go
    *  with it. Without this, a peer that withdrew everything keeps being matched against. */
-  publishedAlbumsReplacePeer(peer: string, albums: OwnedAlbum[]) {
-    this.writePublished(peer, groupPublishedByOwner(albums), () =>
-      this.db.prepare('DELETE FROM published_albums WHERE peer = ?').run(peer)
+  publishedAlbumsReplacePeer(peer: string, direction: Direction, albums: OwnedAlbum[]) {
+    this.writePublished(peer, direction, groupPublishedByOwner(albums), () =>
+      this.db.prepare('DELETE FROM published_albums WHERE peer = ? AND direction = ?').run(peer, direction)
     );
   }
   /** The single write path for the index: the two replaces differ only in what they remove first. */
-  private writePublished(peer: string, albumsByOwner: Map<string, OwnedAlbum[]>, remove: () => unknown) {
+  private writePublished(
+    peer: string,
+    direction: Direction,
+    albumsByOwner: Map<string, OwnedAlbum[]>,
+    remove: () => unknown
+  ) {
     const ins = this.db.prepare(
-      'INSERT INTO published_albums (peer, ownerUserId, name, assetCount, startDate, endDate, ownerName) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO published_albums (peer, direction, ownerUserId, name, assetCount, startDate, endDate, ownerName) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     );
     this.db.exec('BEGIN');
     try {
@@ -590,6 +615,7 @@ export class Store {
         for (const album of albums)
           ins.run(
             peer,
+            direction,
             ownerUserId,
             album.name,
             album.assetCount ?? 0,
@@ -605,12 +631,12 @@ export class Store {
   }
   /** Everything this peer's people have published, by the person who owns each album. Empty for a
    *  peer we have never received a publication from. */
-  publishedAlbumsFor(peer: string): OwnedAlbum[] {
+  publishedAlbumsFor(peer: string, direction: Direction): OwnedAlbum[] {
     return this.db
       .prepare(
-        'SELECT name, assetCount, startDate, endDate, ownerUserId, ownerName FROM published_albums WHERE peer = ? ORDER BY name'
+        'SELECT name, assetCount, startDate, endDate, ownerUserId, ownerName FROM published_albums WHERE peer = ? AND direction = ? ORDER BY name'
       )
-      .all(peer) as OwnedAlbum[];
+      .all(peer, direction) as OwnedAlbum[];
   }
 
   // ---- offered index: which assets each mapping's peer is entitled to read ----

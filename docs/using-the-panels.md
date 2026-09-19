@@ -25,6 +25,9 @@ The personal panel. It answers: _what am I sharing, and with whom?_
   and a relative each imported a Takeout of "Summer 2024", that album shows up on both servers as a
   partial copy; this lists the pairs it finds, with how many photos each side holds and whether the
   dates line up. **Reunite** merges the pair into the album you already own.
+- Opening this page is also what offers **the albums you own** to each connected server, so they can
+  look for the other half of one. The pair appears for whoever opens their panel second, and for both
+  of you on every visit after that — nothing is published until someone opens their own panel.
 - **Reunified albums** — the ones you have merged, each with **Un-reunite**.
 
 Reuniting changes no photo's ownership: each album stays its own owner's, on that owner's own
