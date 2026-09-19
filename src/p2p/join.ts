@@ -83,6 +83,7 @@ export async function join(invite: JoinInvite, forUserId, password?: string) {
     remoteMappingId: res.mappingId,
     // A link join is for one account when the panel/accept page names one, else the household.
     forUserIds: forUserId ? [forUserId] : undefined,
+    reunified: res.reunified === true,
   });
   log(
     created

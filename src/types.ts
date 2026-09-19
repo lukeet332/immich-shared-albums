@@ -82,6 +82,21 @@ export type RedeemResponse = {
   albumOwner: { displayName: string; originUserId: string };
   manifest: AssetRef[]; // current human-owned photos; previews fetched separately
   mappingId: string; // quote this in refs/activity/manifest calls
+  /** This album is part of a reunion rather than an ordinary share. Additive (wire evolution rule
+   *  1): a peer that omits it is simply older, and the receiver records nothing. */
+  reunified?: boolean;
+};
+
+/** GET /invitations — one entry per album this peer has been invited to, by a human, in Immich's
+ *  own picker. Carries the same `reunified` category as a redeem, because a late joiner may arrive
+ *  by either path. */
+export type Invitation = {
+  mappingId: string;
+  album: { id: string; name: string };
+  permissions: 'view' | 'contribute';
+  albumOwner: { displayName?: string; originUserId?: string };
+  forUserIds: string[];
+  reunified?: boolean;
 };
 
 /** POST /immich-shared-albums/api/v1/albums/:mappingId/refs — offer new refs to a peer. */

@@ -294,6 +294,8 @@ export const invitationsFor = (peerPub: string) =>
       permissions: mp.permissions,
       albumOwner: { displayName: mp.albumOwnerName, originUserId: mp.albumOwnerId },
       forUserIds: mp.forPeerUserIds || [],
+      // Same additive shape as the redeem answer: present only when it is a reunion.
+      ...(mp.reunified ? { reunified: true } : {}),
     }));
 
 /**
@@ -402,6 +404,7 @@ export async function pullInvitationsOnce() {
           // Sharing is per person, so the origin always names who. Never fall back to "everyone
           // here": that would silently widen a share the sender deliberately narrowed.
           forUserIds: inv.forUserIds || [],
+          reunified: inv.reunified === true,
         });
         if (created) {
           log(
