@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm install --silent
       - name: Formatting (prettier)
         run: npm run format:check
@@ -65,7 +65,7 @@ jobs:
       # failure pattern is the evidence you need.
       E2E_FAIL_FAST: ${{ inputs.fail_fast || '1' }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Work that needs only the checkout starts here and runs UNDER the ~50s Immich boot instead
       # of after it: the sidecar image build and the browser tooling install. Each writes its exit
