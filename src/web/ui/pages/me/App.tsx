@@ -2,6 +2,7 @@
  *  can be done about each one, and the albums you have reunited. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
 import { s, t, toastStyle } from '../../lib/theme.ts';
+import { Confirm, type Confirmation } from '../../lib/confirm.tsx';
 import {
   invite,
   myAlbums,
@@ -33,6 +34,7 @@ export const App = () => {
   // An action's outcome, kept apart from the lists it describes: `kind` is what makes "done" and
   // "refused" look different, which a bare string could not.
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [asking, setAsking] = useState<Confirmation | null>(null);
 
   useEffect(() => {
     myAlbums()
@@ -132,7 +134,7 @@ export const App = () => {
         <span style={{ color: t.muted, fontWeight: 400 }}> · {household || '…'}</span>
       </h1>
       <p style={{ ...s.muted, marginBottom: 4 }}>
-        What you can see here is scoped to your own Immich account.
+        Only your own Immich account.
         {isAdmin && (
           <>
             {' '}
@@ -164,10 +166,6 @@ export const App = () => {
       {albums && albums.some(a => a.reunified) && (
         <section style={{ marginBottom: 22 }}>
           <b style={s.h2}>Reunified albums</b>
-          <p style={{ ...s.muted, marginTop: 6 }}>
-            Albums you merged with another server. Leaving one keeps your album and your own photos, and
-            removes only the photos that came from the other server.
-          </p>
           <div style={s.card}>
             {albums
               .filter(a => a.reunified)
@@ -177,8 +175,20 @@ export const App = () => {
                     <div style={s.title}>{a.name}</div>
                     <div style={s.sub}>reunited with {a.peer}</div>
                   </div>
-                  <button style={s.button} disabled={!!detaching} onClick={() => onUnreunite(a)}>
-                    {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite (keep my album)'}
+                  <button
+                    style={s.button}
+                    disabled={!!detaching}
+                    onClick={() =>
+                      setAsking({
+                        title: 'Un-reunite?',
+                        body: 'Your album keeps your photos. Only theirs are removed.',
+                        confirm: 'Un-reunite',
+                        danger: true,
+                        onConfirm: () => onUnreunite(a),
+                      })
+                    }
+                  >
+                    {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite'}
                   </button>
                 </div>
               ))}
@@ -210,12 +220,34 @@ export const App = () => {
                 {m.step.kind === 'invite' && (
                   // Nothing shared between the two of you yet. This shares MY album with them, the
                   // same membership Immich's own picker makes — so the reunion can start from here.
-                  <button style={s.button} disabled={!!inviting} onClick={() => onInvite(m)}>
+                  <button
+                    style={s.button}
+                    disabled={!!inviting}
+                    onClick={() =>
+                      setAsking({
+                        title: `Invite ${m.theirs.ownerName}?`,
+                        body: 'Shares this album with them, so they can accept the reunion.',
+                        confirm: 'Invite',
+                        onConfirm: () => onInvite(m),
+                      })
+                    }
+                  >
                     {inviting === rowKey(m) ? 'Inviting…' : `Invite ${m.theirs.ownerName}`}
                   </button>
                 )}
                 {m.step.kind === 'accept' && (
-                  <button style={s.button} disabled={!!reuniting} onClick={() => onReunite(m)}>
+                  <button
+                    style={s.button}
+                    disabled={!!reuniting}
+                    onClick={() =>
+                      setAsking({
+                        title: 'Accept the invite?',
+                        body: 'Merges their photos into your album. You can undo it.',
+                        confirm: 'Accept',
+                        onConfirm: () => onReunite(m),
+                      })
+                    }
+                  >
                     {reuniting === rowKey(m) ? 'Reuniting…' : 'Accept invite'}
                   </button>
                 )}
@@ -232,9 +264,6 @@ export const App = () => {
         </section>
       )}
       <b style={s.h2}>Your shared albums</b>
-      <p style={{ ...s.muted, marginTop: 6 }}>
-        Albums shared between this server and a linked one that you're part of.
-      </p>
       {error && <div style={s.card}>Couldn't load your albums: {error}</div>}
       {!error && albums === null && <div style={s.card}>Loading…</div>}
       {albums && albums.length === 0 && (
@@ -256,6 +285,7 @@ export const App = () => {
           ))}
         </div>
       )}
+      <Confirm ask={asking} onClose={() => setAsking(null)} />
     </main>
   );
 };

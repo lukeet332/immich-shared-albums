@@ -13,6 +13,7 @@
   --isa-accent-2: #7c3aed;
   --isa-accent-ink: #ffffff;
   --isa-focus: rgba(66, 80, 175, 0.15);
+  --isa-scrim: rgba(32, 33, 36, 0.45);
   --isa-danger: #d93025;
   --isa-danger-surface: #fce8e6;
   --isa-ok: #137333;
@@ -51,6 +52,7 @@
     --isa-accent-2: #a8c7fa;
     --isa-accent-ink: #0d1b3d;
     --isa-focus: rgba(168, 199, 250, 0.22);
+    --isa-scrim: rgba(0, 0, 0, 0.6);
     --isa-danger: #f28b82;
     --isa-danger-surface: #3a1d1d;
     --isa-ok: #81c995;
