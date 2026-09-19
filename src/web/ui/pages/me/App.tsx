@@ -198,13 +198,7 @@ export const App = () => {
       {matches.length > 0 && (
         <section style={{ marginBottom: 22 }}>
           <b style={s.h2}>Possible album reunions</b>
-          <p style={{ ...s.muted, marginTop: 6 }}>
-            If you and someone on a linked server uploaded the same Google Photos album separately, you each
-            ended up with half of it. These look like that — the same name, owned by a different person on
-            each server. <b>Invite</b> shares your album with them so they can accept it; if they invited you,{' '}
-            <b>Accept invite</b> merges their half into the album you already own. It stays yours either way,
-            and you can undo it.
-          </p>
+          <p style={{ ...s.muted, marginTop: 6 }}>The same album, half on each server.</p>
           <div style={s.card}>
             {matches.map(m => (
               <div style={s.item} key={rowKey(m)}>

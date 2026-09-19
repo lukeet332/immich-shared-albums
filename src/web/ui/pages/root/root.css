@@ -20,3 +20,16 @@ noscript {
   font-size: 14px;
   line-height: 1.55;
 }
+
+/* A choice row is a target, so it says so: the whole row responds, and the rows are separated by the
+   same hairline the panel uses. */
+.choice + .choice {
+  border-top: 1px solid var(--isa-hairline);
+}
+.choice:hover {
+  background: var(--isa-sunken);
+  border-radius: var(--isa-radius-control);
+  margin: 0 calc(-1 * var(--isa-space-3));
+  padding-left: var(--isa-space-3);
+  padding-right: var(--isa-space-3);
+}

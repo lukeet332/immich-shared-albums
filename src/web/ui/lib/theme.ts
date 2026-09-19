@@ -94,6 +94,20 @@ export const s = {
     flexWrap: 'wrap',
   },
   grow: { flex: '1 1 220px', minWidth: 0 },
+  /** A row that goes somewhere: the whole thing is the target, and the chevron says so. */
+  choice: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'var(--isa-space-3)',
+    padding: 'var(--isa-space-4) 0',
+    fontSize: 14,
+  },
+  chevron: {
+    flex: 'none',
+    color: 'var(--isa-ink-subtle, var(--isa-ink-muted))',
+    fontSize: 18,
+    lineHeight: 1,
+  },
   scrim: {
     position: 'fixed',
     inset: 0,
