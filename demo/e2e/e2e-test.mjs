@@ -952,6 +952,9 @@ stage('native album invitations, per person (no share link)');
                   bOwnAssetsBefore.filter(x => x.ownerId === bAdmin.id).length,
                 `was ${bOwnAssetsBefore.filter(x => x.ownerId === bAdmin.id).length}`);
           // A's photo arrived as a stub: present in B's album, owned by a bot, not by B.
+          console.log(
+            `  (B polls album ${bOwnBefore.id.slice(0, 8)}; B albums named that: ${JSON.stringify((await api(B, BKEY, '/albums')).filter(a => a.albumName === 'natively invited album').map(a => ({ id: a.id.slice(0, 8), count: a.assetCount })))})`
+          );
           const union = await until(async () => {
             const x = await albumAssets(B, BKEY, bOwnBefore.id);
             return x.some(a => a.ownerId !== bAdmin.id) ? x : null;

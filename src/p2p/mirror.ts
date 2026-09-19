@@ -282,6 +282,9 @@ export async function unifyOwnAlbum(
       await new Promise(r => setTimeout(r, POST_MOVE_RECONCILE_WAIT_MS));
     }
   }
+  log(
+    `DBG reunion landed: mapping.albumId=${mapping.albumId.slice(0, 8)} was=${previousAlbumId.slice(0, 8)} name="${own.name}"`
+  );
   return { album: own.name, seeded: assets.length };
 }
 
