@@ -64,6 +64,9 @@ export async function ensureUtilityUser(
     fullName?: string;
     /** The server this person lives on. Set ONLY by the directory sync. */
     homePeer?: string;
+    /** Scopes for the minted key. Defaults to the full utility set; the household bot passes a
+     *  narrower one, because it reads albums and posts comments and does nothing else. */
+    permissions?: string[];
   }
 ) {
   const { peerPub, peerUserId } = opts;
@@ -167,7 +170,10 @@ export async function ensureUtilityUser(
     await fetch(`${CFG.immichUrl}/api/api-keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.accessToken}` },
-      body: JSON.stringify({ name: 'immich-shared-albums', permissions: UTILITY_PERMISSIONS }),
+      body: JSON.stringify({
+        name: 'immich-shared-albums',
+        permissions: opts.permissions ?? UTILITY_PERMISSIONS,
+      }),
     })
   ).json();
   if (!keyRes.secret)

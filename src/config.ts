@@ -152,6 +152,10 @@ export const LEGACY_UTILITY_DOMAINS = ['immich-shared-albums.invalid', 'sidecar.
 export const BOT_PREFIX = {
   /** One remote person, keyed by their user id on their home server. */
   person: 'person-',
+  /** This household's own bot: the account that speaks for the addon — it joins an album so the
+   *  sidecar can read it, and it posts the audit trail. One per server, not per person or per
+   *  album, and no prefix of another so the disjointness invariant holds. */
+  house: 'house-',
 } as const;
 
 /**
