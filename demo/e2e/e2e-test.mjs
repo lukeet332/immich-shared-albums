@@ -2081,12 +2081,23 @@ stage('panel manages server links (unlink)');
     check('no account for that server survives the unlink', survivors.length === 0,
           survivors.map(u => u.name).join(', ') || '(none)');
     // SECURITY: deleting the accounts takes their album memberships with them, and nothing may be
-    // left behind for a later re-link to misread as a fresh invitation.
+    // left behind for a later re-link to misread as a fresh invitation. The hazard is specific to
+    // the accounts this unlink just deleted, so the check is scoped to them — this server holds other
+    // links (it pairs with D two stages up), whose people are members here by design. An account that
+    // is gone from `/admin/users?withDeleted=true` but still listed on an album is exactly the leak.
+    const personIdsBefore = new Set(
+      (await api(B, BKEY, '/admin/users?withDeleted=true').catch(() => []))
+        .filter(u => (u.email || '').startsWith('person-'))
+        .map(u => u.id)
+    );
     const leftBehind = [];
     for (const al of await api(B, BKEY, '/albums').catch(() => [])) {
       const d = await api(B, BKEY, `/albums/${al.id}?withoutAssets=true`).catch(() => null);
       for (const au of d?.albumUsers || []) {
-        if ((au.user?.email || '').startsWith('person-')) leftBehind.push(au.user.email);
+        const uid = au.user?.id;
+        if (personIdsBefore.has(uid) && !afterUsers.some(u => u.id === uid)) {
+          leftBehind.push(`${al.albumName}: ${au.user.email}`);
+        }
       }
     }
     check('no membership is left behind for a re-link to misread as an invitation',

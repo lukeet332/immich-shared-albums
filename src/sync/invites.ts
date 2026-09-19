@@ -283,7 +283,7 @@ export async function detectInvitesOnce() {
  * pushes, because a member with no inbound reachability still syncs perfectly well by pulling
  * and a push-based invite would fail for exactly those households.
  */
-/** The last membership refusal reported per mapping, so a refusal is said once rather than per tick. */
+/** The mappings whose membership refusal has already been reported, so it is said once, not per tick. */
 const refusedMemberships = new Set<string>();
 
 export const invitationsFor = (peerPub: string) =>
