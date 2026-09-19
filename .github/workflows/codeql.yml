@@ -1,0 +1,37 @@
+# .github/workflows/codeql.yml — CodeQL code scanning over src. See AGENTS.md ("How changes land").
+#
+# Free on public repositories. Advisory, like CodeRabbit: deliberately NOT a required status check,
+# so a finding can never block a merge that CI passed.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Not Monday 06:00 — e2e.yml already owns that slot as its Immich :release canary.
+    - cron: '0 6 * * 3'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: github/codeql-action/init@3ea06614dafe36dec890db3446326e0d40ce53d4 # v3
+        with:
+          languages: javascript-typescript
+          # Generated output is not source — the same two paths .coderabbit.yaml excludes, so the
+          # committed bundles cannot produce findings nobody can act on.
+          config: |
+            paths-ignore:
+              - src/web/dist
+              - '**/*.bundle.js'
+      - uses: github/codeql-action/analyze@3ea06614dafe36dec890db3446326e0d40ce53d4 # v3

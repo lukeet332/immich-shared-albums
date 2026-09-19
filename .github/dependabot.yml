@@ -1,0 +1,48 @@
+# .github/dependabot.yml — dependency updates. See AGENTS.md ("How changes land").
+#
+# `commit-message` is load-bearing, not decoration: Dependabot's default title ("Bump x from 1 to 2")
+# is not a conventional commit, and the required `pr-title` check rejects those. prefix plus scope
+# yields `chore(deps): …` and `chore(deps-dev): …`, which pass.
+#
+# Updates are grouped and weekly on purpose: every Dependabot PR runs both e2e lanes (~7 minutes),
+# so a week of small PRs costs the runner queue more than it returns. It also keeps the SHA-pinned
+# `uses:` lines current and preserves each one's `# vX` comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: chore
+      prefix-development: chore
+      include: scope
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ['*']
+    commit-message:
+      prefix: chore
+      prefix-development: chore
+      include: scope
+
+  # The browser lane's own manifest: playwright tracks browser builds, so drift here is a real
+  # failure mode rather than a version bump for its own sake.
+  - package-ecosystem: npm
+    directory: /demo/e2e
+    schedule:
+      interval: weekly
+    groups:
+      npm-e2e:
+        patterns: ['*']
+    commit-message:
+      prefix: chore
+      prefix-development: chore
+      include: scope
