@@ -103,6 +103,40 @@ const btnReady = await page.waitForFunction(() => {
 }, null, { timeout: 90000 }).then(() => true).catch(() => false);
 check('app button enables once the album is filled (gated deeplink)', btnReady);
 
+// 6. the root chooser, in a real browser — because the branch that matters is client-side. The
+// API suite can only read the shell: whether a non-admin is actually redirected to their own panel
+// is decided by the chooser's useEffect, which needs a browser to run. This lane has B's admin
+// credentials, so it can mint a genuine non-admin session rather than assume one exists.
+const sidecarRoot = `${B_PANEL_WEB}/immich-shared-albums/`;
+await page.goto(sidecarRoot, { waitUntil: 'networkidle' });
+const chooserShown = await page.locator('text=Server settings and pairings').count();
+check('an admin at the root is offered both panels', chooserShown > 0, `grep=${chooserShown}`);
+check('the admin stays at the root rather than being sent to a panel',
+  page.url().replace(/\/+$/, '') === sidecarRoot.replace(/\/+$/, ''), page.url());
+
+const adminToken = (await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json()).accessToken;
+const nonAdminEmail = `browser-nonadmin@e2e.local`;
+const nonAdminPass = 'browser-nonadmin-pass-1';
+await fetch(`${B_PANEL_WEB}/api/admin/users`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+  body: JSON.stringify({ email: nonAdminEmail, name: 'Browser Non Admin', password: nonAdminPass }) });
+const nonAdminLogin = await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: nonAdminEmail, password: nonAdminPass }) })).json();
+check('the lane can mint a non-admin session to drive the redirect', !!nonAdminLogin.accessToken,
+  nonAdminLogin.accessToken ? '' : JSON.stringify(nonAdminLogin).slice(0, 60));
+if (nonAdminLogin.accessToken) {
+  await ctx.addCookies(['immich_access_token', 'immich_auth_type', 'immich_is_authenticated'].map((name) => ({
+    name, url: B_PANEL_WEB,
+    value: name === 'immich_access_token' ? nonAdminLogin.accessToken : (name === 'immich_auth_type' ? 'password' : 'true'),
+  })));
+  await page.goto(sidecarRoot, { waitUntil: 'networkidle' });
+  const sentToOwn = await page.waitForURL('**/immich-shared-albums/me*', { timeout: 15000 }).then(() => true).catch(() => false);
+  check('a non-admin at the root is redirected to their own panel', sentToOwn, page.url());
+  check('a non-admin is never offered the server panel',
+    (await page.locator('text=Server settings and pairings').count()) === 0);
+}
+
 await browser.close();
 const fails = results.filter(r => !r.ok);
 console.log(`\n${fails.length === 0 ? '🎉 BROWSER PASS' : `💥 ${fails.length} BROWSER FAILURES`} (${results.length} checks)`);
