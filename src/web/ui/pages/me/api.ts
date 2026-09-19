@@ -11,7 +11,9 @@ const json = async (path: string, init?: RequestInit) => {
 
 export type MyAlbum = { name: string; role: 'owner' | 'member'; via: string; peer: string };
 
-export const myAlbums = () => json('/me/albums') as Promise<{ albums: MyAlbum[] }>;
+export type MyPage = { albums: MyAlbum[]; household: string; isAdmin: boolean };
+
+export const myAlbums = () => json('/me/albums') as Promise<MyPage>;
 
 /** A pair of same-named albums, one on each server. `mine` is the album this person owns. */
 export type PeerMatch = {
