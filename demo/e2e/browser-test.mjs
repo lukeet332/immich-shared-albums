@@ -185,6 +185,125 @@ if (nonAdminLogin.accessToken) {
     (await page.locator('text=Server settings and pairings').count()) === 0);
 }
 
+// 7. THE PANEL IS WHAT OFFERS A PERSON'S ALBUMS, and between two people matching is a pull. This is
+//    the whole reunification surface, and it is invisible to the API suite: it needs a PAGE to be
+//    loaded by a signed-in person, because a panel visit is the only moment the sidecar holds their
+//    credential — the route that offers (`POST /me/albums/publish`) exists, and for a long time
+//    nothing in the UI called it, which left matching unreachable for anyone who did not use an API
+//    client. Driven in one context per household, deliberately: cookies are keyed by domain, not
+//    port, so a shared context silently swaps the two Immich tokens and every check reads the wrong
+//    person's panel.
+const C_PANEL_WEB = process.env.C_PANEL_WEB || `http://localhost:${PORT('PORT_SIDECAR_C', 8302)}`;
+const panelName = `panel offer ${Date.now()}`;
+const panelText = async (p) => (await p.locator('body').innerText().catch(() => '')) || '';
+const seesPair = (t) => new RegExp(`Possible album reunions[\\s\\S]*?${panelName}`).test(t);
+
+// C is hardened like production by run-mock-e2e.sh (`passwordLogin.enabled = false`), which is why no
+// lane has ever driven its panel — the panel needs a session, and there was no way to mint one. Open
+// it for this case and put it back, so the hardening the rig exists to prove stays proven.
+const cConfig = await (await fetch(`${C}/api/system-config`, { headers: { 'x-api-key': CKEY } })).json();
+const setPasswordLogin = (enabled) => fetch(`${C}/api/system-config`, { method: 'PUT',
+  headers: { 'x-api-key': CKEY, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ ...cConfig, passwordLogin: { ...cConfig.passwordLogin, enabled } }) });
+const cWasHardened = cConfig.passwordLogin.enabled === false;
+if (cWasHardened) await setPasswordLogin(true);
+
+const bLogin = await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json();
+const cLogin = await (await fetch(`${C_PANEL_WEB}/api/auth/login`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json();
+check('the lane can sign in on both households\' panels', !!bLogin.accessToken && !!cLogin.accessToken,
+  `${bLogin.accessToken ? 'B ok' : 'B failed'}, ${cLogin.accessToken ? 'C ok' : 'C failed'}`);
+
+const bAlbum = await (await fetch(`${B_PANEL_WEB}/api/albums`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bLogin.accessToken}` },
+  body: JSON.stringify({ albumName: panelName }) })).json();
+const cAlbum = await api('/albums', { albumName: panelName });
+check('each household owns half of a same-named album', !!bAlbum?.id && !!cAlbum?.id,
+  `${bAlbum?.id ? 'B ok' : 'B failed'}, ${cAlbum?.id ? 'C ok' : 'C failed'}`);
+
+const panelOf = async (base, token) => {
+  const c = await browser.newContext();
+  const p = await c.newPage();
+  await c.addCookies(['immich_access_token', 'immich_auth_type', 'immich_is_authenticated'].map((name) => ({
+    name, url: base,
+    value: name === 'immich_access_token' ? token : (name === 'immich_auth_type' ? 'password' : 'true'),
+  })));
+  await p.goto(`${base}/immich-shared-albums/me`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await p.waitForFunction(() => !/Loading/.test(document.body.innerText), null, { timeout: 30000 }).catch(() => {});
+  return { c, p };
+};
+
+const bPanel = await panelOf(B_PANEL_WEB, bLogin.accessToken);
+await bPanel.p.waitForTimeout(3000);
+check('the first person to open their panel sees no pair yet — matching is a pull',
+  !seesPair(await panelText(bPanel.p)));
+
+const cPanel = await panelOf(C_PANEL_WEB, cLogin.accessToken);
+const appeared = await cPanel.p.waitForFunction(
+  (n) => new RegExp(`Possible album reunions[\\s\\S]*?${n}`).test(document.body.innerText),
+  panelName, { timeout: 30000 }).then(() => true).catch(() => false);
+check('opening the other person\'s panel is enough — the pair appears, with no API call', appeared,
+  (await panelText(cPanel.p)).split('\n').find((l) => l.includes(panelName)) || '(never appeared)');
+
+// Withdrawing the half B offered must reach C: an offer of NOTHING is still an offer, and it is how
+// the peer learns that everything this person had is gone.
+const withdrew = await fetch(`${B_PANEL_WEB}/api/albums/${bAlbum.id}`, { method: 'DELETE',
+  headers: { Authorization: `Bearer ${bLogin.accessToken}` } });
+check('the lane can delete the half B offered', withdrew.ok, `delete -> ${withdrew.status}`);
+await bPanel.p.reload({ waitUntil: 'domcontentloaded' });
+await bPanel.p.waitForTimeout(3000);
+await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
+await cPanel.p.waitForTimeout(3000);
+check('so the pair is gone from the other person\'s list', !seesPair(await panelText(cPanel.p)));
+
+// And now the case that a person who ends up owning NOTHING is still heard. B above owns plenty, so
+// his offer simply got shorter; a household's loneliest member is the one whose panel stops offering
+// entirely if the offer is skipped for an empty list, leaving the peer matching against albums that
+// no longer exist. Driven as a freshly minted non-admin, who owns exactly one album and then none.
+const soloName = `panel solo ${Date.now()}`;
+const soloEmail = 'panel-solo@e2e.local';
+const soloPass = 'panel-solo-pass-1';
+await fetch(`${B_PANEL_WEB}/api/admin/users`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bLogin.accessToken}` },
+  body: JSON.stringify({ email: soloEmail, name: 'Panel Solo', password: soloPass }) });
+const soloLogin = await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: soloEmail, password: soloPass }) })).json();
+const soloAlbum = await (await fetch(`${B_PANEL_WEB}/api/albums`, { method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${soloLogin.accessToken}` },
+  body: JSON.stringify({ albumName: soloName }) })).json();
+const cSoloAlbum = await api('/albums', { albumName: soloName });
+check('a person with a single album, and the other half of it on the peer', !!soloLogin.accessToken && !!soloAlbum?.id && !!cSoloAlbum?.id,
+  `${soloLogin.accessToken ? 'signed in' : 'no session'}, ${soloAlbum?.id ? 'album ok' : 'album failed'}, ${cSoloAlbum?.id ? 'peer half ok' : 'peer half failed'}`);
+
+const soloPanel = await panelOf(B_PANEL_WEB, soloLogin.accessToken);
+await soloPanel.p.waitForTimeout(3000);
+await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
+await cPanel.p.waitForTimeout(3000);
+check('a non-admin\'s own panel offers their album too, so the pair appears',
+  new RegExp(`Possible album reunions[\\s\\S]*?${soloName}`).test(await panelText(cPanel.p)));
+
+await fetch(`${B_PANEL_WEB}/api/albums/${soloAlbum.id}`, { method: 'DELETE',
+  headers: { Authorization: `Bearer ${soloLogin.accessToken}` } });
+await soloPanel.p.reload({ waitUntil: 'domcontentloaded' });
+await soloPanel.p.waitForTimeout(3000);
+check('with nothing left to offer, the panel still loads', !/Loading/.test(await panelText(soloPanel.p)));
+await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
+await cPanel.p.waitForTimeout(3000);
+check('and the peer stops matching against the album that is gone',
+  !new RegExp(`Possible album reunions[\\s\\S]*?${soloName}`).test(await panelText(cPanel.p)));
+
+await soloPanel.c.close();
+await bPanel.c.close();
+await cPanel.c.close();
+
+if (cWasHardened) {
+  await setPasswordLogin(false);
+  const restored = await (await fetch(`${C}/api/system-config`, { headers: { 'x-api-key': CKEY } })).json();
+  check("C's password-login hardening is back on after the case", restored.passwordLogin.enabled === false,
+    restored.passwordLogin.enabled === false ? '' : 'the rig was left with C\'s password login open');
+}
+
 await browser.close();
 const fails = results.filter(r => !r.ok);
 console.log(`\n${fails.length === 0 ? '🎉 BROWSER PASS' : `💥 ${fails.length} BROWSER FAILURES`} (${results.length} checks)`);

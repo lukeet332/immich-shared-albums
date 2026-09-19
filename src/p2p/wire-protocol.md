@@ -44,8 +44,10 @@ mirror either way, and nothing about access changes because of it.
 caller's people have *published*: each album's owner asked their own server for the albums it says
 they own, because the sidecar holds no credential for a human and Immich scopes `GET /albums` to
 one. Ownership is therefore settled by Immich at publication time and the route only reads back what
-was recorded — a peer that has published nothing gets an empty list, never a server-wide one. Same
-gate as `/directory`: an enrolled peer may ask, and nothing here grants access to any album.
+was recorded — a peer that has published nothing gets an empty list, never a server-wide one. It
+answers the `to-them` direction only: the `from-them` half is what we recorded about the caller, and
+answering with it would hand a peer its own albums to match against themselves. Same gate as
+`/directory`: an enrolled peer may ask, and nothing here grants access to any album.
 
 **Completion, not just acceptance:** `POST …/refs` answers whether refs were _accepted_;
 materialisation, offers and comment push are asynchronous, so `GET /albums/:mappingId/status`

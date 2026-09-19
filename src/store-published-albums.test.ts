@@ -51,8 +51,8 @@ const asStored = (a: OwnedAlbum): OwnedAlbum =>
 test('a published album is readable back for its owner', () => {
   withStore(store => {
     const [only] = [bobAlbum];
-    store.publishedAlbumsSet('peer-1', only.ownerUserId, [only]);
-    const back = store.publishedAlbumsFor('peer-1');
+    store.publishedAlbumsSet('peer-1', 'to-them', only.ownerUserId, [only]);
+    const back = store.publishedAlbumsFor('peer-1', 'to-them');
     assert.deepEqual(back, [asStored(only)], 'what went in must come back out unchanged');
   });
 });
@@ -60,9 +60,9 @@ test('a published album is readable back for its owner', () => {
 test("republishing replaces that owner's index instead of accumulating it", () => {
   withStore(store => {
     const withdrawn = album({ name: 'Winter 2019' });
-    store.publishedAlbumsSet('peer-1', withdrawn.ownerUserId, [bobAlbum, withdrawn]);
-    store.publishedAlbumsSet('peer-1', republishedBobAlbum.ownerUserId, [republishedBobAlbum]);
-    const back = store.publishedAlbumsFor('peer-1');
+    store.publishedAlbumsSet('peer-1', 'to-them', withdrawn.ownerUserId, [bobAlbum, withdrawn]);
+    store.publishedAlbumsSet('peer-1', 'to-them', republishedBobAlbum.ownerUserId, [republishedBobAlbum]);
+    const back = store.publishedAlbumsFor('peer-1', 'to-them');
     assert.deepEqual(
       back,
       [asStored(republishedBobAlbum)],
@@ -71,29 +71,108 @@ test("republishing replaces that owner's index instead of accumulating it", () =
   });
 });
 
+// The per-owner replace above cannot cover this one: it is called FOR an owner, so an owner the
+// peer no longer mentions is never called at all and their rows are never removed. A peer answers
+// `/albums` with its whole index, which makes silence about an owner an ANSWER rather than an
+// absence of news — and `handlePublishedAlbums` says so: "a peer that has published nothing gets an
+// empty list".
+test('a peer that withdraws everything stops being matched against', () => {
+  withStore(store => {
+    store.publishedAlbumsReplacePeer('peer-1', 'from-them', [bobAlbum, carolAlbum]);
+    assert.equal(store.publishedAlbumsFor('peer-1', 'from-them').length, 2, 'sanity: both owners went in');
+    store.publishedAlbumsReplacePeer('peer-1', 'from-them', []);
+    assert.deepEqual(
+      store.publishedAlbumsFor('peer-1', 'from-them'),
+      [],
+      'an empty index is an ANSWER: the peer offers nothing, so nothing may be matched against'
+    );
+  });
+});
+
+test('a peer-wide replace drops an owner who withdrew, and keeps the rest', () => {
+  withStore(store => {
+    store.publishedAlbumsReplacePeer('peer-1', 'from-them', [bobAlbum, carolAlbum]);
+    store.publishedAlbumsReplacePeer('peer-1', 'from-them', [bobAlbum]); // carol took hers back
+    const back = store.publishedAlbumsFor('peer-1', 'from-them');
+    assert.deepEqual(
+      back,
+      [asStored(bobAlbum)],
+      `carol's albums must be gone while bob's stay: ${JSON.stringify(back)}`
+    );
+  });
+});
+
+// THE BUG THIS PINS: both directions were keyed by peer alone, so one peer's rows held what this
+// server OFFERS them and what it RECEIVED from them together. A refresh from the peer replaced the
+// lot, wiping the offer — and the peer, asking for our index, was handed its own albums back.
+test('offering and receiving are separate rows for the same peer', () => {
+  withStore(store => {
+    store.publishedAlbumsSet('peer-1', 'to-them', bobAlbum.ownerUserId, [bobAlbum]);
+    store.publishedAlbumsReplacePeer('peer-1', 'from-them', [carolAlbum]);
+    assert.deepEqual(
+      store.publishedAlbumsFor('peer-1', 'to-them'),
+      [asStored(bobAlbum)],
+      'what we offer must survive a refresh from the same peer'
+    );
+    assert.deepEqual(
+      store.publishedAlbumsFor('peer-1', 'from-them'),
+      [asStored(carolAlbum)],
+      'and what we received must not be served back as an offer'
+    );
+  });
+});
+
+test('an owner who now owns nothing clears their own offer, and only theirs', () => {
+  withStore(store => {
+    store.publishedAlbumsSet('peer-1', 'to-them', bobAlbum.ownerUserId, [bobAlbum]);
+    store.publishedAlbumsSet('peer-1', 'to-them', carolAlbum.ownerUserId, [carolAlbum]);
+    store.publishedAlbumsSet('peer-1', 'to-them', bobAlbum.ownerUserId, []);
+    const back = store.publishedAlbumsFor('peer-1', 'to-them');
+    assert.deepEqual(
+      back,
+      [asStored(carolAlbum)],
+      `an empty offer is an offer: bob's must go while carol's stays: ${JSON.stringify(back)}`
+    );
+  });
+});
+
+test('a peer withdrawing everything clears only what we received', () => {
+  withStore(store => {
+    store.publishedAlbumsSet('peer-1', 'to-them', bobAlbum.ownerUserId, [bobAlbum]);
+    store.publishedAlbumsReplacePeer('peer-1', 'from-them', [carolAlbum]);
+    store.publishedAlbumsReplacePeer('peer-1', 'from-them', []);
+    assert.deepEqual(store.publishedAlbumsFor('peer-1', 'from-them'), [], 'nothing left to match against');
+    assert.deepEqual(
+      store.publishedAlbumsFor('peer-1', 'to-them'),
+      [asStored(bobAlbum)],
+      'while the peer can still find US: withdrawing must not erase what we offer'
+    );
+  });
+});
+
 test("one peer never sees another peer's index", () => {
   withStore(store => {
-    store.publishedAlbumsSet('peer-1', bobAlbum.ownerUserId, [bobAlbum]);
-    store.publishedAlbumsSet('peer-2', carolAlbum.ownerUserId, [carolAlbum]);
-    assert.deepEqual(store.publishedAlbumsFor('peer-2'), [asStored(carolAlbum)]);
-    assert.deepEqual(store.publishedAlbumsFor('peer-1'), [asStored(bobAlbum)]);
-    assert.deepEqual(store.publishedAlbumsFor('peer-unknown'), []);
+    store.publishedAlbumsSet('peer-1', 'to-them', bobAlbum.ownerUserId, [bobAlbum]);
+    store.publishedAlbumsSet('peer-2', 'to-them', carolAlbum.ownerUserId, [carolAlbum]);
+    assert.deepEqual(store.publishedAlbumsFor('peer-2', 'to-them'), [asStored(carolAlbum)]);
+    assert.deepEqual(store.publishedAlbumsFor('peer-1', 'to-them'), [asStored(bobAlbum)]);
+    assert.deepEqual(store.publishedAlbumsFor('peer-unknown', 'to-them'), []);
   });
 });
 
 test('several owners on one peer all publish, each replaceable on its own', () => {
   withStore(store => {
-    store.publishedAlbumsSet('peer-1', bobAlbum.ownerUserId, [bobAlbum]);
-    store.publishedAlbumsSet('peer-1', carolAlbum.ownerUserId, [carolAlbum]);
-    const both = store.publishedAlbumsFor('peer-1');
+    store.publishedAlbumsSet('peer-1', 'to-them', bobAlbum.ownerUserId, [bobAlbum]);
+    store.publishedAlbumsSet('peer-1', 'to-them', carolAlbum.ownerUserId, [carolAlbum]);
+    const both = store.publishedAlbumsFor('peer-1', 'to-them');
     assert.deepEqual(
       both.map(a => a.name).sort(),
       [bobAlbum.name, carolAlbum.name].sort(),
       'both owners on one peer are offered, sorted by name for a stable comparison'
     );
     // Clearing ONE owner's index must leave the other owner's alone.
-    store.publishedAlbumsSet('peer-1', bobAlbum.ownerUserId, []);
-    assert.deepEqual(store.publishedAlbumsFor('peer-1'), [asStored(carolAlbum)]);
+    store.publishedAlbumsSet('peer-1', 'to-them', bobAlbum.ownerUserId, []);
+    assert.deepEqual(store.publishedAlbumsFor('peer-1', 'to-them'), [asStored(carolAlbum)]);
   });
 });
 
