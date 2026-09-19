@@ -1,7 +1,7 @@
 /** adoption.test.ts — deciding whether an album offered for reunification may actually be adopted. See docs/post-v1-reunification-design.md §2. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findAdoptableAlbum, type OfferToAdopt } from './adoption.ts';
+import { canUnifyOwnAlbum, findAdoptableAlbum, type OfferToAdopt } from './adoption.ts';
 
 /** An album in Immich's shape, owned by the given user. */
 const album = (id: string, name: string, ownerId: string, over: Record<string, unknown> = {}) => ({
@@ -45,4 +45,50 @@ test('an album with no owner entry is never adopted', () => {
 test('the caller having no such album yields nothing rather than a guess', () => {
   assert.equal(findAdoptableAlbum(offer('Summer 2024'), [], 'me'), undefined);
   assert.equal(findAdoptableAlbum(offer('Summer 2024'), [album('a1', 'Other', 'me')], 'me'), undefined);
+});
+
+// ── UNIFYING AN EXISTING SHARE ───────────────────────────────────────────────────────────────
+// The panel's case: a share already exists (an invitation created a mirror), and the person says
+// "actually, use my own album". The mirror being replaced is ours to replace; the album being
+// adopted must be theirs, and must be the same album the share is about.
+test("a share may be unified with the person's own same-named album", () => {
+  const found = canUnifyOwnAlbum(
+    { albumId: 'mirror-1', albumName: 'Summer 2024' },
+    { albumName: 'Summer 2024' },
+    [album('mine-1', 'Summer 2024', 'me')],
+    'me'
+  );
+  assert.equal(found?.albumId, 'mine-1');
+});
+
+test('unifying with an album the caller does not own is refused', () => {
+  const found = canUnifyOwnAlbum(
+    { albumId: 'mirror-1', albumName: 'Summer 2024' },
+    { albumName: 'Summer 2024' },
+    [album('theirs-1', 'Summer 2024', 'someone-else')],
+    'me'
+  );
+  assert.equal(found, undefined, "that would merge another person's album into our share");
+});
+
+test('unifying with an album of a different name is refused', () => {
+  const found = canUnifyOwnAlbum(
+    { albumId: 'mirror-1', albumName: 'Summer 2024' },
+    { albumName: 'Summer 2024' },
+    [album('mine-1', 'Winter 2019', 'me')],
+    'me'
+  );
+  assert.equal(found, undefined, 'only the album the share is about may replace its mirror');
+});
+
+// The mirror IS the share's local half. Re-pointing a mapping at the album it already points at
+// would drop the ledger and re-seed from the same contents, which is churn with no meaning.
+test('the album the mapping already uses is not an adoption', () => {
+  const found = canUnifyOwnAlbum(
+    { albumId: 'same-1', albumName: 'Summer 2024' },
+    { albumName: 'Summer 2024' },
+    [album('same-1', 'Summer 2024', 'me')],
+    'me'
+  );
+  assert.equal(found, undefined);
 });

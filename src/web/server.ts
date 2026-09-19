@@ -19,6 +19,8 @@ import { publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
 import { myAlbums, myMatches, publishAlbumsForPeer } from './me.ts';
+import { unifyOwnAlbum } from '../p2p/mirror.ts';
+import { visibleAlbumIds } from '../immich/access.ts';
 import { parseRequestedPeer } from '../sync/matches.ts';
 import { sharePage, signInPage } from './assets.ts';
 import { localAddr } from '../p2p/transport.ts';
@@ -300,6 +302,40 @@ export const server = http.createServer(async (req, res) => {
       const published = await publishAlbumsForPeer(signedIn.creds, signedIn.caller.id, peer.pub);
       log(`${signedIn.caller.name} offered ${published} owned album(s) to "${peer.name}" for matching`);
       return send(200, { published });
+    }
+    // Reunite: replace one of the caller's shares with an album they already own. The album id
+    // names a request, not a decision — the operation re-derives that it is theirs and that it is
+    // the album this share is about, on their own credential.
+    if (path === `${ROUTE_PREFIX}/me/reunite` && req.method === 'POST') {
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('reunite an album'));
+      let asked: { mappingId?: unknown; albumName?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (typeof asked.mappingId !== 'string' || typeof asked.albumName !== 'string')
+        return send(400, { error: 'name the share and the album to reunite it with' });
+      // Only shares this caller is in: the mapping is looked up, then the album it points at is
+      // read as the caller, so a mapping they cannot see is one they cannot name.
+      const mapping = state.mappings.find(m => m.id === asked.mappingId && !m.dead);
+      if (!mapping) return send(404, { error: 'no such share', code: 'unknown_mapping' });
+      const visible = await visibleAlbumIds(signedIn.creds);
+      if (!visible.has(mapping.albumId)) return send(403, { error: 'that share is not yours' });
+      try {
+        // The panel names the ALBUM by name; which local album that is gets resolved from the
+        // caller's own list inside the operation, so no id crosses the wire or is taken on trust.
+        const outcome = await unifyOwnAlbum(
+          mapping,
+          { albumName: asked.albumName },
+          signedIn.creds,
+          signedIn.caller.id
+        );
+        return send(200, outcome);
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
     }
     // Albums the caller could reunite. Read-only and computed on demand: nothing here changes an
     // album, which is why the panel offers no action yet.

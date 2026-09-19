@@ -25,4 +25,14 @@ export type PeerMatch = {
   why: string;
 };
 
-export const myMatches = () => json('/me/matches') as Promise<{ matches: PeerMatch[] }>;
+export type ActionableMatch = PeerMatch & { mappingId?: string };
+
+export const myMatches = () => json('/me/matches') as Promise<{ matches: ActionableMatch[] }>;
+
+/** Replace a share with an album I already own. `albumId` is the local album the match showed. */
+export const reunite = (mappingId: string, albumName: string) =>
+  json('/me/reunite', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mappingId, albumName }),
+  }) as Promise<{ album: string; seeded: number }>;

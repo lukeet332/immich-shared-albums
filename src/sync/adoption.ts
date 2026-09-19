@@ -50,3 +50,32 @@ const ownsIt = (album, userId: string) =>
   (Array.isArray(album?.albumUsers) ? album.albumUsers : []).some(
     au => au && au.role === 'owner' && au.user?.id === userId
   );
+
+/**
+ * The album a person's OWN album may replace an existing share's mirror with, or undefined.
+ *
+ * The panel's case, as distinct from acquiring a share for the first time: a share already exists
+ * (an invitation created a mirror), and the person says "use my album instead". The mirror is ours
+ * to replace; the album replacing it must be theirs, and must be the same album the share is about,
+ * because that is the match they were shown.
+ *
+ * A mapping already pointing at that album is not an adoption: re-seeding a ledger from the same
+ * contents would drop what it knows and learn it again, which is churn with no meaning.
+ */
+export function canUnifyOwnAlbum(
+  mapping: { albumId: string; albumName: string },
+  request: { albumName: string },
+  callerAlbums: unknown,
+  callerUserId: string
+): AdoptableAlbum | undefined {
+  // The share is about `mapping.albumName`; the request names the album to put in its place. They
+  // must be the same album, or this would reunite a share with an unrelated one of the caller's.
+  if (normaliseAlbumName(request.albumName || '') !== normaliseAlbumName(mapping.albumName)) return undefined;
+  const found = findAdoptableAlbum(
+    { albumName: mapping.albumName, peerOwnerUserId: callerUserId },
+    callerAlbums,
+    callerUserId
+  );
+  if (!found || found.albumId === mapping.albumId) return undefined; // already the mapping's album
+  return found;
+}

@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { s } from '../../lib/theme.ts';
 import { t } from '../../lib/theme.ts';
-import { myAlbums, myMatches, type MyAlbum, type PeerMatch } from './api.ts';
+import { myAlbums, myMatches, reunite, type ActionableMatch, type MyAlbum } from './api.ts';
 
 /** The admin panel, for a caller who can actually open it. A link an ordinary user cannot follow
  *  would bounce them to a sign-in page they will never pass. */
@@ -14,8 +14,10 @@ export const App = () => {
   const [albums, setAlbums] = useState<MyAlbum[] | null>(null);
   const [household, setHousehold] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
-  const [matches, setMatches] = useState<PeerMatch[]>([]);
+  const [matches, setMatches] = useState<ActionableMatch[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [reuniting, setReuniting] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     myAlbums()
@@ -30,6 +32,24 @@ export const App = () => {
       .then(r => setMatches(r.matches))
       .catch(() => setMatches([]));
   }, []);
+
+  // The match carries the peer for display and the names for the pair; the ids the server needs
+  // come from the same records it built the list from.
+  const onReunite = async (m: ActionableMatch) => {
+    if (!m.mappingId) return; // no share to reunite: this pairing has never been shared
+    setReuniting(`${m.peer}:${m.mine.name}`);
+    setNotice(null);
+    try {
+      const r = await reunite(m.mappingId, m.mine.name);
+      setNotice(`Reunited into "${r.album}" — ${r.seeded} photo(s) were already there.`);
+      const fresh = await myMatches();
+      setMatches(fresh.matches);
+    } catch (e) {
+      setNotice(`Could not reunite: ${(e as Error).message}`);
+    } finally {
+      setReuniting('');
+    }
+  };
 
   return (
     <main>
@@ -48,6 +68,7 @@ export const App = () => {
           </>
         )}
       </p>
+      {notice && <div style={s.card}>{notice}</div>}
       {matches.length > 0 && (
         <section style={{ marginBottom: 22 }}>
           <b style={{ fontSize: 18 }}>Possible album reunions</b>
@@ -66,6 +87,9 @@ export const App = () => {
                   {m.theirs.assetCount === 1 ? 'photo' : 'photos'}
                   {m.sameDates ? ' · dates line up' : ''}
                 </div>
+                <button style={s.button} disabled={!!reuniting} onClick={() => onReunite(m)}>
+                  {reuniting === `${m.peer}:${m.mine.name}` ? 'Reuniting…' : 'Reunite these albums'}
+                </button>
               </div>
             ))}
           </div>

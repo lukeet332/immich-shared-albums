@@ -11,14 +11,16 @@
 import crypto from 'node:crypto';
 import { CFG, log, isUtilityEmail, BOT_PREFIX, UTILITY_EMAIL_DOMAIN } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
-import { state, save, seenAdd } from '../state.ts';
+import { state, store, save, seenAdd } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
-import { readAlbumAssetsAs, readCallerAlbums, type Creds } from '../immich/access.ts';
+import { readAlbumAssetsAs, readCallerAlbums, callAs, type Creds } from '../immich/access.ts';
 import { ensureUtilityUser, syncAvatar } from '../immich/contributors.ts';
 import { reconcileMapping } from '../sync/engine.ts';
-import { findAdoptableAlbum } from '../sync/adoption.ts';
+import { canUnifyOwnAlbum, findAdoptableAlbum } from '../sync/adoption.ts';
 import { addHouseBotToAlbum } from '../sync/house-bot.ts';
+import { deleteProxyAsset } from '../immich/materialise.ts';
 import { seedRowsFor } from '../sync/matches.ts';
+import { albumTeardown } from '../sync/album-teardown.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
 export type MirrorRequest = {
@@ -202,4 +204,77 @@ export function fillMirrorInBackground(mapping: Mapping, peer: Peer) {
       log(`post-join sync error: ${e.message} — the loops will retry`);
     }
   })();
+}
+
+/**
+ * Replace a share's mirror with an album the person already owns — the panel's Reunite.
+ *
+ * Distinct from adopting at acquisition time: the share already exists, so this MOVES a mapping
+ * rather than creating one. Ordering is the whole of it:
+ *
+ *  1. prove the requested album is theirs and is the album this share is about;
+ *  2. let the house bot in, so the album can be read at all;
+ *  3. seed the ledger from the album being adopted, WHILE the mapping still points at the mirror —
+ *     so no loop can read a ledger that does not yet describe the album it will point at;
+ *  4. move the mapping and mark it;
+ *  5. only then remove what the mirror held.
+ *
+ * A failure after step 4 costs the mirror's stubs, which are ours and re-materialise; a failure
+ * before it changes nothing. The mirror album itself is deleted only when it was ours to delete,
+ * which is what `albumTeardown` decides.
+ */
+export async function unifyOwnAlbum(
+  mapping: Mapping,
+  request: { albumName: string },
+  ownerCreds: Creds,
+  ownerUserId: string
+): Promise<{ album: string; seeded: number }> {
+  const own = canUnifyOwnAlbum(mapping, request, await readCallerAlbums(ownerCreds), ownerUserId);
+  if (!own) throw new Error(`"${mapping.albumName}" cannot be reunited with that album`);
+
+  await addHouseBotToAlbum(own.albumId, ownerCreds);
+  const hostSlug = `${BOT_PREFIX.house}bot`;
+  const hostKey = state.contributors[hostSlug]?.apiKey;
+  if (!hostKey) throw new Error('house bot has no key after provisioning — cannot read the album');
+
+  const assets = (await readAlbumAssetsAs(own.albumId, { source: 'mapping', key: hostKey })) ?? [];
+  const previousAlbumId = mapping.albumId;
+  const previousHostSlug = mapping.hostSlug;
+
+  // Seeded before the move, so the mapping is never visible with a ledger that describes a
+  // different album — that is the state that offers an album's whole contents back to its origin.
+  for (const row of seedRowsFor(assets, mapping.id)) seenAdd(mapping.id, row.checksum, row.localAsset);
+
+  mapping.albumId = own.albumId;
+  mapping.albumName = own.name;
+  mapping.hostSlug = hostSlug;
+  mapping.adopted = true;
+  mapping.reunified = true;
+  save();
+  log(`reunited "${own.name}" — ${assets.length} photo(s) were already here, seeded so none is offered back`);
+
+  await retireMirror(mapping, previousAlbumId, previousHostSlug);
+  return { album: own.name, seeded: assets.length };
+}
+
+/** Remove what the mirror held. Its stubs are ours and the ledger says so, so removal is
+ *  reclaiming space rather than destroying anyone's photo; the album goes only if it was ours. */
+async function retireMirror(mapping: Mapping, mirrorAlbumId: string, mirrorHostSlug?: string) {
+  let removed = 0;
+  for (const entry of store.seenForMapping(mapping.id)) {
+    if (!entry.originAsset) continue;
+    const owner = store.ledgerByAsset(entry.localAsset);
+    if (!owner || owner.mapping !== mapping.id) continue;
+    if (await deleteProxyAsset(entry.localAsset)) {
+      store.seenRemoveEntry(mapping.id, entry.checksum);
+      removed++;
+    }
+  }
+  const plan = albumTeardown({ role: 'member', albumName: mapping.albumName });
+  const key = mirrorHostSlug ? state.contributors[mirrorHostSlug]?.apiKey : undefined;
+  if (plan.deleteAlbum && key)
+    await callAs({ source: 'mapping', key }, `/albums/${mirrorAlbumId}`, { method: 'DELETE' }).catch(e =>
+      log(`could not remove the replaced mirror: ${e.message}`)
+    );
+  if (removed) log(`reclaimed ${removed} stub(s) from the replaced mirror`);
 }
