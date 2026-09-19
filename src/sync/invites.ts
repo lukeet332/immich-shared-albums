@@ -283,6 +283,9 @@ export async function detectInvitesOnce() {
  * pushes, because a member with no inbound reachability still syncs perfectly well by pulling
  * and a push-based invite would fail for exactly those households.
  */
+/** The last membership refusal reported per mapping, so a refusal is said once rather than per tick. */
+const refusedMemberships = new Map<string, string>();
+
 export const invitationsFor = (peerPub: string) =>
   state.mappings
     // ONLY invitation-shaped shares. Offering link-redeemed ones here would re-mirror albums
@@ -328,10 +331,17 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
   // adoption on the owner's credential (album-grant.ts); anything the origin changes afterwards
   // needs that owner again, so say so once per change instead of looping the refusal.
   if (mapping.adopted && (add.length || remove.length)) {
-    log(
-      `"${mapping.albumName}" is reunified — ${add.length} person(s) to add, ${remove.length} to remove ` +
-        `need the album's owner; re-run the reunion from the panel`
-    );
+    // ONCE PER CHANGE, which is what the note above always claimed: a rig (or a host) on a fast tick
+    // turned one refusal into a line a second, drowning the log it is written to be read in. A real
+    // change — a different set of people — is still reported.
+    const refusal = `${add.length}add/${remove.length}remove`;
+    if (refusedMemberships.get(mapping.id) !== refusal) {
+      refusedMemberships.set(mapping.id, refusal);
+      log(
+        `"${mapping.albumName}" is reunified — ${add.length} person(s) to add, ${remove.length} to remove ` +
+          `need the album's owner; re-run the reunion from the panel`
+      );
+    }
     return;
   }
   if (add.length) {
