@@ -53,8 +53,8 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
 
   return (
     <div style={s.card}>
-      <b style={{ fontSize: 14 }}>Link a server</b>
-      <p style={s.muted}>Send this to the other admin. One use; shares no photos.</p>
+      <h3 style={s.h3}>Link a server</h3>
+      <p style={s.muted}>One use, and it shares no photos.</p>
       <div style={{ display: 'flex', gap: 8 }}>
         <button style={s.button} onClick={createLink}>
           Create a link
@@ -67,8 +67,8 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
       {link && (
         <div style={{ marginTop: 10 }}>
           <p style={s.muted}>
-            Send this to them now — it works once, expires in {minutesLeft} minute
-            {minutesLeft === 1 ? '' : 's'}, and cannot be shown again after you leave this page.
+            Send it now: one use, {minutesLeft} minute{minutesLeft === 1 ? '' : 's'} left, and never shown
+            again.
           </p>
           <div style={{ display: 'flex', gap: 8 }}>
             <input id="pairlink" style={s.input} readOnly value={link} />
@@ -87,7 +87,7 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
             value={theirLink}
             onInput={event => setTheirLink((event.target as HTMLInputElement).value)}
           />
-          <button style={s.button}>Link</button>
+          <button style={s.button}>Link servers</button>
         </form>
       )}
 

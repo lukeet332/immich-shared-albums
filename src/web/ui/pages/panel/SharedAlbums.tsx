@@ -4,7 +4,7 @@ import type { Album } from './api.ts';
 
 export const SharedAlbums = ({ albums }: { albums: Album[] }) => (
   <div style={s.card}>
-    <b style={{ fontSize: 14 }}>Shared albums</b>
+    <h3 style={s.h3}>Shared albums</h3>
     {albums.length === 0 && <p style={s.muted}>None yet.</p>}
     {albums.map(a => (
       <div key={`${a.name}:${a.peer}:${a.role}`} style={{ ...s.item, ...s.row }}>
