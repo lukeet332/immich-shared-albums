@@ -296,9 +296,6 @@ await cPanel.p.waitForTimeout(3000);
 check('and the peer stops matching against the album that is gone',
   !new RegExp(`Possible album reunions[\\s\\S]*?${soloName}`).test(await panelText(cPanel.p)));
 
-await soloPanel.c.close();
-await bPanel.c.close();
-await cPanel.c.close();
 
 // 8. The reunion round trip through the PANELS alone: one side invites — which shares its own album
 //    with the other person, in Immich — the other accepts, and both lists drop the pair. The
@@ -358,6 +355,11 @@ for (let waited = 0; waited < 60000 && !gone; waited += 5000) {
   gone = !new RegExp(inviteName).test(candidates(await panelText(bPanel.p)));
 }
 check("and the pair leaves the inviter's list once it is done", gone);
+
+// The invite case above is the last to drive them, so the panels close here.
+await soloPanel.c.close();
+await bPanel.c.close();
+await cPanel.c.close();
 
 if (cWasHardened) {
   await setPasswordLogin(false);
