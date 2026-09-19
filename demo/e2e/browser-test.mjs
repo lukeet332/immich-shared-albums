@@ -244,7 +244,7 @@ if (cWasHardened) {
   await setPasswordLogin(false);
   const restored = await (await fetch(`${C}/api/system-config`, { headers: { 'x-api-key': CKEY } })).json();
   check("C's password-login hardening is back on after the case", restored.passwordLogin.enabled === false,
-    `passwordLogin.enabled = ${restored.passwordLogin.enabled}`);
+    restored.passwordLogin.enabled === false ? '' : 'the rig was left with C\'s password login open');
 }
 
 await browser.close();
