@@ -15,10 +15,13 @@
 import http from 'node:http';
 import { CFG, log, ROUTE_PREFIX } from '../config.ts';
 import { state, store, storeSharedAssetsLocally } from '../state.ts';
-import { publicShareLinkMeta } from '../immich/client.ts';
+import { immichJson, publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
 import { myAlbums, myMatches, publishAlbumsForPeer } from './me.ts';
+import { unifyOwnAlbum } from '../p2p/mirror.ts';
+import { readCallerAlbums, visibleAlbumIds } from '../immich/access.ts';
+import { findAdoptableAlbum } from '../sync/adoption.ts';
 import { parseRequestedPeer } from '../sync/matches.ts';
 import { sharePage, signInPage } from './assets.ts';
 import { localAddr } from '../p2p/transport.ts';
@@ -26,6 +29,7 @@ import { keys } from '../state.ts';
 import { proxyToImmich } from './passthrough.ts';
 import { callerIdentity, callerSignedIn, signInRequired } from './auth.ts';
 import { join } from '../p2p/join.ts';
+import { stripAlbumBots } from '../sync/album-grant.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { syncStatus, loopTicks } from '../sync/status.ts';
 import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
@@ -136,11 +140,44 @@ export const server = http.createServer(async (req, res) => {
     const body = await readCappedBody(req);
     if (body === null) return send(413, { error: `request body exceeds ${CFG.maxBodyKb}KB` });
 
+    // Would joining this link leave the caller with a SECOND album of a name they already own? The
+    // accept page asks BEFORE it joins, because a plain join would create the duplicate this feature
+    // exists to remove, and the person would have to reunite the two afterwards in the panel.
+    //
+    // It deliberately does NOT redeem the link to find out. Redeeming pins the caller as a peer on
+    // the ORIGIN and writes an owner mapping there, so a preview that redeemed would enrol a
+    // household on someone else's server merely because a page opened. The album's name is all this
+    // needs, and it arrives from the share page the person just came from.
+    if (path === `${ROUTE_PREFIX}/join/preview` && req.method === 'POST') {
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('check this album against your own'));
+      let asked: { albumName?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (typeof asked.albumName !== 'string') return send(400, { error: 'name the album the link is for' });
+      try {
+        // The SAME function the join itself re-derives with, so a preview can never offer a marriage
+        // the adoption would refuse — and the caller's own album list is read on THEIR credential,
+        // because only Immich can say which albums are theirs.
+        const reunion = findAdoptableAlbum(
+          { albumName: asked.albumName, peerOwnerUserId: '' },
+          await readCallerAlbums(signedIn.creds),
+          signedIn.caller.id
+        );
+        return send(200, { albumName: asked.albumName, ...(reunion ? { reunion } : {}) });
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
+    }
     if (path === `${ROUTE_PREFIX}/join` && req.method === 'POST') {
       // The account being joined is the SIGNED-IN one. The request body may name a
       // different user only if the caller is an admin acting on their behalf.
-      const caller = await callerIdentity(req);
-      if (!caller) return send(401, signInRequired('join a shared album'));
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('join a shared album'));
+      const caller = signedIn.caller;
       try {
         const b = JSON.parse(body);
         const forUserId = b.forUserId || caller.id;
@@ -150,7 +187,13 @@ export const server = http.createServer(async (req, res) => {
         const endpoint = JSON.parse(
           Buffer.from(String(b.invite?.endpointToken ?? ''), 'base64url').toString()
         );
-        return send(200, await join({ endpoint, key: b.invite?.key }, forUserId, b.password));
+        // A reunification may only adopt the caller's OWN album, and only on their own credential.
+        // Both are re-checked in ensureMirror; naming an id here is a request, not a decision.
+        const adopt =
+          b.adopt && typeof b.adopt.albumId === 'string' && b.adopt.albumId && forUserId === caller.id
+            ? { albumId: b.adopt.albumId, ownerCreds: signedIn.creds }
+            : undefined;
+        return send(200, await join({ endpoint, key: b.invite?.key }, forUserId, b.password, adopt));
       } catch (e) {
         return send(
           e.passwordRequired ? 401 : 400,
@@ -293,6 +336,98 @@ export const server = http.createServer(async (req, res) => {
       const published = await publishAlbumsForPeer(signedIn.creds, signedIn.caller.id, peer.pub);
       log(`${signedIn.caller.name} offered ${published} owned album(s) to "${peer.name}" for matching`);
       return send(200, { published });
+    }
+    // Un-reunify: undo the ADOPTION, not the share. The album and its own photos stay, the peer's
+    // stubs go, and the share returns to an ordinary mirror — so the origin is NOT told to stop
+    // (`notifyOrigin: false`) and keeps offering the invitation, which the member's own invite poll
+    // turns back into a mirror. Sending `/leave` here would retire the origin's mapping and lose the
+    // share; and because the marker account stays on the album, a later poll would silently
+    // re-create it, so the person's un-reunify would appear to undo itself.
+    if (path === `${ROUTE_PREFIX}/me/unreunite` && req.method === 'POST') {
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('un-reunite an album'));
+      let asked: { mappingId?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (typeof asked.mappingId !== 'string') return send(400, { error: 'name the share to un-reunite' });
+      // ONLY AN ADOPTION, and only its album's owner. Membership is not authority here: on a mapping
+      // that is not an adoption `leaveAlbum` DELETES the album, so an un-reunify that accepted one
+      // would be a leave button wearing the wrong label. `canUnifyOwnAlbum` checks the other
+      // direction (which album may be adopted) and cannot stand in for this.
+      const mapping = state.mappings.find(m => m.id === asked.mappingId && !m.dead && m.adopted === true);
+      if (!mapping) return send(404, { error: 'no such reunified share', code: 'unknown_mapping' });
+      const visible = await visibleAlbumIds(signedIn.creds);
+      if (!visible.has(mapping.albumId)) return send(403, { error: 'that share is not yours' });
+      // Ownership is the fact that matters: the album is the person's own, and only they may give up
+      // the reunion. Read as the caller, so the answer comes from Immich rather than from a claim.
+      const reunionAlbum = await immichJson(
+        `/albums/${mapping.albumId}?withoutAssets=true`,
+        {},
+        signedIn.creds
+      ).catch(() => null);
+      const callerOwnsIt = (reunionAlbum?.albumUsers || []).some(
+        au => au.user?.id === signedIn.caller.id && au.role === 'owner'
+      );
+      if (!callerOwnsIt) return send(403, { error: "only the album's owner can un-reunite it" });
+      try {
+        const { albumId, albumName } = mapping;
+        // Purge the peer's stubs FIRST, while our accounts still hold the memberships they were
+        // granted, then take those accounts off — only the owner can, and the caller IS the owner
+        // here. A leftover membership would keep our read access to a private album and make it
+        // read as a live mirror to anything enumerating albums by stand-in key.
+        const left = await leaveAlbum(mapping.id, { notifyOrigin: false });
+        // Reported, never swallowed: the owner's credential is gone the moment this request ends, so
+        // an account we failed to remove keeps reading a private album and NOTHING can retry it. The
+        // caller is told, and `stripFailed` names what is still on the album.
+        const { removed, failed } = await stripAlbumBots(albumId, signedIn.creds).catch(e => {
+          log(`un-reunify could not take our accounts off "${albumName}": ${e.message}`);
+          return { removed: 0, failed: ['unknown'] };
+        });
+        if (failed.length)
+          log(
+            `un-reunify left ${failed.length} of our account(s) on "${albumName}" — they still read it; remove them in Immich`
+          );
+        return send(200, { ...left, stripped: removed, ...(failed.length ? { stripFailed: failed } : {}) });
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
+    }
+    // Reunite: replace one of the caller's shares with an album they already own. The album id
+    // names a request, not a decision — the operation re-derives that it is theirs and that it is
+    // the album this share is about, on their own credential.
+    if (path === `${ROUTE_PREFIX}/me/reunite` && req.method === 'POST') {
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('reunite an album'));
+      let asked: { mappingId?: unknown; albumName?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (typeof asked.mappingId !== 'string' || typeof asked.albumName !== 'string')
+        return send(400, { error: 'name the share and the album to reunite it with' });
+      // Only shares this caller is in: the mapping is looked up, then the album it points at is
+      // read as the caller, so a mapping they cannot see is one they cannot name.
+      const mapping = state.mappings.find(m => m.id === asked.mappingId && !m.dead);
+      if (!mapping) return send(404, { error: 'no such share', code: 'unknown_mapping' });
+      const visible = await visibleAlbumIds(signedIn.creds);
+      if (!visible.has(mapping.albumId)) return send(403, { error: 'that share is not yours' });
+      try {
+        // The panel names the ALBUM by name; which local album that is gets resolved from the
+        // caller's own list inside the operation, so no id crosses the wire or is taken on trust.
+        const outcome = await unifyOwnAlbum(
+          mapping,
+          { albumName: asked.albumName },
+          signedIn.creds,
+          signedIn.caller.id
+        );
+        return send(200, outcome);
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
     }
     // Albums the caller could reunite. Read-only and computed on demand: nothing here changes an
     // album, which is why the panel offers no action yet.

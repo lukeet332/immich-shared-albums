@@ -24,10 +24,17 @@ The personal panel. It answers: _what am I sharing, and with whom?_
 - **Possible album reunions** — albums that look like two halves of one Google Photos album. If you
   and a relative each imported a Takeout of "Summer 2024", that album shows up on both servers as a
   partial copy; this lists the pairs it finds, with how many photos each side holds and whether the
-  dates line up.
+  dates line up. **Reunite** merges the pair into the album you already own.
+- **Reunified albums** — the ones you have merged, each with **Un-reunite**.
 
-Nothing on this page changes an album. It is a view, and every action it describes is confirmed by
-both album owners before anything moves.
+Reuniting changes no photo's ownership: each album stays its own owner's, on that owner's own
+server, and the other side's photos arrive as shared copies rather than being copied. A photo both
+of you hold is never shown twice.
+
+Un-reuniting undoes the merge and nothing else — your album keeps your own photos, the other side's
+copies are removed, and the share goes back to being an ordinary shared album. It is worth knowing
+that the two matching albums are paired by **name alone**, because a Takeout carries no album dates
+to compare; a name can be wrong, which is why the action is reversible.
 
 ## Server settings and pairings (`/admin`)
 
@@ -55,6 +62,17 @@ use their own photos.
 When someone sends you a share link, the join card on that page hands you to
 `/immich-shared-albums/accept`. Sign in to your own Immich there, accept, and the album fills with
 the other server's photos. Anyone can reach this page; it does not require the addon's panels.
+
+**If you already have an album with the same name**, the page offers to reunite the two instead of
+joining separately — because joining separately is what would leave you holding two albums of one
+name. Reuniting keeps the album yours, shows a photo you both hold once, and can be undone from your
+shared-albums page afterwards. The other button joins as a separate album, which is the right choice
+when the two albums only happen to share a name.
+
+Albums that have been reunited carry a line in their own comments saying so, written by the addon's
+"Shared albums" account rather than by the person who clicked. That is the record of what happened to
+the album, and it is there because the two albums were paired by name alone — which can be wrong, and
+only the people in the album can tell.
 
 ## Related
 

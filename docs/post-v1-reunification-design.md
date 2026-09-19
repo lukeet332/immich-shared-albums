@@ -1,13 +1,14 @@
 # Post-v1 design spec: Google shared-album reunification & the user-level surface
 
-> Status: **matching is built; the merge is not.** §2's match and the panel surface exist —
-> `sync/matches.ts` pairs the halves, `sync/album-index.ts` records what each side offers, and the
-> matches list shows in the per-user panel with no action attached. Adopting an album, the
-> non-destructive suppression, the audit trail and `/commands` remain design. Everything here is
-> post-v1 and confirmed **non-breaking** — it rides surfaces and identities that v1 already ships
-> and freezes. Captured from the 2026-08-25 design discussion. Decisions are marked **[decided]**;
-> open choices **[open]**; things considered and dropped are in "Rejected alternatives" with
-> rationale.
+> Status: **the merge is built end to end.** §2's match and both surfaces exist — `sync/matches.ts`
+> pairs the halves, `sync/album-index.ts` records what each side offers, the per-user panel lists
+> matches and reunites each one (`POST /me/reunite`, reversing with `/me/unreunite`), and the accept
+> flow asks before it acts (`POST /join/preview`, then `POST /join` with `adopt`). §3's suppression
+> is scoped to the album (`sync/album-suppression.ts`), and §7's trail is left in the album's own
+> comments by `sync/audit.ts`. `/commands` remains design. Everything here is post-v1 and confirmed
+> **non-breaking** — it rides surfaces and identities that v1 already ships and freezes. Captured
+> from the 2026-08-25 design discussion. Decisions are marked **[decided]**; open choices
+> **[open]**; things considered and dropped are in "Rejected alternatives" with rationale.
 
 ## 1. Why this is possible without breaking changes
 
@@ -65,6 +66,29 @@ guaranteed pixel-identical where Google diverged the copies.
 
 ---
 
+### The accept flow offers the reunion, it does not assume the join **[decided]**
+A late reunifier is the person this design is most likely to meet: they accepted a share for an album
+they already hold half of, and a plain join would leave them with **two albums of one name** — the
+duplicate the feature exists to remove. So the accept surface asks before it acts:
+`POST /join/preview` answers whether this household already owns an album of the link's name
+(`findAdoptableAlbum`, the same function `unifyOwnAlbum` re-derives server-side, so a preview can
+never offer a marriage the adoption would refuse). The page then offers "reunite with your album" and
+passes `adopt` to `POST /join`, which is the path that already exists and is validated against the
+caller's own list rather than the browser's word.
+
+**The preview does NOT redeem the link, and that is the whole constraint on it.** Redeeming is not a
+read: it pins the caller as a peer on the ORIGIN and writes an owner mapping there. A preview that
+redeemed would enrol a household on someone else's server merely because a page opened. So the album
+name travels the other way — the share page already knows it and puts it in the accept link, and the
+preview needs nothing else. An older share page that sends no name simply offers no reunion, and the
+person lands in an ordinary share with the panel (§5) to reunite the two halves there.
+
+Sign-in is required, as it is for `/join`: the comparison is made with the caller's credential,
+because only Immich can answer which albums they own, and a caller who is not signed in has nothing
+to compare against. Without a preview a late reunifier still has the panel (§5) — they land in an
+ordinary share with a second album, and reunite the two there — so the preview is about not creating
+the duplicate in the first place, not about the only way out of it.
+
 ## 3. Dedup: non-destructive suppression **[decided]**
 
 The key design decision that de-risks the whole feature: **dedup is never destructive.**
@@ -85,6 +109,15 @@ directions are cheap and reversible:**
 - A **false positive** → one photo temporarily hidden, undoable. No loss.
 
 So cross-server match precision becomes a **soft optimisation, not a correctness requirement.**
+
+### Suppression is scoped to the ALBUM, not the mapping **[decided]**
+A mesh can offer one photo through two shares that land on the same album — three households holding
+the same Google album is the case this design exists for. Suppressing per mapping would materialise
+two stubs for it, and Immich cannot collapse them, because each stub carries a random tail so that it
+is a distinct asset. `existingCopyInAlbum` (`../src/sync/album-suppression.ts`) therefore asks
+whether *the album* already holds the photo, whichever mapping put it there, and `materialiseRef`
+records the row against the second mapping rather than uploading again. Two ledger rows then carry
+one stub, so withdrawing one share's copy leaves the other's claim standing.
 
 ### It also dissolves ownership ambiguity for co-owned assets
 For photos **both** own, ownership is moot — each uses its own copy. Ownership only has to be
@@ -143,6 +176,19 @@ the feature exists to avoid. Instead:
 - Consequence: no alias account is mirroring a person here. The merge writes **only the stub
   assets** into the album, and attribution stays on the ref (`contributor.originUserId`), so no
   Immich account is created for a person we have not been asked to share with.
+
+### Only the album's owner can add its writers **[decided]**
+Adopting an album does not make the sidecar able to administer it. Immich scopes membership writes to
+the album's owner: the household admin key answers `403 albumUser.create` on an album a different
+person owns, and a viewer — which is what the house bot is — does too. So the accounts that will own
+the merged stubs (`person-<originUserId>`, one per contributor named by the peer's refs) are granted
+membership as **editors** at adoption, on the album owner's forwarded credential:
+`grantAlbumWriters` in [`../src/sync/album-grant.ts`](../src/sync/album-grant.ts), called from
+`ensureMirror`'s adopt branch and from `unifyOwnAlbum`. A reconcile that runs later holds no owner
+credential, so a contributor the peer only begins offering afterwards needs the owner in the loop
+again — that is the panel's job, not the loop's. Un-reunifying runs on that same credential, so it
+takes those accounts back off (`stripAlbumBots`): a membership left behind would both keep the
+sidecar's read access to a private album and make it indistinguishable from a live mirror.
 
 ### What a side publishes, and what "owned" means **[decided]**
 Matching runs against albums each side **owns** — never ones merely visible to them.
@@ -263,9 +309,23 @@ choice. This also removes the wrinkle that **Immich has no native per-user-priva
   ever transmitted. Each side's comment thread ends up showing the same events.
 - **Idempotent by ledger, not by hope**: a line is written once per event, tagged through
   `seenActAdd`/`seenActHas`, because the loops retry a step until it settles and a naive write
-  would accumulate a second "Repair requested by Alice" on every pass.
+  would accumulate a second "Repair requested by Alice" on every pass. `sync/audit.ts` is where this
+  lives: `auditLine(mappingId, albumId, event, text)` writes the tag for the event and a `local:` tag
+  for the activity it posted, so the line is neither repeated nor pushed back to the peer.
+- **The reunion's line is posted at adoption** (`unifyOwnAlbum`, and `ensureMirror`'s adopt branch),
+  because that is the request carrying the album owner's credential — the same request that runs
+  `grantAlbumWriters` and `grantInvitedHumans` (§4), which is what puts the bot on the album so it can
+  comment at all. A line on an album a human owns cannot be written by a later loop.
 - **Comments sync covers the human replies** on both albums (owner mapping pushes, member mapping
   pulls canonical) — the trail is what stays put, not the conversation.
+- **A trail line needs a membership, and only the album's owner can grant one.** Posting to
+  `POST /activities` requires album access, so the utility account writing the line must be a member
+  of the album it writes on — verified: the household admin key answers `403 albumUser.create` on an
+  album a different person owns, and a viewer cannot widen one either. On a REUNIFIED album the grant
+  already happens at adoption, on the owner's forwarded credential (`grantAlbumWriters`, per §4), so
+  the line rides that. On an album a human merely invited us into there is no such moment: the origin
+  album's trail cannot be written by a background loop, and the design has to either take the line at
+  the one request that carries the owner's credential or not write it on that side at all.
 - Panel link in a comment is a **plain URL**: copy-pasteable, and Immich rendering it clickable is
   not something we control.
 

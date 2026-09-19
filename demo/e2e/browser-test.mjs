@@ -94,6 +94,27 @@ await page.reload({ waitUntil: 'networkidle' });
 await page.waitForFunction(() => document.getElementById('who')?.textContent?.includes('Joining as'), null, { timeout: 15000 }).catch(() => {});
 const whoIn = await page.locator('#who').textContent().catch(() => '');
 check('signed-in accept page recognises the user', /Joining as/.test(whoIn || ''), (whoIn || '').slice(0, 50));
+
+// 5b. A LATE REUNIFIER — someone who already owns an album of the link's name. This is the case the
+// page exists to ask about, and without seeding it the branch that CHOOSES between joining and
+// reuniting is the one part of the page no test ever renders. Created through the API on the
+// session, then reloaded so the offer is computed fresh.
+const ownAlbum = await (await fetch(`${B_PANEL_WEB}/api/albums`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.accessToken}` },
+  body: JSON.stringify({ albumName: album.albumName }),
+})).json();
+check('the lane can give the joiner an album of the link\'s own name', !!ownAlbum?.id,
+  ownAlbum?.id ? ownAlbum.id.slice(0, 8) : JSON.stringify(ownAlbum).slice(0, 60));
+await page.reload({ waitUntil: 'networkidle' });
+const offered = await page.locator('#reunion').waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
+check('accept page offers the reunion rather than a second album of the same name', offered,
+  (await page.locator('#reunion').textContent().catch(() => '')).slice(0, 70));
+check('and keeps the separate join visible as the other choice',
+  await page.locator('#joinseparate').isVisible().catch(() => false));
+
+// The primary button is now the REUNION, so this lane drives the reunite path; plain joins are
+// covered by the API suite, which does them throughout.
 await page.locator('#go').click();
 await page.waitForFunction(() => document.getElementById('out')?.textContent?.includes('Joined'), null, { timeout: 60000 }).catch(() => {});
 check('join completes fast (async join)', (await page.locator('#out').textContent().catch(() => '')).includes('Joined'));

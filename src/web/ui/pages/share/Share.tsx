@@ -64,8 +64,15 @@ export const Share = () => {
     }
     localStorage.setItem(REMEMBERED_SERVER, raw);
     // The invite rides the fragment so it never appears in any server's logs.
-    const endpoint = document.getElementById('immich-shared-albums-banner')?.dataset.originEndpoint ?? '';
-    const invite = encodeURIComponent(JSON.stringify({ v: 2, e: endpoint, key: shareKeyFromPath() }));
+    const banner = document.getElementById('immich-shared-albums-banner');
+    const endpoint = banner?.dataset.originEndpoint ?? '';
+    // The album's NAME rides along, so the accept page can ask whether the person already owns one
+    // by that name without the receiving sidecar redeeming the link to find out — redeeming enrols
+    // this household on the origin, and merely opening a page must not do that.
+    const albumName = banner?.dataset.albumName ?? '';
+    const invite = encodeURIComponent(
+      JSON.stringify({ v: 2, e: endpoint, key: shareKeyFromPath(), ...(albumName ? { a: albumName } : {}) })
+    );
     location.href = `${scheme}://${domain}/immich-shared-albums/accept#${invite}`;
   };
 

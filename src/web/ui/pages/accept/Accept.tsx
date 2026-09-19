@@ -1,7 +1,7 @@
 /** web/ui/pages/accept/Accept.tsx — the joining flow: sign-in poll, redeem, watch the album fill, hand over the deeplink. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
 import { readInvite } from './fragment.ts';
-import { join, whoami, type JoinResult, type Me } from './api.ts';
+import { join, preview, whoami, type JoinResult, type Me, type Reunion } from './api.ts';
 import { OpenInApp } from './OpenInApp.tsx';
 
 // #who/#go/#out (and #openapp) are a TEST CONTRACT — the browser lane drives them. Keep them.
@@ -20,6 +20,12 @@ export const Accept = ({ household }: { household: string }) => {
   const [password, setPassword] = useState('');
   const [joined, setJoined] = useState<JoinResult | null>(null);
   const [message, setMessage] = useState('');
+  const [reunion, setReunion] = useState<Reunion | null>(null);
+  // False while the preview is in flight, because the primary button must not be usable before the
+  // answer exists: a click during that window joins SEPARATELY and creates the second album the
+  // preview was asked about, which is the one thing this page exists to prevent. True already when
+  // there is no album name to ask about (an older share page), so nothing waits for nothing.
+  const [previewSettled, setPreviewSettled] = useState(!invite?.albumName);
 
   // Wait for a session rather than demanding one up front: people arrive here from someone else's
   // share page, sign in to their own Immich in another tab, and come back to this one.
@@ -50,6 +56,27 @@ export const Accept = ({ household }: { household: string }) => {
     };
   }, []);
 
+  // Asked once there is a session to ask with: does this person ALREADY own an album of the name the
+  // link is for? It has to be known BEFORE the join, because a plain join creates the second album
+  // first and the duplicate is what reunification exists to remove.
+  useEffect(() => {
+    if (!signedInUser || !invite?.albumName) return;
+    let unmounted = false;
+    setPreviewSettled(false);
+    void preview(invite.albumName)
+      .then(r => {
+        if (!unmounted) setReunion(r.reunion ?? null);
+      })
+      // Settled whatever happened, including the timeout inside `preview`: a preview that cannot
+      // answer must fail OPEN, by enabling the ordinary join, not closed by disabling it forever.
+      .finally(() => {
+        if (!unmounted) setPreviewSettled(true);
+      });
+    return () => {
+      unmounted = true;
+    };
+  }, [signedInUser, invite]);
+
   if (!invite) {
     return (
       <>
@@ -59,12 +86,17 @@ export const Accept = ({ household }: { household: string }) => {
     );
   }
 
-  const acceptInvite = async () => {
+  const acceptInvite = async (adoptAlbumId?: string) => {
     if (!signedInUser) return;
     setJoinInProgress(true);
     setMessage('');
 
-    const outcome = await join(invite, signedInUser.id, albumNeedsPassword ? password : undefined);
+    const outcome = await join(
+      invite,
+      signedInUser.id,
+      albumNeedsPassword ? password : undefined,
+      adoptAlbumId
+    );
 
     // The session went away between page load and click — send them to sign in and back.
     if (outcome.needsAuth) {
@@ -124,21 +156,41 @@ export const Accept = ({ household }: { household: string }) => {
           onInput={e => setPassword((e.target as HTMLInputElement).value)}
         />
       )}
+      {reunion && (
+        <div id="reunion" class="reunion">
+          You already have an album called “{reunion.name}”. Reuniting the two shows the photos you both hold
+          once, and leaves the album yours — you can undo it from your shared-albums page.
+        </div>
+      )}
       <button
         id="go"
-        disabled={!signedInUser || joinInProgress}
+        disabled={!signedInUser || joinInProgress || !previewSettled}
         class={joinInProgress ? 'busy' : ''}
-        onClick={acceptInvite}
+        onClick={() => acceptInvite(reunion?.albumId)}
       >
         {joinInProgress ? (
           <>
             <span class="spin" />
             Joining — syncing photos…
           </>
+        ) : !previewSettled ? (
+          <>
+            <span class="spin" />
+            Checking your albums…
+          </>
+        ) : reunion ? (
+          `Reunite with “${reunion.name}” and join`
         ) : (
           'Accept & join'
         )}
       </button>
+      {reunion && (
+        // The other choice, stated rather than hidden: joining separately is what a plain join does,
+        // and it is right when the two albums only share a name.
+        <button id="joinseparate" class="secondary" disabled={joinInProgress} onClick={() => acceptInvite()}>
+          Join as a separate album
+        </button>
+      )}
       <div id="out" class="out">
         {message}
       </div>

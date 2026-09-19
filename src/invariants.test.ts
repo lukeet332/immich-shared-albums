@@ -65,7 +65,15 @@ test('bot accounts are keyed by id, never by display name', () => {
   // (The old slugify(displayName) fallback also let a person named "Person 5" slug INTO the
   // person- namespace that unlink trusts for deletion.)
   const prefixes = Object.values(BOT_PREFIX);
-  assert.deepEqual(prefixes, ['person-'], 'one namespace, one keying rule');
+  // Two namespaces now, and the property that matters is disjointness rather than "only one":
+  // `p2p/unlink.ts` deletes accounts starting with `person-`, so a `house-` account must never be
+  // reachable from a person prefix — or unlinking a server would delete this household's own bot.
+  assert.deepEqual([...prefixes].sort(), ['house-', 'person-'], 'the namespaces that exist');
+  for (const a of prefixes)
+    for (const b of prefixes)
+      if (a !== b) assert.ok(!b.startsWith(a), `"${a}" prefixes "${b}" — deletion could over-reach`);
+  assert.ok(!BOT_PREFIX.house.startsWith(BOT_PREFIX.person));
+  assert.ok(!BOT_PREFIX.person.startsWith(BOT_PREFIX.house));
 });
 
 test('a marker name never collides with an attribution contributor name', () => {

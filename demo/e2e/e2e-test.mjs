@@ -879,6 +879,23 @@ stage('native album invitations, per person (no share link)');
     // stand-in keys that OWN the mirrors — asserting via the admin only proves it was excluded.
     const standInKeys = () => Object.values(readSidecarContributors('b-sidecar') || {})
       .map(c => c && c.apiKey).filter(Boolean);
+    /** The MIRRORS among B's albums under a name: the ones a STAND-IN owns. A reunited album belongs
+     *  to a human and merely carries our accounts, so counting by what a stand-in can SEE misreads it
+     *  as a mirror — which is exactly what a reunion creates. */
+    const standInOwnedAlbumIds = async (name) => {
+      const ids = new Set();
+      for (const k of standInKeys()) {
+        const al = await api(B, k, '/albums').catch(() => []);
+        for (const a of al || []) {
+          if (
+            a.albumName === name &&
+            (a.albumUsers || []).some(au => au.role === 'owner' && isBot(au.user?.email))
+          )
+            ids.add(a.id);
+        }
+      }
+      return ids;
+    };
     const findOnB = async (name, timeout = 150000) => until(async () => {
       for (const k of standInKeys()) {
         const al = await api(B, k, '/albums').catch(() => []);
@@ -905,7 +922,7 @@ stage('native album invitations, per person (no share link)');
       check('marker is really a member after the invite',
             (back.albumUsers || []).some(au => au.user?.id === nan.id && au.role === 'editor'));
 
-      const mirrored = await findOnB('natively invited album');
+      let mirrored = await findOnB('natively invited album');
       check('member mirrors an invited album automatically, with no link', !!mirrored,
             mirrored ? '' : 'timed out');
       if (mirrored) {
@@ -913,8 +930,197 @@ stage('native album invitations, per person (no share link)');
           const x = await albumAssets(B, mirrored.key, mirrored.album.id); return x.length >= 1 ? x : null;
         }, 150000);
         check('invited album\'s photo materialises on the member', !!arrived, arrived ? '' : 'timed out');
-        check('an invite reaches ONLY the invited person', (await humansOn(mirrored)).join(',') === bAdmin.name,
-              (await humansOn(mirrored)).join(', '));
+        // ── REUNIFY ──────────────────────────────────────────────────────────────────────────
+        // The panel's action, end to end: B already holds a partial album of the same name, so it
+        // is reunited with the share rather than mirrored into a second album. This is the stage
+        // that exercises adoption at all — every check above proves the ordinary flows still work.
+        const bOwnBefore = await api(B, BKEY, '/albums', j({ albumName: 'natively invited album' }));
+        // POPULATED ON PURPOSE. `j(...)` is a POST, so the line above creates an EMPTY album, and an
+        // empty album cannot show that a reunion preserved what was already there — every
+        // preservation assertion below would hold trivially, whatever the reunion did to it.
+        const bOwnPhoto = await upload(
+          B,
+          BKEY,
+          'b-own.jpg',
+          `bown${Date.now() % 10000}`,
+          '2026-04-01T09:00:00.000Z'
+        );
+        await api(B, BKEY, `/albums/${bOwnBefore.id}/assets`, { ...j({ ids: [bOwnPhoto] }), method: 'PUT' });
+        const bOwnAssetsBefore = await albumAssets(B, BKEY, bOwnBefore.id);
+
+        // THE PREVIEW the accept page asks before it joins: does this household already own an album
+        // of the name the link is for? This is the answer that stops a late reunifier ending up with
+        // two albums. It must come back WITHOUT the sidecar redeeming the link — redeeming pins us as
+        // a peer on the ORIGIN and writes a mapping there, which opening a page must never do.
+        const preview = async (albumName) =>
+          (
+            await fetch(`${BS}/immich-shared-albums/join/preview`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+              body: JSON.stringify({ albumName }),
+            })
+          ).json();
+        const previewHit = await preview('natively invited album');
+        check('the accept preview offers the reunion for a name this person already owns',
+              previewHit?.reunion?.albumId === bOwnBefore.id, JSON.stringify(previewHit));
+        const previewMiss = await preview(`nothing called this ${Date.now()}`);
+        check('the accept preview offers nothing for a name they do not own',
+              !previewMiss?.reunion, JSON.stringify(previewMiss));
+        const previewAnon = await fetch(`${BS}/immich-shared-albums/join/preview`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ albumName: 'natively invited album' }),
+        });
+        check('the accept preview refuses a caller with no session, like the join it precedes',
+              previewAnon.status === 401, `status=${previewAnon.status}`);
+        const aBefore = (await albumAssets(A, AKEY, invAlb)).length;
+
+        // The share B holds for this peer, with the local album it currently points at.
+        const panel = await (await fetch(`${BS}/immich-shared-albums/me/albums`, {
+          headers: { 'x-api-key': BKEY },
+        })).json();
+        const shared = (panel.albums || []).find(a => a.name === 'natively invited album');
+        // The share's own record, so a failure later says WHICH mapping moved and where it pointed.
+        const bMappings = sidecarSql('b-sidecar', `SELECT id, role, albumId, remoteAlbumId, remoteMappingId, hostSlug FROM mappings WHERE albumName = 'natively invited album'`);
+        console.log(`  (share before reunite: ${JSON.stringify(shared)} mappings=${bMappings})`);
+        const bAlbumsNow = await api(B, BKEY, '/albums');
+        console.log(`  (B albums named that: ${JSON.stringify(bAlbumsNow.filter(a => a.albumName === 'natively invited album').map(a => ({ id: a.id.slice(0, 8), count: a.assetCount })))})`);
+
+        const reunited = shared
+          ? await (await fetch(`${BS}/immich-shared-albums/me/reunite`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+              body: JSON.stringify({ mappingId: shared.mappingId, albumName: 'natively invited album' }),
+            })).json()
+          : null;
+        check('B reunites its own album with the share, instead of keeping a second one',
+              !!reunited?.album, JSON.stringify(reunited));
+
+        if (reunited?.album) {
+          const bOwnAfter = await api(B, BKEY, `/albums/${bOwnBefore.id}`);
+          // The whole promise: the reunion ADDS to the album that was already there.
+          check('the reunified album is the one B already had, not a new one',
+                (bOwnAfter.albumUsers || []).some(au => au.user?.id === bAdmin.id), JSON.stringify(bOwnAfter.albumUsers?.length));
+          check("B's own photos are still there, and still B's",
+                (await albumAssets(B, BKEY, bOwnBefore.id)).filter(x => x.ownerId === bAdmin.id).length >=
+                  bOwnAssetsBefore.filter(x => x.ownerId === bAdmin.id).length,
+                `was ${bOwnAssetsBefore.filter(x => x.ownerId === bAdmin.id).length}`);
+          // A's photo arrived as a stub: present in B's album, owned by a bot, not by B.
+          console.log(
+            `  (B polls album ${bOwnBefore.id.slice(0, 8)}; B albums named that: ${JSON.stringify((await api(B, BKEY, '/albums')).filter(a => a.albumName === 'natively invited album').map(a => ({ id: a.id.slice(0, 8), count: a.assetCount })))})`
+          );
+          const union = await until(async () => {
+            const x = await albumAssets(B, BKEY, bOwnBefore.id);
+            return x.some(a => a.ownerId !== bAdmin.id) ? x : null;
+          }, 120000);
+          check("A's photos appear in B's album as stubs, not as B's own",
+                !!union, union ? `${union.length} asset(s)` : 'timed out');
+
+          // NO DUPLICATES, and it must HOLD. A second stub for one photo is exactly what
+          // album-level suppression prevents, and it shows up the same way the echo does: a count
+          // that climbs rather than a single wrong reading. Two peers offering one photo is the
+          // 3-household case, so this is the assertion that stops the mesh double-showing.
+          const foreignStubs = async () =>
+            [(await albumAssets(B, BKEY, bOwnBefore.id)).filter(a => a.ownerId !== bAdmin.id).length];
+          const noDupes = await stable(foreignStubs, TWO_CYCLES_MS, HOLD_DEADLINE_MS);
+          check("A's photo is in B's album exactly once, across cycles",
+                !!noDupes && noDupes[0] === 1, `stub count ${JSON.stringify(noDupes)}`);
+
+          // THE PEOPLE LIST. Who is in the album has to be exactly who should be: the person who
+          // owns it, and the accounts we added to carry the other side's photos. This is the
+          // assertion behind "the correct people show for all linked servers", and the duplicate
+          // check is what catches an account added twice by two different code paths.
+          const members = (bOwnAfter.albumUsers || []).map(au => au.user?.id).filter(Boolean);
+          check('the reunified album names no account twice',
+                members.length === new Set(members).size,
+                `${members.length} entries, ${new Set(members).size} distinct`);
+          check("the reunified album keeps its owner and adds only our own accounts",
+                (bOwnAfter.albumUsers || []).every(au => au.user?.id === bAdmin.id || isBot(au.user?.email)),
+                (bOwnAfter.albumUsers || []).map(au => `${au.user?.name}:${au.role}`).join(', '));
+
+          // THE AUDIT TRAIL, and the reason it exists: the two albums were paired by NAME alone, so
+          // when the pairing is wrong the people involved are the only ones who can tell — and they
+          // can only tell if the album says what happened to it. Exactly ONE line, authored by our
+          // bot: a line in the name of the person who clicked would be a comment they never wrote,
+          // and a second copy is what a retry loop leaves when idempotency is hoped for rather than
+          // recorded.
+          const auditLines = async () => {
+            const acts = await api(B, BKEY, `/activities?albumId=${bOwnBefore.id}&type=comment`);
+            return (acts || []).filter(a => /^Reunited with /.test(a.comment || ''));
+          };
+          // HELD at one, not merely seen to be one. `until` returns the moment a line exists, so a
+          // second copy arriving a cycle later would slip past a single sample — and idempotency is a
+          // claim about every retry, which is exactly what `stable` measures.
+          const heldAudit = await stable(
+            async () => [(await auditLines()).length],
+            TWO_CYCLES_MS,
+            HOLD_DEADLINE_MS
+          );
+          const auditFirst = (await auditLines())[0];
+          check('the reunion leaves one audit line in the album, authored by our bot',
+                !!heldAudit && heldAudit[0] === 1 && isBot(auditFirst?.user?.email),
+                `count ${JSON.stringify(heldAudit)} from ${auditFirst?.user?.name ?? 'nobody'}`);
+
+          // ECHO: A's count must HOLD, not merely read true once. An unseeded ledger offers B's
+          // whole album back, which shows up as a count that keeps climbing.
+          const aCounts = async () => [(await albumAssets(A, AKEY, invAlb)).length];
+          const held = await stable(aCounts, TWO_CYCLES_MS, HOLD_DEADLINE_MS);
+          check("A's album does not grow — nothing of B's was offered back",
+                !!held && held[0] === aBefore, `was ${aBefore}, now ${JSON.stringify(held)}`);
+
+          // ── DETACH ─────────────────────────────────────────────────────────────────────────
+          // Snapshot, un-reunify, and require the album to be exactly as it was: the assertion that
+          // makes name-only matching acceptable.
+          const idsBefore = (await albumAssets(B, BKEY, bOwnBefore.id)).map(a => a.id).sort();
+          const detached = await (await fetch(`${BS}/immich-shared-albums/me/unreunite`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+            body: JSON.stringify({ mappingId: shared.mappingId }),
+          })).json();
+          check('un-reuniting is offered and accepted', !!detached?.left, JSON.stringify(detached));
+          const after = await until(async () => {
+            const x = await albumAssets(B, BKEY, bOwnBefore.id);
+            return x.every(a => a.ownerId === bAdmin.id) ? x : null;
+          }, 120000);
+          check("un-reuniting removes the other server's photos from the album",
+                !!after, after ? '' : 'stubs still present after 120s');
+          // Our accounts came off on the way out. They were added on the owner's credential, and
+          // only the owner can remove them, so a miss here leaves us reading a private album for
+          // good — and makes that album look like a live mirror to anything enumerating by bot key.
+          const afterDetach = await api(B, BKEY, `/albums/${bOwnBefore.id}`);
+          check('un-reuniting takes our accounts back off the album',
+                (afterDetach.albumUsers || []).every(au => !isBot(au.user?.email)),
+                (afterDetach.albumUsers || []).map(au => au.user?.name).join(', '));
+          check('the album still exists, holding exactly the photos it held before',
+                !!after && JSON.stringify(after.map(a => a.id).sort()) === JSON.stringify(bOwnAssetsBefore.map(a => a.id).sort()),
+                `before=${bOwnAssetsBefore.length} after=${after?.length}`);
+        }
+
+        // Un-reunifying gives the share back as an ORDINARY MIRROR — a new album, created by the
+        // member's own invite poll within a tick, because un-reunify never tells the origin to stop
+        // offering. The mirror this stage found was retired by the reunion, so re-point `mirrored`
+        // once here for every check below. Two traps this resolves without: a NAME search cannot tell
+        // that mirror from the album this person owns under the same name — the mirror is the one a
+        // STAND-IN owns, and the person's own is owned by a human — and state.db read from the host
+        // is a stale snapshot, so the answer comes from the API (README rules 10 and 11).
+        const standInOwnedMirror = async () => {
+          for (const k of standInKeys()) {
+            const al = await api(B, k, '/albums').catch(() => []);
+            const hit = (al || []).find(a =>
+              a.albumName === 'natively invited album' &&
+              (a.albumUsers || []).some(au => au.role === 'owner' && isBot(au.user?.email)));
+            if (hit) return { album: hit, key: k };
+          }
+          return null;
+        };
+        const remirrored = await until(standInOwnedMirror, 120000);
+        if (remirrored) mirrored = remirrored;
+        check('un-reunifying gives the share back as a mirror, so the invitation is still live',
+              !!remirrored, remirrored ? `mirror ${remirrored.album.id.slice(0, 8)}` : 'no mirror re-created');
+
+        check('an invite reaches ONLY the invited person',
+              (await humansOn(mirrored).catch(() => [])).join(',') === bAdmin.name,
+              (await humansOn(mirrored).catch(() => [])).join(', '));
 
         // The per-user panel must answer AS the caller. This user belongs to the one album they
         // joined and none of the others the admin can see — so a filtered admin read, which
@@ -1066,13 +1272,72 @@ stage('native album invitations, per person (no share link)');
         check('the member sidecar kept evaluating both loops while the mirror was left alone',
               !!ticksAfter,
               ticksBefore ? JSON.stringify({ before: ticksBefore, after: ticksAfter }) : 'sync/status unreadable — is ISA_TEST_HOOKS set on B?');
-        const mirrorAlbumIds = new Set();
-        for (const key of standInKeys()) {
-          const albums = await api(B, key, '/albums').catch(() => []);
-          for (const album of albums || []) {
-            if (album.albumName === 'natively invited album') mirrorAlbumIds.add(album.id);
-          }
+
+        // ── MESH: ONE ALBUM REACHED THROUGH TWO SHARES ───────────────────────────────────────
+        // The case album-level suppression exists for. Built from LINK shares on purpose: the
+        // invitation stages above revoke their markers and tear those shares down, so a mesh built
+        // on invitations would be measuring whatever survived them rather than what it set up.
+        // Two same-named albums on the origin, each carrying the SAME asset — Immich lets one asset
+        // sit in two albums, so the checksums match without copying any bytes — and B reunites both
+        // onto the album it already has. Two mappings then point at one album, both offering it.
+        const joinSameNamedShare = async () => {
+          const id = (await api(A, AKEY, '/albums', j({ albumName: 'natively invited album' }))).id;
+          await api(A, AKEY, `/albums/${id}/assets`, { ...j({ ids: [invAsset] }), method: 'PUT' });
+          const key = (await api(A, AKEY, '/shared-links',
+            j({ type: 'ALBUM', albumId: id, allowUpload: true }))).key;
+          const res = await fetch(`${BS}/immich-shared-albums/join`,
+            jAuth(await inviteFor(ORIGIN_DIRECT, key), BKEY));
+          const body = await res.json().catch(() => null);
+          // CHECKED, not fired and forgotten: an unchecked join is how this stage once reported a
+          // mesh it had never managed to build.
+          return res.ok && body?.album === 'natively invited album';
+        };
+        const joined = await joinSameNamedShare();
+        const joinedToo = await joinSameNamedShare();
+        check('two same-named albums both join as shares of their own', joined && joinedToo,
+              `first=${joined} second=${joinedToo}`);
+
+        // Read BOTH before reuniting either: reuniting one retires the mirror it pointed at.
+        const twoShares = await until(async () => {
+          const list = (await (await fetch(`${BS}/immich-shared-albums/me/albums`, {
+            headers: { 'x-api-key': BKEY },
+          })).json()).albums?.filter(a => a.name === 'natively invited album') || [];
+          return list.length >= 2 ? list : null;
+        }, 60000);
+        check("the origin's same-named albums reach B as two separate shares",
+              !!twoShares, `${twoShares?.length ?? 0} share(s)`);
+
+        let reunions = 0;
+        for (const sh of (twoShares || []).slice(0, 2)) {
+          const r = await (await fetch(`${BS}/immich-shared-albums/me/reunite`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+            body: JSON.stringify({ mappingId: sh.mappingId, albumName: 'natively invited album' }),
+          })).json();
+          if (r?.album) reunions++;
         }
+        check('both shares reunite onto the album B already had', reunions === 2, `${reunions} reunited`);
+
+        // The album the reunions land on: the one B OWNS under that name, which a stand-in cannot be
+        // — re-resolved here rather than captured above, because the block that captured it is not
+        // in scope at this point in the lane.
+        const ownAlbum = (await api(B, BKEY, '/albums')).find(
+          a => a.albumName === 'natively invited album' &&
+               (a.albumUsers || []).some(au => au.user?.id === bAdmin.id && au.role === 'owner')
+        );
+        check('the reunions landed on the album B owns', !!ownAlbum, ownAlbum?.id?.slice(0, 8) ?? 'not found');
+
+        // THE ASSERTION: two mappings offered this photo into one album, so it holds it ONCE.
+        // Without album-level suppression each mapping materialises its own stub, and Immich cannot
+        // collapse them — the bytes differ by a random tail precisely so each is a distinct asset.
+        const oneOfIt = await until(async () => {
+          const x = await albumAssets(B, BKEY, ownAlbum.id);
+          return x.filter(a => a.ownerId !== bAdmin.id).length === 1 ? x : null;
+        }, 120000);
+        const stubsNow = (await albumAssets(B, BKEY, ownAlbum.id)).filter(a => a.ownerId !== bAdmin.id).length;
+        check('two shares offering one photo leave ONE copy, not two', !!oneOfIt, `${stubsNow} stub(s)`);
+
+        const mirrorAlbumIds = await standInOwnedAlbumIds('natively invited album');
         const survivors = await until(async () => {
           const h = await humansOn(mirrored);
           return h.length === 1 && h[0] === 'Second Human' ? h : null;
@@ -1093,11 +1358,8 @@ stage('native album invitations, per person (no share link)');
 
       // and the member must not be left holding a stale album of placeholders
       const mirrorGone = await until(async () => {
-        for (const k of standInKeys()) {
-          const al = await api(B, k, '/albums').catch(() => []);
-          if ((al || []).some(a => a.albumName === 'natively invited album')) return null;
-        }
-        return true;
+        const ids = await standInOwnedAlbumIds('natively invited album');
+        return ids.size === 0 ? true : null;
       }, 120000);
       check('member tears down its mirror when the last invitee is removed', !!mirrorGone,
             mirrorGone ? '' : 'stale mirror still present');

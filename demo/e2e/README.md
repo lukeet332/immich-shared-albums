@@ -8,6 +8,36 @@ the whole flow, exits non-zero on any fail. A Playwright lane (browser-test.mjs)
 ./demo/run-mock-e2e.sh
 ```
 
+### Running the browser lane locally
+
+It needs a Chromium with its system libraries, which a dev box may not have. Run it in a throwaway
+container instead of installing them — `--network host` is what makes it work, because the rig binds
+its ports to the host's **loopback** and a normally-networked container cannot reach those:
+
+```bash
+CKEY=$(grep -m1 C_API_KEY demo/household-c/.env | cut -d= -f2-)
+docker run --rm --network host \
+  -v "$PWD":/work -w /work/demo/e2e -v pw-browsers:/root/.cache/ms-playwright \
+  --add-host host.docker.internal:127.0.0.1 \
+  -e CKEY="$CKEY" -e B_EMAIL=admin@e2e.local -e B_PASS=e2e-admin-pass-1 \
+  -e PORT_SIDECAR_B=9381 -e PORT_SIDECAR_C=9382 \
+  node:24-bookworm bash -c \
+  'apt-get update -qq && /work/node_modules/.bin/playwright install-deps chromium &&
+   /work/node_modules/.bin/playwright install chromium && node browser-test.mjs'
+```
+
+Three details that each cost a cycle:
+
+- Mount the browser cache as a **named volume, not a host path**. The path inside whatever runs the
+  command is not the path the Docker daemon sees, so a bind mount there silently resolves to an empty
+  directory and the browser reports itself missing.
+- **Keep `install-deps` in the command.** The browser is cached in the volume; the system libraries
+  are installed by apt and are therefore per-container. Dropping it gives
+  `error while loading shared libraries: libnspr4.so`.
+- `--network host` is what makes the rig reachable at all: its ports are bound to the host's
+  loopback, and a normally-networked container cannot reach those. `--add-host` then points
+  `host.docker.internal` at `127.0.0.1`, which is where the share page is browsed from.
+
 First time only: put admin API keys in `demo/.env` (`B_API_KEY=...`) and
 `demo/household-c/.env` (`C_API_KEY=...`). On a fresh machine or CI,
 `demo/ci/provision-mock.sh <base-url>` creates the admin and mints a key for you

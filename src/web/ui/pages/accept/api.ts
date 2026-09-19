@@ -1,6 +1,9 @@
 /** web/ui/pages/accept/api.ts — the accept page's server calls: whoami, join, album fill, deeplink. See ../../../http-router.md. */
 const ROUTE_PREFIX = '/immich-shared-albums';
 
+/** The join button waits for the preview, so the preview has to finish. */
+const PREVIEW_TIMEOUT_MS = 8000;
+
 export type Me = { id: string; name: string };
 
 /** Whoever is signed in to THIS Immich, or null. Their session, not ours to invent. */
@@ -26,15 +29,43 @@ export type JoinResult = {
   passwordRequired?: boolean;
 };
 
+export type Reunion = { albumId: string; name: string };
+
+/**
+ * Does this household already own an album of this name? Asked BEFORE joining, because a plain join
+ * would leave the person with two albums of one name — the duplicate reunification exists to remove.
+ */
+export const preview = async (albumName: string): Promise<{ albumName?: string; reunion?: Reunion }> => {
+  try {
+    const r = await fetch(`${ROUTE_PREFIX}/join/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ albumName }),
+      signal: AbortSignal.timeout(PREVIEW_TIMEOUT_MS),
+    });
+    return r.ok ? await r.json() : {};
+  } catch {
+    return {}; // a preview is an offer, not a step: failing it must not block the join
+  }
+};
+
 export const join = async (
   invite: { endpointToken: string; key: string },
   forUserId: string,
-  password?: string
+  password?: string,
+  /** Reunify instead of creating a mirror: the album id is a REQUEST, re-derived against the
+   *  caller's own albums server-side before anything is adopted. */
+  adoptAlbumId?: string
 ): Promise<JoinResult> => {
   const r = await fetch(`${ROUTE_PREFIX}/join`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ invite, forUserId, ...(password ? { password } : {}) }),
+    body: JSON.stringify({
+      invite,
+      forUserId,
+      ...(password ? { password } : {}),
+      ...(adoptAlbumId ? { adopt: { albumId: adoptAlbumId } } : {}),
+    }),
   });
   const body = await r.json().catch(() => ({ error: 'failed' }));
   return { ok: r.ok, ...body };

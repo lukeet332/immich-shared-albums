@@ -13,8 +13,10 @@ certificates, and no listening HTTP surface for peers at all.
 - Dialing needs the key plus hints: `Peer.relayHint`/`Peer.lastAddrs`, refreshed after every
   successful dial — **hints, never identity**. First contact gets them from the pairing ticket or
   the share page's endpoint token.
-- Connections are cached per peer and redialed on close. The accept loop hands `routes.ts` the
-  caller's proven key (`remoteId()`), never a header.
+- Connections are cached per peer and redialed when they close — including when one turns out to
+  be a zombie after its peer restarted, which `closeReason()` alone does not report (see *Pushed
+  refs report partial success*). The accept loop hands `routes.ts` the caller's proven key
+  (`remoteId()`), never a header.
 - **Relays**: n0's public map assists hole-punching and carries end-to-end-encrypted traffic when
   a direct path fails — the one disclosed third party, fallback only; `RELAY=off` runs dark.
   **Discovery is never enabled** — tickets and tokens carry the address, so no registry learns a
@@ -138,6 +140,23 @@ a hung peer costs one timeout, never a wedged loop. Reaching a peer has its own,
 is offline, and a byte request is answered the moment the peer's Immich returns headers — so an
 offline owner makes the member's uncached photos fail closed to their stubs in seconds, not after
 QUIC's ~45s loss detection on a connection the dead peer never closed.
+
+A cached connection is a **zombie** once its peer restarts: `closeReason()` still returns null,
+so `connectionFor` reuses it and the request is written into a connection nothing will answer. TCP
+never had this problem — a restarted peer failed the socket and the next call dialled fresh — so
+every wait that can span a restart races `untilClosed(conn, …)` against `conn.closed()`, which is
+the one signal that does fire. A JSON request that loses its connection this way is re-dialled and
+retried **once** (`withRedialOnDeath`): the first attempt may or may not have been processed, and
+every route is idempotent by checksum, so a duplicate is a no-op rather than a double-write. The
+byte path does not redial — it already fails closed to the local stub in seconds, and a dial would
+only delay that stub. JSON response headers keep the long `DEADLINE_MS` because a `refs` push is
+processed before it is answered and can legitimately take that long; a dead connection is caught by
+`untilClosed`, never by shortening that deadline.
+
+`ISA_TRACE_SYNC` logs every dial, stream write, response wait and local Immich call with its
+elapsed time. Reach for it when a sync hangs: a stalled request is a *silent* wait, so no error
+state distinguishes it from a slow handler, and only the last logged stage says which await stopped
+returning.
 
 ## How this protocol evolves
 

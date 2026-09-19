@@ -77,6 +77,11 @@ export const CFG = {
   // ever store ~2KB per photo and ~2MB per video, so a cap bounds what a stolen bot
   // key could write — but set it too low and materialisation silently starts failing.
   botQuotaMb: envInt('ISA_BOT_QUOTA_MB', 0),
+  // Per-stage sync tracing: every peer dial, stream write and response wait, and every call to
+  // this household's own Immich, logs its elapsed time. Off by default because it is a line per
+  // await; it exists because the failure mode it diagnoses is a SILENT wait, which no error
+  // state distinguishes from a slow handler.
+  traceSync: envBool('ISA_TRACE_SYNC', false),
   // PUBLISH the names of local (human) users to linked servers, so they can invite a
   // specific person to an album. Names only — never emails; outbound only (it does not
   // affect consuming a peer's directory). Set false to keep your user list private; because
@@ -94,6 +99,10 @@ export const CFG = {
   testHooks: envBool('ISA_TEST_HOOKS', false),
 };
 export const log = (...a) => console.log(new Date().toISOString(), ...a);
+/** Per-stage sync trace, gated by ISA_TRACE_SYNC — see CFG.traceSync. */
+export const trace = (what: string, ...rest: unknown[]): void => {
+  if (CFG.traceSync) log(`[trace] ${what}`, ...rest);
+};
 export const UTILITY_SUFFIX = ' (via shared albums)';
 
 /**
@@ -152,6 +161,10 @@ export const LEGACY_UTILITY_DOMAINS = ['immich-shared-albums.invalid', 'sidecar.
 export const BOT_PREFIX = {
   /** One remote person, keyed by their user id on their home server. */
   person: 'person-',
+  /** This household's own bot: the account that speaks for the addon — it joins an album so the
+   *  sidecar can read it, and it posts the audit trail. One per server, not per person or per
+   *  album, and no prefix of another so the disjointness invariant holds. */
+  house: 'house-',
 } as const;
 
 /**

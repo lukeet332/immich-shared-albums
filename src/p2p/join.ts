@@ -8,6 +8,7 @@ import { CFG, SIDECAR_VERSION, log } from '../config.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
 import { state } from '../state.ts';
 import { peerRequest } from './transport.ts';
+import type { Creds } from '../immich/access.ts';
 import { ensureMirror, fillMirrorInBackground } from './mirror.ts';
 
 export type JoinInvite = {
@@ -16,7 +17,14 @@ export type JoinInvite = {
   key: string;
 };
 
-export async function join(invite: JoinInvite, forUserId, password?: string) {
+export async function join(
+  invite: JoinInvite,
+  forUserId,
+  password?: string,
+  /** Reunify rather than join: adopt this person's own album as the share's local half. The
+   *  credential is theirs because only it can read an album they own — see sync/house-bot.ts. */
+  adopt?: { albumId: string; ownerCreds: Creds }
+) {
   if (!invite?.endpoint?.pub || !invite?.key) throw new Error('that does not look like a share invite');
   const origin: import('../store.ts').Peer = {
     pub: invite.endpoint.pub,
@@ -84,6 +92,8 @@ export async function join(invite: JoinInvite, forUserId, password?: string) {
     // A link join is for one account when the panel/accept page names one, else the household.
     forUserIds: forUserId ? [forUserId] : undefined,
     reunified: res.reunified === true,
+    // Only when asked: without it this is an ordinary join, unchanged.
+    ...(adopt ? { adopt: { ...adopt, ownerUserId: forUserId } } : {}),
   });
   log(
     created
