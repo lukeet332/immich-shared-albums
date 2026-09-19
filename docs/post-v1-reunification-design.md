@@ -65,6 +65,22 @@ guaranteed pixel-identical where Google diverged the copies.
 
 ---
 
+### The accept flow offers the reunion, it does not assume the join **[decided]**
+A late reunifier is the person this design is most likely to meet: they accepted a share for an album
+they already hold half of, and a plain join would leave them with **two albums of one name** — the
+duplicate the feature exists to remove. So the accept surface asks before it acts:
+`POST /join/preview` redeems the invite, reads the caller's OWN albums on their credential, and
+answers with the album plus whether they own one of that name (`findAdoptableAlbum`, the same
+function `unifyOwnAlbum` re-derives server-side, so a preview can never widen what adoption allows).
+The page then offers "reunite with your album" and passes `adopt` to `POST /join`, which is the path
+that already exists and is validated against the caller's own list rather than the browser's word.
+
+Sign-in is required, as it is for `/join`: the comparison is made with the caller's credential,
+because only Immich can answer which albums they own, and a caller who is not signed in has nothing
+to compare against. Without a preview a late reunifier still has the panel (§5) — they land in an
+ordinary share with a second album, and reunite the two there — so the preview is about not creating
+the duplicate in the first place, not about the only way out of it.
+
 ## 3. Dedup: non-destructive suppression **[decided]**
 
 The key design decision that de-risks the whole feature: **dedup is never destructive.**
@@ -288,6 +304,14 @@ choice. This also removes the wrinkle that **Immich has no native per-user-priva
   would accumulate a second "Repair requested by Alice" on every pass.
 - **Comments sync covers the human replies** on both albums (owner mapping pushes, member mapping
   pulls canonical) — the trail is what stays put, not the conversation.
+- **A trail line needs a membership, and only the album's owner can grant one.** Posting to
+  `POST /activities` requires album access, so the utility account writing the line must be a member
+  of the album it writes on — verified: the household admin key answers `403 albumUser.create` on an
+  album a different person owns, and a viewer cannot widen one either. On a REUNIFIED album the grant
+  already happens at adoption, on the owner's forwarded credential (`grantAlbumWriters`, per §4), so
+  the line rides that. On an album a human merely invited us into there is no such moment: the origin
+  album's trail cannot be written by a background loop, and the design has to either take the line at
+  the one request that carries the owner's credential or not write it on that side at all.
 - Panel link in a comment is a **plain URL**: copy-pasteable, and Immich rendering it clickable is
   not something we control.
 
