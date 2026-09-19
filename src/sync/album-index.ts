@@ -2,7 +2,8 @@
 
 import type { Creds } from '../immich/access.ts';
 import { readCallerAlbums } from '../immich/access.ts';
-import type { OwnedAlbum } from '../store.ts';
+import type { OwnedAlbum, Peer } from '../store.ts';
+import { peerRequest } from '../p2p/transport.ts';
 import { store } from '../state.ts';
 import { albumsIPublish } from './matches.ts';
 
@@ -19,6 +20,40 @@ export async function publishOwnedAlbums(creds: Creds, callerUserId: string, pee
   const albums = albumsIPublish(await readCallerAlbums(creds), callerUserId);
   store.publishedAlbumsSet(peer, callerUserId, albums);
   return albums;
+}
+
+/**
+ * Refresh what a peer offers us, from the peer's own `/albums`.
+ *
+ * Pull-only, like invitations: a household behind CGNAT still matches perfectly well, and a peer
+ * too old to know the route answers 404 — which is "peer too old", not an error (wire rule 2), so
+ * the cached index simply stands. Best-effort: a failure leaves the last good snapshot in place
+ * rather than clearing an index the panel is about to read.
+ */
+export async function refreshPeerAlbums(peer: Peer): Promise<OwnedAlbum[]> {
+  try {
+    const r = await peerRequest(peer, '/albums');
+    if (r.status >= 400 || !Array.isArray(r.json?.albums)) return store.publishedAlbumsFor(peer.pub);
+    groupByOwner(r.json.albums as OwnedAlbum[]).forEach((albums, ownerUserId) =>
+      store.publishedAlbumsSet(peer.pub, ownerUserId, albums)
+    );
+    return store.publishedAlbumsFor(peer.pub);
+  } catch {
+    return store.publishedAlbumsFor(peer.pub); // unreachable right now: keep what we have
+  }
+}
+
+/** A peer's index arrives as one flat list; the store keys it per owner, so split it here. */
+function groupByOwner(albums: OwnedAlbum[]): Map<string, OwnedAlbum[]> {
+  const byOwner = new Map<string, OwnedAlbum[]>();
+  for (const album of albums) {
+    const owner = String(album?.ownerUserId ?? '');
+    if (!owner) continue; // an entry with no owner cannot be routed to anyone
+    const bucket = byOwner.get(owner);
+    if (bucket) bucket.push(album);
+    else byOwner.set(owner, [album]);
+  }
+  return byOwner;
 }
 
 /** What this server offers the given peer for matching. */

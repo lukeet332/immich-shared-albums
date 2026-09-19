@@ -20,7 +20,7 @@ There are three tiers, and each is enforced server-side:
 | Tier            | Routes                                                                                                                                                                                                 | Gate                                                                                                                                                                                                                                                 |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Public          | `/immich-shared-albums/health`, `/immich-shared-albums/accept`, `/immich-shared-albums/assets/*`, `/share/:key` (the join document; `?native=1` passes through)                                        | none — liveness, static pages and their assets. `health` returns `{ok:true}` and nothing else, because the join card probes it cross-origin to discover a sidecar.                                                                                   |
-| Signed-in human | `/immich-shared-albums/join`, `/leave`, `/peers`, `/pairings`, `/pairings/revoke`, `/pair`, `/settings`, `/unlink`, the panel                                                                          | `auth.ts` against the caller's Immich session. `join` takes the account from the **session**, not the request body; naming a different user requires admin. Everything else here requires admin — server links and settings are admin-owned objects. |
+| Signed-in human | `/immich-shared-albums/join`, `/leave`, `/peers`, `/pairings`, `/pairings/revoke`, `/pair`, `/settings`, `/unlink`, `/me/albums`, `/me/matches`, `/me/albums/publish`, the panel                                                                          | `auth.ts` against the caller's Immich session. `join` takes the account from the **session**, not the request body; naming a different user requires admin. Everything else here requires admin — server links and settings are admin-owned objects. |
 | Peers           | **nothing** — peer operations left HTTP entirely and ride mutually authenticated iroh QUIC; see [`../p2p/wire-protocol.md`](../p2p/wire-protocol.md). The router serves humans and the app, full stop. |
 
 The accept page's client-side `whoami` is UX only — it tells someone to sign in before
@@ -36,6 +36,11 @@ streams through), and authorise before doing work.
 origin's **endpoint token** (so a visitor's sidecar can dial it over iroh), and the join card
 over the native album in a same-origin iframe. `?native=1` is the untouched Immich page — what
 the iframe loads, and where dismissing the card navigates.
+
+**The per-user routes answer as the caller.** `/me/albums` and `/me/matches` read Immich with the
+caller's own forwarded credential (`immich/access.ts` decides that once), so membership and
+ownership are Immich's answers rather than a filtered admin read — and `/me/albums/publish` reads
+the albums from Immich too, so a request body can only name the peer it is offering them to.
 
 Panel settings live in the kv `settings` row: `pairingTtlMinutes` (how long a minted pairing link stays redeemable, default 15, clamped 5–1440 — the ticket itself is shown exactly once and only its hash persists) and `shareLinkJoin` (default on), which governs the
 whole capability: off means every `/share/*` request passes straight through **and** the iroh

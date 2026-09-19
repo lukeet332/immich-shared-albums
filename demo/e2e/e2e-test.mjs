@@ -1252,6 +1252,67 @@ stage('album index: what a person offered for matching, recorded only for the pe
 }
 
 
+// Matching, end to end across two servers. Both sides publish their OWN albums over the new
+// /albums route, and each panel then pairs the halves by name and owner. This is the first test
+// that exercises the wire read in the direction it was built for — B publishing to C and C
+// reading B's index, which a probe container could not dial.
+stage('reunification matching: two servers each find the other half of an album');
+{
+  const bPeerPubs = (readSidecarPeers('b-sidecar') || []).map(p => p.pub);
+  const cPeers = readSidecarPeers('c-sidecar') || [];
+  const cPub = bPeerPubs[0];
+  const bPub = (cPeers.find(p => bPeerPubs.includes(p.pub)) || {}).pub || (cPeers[0] || {}).pub;
+  if (!cPub || !bPub) requireState("both sides' peer lists from their state.db");
+
+  if (cPub && bPub) {
+    const aMe = await api(A, AKEY, '/users/me');
+    const aAlbums = await api(A, AKEY, '/albums');
+    const aOwned = aAlbums.find(x => (x.albumUsers || []).some(au => au.role === 'owner' && au.user?.id === aMe.id));
+    const bOwned = (await api(B, BKEY, '/albums')).find(x => (x.albumUsers || []).some(au => au.role === 'owner'));
+
+    // A pair to find: the SAME name on both sides, owned by their respective admins.
+    const named = `Reunion probe ${Date.now() % 100000}`;
+    await api(B, BKEY, '/albums', j({ albumName: named }));
+    await api(A, AKEY, '/albums', j({ albumName: named }));
+    check('the rig has a same-named album owned on each side to match',
+          !!aOwned && !!bOwned, `C-owned=${!!aOwned} B-owned=${!!bOwned}`);
+
+    const publish = async (sidecar, img, key, peerPub) =>
+      (await (await fetch(`${sidecar}/immich-shared-albums/me/albums/publish`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+        body: JSON.stringify({ peer: peerPub }),
+      })).json()).published;
+
+    const bPublished = await publish(BS, B, BKEY, cPub);
+    const cSidecar = process.env.C_SIDECAR || `http://localhost:${PORT('PORT_SIDECAR_C', 8302)}`;
+    const cPublished = await publish(cSidecar, A, AKEY, bPub);
+    check('each side offers its own albums to the other for matching',
+          bPublished > 0 && cPublished > 0, `B offered ${bPublished}, C offered ${cPublished}`);
+
+    // C published to B and B published to C, so reading the other's index over iroh is now the
+    // ordinary path rather than a harness stunt.
+    // The sidecar's own route, not Immich's: api() prefixes /api and would 404.
+    const sidecarGet = (base, key, path) =>
+      fetch(`${base}${path}`, { headers: { 'x-api-key': key } }).then(async r => {
+        if (!r.ok) throw new Error(`${path} -> ${r.status}`);
+        return r.json();
+      });
+    const bMatches = await sidecarGet(BS, BKEY, '/immich-shared-albums/me/matches');
+    const cMatches = await sidecarGet(cSidecar, AKEY, '/immich-shared-albums/me/matches');
+    const findPair = (matches, owner) =>
+      (matches || []).find(m => m.mine.name === named && m.theirs.ownerName === owner);
+    const bFound = findPair(bMatches.matches, aMe.name);
+    const cFound = findPair(cMatches.matches, (await api(B, BKEY, '/users/me')).name);
+    check('B finds its half of the album in the other server\'s index',
+          !!bFound, `matches=${JSON.stringify((bMatches.matches || []).map(m => `${m.mine.name}<>${m.theirs.name}`).slice(0, 5))}`);
+    check('the match is symmetric: each side sees the pair, independently',
+          !!bFound && !!cFound, `B=${!!bFound} C=${!!cFound}`);
+    check('a match names whose server the other half is on, for the owner-to-owner request',
+          !!bFound && bFound.peer === cPub && !!bFound.peerName,
+          bFound ? `peer=${bFound.peerName}` : 'no match');
+  }
+}
+
 stage('route prefix rename + legacy compatibility');
 {
   const code = async (u, init) => (await fetch(u, init).catch(() => ({ status: 0 }))).status;

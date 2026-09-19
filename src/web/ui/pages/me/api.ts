@@ -12,3 +12,15 @@ const json = async (path: string, init?: RequestInit) => {
 export type MyAlbum = { name: string; role: 'owner' | 'member'; via: string; peer: string };
 
 export const myAlbums = () => json('/me/albums') as Promise<{ albums: MyAlbum[] }>;
+
+/** A pair of same-named albums, one on each server. `mine` is the album this person owns. */
+export type PeerMatch = {
+  mine: { name: string; assetCount: number };
+  theirs: { name: string; assetCount: number; ownerName: string };
+  peer: string;
+  peerName: string;
+  sameDates: boolean;
+  why: string;
+};
+
+export const myMatches = () => json('/me/matches') as Promise<{ matches: PeerMatch[] }>;
