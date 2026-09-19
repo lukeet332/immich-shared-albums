@@ -36,6 +36,54 @@ test('a pre-v1 database is refused with instructions, not SQL errors', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// The reunification facts. Recorded rather than inferred: an adopted album belongs to a human who
+// had it before the share, and whether it is part of a reunion is a different fact again — deriving
+// either from the album's contents would mean deciding whose photos they are at deletion time.
+test('a v2 database migrates to v3 by adding the reunification facts, keeping existing mappings', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'isa-v2-'));
+  const db = new DatabaseSync(path.join(dir, 'state.db'));
+  // a v2 mappings table: real columns, but without `adopted`/`reunified`, stamped v2
+  db.exec(`
+    CREATE TABLE kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE seen (
+      id INTEGER PRIMARY KEY, mapping TEXT NOT NULL, checksum TEXT NOT NULL,
+      localAsset TEXT NOT NULL, originAsset TEXT, storedFull INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE mappings (
+      id TEXT PRIMARY KEY, role TEXT NOT NULL, albumId TEXT NOT NULL, albumName TEXT NOT NULL,
+      peer TEXT NOT NULL, remoteAlbumId TEXT, remoteMappingId TEXT,
+      permissions TEXT NOT NULL, hostSlug TEXT, via TEXT NOT NULL, forPeerUserIds TEXT,
+      albumOwnerName TEXT, albumOwnerId TEXT, dead INTEGER NOT NULL DEFAULT 0,
+      deadAt TEXT, deadReason TEXT, failCount INTEGER, localVersion TEXT, remoteVersion TEXT,
+      commentCount INTEGER, remoteCommentCount INTEGER
+    );
+    CREATE TABLE peers (pub TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT, protocol INTEGER,
+      features TEXT, via TEXT NOT NULL, firstSeenAt TEXT NOT NULL, relayHint TEXT, lastAddrs TEXT);
+    CREATE TABLE contributors (slug TEXT PRIMARY KEY, userId TEXT NOT NULL UNIQUE, apiKey TEXT NOT NULL,
+      password TEXT, avatarDone INTEGER NOT NULL DEFAULT 0, viaPeer TEXT, peerUserId TEXT, homePeer TEXT);
+    PRAGMA user_version = 2;
+  `);
+  db.prepare(
+    `INSERT INTO mappings (id, role, albumId, albumName, peer, permissions, via)
+     VALUES ('m1', 'owner', 'alb-1', 'Summer 2024', 'peer-1', 'contribute', 'invite')`
+  ).run();
+  db.close();
+
+  const store = new Store(dir);
+  assert.equal(SCHEMA_VERSION, 3, 'this migration targets schema v3');
+  assert.equal(
+    (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+    SCHEMA_VERSION,
+    'the v2 db is migrated up, not refused'
+  );
+  const mapping = store.state.mappings.find(m => m.id === 'm1');
+  assert.ok(mapping, 'pre-existing mappings survive the migration');
+  assert.equal(mapping.adopted, undefined, 'an existing mapping is not retroactively marked adopted');
+  assert.equal(mapping.reunified, undefined, 'nor retroactively marked reunified');
+  store.db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('an unknown future schema version is refused rather than guessed at', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'isa-future-'));
   const fresh = new Store(dir);
@@ -45,7 +93,7 @@ test('an unknown future schema version is refused rather than guessed at', () =>
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('a v1 database migrates to v2 by adding the storedFull column, keeping existing rows', () => {
+test('a v1 database migrates the whole chain, keeping existing rows', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'isa-v1-'));
   const db = new DatabaseSync(path.join(dir, 'state.db'));
   // a v1 store: the seen table WITHOUT storedFull, stamped v1, and not the v0 signature (no kv 'keys')
@@ -66,7 +114,6 @@ test('a v1 database migrates to v2 by adding the storedFull column, keeping exis
   db.close();
 
   const store = new Store(dir);
-  assert.equal(SCHEMA_VERSION, 2, 'this migration targets schema v2');
   assert.equal(
     (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
     SCHEMA_VERSION,
@@ -74,7 +121,13 @@ test('a v1 database migrates to v2 by adding the storedFull column, keeping exis
   );
   const row = store.seenForMapping('m1')[0];
   assert.equal(row.localAsset, 'a1', 'pre-existing rows survive the migration');
-  assert.equal(row.storedFull, 0, 'the added column defaults to 0 (a stub) for old rows');
+  assert.equal(row.storedFull, 0, 'the v2 column defaults to 0 (a stub) for old rows');
+  // and it keeps going: v1 is brought all the way up, not left at v2
+  assert.equal(
+    (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+    SCHEMA_VERSION,
+    'a v1 database reaches the current schema, not an intermediate one'
+  );
   store.db.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

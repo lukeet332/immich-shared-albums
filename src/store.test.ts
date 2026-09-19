@@ -47,3 +47,45 @@ test('an asset only this mapping claims is left unclaimed by others', () => {
     assert.equal(store.ledgerByAsset('asset-1'), undefined);
   });
 });
+
+// The two reunification facts. They round-trip or they do not exist: the whole point of recording
+// them is that teardown and the member view can trust what they read back.
+test('the reunification facts survive a write and a read', () => {
+  withStore(store => {
+    const base = {
+      id: 'm-reunified',
+      role: 'owner' as const,
+      albumId: 'alb-1',
+      albumName: 'Summer 2024',
+      peer: 'peer-1',
+      permissions: 'contribute' as const,
+      via: 'invite' as const,
+    };
+    store.state.mappings.push({ ...base, adopted: true, reunified: true });
+    store.save();
+    const back = store.state.mappings.find(m => m.id === 'm-reunified');
+    assert.equal(back?.adopted, true);
+    assert.equal(back?.reunified, true);
+  });
+});
+
+// Unset is not false: a mapping made the ordinary way was neither adopted nor part of a reunion,
+// and "not stated" must stay distinguishable from "stated as no" so a future default cannot
+// retroactively reclassify existing shares.
+test('a mapping with neither fact set reads back with neither set', () => {
+  withStore(store => {
+    store.state.mappings.push({
+      id: 'm-ordinary',
+      role: 'member',
+      albumId: 'alb-2',
+      albumName: 'Ordinary share',
+      peer: 'peer-1',
+      permissions: 'contribute',
+      via: 'link',
+    });
+    store.save();
+    const back = store.state.mappings.find(m => m.id === 'm-ordinary');
+    assert.equal(back?.adopted, undefined, 'adopted must not default to false');
+    assert.equal(back?.reunified, undefined, 'reunified must not default to false');
+  });
+});
