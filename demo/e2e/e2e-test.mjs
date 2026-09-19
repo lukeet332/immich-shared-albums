@@ -935,6 +935,17 @@ stage('native album invitations, per person (no share link)');
         // is reunited with the share rather than mirrored into a second album. This is the stage
         // that exercises adoption at all — every check above proves the ordinary flows still work.
         const bOwnBefore = await api(B, BKEY, '/albums', j({ albumName: 'natively invited album' }));
+        // POPULATED ON PURPOSE. `j(...)` is a POST, so the line above creates an EMPTY album, and an
+        // empty album cannot show that a reunion preserved what was already there — every
+        // preservation assertion below would hold trivially, whatever the reunion did to it.
+        const bOwnPhoto = await upload(
+          B,
+          BKEY,
+          'b-own.jpg',
+          `bown${Date.now() % 10000}`,
+          '2026-04-01T09:00:00.000Z'
+        );
+        await api(B, BKEY, `/albums/${bOwnBefore.id}/assets`, { ...j({ ids: [bOwnPhoto] }), method: 'PUT' });
         const bOwnAssetsBefore = await albumAssets(B, BKEY, bOwnBefore.id);
         const aBefore = (await albumAssets(A, AKEY, invAlb)).length;
 

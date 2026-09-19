@@ -70,38 +70,43 @@ export async function fetchFullOriginal(
 const inFlight = new Set<string>();
 export async function materialiseRef(mapping, peer, ref) {
   if (seenHas(mapping.id, ref.checksum)) return true;
-  // ALBUM-LEVEL SUPPRESSION, before the in-flight guard: a mesh can offer one photo through two
-  // shares that land on the same album, so the second mapping must find the FIRST one's stub rather
-  // than upload another. Immich cannot collapse them itself — the stubs differ by a random tail on
-  // purpose — so without this the album shows the photo twice.
-  const alreadyHere = existingCopyInAlbum(
-    mapping.albumId,
-    ref.checksum,
-    state.mappings,
-    store.seenForChecksum(ref.checksum)
-  );
-  if (alreadyHere) {
-    // Point at the stub the album already has instead of making a second one. The row is recorded
-    // for THIS mapping because the version cursor and the deletion sweep both read it: when this
-    // mapping's peer stops offering the photo, its sweep retracts the row, and the stub survives on
-    // the other mapping's claim (deleteProxyAsset is guarded by the authoritative ledger row).
-    seenAdd(mapping.id, ref.checksum, alreadyHere.localAsset, ref.originAsset, !!alreadyHere.storedFull);
-    trace(
-      `materialise ${ref.checksum.slice(0, 8)}: already in album ${mapping.albumId.slice(0, 8)} via ${alreadyHere.mapping.slice(0, 8)} — not uploaded again`
-    );
-    return true;
-  }
-  const flightKey = `${mapping.id}:${ref.checksum}`;
+  // ONE FLIGHT PER ALBUM AND PHOTO, not per mapping. The suppression below is album-level, so keying
+  // this guard per mapping would let two mappings of the SAME album both look, both find no row, and
+  // both upload — each holding its own flight key, so neither is stopped.
+  const flightKey = `${mapping.albumId}:${ref.checksum}`;
   if (inFlight.has(flightKey)) {
-    trace(`materialise ${ref.checksum.slice(0, 8)}: skipped, already in flight`);
+    trace(`materialise ${ref.checksum.slice(0, 8)}: skipped, already in flight for this album`);
     return false;
   }
   inFlight.add(flightKey);
   const started = Date.now();
-  trace(
-    `materialise ${ref.checksum.slice(0, 8)}: ENTER mapping=${mapping.id.slice(0, 8)} album=${mapping.albumId.slice(0, 8)} kind=${ref.kind} storeLocal=${storeSharedAssetsLocally()}`
-  );
   try {
+    // Re-run BOTH checks now the flight is ours: whoever held it may have recorded exactly the row
+    // this is looking for, and an album-level duplicate is the one thing it must not miss.
+    if (seenHas(mapping.id, ref.checksum)) return true;
+    // ALBUM-LEVEL SUPPRESSION: a mesh can offer one photo through two shares that land on the same
+    // album, so the second mapping must find the FIRST one's stub rather than upload another. Immich
+    // cannot collapse them itself — the stubs differ by a random tail on purpose.
+    const alreadyHere = existingCopyInAlbum(
+      mapping.albumId,
+      ref.checksum,
+      state.mappings,
+      store.seenForChecksum(ref.checksum)
+    );
+    if (alreadyHere) {
+      // Point at the stub the album already has instead of making a second one. The row is recorded
+      // for THIS mapping because the version cursor and the deletion sweep both read it: when this
+      // mapping's peer stops offering the photo, its sweep retracts the row, and the stub survives on
+      // the other mapping's claim (deleteProxyAsset is guarded by the authoritative ledger row).
+      seenAdd(mapping.id, ref.checksum, alreadyHere.localAsset, ref.originAsset, !!alreadyHere.storedFull);
+      trace(
+        `materialise ${ref.checksum.slice(0, 8)}: already in album ${mapping.albumId.slice(0, 8)} via ${alreadyHere.mapping.slice(0, 8)} — not uploaded again`
+      );
+      return true;
+    }
+    trace(
+      `materialise ${ref.checksum.slice(0, 8)}: ENTER mapping=${mapping.id.slice(0, 8)} album=${mapping.albumId.slice(0, 8)} kind=${ref.kind} storeLocal=${storeSharedAssetsLocally()}`
+    );
     const ok = await materialiseRefLocked(mapping, peer, ref);
     trace(`materialise ${ref.checksum.slice(0, 8)}: EXIT ${ok} in ${Date.now() - started}ms`);
     return ok;
@@ -194,9 +199,12 @@ async function materialiseRefLocked(mapping, peer, ref) {
   const tUp = Date.now();
   const up = await uploadAsset(bytes, `shared-${slug}.${ext}`, c.apiKey, ref.takenAt);
   trace(`materialise ${ref.checksum.slice(0, 8)}: uploaded ${bytes.length}B in ${Date.now() - tUp}ms`);
+  // Its own timer: `tUp` already covers the upload, so measuring filing against it would report a
+  // stage that had not started yet as having taken as long as the upload did.
+  const tFile = Date.now();
   await addToAlbum(mapping.albumId, [up.id], c.apiKey);
   await applyRefMetadata(up.id, ref, c.apiKey);
-  trace(`materialise ${ref.checksum.slice(0, 8)}: filed in album in ${Date.now() - tUp}ms`);
+  trace(`materialise ${ref.checksum.slice(0, 8)}: filed in album in ${Date.now() - tFile}ms`);
   seenAdd(mapping.id, ref.checksum, up.id, ref.originAsset, storedFull);
   log(
     `materialised ${storedFull ? 'full copy of' : 'stub for'} ref from ` +
