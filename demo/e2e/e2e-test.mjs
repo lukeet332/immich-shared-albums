@@ -1656,6 +1656,20 @@ stage('panel invite: the panel shares the album, the other side accepts');
     const aMe = await api(A, AKEY, '/users/me');
     const bMe = await api(B, BKEY, '/users/me');
 
+    // A panel visit publishes before it can invite, and the invite is checked against what the peer
+    // published: that is how the operation refuses a pairing the other side never offered. The lane
+    // has to do the same thing a panel does, or it is testing a request no UI would ever make.
+    const publishTo = (sidecar, key, peerPub) =>
+      fetch(`${sidecar}/immich-shared-albums/me/albums/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+        body: JSON.stringify({ peer: peerPub }),
+      }).then(async r => ({ status: r.status, json: await r.json().catch(() => null) }));
+    const offered = [await publishTo(BS, BKEY, cPub), await publishTo(cSidecar, AKEY, bPub)];
+    check('both sides offered their albums first, as a panel visit does',
+          offered.every(o => o.status === 200),
+          JSON.stringify(offered.map(o => `${o.status}:${o.json?.published}`)));
+
     const invite = (sidecar, key, body) =>
       fetch(`${sidecar}/immich-shared-albums/me/invite`, jAuth(body, key)).then(async r => ({ status: r.status, json: await r.json().catch(() => null) }));
     const matchesFor = async (sidecar, key, ownerName) =>
