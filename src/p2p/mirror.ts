@@ -254,6 +254,24 @@ export async function unifyOwnAlbum(
   log(`reunited "${own.name}" — ${assets.length} photo(s) were already here, seeded so none is offered back`);
 
   await retireMirror(mapping, previousAlbumId, previousHostSlug);
+  // Reconcile NOW rather than at the next tick. Retiring the mirror removes the peer's stubs from
+  // the album they used to be in, so until reconcile re-materialises them the album is visibly
+  // missing that half — the person would watch their reunion strip photos out and put them back
+  // minutes later. The gap is inherent to moving a share between albums; closing it here is what
+  // makes the move look like a move.
+  const peer = state.peers.find(p => p.pub === mapping.peer);
+  if (peer) {
+    // The cursor has to go first. `reconcileMapping` returns early when the origin's version is
+    // unchanged, and moving the album does not change anything at the origin — so without this the
+    // reconcile is a no-op and the moved album stays missing the other half until the origin
+    // happens to move something.
+    delete mapping.remoteVersion;
+    save();
+    log(`post-reunion: reconciling "${own.name}" into its new album`);
+    await reconcileMapping(mapping, peer)
+      .then(() => log(`post-reunion: reconcile finished for "${own.name}"`))
+      .catch(e => log(`post-reunion reconcile: ${e.message}`));
+  }
   return { album: own.name, seeded: assets.length };
 }
 
@@ -265,6 +283,11 @@ async function retireMirror(mapping: Mapping, mirrorAlbumId: string, mirrorHostS
     if (!entry.originAsset) continue;
     const owner = store.ledgerByAsset(entry.localAsset);
     if (!owner || owner.mapping !== mapping.id) continue;
+    // Delete the stub AND forget the row, unlike a teardown that keeps them in step. The mapping
+    // did not end, it moved: the photo still belongs to this share, but its copy lived in the album
+    // the mapping has left. Forgetting it is what makes reconcile materialise it into the album the
+    // mapping now points at — keeping the row would make reconcile skip it as already seen while
+    // its bytes sit in an album nobody looks at any more.
     if (await deleteProxyAsset(entry.localAsset)) {
       store.seenRemoveEntry(mapping.id, entry.checksum);
       removed++;
