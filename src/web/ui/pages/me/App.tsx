@@ -85,7 +85,7 @@ export const App = () => {
       // refreshing only the matches leaves the albums below describing a state that no longer holds.
       await refreshBoth();
     } catch (e) {
-      setNotice({ kind: 'ok', text: `Could not reunite: ${(e as Error).message}` });
+      setNotice({ kind: 'error', text: `Could not reunite: ${(e as Error).message}` });
     } finally {
       setReuniting('');
     }
@@ -104,7 +104,7 @@ export const App = () => {
       });
       await refreshBoth();
     } catch (e) {
-      setNotice({ kind: 'ok', text: `Could not invite: ${(e as Error).message}` });
+      setNotice({ kind: 'error', text: `Could not invite: ${(e as Error).message}` });
     } finally {
       setInviting('');
     }
@@ -121,7 +121,7 @@ export const App = () => {
       });
       await refreshBoth(); // same reason, the other way round
     } catch (e) {
-      setNotice({ kind: 'ok', text: `Could not un-reunite: ${(e as Error).message}` });
+      setNotice({ kind: 'error', text: `Could not un-reunite: ${(e as Error).message}` });
     } finally {
       setDetaching('');
     }

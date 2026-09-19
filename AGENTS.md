@@ -81,13 +81,14 @@ worse without saying so.**
   that had to be found twice. So:
   - **Lift it, then delete the copies.** A shared module, a token file, a named function. The
     extraction is not done while a literal of it remains somewhere else.
-  - **The invite is the test case.** `POST /me/invite` adds a membership and lets the EXISTING
-    invitation scanner record it, rather than writing its own mapping; `lib/tokens.css` is the one
-    place a colour is written down, and every page's stylesheet imports it. Both were caught in
-    review for not doing this first.
-  - **Make it enforceable where it can be.** "Remember to reuse" is prose; a check that fails on a
-    new colour literal outside `lib/tokens.css`, or a lint rule on a single-source constant, is not.
-    Prefer the second.
+  - **The test cases are in the tree.** `sync/album-invite.ts` lets `sync/invites.ts` record the
+    invitation rather than writing a second owner mapping; `src/web/ui/lib/tokens.css` is the only
+    file in `src/web/ui` that contains a colour, and every page's stylesheet imports it. Both were
+    caught in review for doing it the other way first.
+  - **Make it enforceable where it can be.** `scripts/check-tokens.mjs` fails on a colour literal
+    outside `tokens.css` (it ran as a ratchet while the stylesheets were converted, and lists an
+    empty allowance now); `scripts/check-contrast.mjs` fails when a text pair drops below AA. Both run
+    in `verify:fast` — a rule that a build refuses to let you break beats one you must remember.
 - **Never enforce in prose what code can enforce.** An instruction in this file relies on being
   read, remembered and obeyed every time; a hook, a lint rule, a test or an npm script does not.
   Before adding a "remember to…" here, try to make it impossible to forget instead — and when a

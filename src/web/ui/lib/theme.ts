@@ -76,7 +76,7 @@ export const s = {
   card: {
     background: t.card,
     border: `1px solid ${t.line}`,
-    borderRadius: t.radius,
+    borderRadius: 'var(--isa-radius-card)',
     padding: 'var(--isa-pad-card)',
     margin: '14px 0',
   },
