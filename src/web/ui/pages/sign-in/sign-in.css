@@ -5,16 +5,16 @@ body {
     Inter,
     -apple-system,
     sans-serif;
-  background: #101216;
-  color: #e5e7eb;
+  background: var(--isa-bg);
+  color: var(--isa-ink);
   display: grid;
   place-items: center;
   min-height: 100vh;
 }
 .card {
   width: min(400px, 92vw);
-  background: #1f2229;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--isa-surface);
+  border: 1px solid var(--isa-line);
   border-radius: 18px;
   padding: 28px;
   text-align: center;
@@ -24,15 +24,15 @@ h1 {
   margin: 0 0 8px;
 }
 p {
-  color: #9aa0a6;
+  color: var(--isa-ink-muted);
   font-size: 14px;
   line-height: 1.55;
   margin: 0 0 20px;
 }
 a {
   display: inline-block;
-  background: #4250af;
-  color: #fff;
+  background: var(--isa-accent);
+  color: var(--isa-surface);
   text-decoration: none;
   font-weight: 600;
   padding: 11px 26px;

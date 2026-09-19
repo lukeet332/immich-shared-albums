@@ -7,8 +7,8 @@ body {
     Roboto,
     -apple-system,
     sans-serif;
-  background: #f8f9fa;
-  color: #202124;
+  background: var(--isa-bg);
+  color: var(--isa-ink);
   display: grid;
   place-items: center;
   min-height: 100vh;
@@ -17,14 +17,12 @@ body {
   font-family: var(--isa-font);
   width: min(440px, calc(100vw - 32px));
   box-sizing: border-box;
-  background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: var(--isa-surface);
+  border: 1px solid var(--isa-line);
   border-radius: 28px;
   padding: var(--isa-pad-hero) var(--isa-pad-card) var(--isa-pad-card);
   text-align: center;
-  box-shadow:
-    0 1px 3px rgba(60, 64, 67, 0.15),
-    0 8px 28px rgba(60, 64, 67, 0.15);
+  box-shadow: var(--isa-shadow-1), var(--isa-shadow-2);
 }
 .logo {
   width: 56px;
@@ -33,9 +31,9 @@ body {
   margin: 0 auto var(--isa-space-4);
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #4250af, #7c3aed);
+  background: linear-gradient(135deg, var(--isa-accent), var(--isa-accent-2));
   font-size: 26px;
-  box-shadow: 0 2px 10px rgba(66, 80, 175, 0.35);
+  box-shadow: 0 2px 10px var(--isa-focus);
 }
 h1 {
   font-size: 19px;
@@ -44,7 +42,7 @@ h1 {
   letter-spacing: -0.01em;
 }
 p {
-  color: #5f6368;
+  color: var(--isa-ink-muted);
   font-size: 13.5px;
   line-height: 1.55;
   margin: var(--isa-space-2) 0 var(--isa-space-5);
@@ -56,8 +54,8 @@ button {
   padding: 14px var(--isa-space-6);
   border: 0;
   border-radius: 999px;
-  background: #4250af;
-  color: #fff;
+  background: var(--isa-accent);
+  color: var(--isa-surface);
   cursor: pointer;
   transition:
     filter 0.15s,
@@ -65,7 +63,7 @@ button {
 }
 button:hover {
   filter: brightness(1.08);
-  box-shadow: 0 2px 10px rgba(66, 80, 175, 0.4);
+  box-shadow: 0 2px 10px var(--isa-focus);
 }
 button:disabled {
   opacity: 0.4;
@@ -77,8 +75,8 @@ button.busy {
 }
 .cta {
   display: inline-block;
-  background: #4250af;
-  color: #fff;
+  background: var(--isa-accent);
+  color: var(--isa-surface);
   text-decoration: none;
   font-weight: 600;
   padding: 14px var(--isa-space-6);
@@ -92,7 +90,7 @@ button.busy {
   font-size: 14px;
   padding: 11px 16px;
   border-radius: 999px;
-  border: 1px solid rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--isa-line);
   margin: 0 0 14px;
   text-align: center;
 }
@@ -102,8 +100,8 @@ button.busy {
   height: 14px;
   margin-right: 9px;
   vertical-align: -2px;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
+  border: 2px solid var(--isa-spinner);
+  border-top-color: var(--isa-surface);
   border-radius: 50%;
   animation: isa-spin 0.8s linear infinite;
 }
@@ -114,29 +112,29 @@ button.busy {
 }
 .who {
   font-size: 12.5px;
-  color: #4250af;
+  color: var(--isa-accent);
   margin: 0 0 var(--isa-space-3);
   line-height: 1.5;
 }
 .who a {
-  color: #4250af;
+  color: var(--isa-accent);
 }
 /* The reunion offer: a real choice, so it reads as one — the primary button becomes the reunion and
    this states what that means, with the separate-join kept visible underneath rather than hidden. */
 .reunion {
-  background: rgba(66, 80, 175, 0.08);
+  background: var(--isa-accent-tint);
   border-radius: 14px;
   padding: 12px 14px;
   margin: 0 0 14px;
   font-size: 12.5px;
   line-height: 1.5;
-  color: #3c4043;
+  color: var(--isa-ink);
   text-align: left;
 }
 button.secondary {
   background: transparent;
-  color: #4250af;
-  box-shadow: inset 0 0 0 1px rgba(66, 80, 175, 0.45);
+  color: var(--isa-accent);
+  box-shadow: inset 0 0 0 1px var(--isa-focus-ring);
   margin-top: 10px;
   font-size: 13.5px;
   padding: 10px 24px;
@@ -144,44 +142,42 @@ button.secondary {
 .out {
   margin-top: 16px;
   font-size: 13px;
-  color: #4250af;
+  color: var(--isa-accent);
   min-height: 20px;
   line-height: 1.5;
 }
 @media (prefers-color-scheme: dark) {
   body {
-    background: #101216;
-    color: #e8eaed;
+    background: var(--isa-bg);
+    color: var(--isa-ink);
   }
   .card {
     font-family: var(--isa-font);
-    background: #1b1f26;
-    border-color: rgba(255, 255, 255, 0.08);
-    box-shadow:
-      0 1px 3px rgba(0, 0, 0, 0.4),
-      0 10px 32px rgba(0, 0, 0, 0.5);
+    background: var(--isa-surface);
+    border-color: var(--isa-line);
+    box-shadow: var(--isa-shadow-1), var(--isa-shadow-2);
   }
   p {
-    color: #9aa0a6;
+    color: var(--isa-ink-muted);
   }
   .who,
   .who a,
   .out {
-    color: #a8c7fa;
+    color: var(--isa-accent);
   }
   button,
   .cta {
-    background: #a8c7fa;
-    color: #0d1b3d;
+    background: var(--isa-accent);
+    color: var(--isa-accent-ink);
   }
   .reunion {
-    background: rgba(168, 199, 250, 0.12);
-    color: #c8d6f0;
+    background: var(--isa-accent-tint);
+    color: var(--isa-ink);
   }
   button.secondary {
     background: transparent;
-    color: #a8c7fa;
-    box-shadow: inset 0 0 0 1px rgba(168, 199, 250, 0.45);
+    color: var(--isa-accent);
+    box-shadow: inset 0 0 0 1px var(--isa-focus-ring);
   }
 }
 

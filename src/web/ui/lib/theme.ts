@@ -13,10 +13,15 @@ export const t = {
 /** One action's outcome, as the panel shows it: green for done, red for refused. */
 export const toastStyle = (kind: 'ok' | 'error') =>
   kind === 'ok'
-    ? { background: 'var(--isa-ok-surface)', border: '1px solid #1f7a5a', badge: 'var(--isa-ok)', glyph: '✓' }
+    ? {
+        background: 'var(--isa-ok-surface)',
+        border: '1px solid var(--isa-ok)',
+        badge: 'var(--isa-ok)',
+        glyph: '✓',
+      }
     : {
         background: 'var(--isa-danger-surface)',
-        border: '1px solid #a13b3b',
+        border: '1px solid var(--isa-danger)',
         badge: 'var(--isa-danger)',
         glyph: '!',
       };
@@ -41,7 +46,7 @@ export const s = {
     borderRadius: 12,
     fontSize: 14,
     color: t.text,
-    boxShadow: '0 10px 28px rgba(0,0,0,.45)',
+    boxShadow: 'var(--isa-shadow-2)',
     zIndex: 20,
   },
   badge: {
@@ -76,7 +81,7 @@ export const s = {
     margin: '14px 0',
   },
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
-  item: { padding: '9px 0', borderBottom: `1px solid rgba(255,255,255,.06)`, fontSize: 14 },
+  item: { padding: '9px 0', borderBottom: `1px solid var(--isa-hairline)`, fontSize: 14 },
   muted: { color: t.muted, fontSize: 13 },
   sub: { color: t.muted, fontSize: 12 },
   input: {
@@ -85,7 +90,7 @@ export const s = {
     fontSize: 14,
     padding: '10px 12px',
     borderRadius: 11,
-    border: `1px solid rgba(255,255,255,.12)`,
+    border: `1px solid var(--isa-line)`,
     background: 'var(--isa-sunken)',
     color: 'inherit',
     outline: 'none',
@@ -99,17 +104,17 @@ export const s = {
     border: 0,
     borderRadius: 11,
     background: t.accent,
-    color: '#fff',
+    color: 'var(--isa-surface)',
     cursor: 'pointer',
   },
   danger: {
     background: 'transparent',
-    border: `1px solid rgba(248,113,113,.45)`,
+    border: `1px solid var(--isa-focus-ring)`,
     color: t.danger,
     padding: '5px 12px',
     fontSize: 12,
     borderRadius: 11,
     cursor: 'pointer',
   },
-  note: { fontSize: 13, marginTop: 10, color: '#8b9cf9', minHeight: 18 },
+  note: { fontSize: 13, marginTop: 10, color: 'var(--isa-accent-2)', minHeight: 18 },
 } as const;

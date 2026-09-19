@@ -190,9 +190,7 @@ iframe.native-album {
     background: var(--isa-surface);
     color: var(--isa-ink);
     border-color: var(--isa-line);
-    box-shadow:
-      0 1px 3px rgba(0, 0, 0, 0.4),
-      0 10px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--isa-shadow-1), var(--isa-shadow-2);
   }
   #immich-shared-albums-banner .sub {
     color: var(--isa-ink-muted);

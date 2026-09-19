@@ -18,6 +18,9 @@
   --isa-ok: #137333;
   --isa-ok-surface: #e6f4ea;
   --isa-shadow-1: 0 1px 3px rgba(60, 64, 67, 0.15);
+  --isa-spinner: rgba(255, 255, 255, 0.35);
+  --isa-accent-tint: rgba(66, 80, 175, 0.08);
+  --isa-focus-ring: rgba(66, 80, 175, 0.45);
   --isa-shadow-2: 0 8px 28px rgba(60, 64, 67, 0.22);
   --isa-radius-card: 28px;
   --isa-radius-control: 12px;
@@ -53,6 +56,9 @@
     --isa-ok: #81c995;
     --isa-ok-surface: #0f2e22;
     --isa-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --isa-spinner: rgba(255, 255, 255, 0.35);
+    --isa-accent-tint: rgba(168, 199, 250, 0.12);
+    --isa-focus-ring: rgba(168, 199, 250, 0.45);
     --isa-shadow-2: 0 10px 32px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
   }

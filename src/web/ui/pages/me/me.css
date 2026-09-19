@@ -5,8 +5,8 @@ body {
     Inter,
     -apple-system,
     sans-serif;
-  background: #101216;
-  color: #e5e7eb;
+  background: var(--isa-bg);
+  color: var(--isa-ink);
   display: grid;
   place-items: start center;
   min-height: 100vh;
@@ -16,7 +16,7 @@ main {
   padding: 40px 0;
 }
 noscript {
-  color: #9aa0a6;
+  color: var(--isa-ink-muted);
   font-size: 14px;
   line-height: 1.55;
 }
