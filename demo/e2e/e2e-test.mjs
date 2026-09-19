@@ -1701,6 +1701,23 @@ stage('security (unauthenticated surface)');
   check('leave refuses an unauthenticated caller',
         await status(`${BS}/immich-shared-albums/leave`, j({ mappingId: 'whatever' })) === 401);
 
+  // A PROXIED REJECTION MUST REACH THE CALLER. Immich's auth guard answers 401 BEFORE reading the
+  // request body, and the proxy handed `fetch` a STREAM: undici rejected with "fetch failed", the
+  // rejection escaped the handler, and no response was ever written — so every unauthenticated POST
+  // through the sidecar hung until the caller gave up, which is what an expired session looks like in
+  // a browser. A 400 and a 404 came back in milliseconds, because those routes read the body first,
+  // and that is exactly why nothing caught it: the failing case was the one nobody probed.
+  const proxiedAt = Date.now();
+  const proxied = await fetch(`${BS}/api/admin/users`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{"probe":1}',
+    signal: AbortSignal.timeout(15000),
+  }).catch(() => null);
+  check('a proxied 401 reaches the caller instead of hanging',
+        proxied?.status === 401,
+        `status=${proxied?.status ?? 'no response'} after ${Date.now() - proxiedAt}ms`);
+
   const health = await (await fetch(`${BS}/immich-shared-albums/health`)).json();
   check('health exposes liveness only (no household name, no peer count)',
         health.ok === true && !('household' in health) && !('peers' in health), JSON.stringify(health));
