@@ -23,7 +23,13 @@ import { forgetWatcherCycles } from './status.ts';
 // An ADOPTED mapping is the exception, and `albumTeardown` is what decides it: that album existed
 // before the share and holds a person's OWN photos, so leaving gives up the mapping and the peer's
 // stubs and nothing else. A mistaken reunification therefore costs exactly the stubs.
-export async function leaveAlbum(mappingId: string) {
+//
+// `notifyOrigin: false` is for un-reunifying, which undoes the ADOPTION but not the SHARE: the
+// person goes back to an ordinary mirror, and the invitation they still hold re-creates it through
+// the normal invite path. Telling the origin "we left" there would retire its owner mapping
+// (`handleLeave` sets `dead`) and the share would be gone rather than mirrored — and, because the
+// marker account is still on the album, the next invitation poll would silently re-create it.
+export async function leaveAlbum(mappingId: string, opts: { notifyOrigin?: boolean } = {}) {
   const mapping = state.mappings.find(mp => mp.id === mappingId);
   if (!mapping || mapping.role !== 'member')
     throw new Error('unknown mapping (only joined albums can be left)');
@@ -60,7 +66,7 @@ export async function leaveAlbum(mappingId: string) {
   // to know the route just 404s — the old one-sided behaviour.
   const origin = state.peers.find(p => p.pub === mapping.peer);
   const target = mapping.remoteMappingId || mapping.remoteAlbumId;
-  if (origin && target)
+  if ((opts.notifyOrigin ?? true) && origin && target)
     void peerRequest(origin, `/albums/${target}/leave`).catch(() => {
       /* unreachable or too old — their next 410 handling or manual unshare covers it */
     });

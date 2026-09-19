@@ -21,6 +21,7 @@ import { addHouseBotToAlbum } from '../sync/house-bot.ts';
 import { deleteProxyAsset } from '../immich/materialise.ts';
 import { seedRowsFor } from '../sync/matches.ts';
 import { albumTeardown } from '../sync/album-teardown.ts';
+import { grantAlbumWriters, grantInvitedHumans, peerContributors } from '../sync/album-grant.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
 export type MirrorRequest = {
@@ -118,6 +119,15 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     // The sidecar reads the album as the house bot, so the bot must be a member first. Added on the
     // owner's own credential, from their own request: the membership is their act, not one we take.
     await addHouseBotToAlbum(albumId, ownerCreds);
+    // The stubs' own accounts need a membership only the album's owner can grant, and this request
+    // is the only place that credential exists — see sync/album-grant.ts.
+    await grantAlbumWriters(
+      albumId,
+      ownerCreds,
+      peer,
+      await peerContributors(peer, req.remoteMappingId || album.id)
+    );
+    await grantInvitedHumans(albumId, ownerCreds, forUserIds || [], memberRole);
     const hostSlug = `${BOT_PREFIX.house}bot`;
     const hostKey = state.contributors[hostSlug]?.apiKey;
     if (!hostKey) throw new Error('house bot has no key after provisioning — cannot read the album');
@@ -254,16 +264,29 @@ export async function unifyOwnAlbum(
   log(`reunited "${own.name}" — ${assets.length} photo(s) were already here, seeded so none is offered back`);
 
   await retireMirror(mapping, previousAlbumId, previousHostSlug);
-  // Kick the reconcile off, but do NOT await it. This pull crosses the wire, and a peer response
-  // that never arrives costs the transport's full deadline — `DEADLINE_MS` in p2p/transport.ts is
-  // 120s, measured on the rig as a 124s stall that left the album without the other half and made
-  // the reunion request look hung. Awaiting a peer call here makes the move's latency someone
-  // else's uptime, which is the one thing this operation must not depend on.
+  // Kick the reconcile off, but do NOT await it: the album must be reunited the moment the move is
+  // made, and awaiting a peer call would make the move's latency someone else's uptime.
   //
   // Clearing the cursor first makes the pull do work: `reconcileMapping` returns early when the
   // origin's version is unchanged, and moving an album changes nothing at the origin.
   const peer = state.peers.find(p => p.pub === mapping.peer);
   if (peer) {
+    // Same grant as acquisition-time adoption, and for the same reason: the contributor accounts
+    // that will own this album's stubs can only be given a membership by its owner, who is present
+    // here and nowhere else. A peer that cannot be reached now grants nothing and must not fail the
+    // reunion — `peerContributors` returns empty instead.
+    await grantAlbumWriters(
+      own.albumId,
+      ownerCreds,
+      peer,
+      await peerContributors(peer, mapping.remoteMappingId || mapping.remoteAlbumId)
+    );
+    await grantInvitedHumans(
+      own.albumId,
+      ownerCreds,
+      mapping.forPeerUserIds || [],
+      mapping.permissions === 'contribute' ? 'editor' : 'viewer'
+    );
     delete mapping.remoteVersion;
     save();
     // `void`: deliberately unawaited. The loops retry, so a lost pull costs a tick, not the move.

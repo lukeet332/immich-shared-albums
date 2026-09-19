@@ -1,13 +1,13 @@
 # Post-v1 design spec: Google shared-album reunification & the user-level surface
 
-> Status: **matching is built; the merge is not.** §2's match and the panel surface exist —
-> `sync/matches.ts` pairs the halves, `sync/album-index.ts` records what each side offers, and the
-> matches list shows in the per-user panel with no action attached. Adopting an album, the
-> non-destructive suppression, the audit trail and `/commands` remain design. Everything here is
-> post-v1 and confirmed **non-breaking** — it rides surfaces and identities that v1 already ships
-> and freezes. Captured from the 2026-08-25 design discussion. Decisions are marked **[decided]**;
-> open choices **[open]**; things considered and dropped are in "Rejected alternatives" with
-> rationale.
+> Status: **the merge is built; the discovery surface is not.** §2's match and the panel surface
+> exist — `sync/matches.ts` pairs the halves, `sync/album-index.ts` records what each side offers,
+> and the per-user panel lists matches and reunites each one (`POST /me/reunite`, reversing with
+> `/me/unreunite`). Both directions adopt: at join time (`POST /join` with `adopt`) and from the
+> panel. The audit trail and `/commands` remain design. Everything here is post-v1 and confirmed
+> **non-breaking** — it rides surfaces and identities that v1 already ships and freezes. Captured
+> from the 2026-08-25 design discussion. Decisions are marked **[decided]**; open choices
+> **[open]**; things considered and dropped are in "Rejected alternatives" with rationale.
 
 ## 1. Why this is possible without breaking changes
 
@@ -143,6 +143,19 @@ the feature exists to avoid. Instead:
 - Consequence: no alias account is mirroring a person here. The merge writes **only the stub
   assets** into the album, and attribution stays on the ref (`contributor.originUserId`), so no
   Immich account is created for a person we have not been asked to share with.
+
+### Only the album's owner can add its writers **[decided]**
+Adopting an album does not make the sidecar able to administer it. Immich scopes membership writes to
+the album's owner: the household admin key answers `403 albumUser.create` on an album a different
+person owns, and a viewer — which is what the house bot is — does too. So the accounts that will own
+the merged stubs (`person-<originUserId>`, one per contributor named by the peer's refs) are granted
+membership as **editors** at adoption, on the album owner's forwarded credential:
+`grantAlbumWriters` in [`../src/sync/album-grant.ts`](../src/sync/album-grant.ts), called from
+`ensureMirror`'s adopt branch and from `unifyOwnAlbum`. A reconcile that runs later holds no owner
+credential, so a contributor the peer only begins offering afterwards needs the owner in the loop
+again — that is the panel's job, not the loop's. Un-reunifying runs on that same credential, so it
+takes those accounts back off (`stripAlbumBots`): a membership left behind would both keep the
+sidecar's read access to a private album and make it indistinguishable from a live mirror.
 
 ### What a side publishes, and what "owned" means **[decided]**
 Matching runs against albums each side **owns** — never ones merely visible to them.

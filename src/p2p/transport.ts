@@ -1,6 +1,6 @@
 /** p2p/transport.ts — the iroh peer transport: endpoint lifecycle, dial-by-key, request framing. See wire-protocol.md. */
-import { Endpoint, EndpointAddr, EndpointId, RelayMode, presetMinimal } from '@number0/iroh';
-import { CFG, log } from '../config.ts';
+import { Endpoint, EndpointAddr, EndpointId, RelayMode, presetMinimal, type Connection } from '@number0/iroh';
+import { CFG, log, trace } from '../config.ts';
 import { keys, save } from '../state.ts';
 import type { Peer } from '../store.ts';
 
@@ -21,9 +21,10 @@ const DEADLINE_MS = 120_000;
 const DIAL_DEADLINE_MS = 10_000;
 /** The byte path's response HEADER — see peerByteRequest. Bodies keep DEADLINE_MS semantics
  *  (none: they stream to FIN). JSON requests keep DEADLINE_MS for their header too, because a
- *  ref push is processed before it is answered and can legitimately take that long. */
+ *  ref push is processed before it is answered and can legitimately take that long — a DEAD
+ *  connection is caught by untilClosed instead, not by shortening that deadline. */
 const BYTE_HEAD_DEADLINE_MS = 15_000;
-const withDeadline = <T>(p: Promise<T>, what: string, ms = DEADLINE_MS): Promise<T> => {
+export const withDeadline = <T>(p: Promise<T>, what: string, ms = DEADLINE_MS): Promise<T> => {
   let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
     p.finally(() => clearTimeout(timer)),
@@ -32,6 +33,45 @@ const withDeadline = <T>(p: Promise<T>, what: string, ms = DEADLINE_MS): Promise
     }),
   ]);
 };
+
+/** Race a wait against the peer's connection dying.
+ *
+ *  TCP told the v1 HTTP transport when a peer had restarted: the socket failed, the request
+ *  failed with it, and the next call dialled fresh. QUIC does not — `closeReason()` stays null
+ *  on a connection whose peer is already gone, so a request written into it waits out its whole
+ *  deadline. `closed()` is the one signal that does fire, so every wait that can span a restart
+ *  races against it. */
+const untilClosed = <T>(conn: Connection, p: Promise<T>, what: string): Promise<T> => {
+  let closed: Promise<string>;
+  try {
+    closed = Promise.resolve(conn.closed());
+  } catch {
+    closed = Promise.reject(new Error('unavailable'));
+  }
+  return Promise.race([
+    p,
+    closed
+      .catch(() => 'peer gone')
+      .then((reason: string) => {
+        throw new Error(`connection closed before ${what}${reason ? `: ${reason}` : ''}`);
+      }),
+  ]);
+};
+
+/** Log a connection's death and how long after the request began it happened. */
+function traceConnectionDeath(conn: Connection, started: number, what: string): void {
+  if (!CFG.traceSync) return;
+  void conn
+    .closed()
+    .then((reason: string) =>
+      trace(`${what} connection CLOSED after ${Date.now() - started}ms — ${reason || 'no reason given'}`)
+    )
+    .catch(() => {});
+}
+
+/** True when the peer's connection died mid-request rather than our own deadline expiring. */
+const connectionDied = (e: unknown): boolean =>
+  e instanceof Error && e.message.startsWith('connection closed before');
 
 // Identity strings are RAW ed25519 keys, base64url — byte-for-byte what iroh speaks, so
 // these two are pure encoding shifts, not format conversions.
@@ -190,9 +230,9 @@ async function serveRequest(
 
 // ---- client side ----
 
-const connections = new Map<string, Promise<any>>();
+const connections = new Map<string, Promise<Connection>>();
 
-async function dial(peer: Peer): Promise<any> {
+async function dial(peer: Peer): Promise<Connection> {
   const id = EndpointId.fromBytes(pubToRaw(peer.pub));
   const addr = new EndpointAddr(id, peer.relayHint ?? null, peer.lastAddrs ?? null);
   const conn = await endpoint!.connect(addr, PROTOCOL_ALPN);
@@ -206,34 +246,71 @@ async function dial(peer: Peer): Promise<any> {
   return conn;
 }
 
-async function connectionFor(peer: Peer): Promise<any> {
+async function connectionFor(peer: Peer): Promise<Connection> {
+  const started = Date.now();
   const cached = connections.get(peer.pub);
   if (cached) {
     try {
-      const conn = await cached;
-      if (conn.closeReason() === null) return conn;
-    } catch {
-      /* fall through to redial */
+      const conn = await withDeadline(cached, `cached connection to "${peer.name}"`, DIAL_DEADLINE_MS);
+      if (conn.closeReason() === null) {
+        trace(`dial ${peer.name}: reusing cached connection (${Date.now() - started}ms)`);
+        return conn;
+      }
+      trace(`dial ${peer.name}: cached connection closed (${conn.closeReason()}) — redialing`);
+    } catch (e) {
+      trace(`dial ${peer.name}: cached dial unusable (${(e as Error).message}) — redialing`);
     }
+    connections.delete(peer.pub);
   }
+  trace(`dial ${peer.name}: dialing`);
   const fresh = dial(peer);
   connections.set(peer.pub, fresh);
   fresh.catch(() => connections.delete(peer.pub));
-  return fresh;
+  const conn = await fresh;
+  trace(`dial ${peer.name}: dialed (${Date.now() - started}ms)`);
+  return conn;
 }
 
 async function roundTrip(peer: Peer, header: FrameHeader, body: Buffer) {
   if (!endpoint) throw new Error('transport not started');
+  const started = Date.now();
   try {
     const conn = await withDeadline(connectionFor(peer), `dial to "${peer.name}"`, DIAL_DEADLINE_MS);
-    const bi = await conn.openBi();
-    await bi.send.writeAll(lenPrefixed(Buffer.from(JSON.stringify(header))));
-    await bi.send.writeAll(lenPrefixed(body));
-    await bi.send.finish();
-    return bi;
+    traceConnectionDeath(conn, started, `→ ${peer.name} ${header.path}:`);
+    const bi = await untilClosed(conn, conn.openBi(), `opening a stream to "${peer.name}"`);
+    trace(`→ ${peer.name} ${header.path}: stream open (${Date.now() - started}ms)`);
+    await untilClosed(
+      conn,
+      (async () => {
+        await bi.send.writeAll(lenPrefixed(Buffer.from(JSON.stringify(header))));
+        await bi.send.writeAll(lenPrefixed(body));
+        await bi.send.finish();
+      })(),
+      `sending ${header.path} to "${peer.name}"`
+    );
+    trace(`→ ${peer.name} ${header.path}: sent ${body.length}B (${Date.now() - started}ms)`);
+    return { bi, conn, started };
   } catch (e) {
     connections.delete(peer.pub); // a timed-out or broken connection must not be reused
+    trace(
+      `→ ${peer.name} ${header.path}: SEND FAILED after ${Date.now() - started}ms — ${(e as Error).message}`
+    );
     throw e;
+  }
+}
+
+/** Run a request, and on a connection death re-dial ONCE and run it again. The peer restarted;
+ *  the first attempt may or may not have been processed, and every route here is idempotent by
+ *  checksum — a ref push materialises through a ledger and an in-flight guard — so a duplicate
+ *  is a no-op rather than a double-write. */
+async function withRedialOnDeath<T>(peer: Peer, what: string, attempt: () => Promise<T>): Promise<T> {
+  try {
+    return await attempt();
+  } catch (e) {
+    if (!connectionDied(e)) throw e;
+    connections.delete(peer.pub); // it is gone; a fresh dial is the only way through
+    trace(`${what}: ${(e as Error).message} — redialing once`);
+    return attempt();
   }
 }
 
@@ -243,23 +320,38 @@ export async function peerRequest(
   path: string,
   jsonBody?: unknown
 ): Promise<{ status: number; json: any }> {
-  const bi = await roundTrip(
-    peer,
-    { path },
-    jsonBody === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(jsonBody))
-  );
-  try {
-    const head = JSON.parse(
-      (await withDeadline(readPrefixed(bi.recv, 64 * 1024), `response from "${peer.name}"`)).toString()
-    ) as ResponseHeader;
-    const raw = Buffer.from(
-      await withDeadline(bi.recv.readToEnd(64 * 1024 * 1024), `response body from "${peer.name}"`)
-    );
-    return { status: head.status, json: raw.length ? JSON.parse(raw.toString()) : null };
-  } catch (e) {
-    connections.delete(peer.pub); // a connection that stopped answering must not be reused
-    throw e;
-  }
+  const body = jsonBody === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(jsonBody));
+  return withRedialOnDeath(peer, `${path} to ${peer.name}`, async () => {
+    const { bi, conn, started } = await roundTrip(peer, { path }, body);
+    try {
+      trace(`← ${peer.name} ${path}: awaiting response header (${Date.now() - started}ms)`);
+      const head = JSON.parse(
+        (
+          await untilClosed(
+            conn,
+            withDeadline(readPrefixed(bi.recv, 64 * 1024), `response from "${peer.name}"`),
+            `the response header for ${path} from "${peer.name}"`
+          )
+        ).toString()
+      ) as ResponseHeader;
+      trace(`← ${peer.name} ${path}: header ${head.status} (${Date.now() - started}ms)`);
+      const raw = Buffer.from(
+        await untilClosed(
+          conn,
+          withDeadline(bi.recv.readToEnd(64 * 1024 * 1024), `response body from "${peer.name}"`),
+          `the response body for ${path} from "${peer.name}"`
+        )
+      );
+      trace(`← ${peer.name} ${path}: body ${raw.length}B (${Date.now() - started}ms)`);
+      return { status: head.status, json: raw.length ? JSON.parse(raw.toString()) : null };
+    } catch (e) {
+      connections.delete(peer.pub); // a connection that stopped answering must not be reused
+      trace(
+        `← ${peer.name} ${path}: RECEIVE FAILED after ${Date.now() - started}ms — ${(e as Error).message}`
+      );
+      throw e;
+    }
+  });
 }
 
 /** Byte request with a peer — previews, originals, playback. Range rides the frame header. */
@@ -273,21 +365,27 @@ export async function peerByteRequest(
   headers: Record<string, string>;
   recv: { read(size: number): Promise<number[]> };
 }> {
-  const bi = await roundTrip(peer, { path, range, mapping }, Buffer.alloc(0));
+  const { bi, conn, started } = await roundTrip(peer, { path, range, mapping }, Buffer.alloc(0));
   // Deadline covers the header only: byte BODIES may stream for as long as a video runs. The
   // header gets the SHORT budget: a peer answers a byte request the moment its Immich returns
   // headers, so a header that has not arrived in seconds means the peer is gone — and a cached
   // QUIC connection to a peer that died without closing still looks open (closeReason() null),
   // so the dial deadline never fires for it; QUIC's own loss detection takes ~45s. This is the
   // wait a member's Immich showed on every uncached photo while the owner was offline.
+  // No redial here: this path already fails closed to the local stub in seconds, and a dial
+  // would only delay that stub.
   let head: ResponseHeader;
   try {
     head = JSON.parse(
       (
-        await withDeadline(
-          readPrefixed(bi.recv, 64 * 1024),
-          `byte response from "${peer.name}"`,
-          BYTE_HEAD_DEADLINE_MS
+        await untilClosed(
+          conn,
+          withDeadline(
+            readPrefixed(bi.recv, 64 * 1024),
+            `byte response from "${peer.name}"`,
+            BYTE_HEAD_DEADLINE_MS
+          ),
+          `the byte response header for ${path} from "${peer.name}"`
         )
       ).toString()
     ) as ResponseHeader;
@@ -296,8 +394,12 @@ export async function peerByteRequest(
     // yet. Evict it, or every request until QUIC's own loss detection would time out the same
     // way — including the first one after the peer comes back.
     connections.delete(peer.pub);
+    trace(
+      `← ${peer.name} ${path}: BYTE HEADER FAILED after ${Date.now() - started}ms — ${(e as Error).message}`
+    );
     throw e;
   }
+  trace(`← ${peer.name} ${path}: byte header ${head.status} (${Date.now() - started}ms)`);
   return { status: head.status, headers: head.headers ?? {}, recv: bi.recv };
 }
 

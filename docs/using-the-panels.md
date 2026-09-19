@@ -24,10 +24,17 @@ The personal panel. It answers: _what am I sharing, and with whom?_
 - **Possible album reunions** — albums that look like two halves of one Google Photos album. If you
   and a relative each imported a Takeout of "Summer 2024", that album shows up on both servers as a
   partial copy; this lists the pairs it finds, with how many photos each side holds and whether the
-  dates line up.
+  dates line up. **Reunite** merges the pair into the album you already own.
+- **Reunified albums** — the ones you have merged, each with **Un-reunite**.
 
-Nothing on this page changes an album. It is a view, and every action it describes is confirmed by
-both album owners before anything moves.
+Reuniting changes no photo's ownership: each album stays its own owner's, on that owner's own
+server, and the other side's photos arrive as shared copies rather than being copied. A photo both
+of you hold is never shown twice.
+
+Un-reuniting undoes the merge and nothing else — your album keeps your own photos, the other side's
+copies are removed, and the share goes back to being an ordinary shared album. It is worth knowing
+that the two matching albums are paired by **name alone**, because a Takeout carries no album dates
+to compare; a name can be wrong, which is why the action is reversible.
 
 ## Server settings and pairings (`/admin`)
 

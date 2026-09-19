@@ -322,6 +322,17 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
     current: (alb.albumUsers || []).filter(au => au.role !== 'owner' && au.user?.id).map(au => au.user.id),
     local: humans.map(u => u.id),
   });
+  // An adopted album belongs to a local human, so the stand-in key cannot widen it — Immich answers
+  // `403 albumUser.create`, every cycle, forever. The people the invitation NAMES were placed at
+  // adoption on the owner's credential (album-grant.ts); anything the origin changes afterwards
+  // needs that owner again, so say so once per change instead of looping the refusal.
+  if (mapping.adopted && (add.length || remove.length)) {
+    log(
+      `"${mapping.albumName}" is reunified — ${add.length} person(s) to add, ${remove.length} to remove ` +
+        `need the album's owner; re-run the reunion from the panel`
+    );
+    return;
+  }
   if (add.length) {
     try {
       // same vanilla-parity rule as p2p/mirror.ts: the share's permission picks the role

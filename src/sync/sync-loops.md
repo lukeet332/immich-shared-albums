@@ -10,6 +10,7 @@ also driven on demand by nudges (`../p2p/protocol.ts`) so changes land in second
 | `leave.ts`    | `leaveAlbum` — the full reverse of a join: purges every stub, the mirror album, the mapping and its ledger. An asset another mapping's authoritative row (`ledgerByAsset`) still claims is retained — a bookkeeping row cannot pin one.                                                                                                                                                                                                                                                                                                         |
 | `matches.ts`  | **Reunification matching, pure.** `albumsIPublish` turns Immich's album list into the index a person may offer (only albums they OWN — Immich says so inside `albumUsers`, and a response carries no `ownerId`); `matchAlbums` pairs same-named albums owned by different people, ordering by date overlap and count but never filtering on them. No Immich call and no storage, so it is unit-tested in milliseconds. See [`../docs/post-v1-reunification-design.md`](../docs/post-v1-reunification-design.md). |
 | `album-index.ts` | **The album index itself.** `publishOwnedAlbums` reads the caller's OWN albums from Immich on their forwarded credential and records them per peer for the `/albums` peer route to serve. Reading from Immich is the point: ownership is answered by the server that owns the albums, so nothing a client posts can add an album the caller does not own or omit one they do. The sidecar holds no credential for a human and `GET /albums` is scoped to one, which is why this rides the caller's session rather than a stored key, and why a request body names only the peer. |
+| `album-grant.ts` | **The membership a reunified album's writers need.** `peerContributors` reads the distinct contributors from the peer's manifest; `grantAlbumWriters` adds each one's `person-<id>` account to the adopted album as an EDITOR, through `ensureContributor` on the album OWNER's forwarded credentials. Only an owner can add a member, and the request that reunifies is the only place that credential exists — so the grant happens at adoption, never lazily in a reconcile. The manifest pull is bounded by `GRANT_MANIFEST_DEADLINE_MS`: a peer that cannot answer in seconds grants nothing rather than holding up the owner's request. |
 | `comments.ts` | Cross-server comments. The origin album is the source of truth: members pull the canonical list and push their own, gated by a cheap activity-count statistic so messages land in seconds without heavy polling. Includes the inbound `handleActivity`/`handleComments` handlers. `startCommentLoop` runs the fast lane.                                                                                                                                                                                                                        |
 
 **Why loops and not just webhooks:** nudges make the common case instant, but the timed
@@ -61,3 +62,28 @@ on it:
 Invitations are **pulled**, never pushed: a member with no inbound reachability still syncs
 perfectly well by pulling, so a push-based invitation would fail for exactly the households
 that most need this.
+
+## Only an album's owner can grant a membership
+
+Immich scopes album membership writes to the album's owner. The household admin key answers
+`403 albumUser.create` on an album a different person owns, and so does the house bot (a viewer), so
+there is no key the sidecar holds that can widen someone else's album. Three cases follow, and the
+code depends on which one it is in:
+
+- **An adopted album** (`Mapping.adopted`) belongs to a local human. Its stub-writing accounts are
+  therefore granted exactly once, at adoption, on that owner's forwarded credential —
+  `grantAlbumWriters` and `grantInvitedHumans` in `album-grant.ts`. A reconcile that runs later has
+  no owner credential to offer, so a contributor granted nothing fails every cycle instead of being
+  repaired in place, and a contributor the peer only starts offering later needs the owner in the
+  loop again. `syncMirrorMembers` reports that case instead of looping the 403.
+- **Un-reunifying** runs on the owner's credential too, so it takes those accounts back off
+  (`stripAlbumBots`), after the peer's stubs are purged. A membership left behind keeps the sidecar's
+  read access to a private album and makes that album look like a live mirror to anything
+  enumerating albums by stand-in key — the same mistake in reverse.
+- **A mirror the sidecar creates** is owned by the sidecar's own key, so it adds members directly.
+- **An album a local human owns and invited a peer into** cannot gain a bot at all without that
+  human acting; no credential for it is ever in hand.
+
+`Mapping.hostSlug` names the account that READS an album — the house bot on an adopted album, the
+owning stand-in on a mirror. It is not the account that may widen one, and using it for a membership
+write is what a silent 403-per-cycle loop looks like.

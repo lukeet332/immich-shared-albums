@@ -48,6 +48,11 @@ services:
       ISA_SYNC_POLL_MS: "${ISA_SYNC_POLL_MS:-1000}"
       # Rig only: lets the suite read this sidecar's own progress (loop ticks). Off in every real install.
       ISA_TEST_HOOKS: "true"
+      # Rig only: per-stage peer/Immich tracing, so a stalled request names the await it
+      # stopped at. Off in every real install (a line per await).
+      ISA_TRACE_SYNC: "${ISA_TRACE_SYNC:-false}"
+      # Rig only: the reconcile loops log their version/manifest/missing arithmetic.
+      ISA_RECONCILE_DEBUG: "${ISA_RECONCILE_DEBUG:-false}"
     networks:
       - default
       - isa-demo

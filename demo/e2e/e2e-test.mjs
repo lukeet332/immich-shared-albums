@@ -905,7 +905,7 @@ stage('native album invitations, per person (no share link)');
       check('marker is really a member after the invite',
             (back.albumUsers || []).some(au => au.user?.id === nan.id && au.role === 'editor'));
 
-      const mirrored = await findOnB('natively invited album');
+      let mirrored = await findOnB('natively invited album');
       check('member mirrors an invited album automatically, with no link', !!mirrored,
             mirrored ? '' : 'timed out');
       if (mirrored) {
@@ -990,8 +990,31 @@ stage('native album invitations, per person (no share link)');
                 `before=${bOwnAssetsBefore.length} after=${after?.length}`);
         }
 
-        check('an invite reaches ONLY the invited person', (await humansOn(mirrored)).join(',') === bAdmin.name,
-              (await humansOn(mirrored)).join(', '));
+        // Un-reunifying gives the share back as an ORDINARY MIRROR — a new album, created by the
+        // member's own invite poll within a tick, because un-reunify never tells the origin to stop
+        // offering. The mirror this stage found was retired by the reunion, so re-point `mirrored`
+        // once here for every check below. Two traps this resolves without: a NAME search cannot tell
+        // that mirror from the album this person owns under the same name — the mirror is the one a
+        // STAND-IN owns, and the person's own is owned by a human — and state.db read from the host
+        // is a stale snapshot, so the answer comes from the API (README rules 10 and 11).
+        const standInOwnedMirror = async () => {
+          for (const k of standInKeys()) {
+            const al = await api(B, k, '/albums').catch(() => []);
+            const hit = (al || []).find(a =>
+              a.albumName === 'natively invited album' &&
+              (a.albumUsers || []).some(au => au.role === 'owner' && isBot(au.user?.email)));
+            if (hit) return { album: hit, key: k };
+          }
+          return null;
+        };
+        const remirrored = await until(standInOwnedMirror, 120000);
+        if (remirrored) mirrored = remirrored;
+        check('un-reunifying gives the share back as a mirror, so the invitation is still live',
+              !!remirrored, remirrored ? `mirror ${remirrored.album.id.slice(0, 8)}` : 'no mirror re-created');
+
+        check('an invite reaches ONLY the invited person',
+              (await humansOn(mirrored).catch(() => [])).join(',') === bAdmin.name,
+              (await humansOn(mirrored).catch(() => [])).join(', '));
 
         // The per-user panel must answer AS the caller. This user belongs to the one album they
         // joined and none of the others the admin can see — so a filtered admin read, which

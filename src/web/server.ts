@@ -28,6 +28,7 @@ import { keys } from '../state.ts';
 import { proxyToImmich } from './passthrough.ts';
 import { callerIdentity, callerSignedIn, signInRequired } from './auth.ts';
 import { join } from '../p2p/join.ts';
+import { stripAlbumBots } from '../sync/album-grant.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { syncStatus, loopTicks } from '../sync/status.ts';
 import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
@@ -303,9 +304,12 @@ export const server = http.createServer(async (req, res) => {
       log(`${signedIn.caller.name} offered ${published} owned album(s) to "${peer.name}" for matching`);
       return send(200, { published });
     }
-    // Un-reunify: give up the share and keep the album. For an adopted mapping `leaveAlbum` is
-    // exactly that — `albumTeardown` keeps the album and the person's own photos, and removes the
-    // peer's stubs — so this route adds the authorisation, not a second teardown path.
+    // Un-reunify: undo the ADOPTION, not the share. The album and its own photos stay, the peer's
+    // stubs go, and the share returns to an ordinary mirror — so the origin is NOT told to stop
+    // (`notifyOrigin: false`) and keeps offering the invitation, which the member's own invite poll
+    // turns back into a mirror. Sending `/leave` here would retire the origin's mapping and lose the
+    // share; and because the marker account stays on the album, a later poll would silently
+    // re-create it, so the person's un-reunify would appear to undo itself.
     if (path === `${ROUTE_PREFIX}/me/unreunite` && req.method === 'POST') {
       const signedIn = await callerSignedIn(req);
       if (!signedIn) return send(401, signInRequired('un-reunite an album'));
@@ -323,7 +327,17 @@ export const server = http.createServer(async (req, res) => {
       const visible = await visibleAlbumIds(signedIn.creds);
       if (!visible.has(mapping.albumId)) return send(403, { error: 'that share is not yours' });
       try {
-        return send(200, await leaveAlbum(mapping.id));
+        const { albumId, albumName } = mapping;
+        // Purge the peer's stubs FIRST, while our accounts still hold the memberships they were
+        // granted, then take those accounts off — only the owner can, and the caller IS the owner
+        // here. A leftover membership would keep our read access to a private album and make it
+        // read as a live mirror to anything enumerating albums by stand-in key.
+        const left = await leaveAlbum(mapping.id, { notifyOrigin: false });
+        const stripped = await stripAlbumBots(albumId, signedIn.creds).catch(e => {
+          log(`un-reunify could not take our accounts off "${albumName}": ${e.message}`);
+          return 0;
+        });
+        return send(200, { ...left, stripped });
       } catch (e) {
         return send(400, { error: e.message });
       }

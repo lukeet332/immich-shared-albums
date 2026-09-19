@@ -4,7 +4,7 @@
  * hard-guarded so only utility-owned proxies are ever deleted.
  */
 import crypto from 'node:crypto';
-import { log } from '../config.ts';
+import { log, trace } from '../config.ts';
 import { state, seenHas, seenAdd, storeSharedAssetsLocally } from '../state.ts';
 import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 import { STUB_JPEG, immichJson, jsonBody, uploadAsset, addToAlbum, applyRefMetadata } from './client.ts';
@@ -70,10 +70,24 @@ const inFlight = new Set<string>();
 export async function materialiseRef(mapping, peer, ref) {
   if (seenHas(mapping.id, ref.checksum)) return true;
   const flightKey = `${mapping.id}:${ref.checksum}`;
-  if (inFlight.has(flightKey)) return false;
+  if (inFlight.has(flightKey)) {
+    trace(`materialise ${ref.checksum.slice(0, 8)}: skipped, already in flight`);
+    return false;
+  }
   inFlight.add(flightKey);
+  const started = Date.now();
+  trace(
+    `materialise ${ref.checksum.slice(0, 8)}: ENTER mapping=${mapping.id.slice(0, 8)} album=${mapping.albumId.slice(0, 8)} kind=${ref.kind} storeLocal=${storeSharedAssetsLocally()}`
+  );
   try {
-    return await materialiseRefLocked(mapping, peer, ref);
+    const ok = await materialiseRefLocked(mapping, peer, ref);
+    trace(`materialise ${ref.checksum.slice(0, 8)}: EXIT ${ok} in ${Date.now() - started}ms`);
+    return ok;
+  } catch (e) {
+    trace(
+      `materialise ${ref.checksum.slice(0, 8)}: THREW in ${Date.now() - started}ms — ${(e as Error).message}`
+    );
+    throw e;
   } finally {
     inFlight.delete(flightKey);
   }
@@ -140,6 +154,7 @@ async function materialiseRefLocked(mapping, peer, ref) {
   const contributorId = ref.contributor?.originUserId;
   const missingMemberMeansRevoked =
     mapping.via === 'invite' && !!contributorId && (mapping.forPeerUserIds || []).includes(contributorId);
+  const tContrib = Date.now();
   const c = await ensureContributor(
     ref.contributor?.displayName || peer.name,
     mapping.albumId,
@@ -149,11 +164,17 @@ async function materialiseRefLocked(mapping, peer, ref) {
     mapping.peer,
     { reAddIfMissing: !missingMemberMeansRevoked }
   );
+  trace(
+    `materialise ${ref.checksum.slice(0, 8)}: contributor ready in ${Date.now() - tContrib}ms (${c.userId.slice(0, 8)})`
+  );
   // base64 checksums contain / and + — never let them into filenames
   const slug = ref.checksum.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+  const tUp = Date.now();
   const up = await uploadAsset(bytes, `shared-${slug}.${ext}`, c.apiKey, ref.takenAt);
+  trace(`materialise ${ref.checksum.slice(0, 8)}: uploaded ${bytes.length}B in ${Date.now() - tUp}ms`);
   await addToAlbum(mapping.albumId, [up.id], c.apiKey);
   await applyRefMetadata(up.id, ref, c.apiKey);
+  trace(`materialise ${ref.checksum.slice(0, 8)}: filed in album in ${Date.now() - tUp}ms`);
   seenAdd(mapping.id, ref.checksum, up.id, ref.originAsset, storedFull);
   log(
     `materialised ${storedFull ? 'full copy of' : 'stub for'} ref from ` +

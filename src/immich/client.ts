@@ -4,18 +4,21 @@
  * album/asset getters, asset upload, metadata apply, and the stub-JPEG constant.
  */
 import crypto from 'node:crypto';
-import { CFG, log, isUtilityEmail } from '../config.ts';
+import { CFG, log, trace, isUtilityEmail } from '../config.ts';
 import type { AssetRef } from '../types.ts';
 import type { Creds } from './access.ts';
 
 /** The admin key unless a caller names a specific one, or forwards their own credential. */
 export const immich = async (p: string, init: RequestInit = {}, key: string | Creds = CFG.apiKey) => {
   const identity: Record<string, string> = typeof key === 'string' ? { 'x-api-key': key } : key.headers;
+  const started = Date.now();
+  trace(`immich ${init.method || 'GET'} ${p}: sending`);
   const r = await fetch(`${CFG.immichUrl}/api${p}`, {
     signal: AbortSignal.timeout(60000),
     ...init,
     headers: { ...identity, Accept: 'application/json', ...(init.headers || {}) },
   });
+  trace(`immich ${init.method || 'GET'} ${p}: ${r.status} (${Date.now() - started}ms)`);
   if (!r.ok) throw new Error(`immich ${p} -> ${r.status} ${await r.text().catch(() => '')}`);
   return r;
 };
