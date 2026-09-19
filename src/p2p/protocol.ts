@@ -157,6 +157,9 @@ export async function handleRedeem(callerPub: string, body: string) {
       albumOwner,
       manifest,
       mappingId: mapping.id,
+      // Only when true: an absent field is how a peer says "ordinary share", so an older build
+      // stays wire-identical rather than gaining a field it does not understand.
+      ...(mapping.reunified ? { reunified: true } : {}),
     },
   ];
 }

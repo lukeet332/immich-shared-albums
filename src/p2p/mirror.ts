@@ -33,6 +33,9 @@ export type MirrorRequest = {
   /** How this share was acquired. Scopes member-side withdrawal: only invitation-created
    *  mirrors may be torn down when an invitation stops being offered. */
   via?: 'link' | 'invite';
+  /** The origin says this album is part of a reunion. Recorded, never inferred: the local mapping
+   *  is an ordinary member mirror either way, and only the category distinguishes it. */
+  reunified?: boolean;
 };
 
 /**
@@ -127,6 +130,7 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     permissions,
     hostSlug,
     via: req.via ?? 'link',
+    ...(req.reunified ? { reunified: true } : {}),
   };
   state.mappings.push(mapping);
   save();

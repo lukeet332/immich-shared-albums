@@ -31,6 +31,13 @@ certificates, and no listening HTTP surface for peers at all.
 | `entitlement.ts` | What a peer may **read**, as distinct from who it is. Records every asset advertised to a mapping, and answers the byte routes' "is this peer allowed this asset".                                                                                                                                                                                                                                                                                                                                            |
 | `unlink.ts`      | Cutting a server link, from the panel. Tears down mirrors held from that peer (via `sync/leave.ts`, so their stubs go too), drops the mappings and entitlement for albums shared _to_ them, and deletes that peer's per-person accounts with `force: true` — **assets leave with their owner**. Unlinking is destructive by design, and the panel confirms it.                                                                                                                                                |
 
+**The `reunified` category travels with the share.** An album that is part of a reunion carries
+`reunified: true` on both acquisition paths — the redeem answer (`handleRedeem`) and `/invitations` —
+and the receiver records it on its mapping. Present only when true: an ordinary share omits the
+field, so an older build stays wire-identical rather than gaining a field it does not understand
+(evolution rule 1). It is a category, not a permission — the local mapping is an ordinary member
+mirror either way, and nothing about access changes because of it.
+
 **The album index is published, not derived.** `GET /albums` on the wire answers what the
 caller's people have *published*: each album's owner asked their own server for the albums it says
 they own, because the sidecar holds no credential for a human and Immich scopes `GET /albums` to
