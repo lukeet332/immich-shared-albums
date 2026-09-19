@@ -303,6 +303,31 @@ export const server = http.createServer(async (req, res) => {
       log(`${signedIn.caller.name} offered ${published} owned album(s) to "${peer.name}" for matching`);
       return send(200, { published });
     }
+    // Un-reunify: give up the share and keep the album. For an adopted mapping `leaveAlbum` is
+    // exactly that — `albumTeardown` keeps the album and the person's own photos, and removes the
+    // peer's stubs — so this route adds the authorisation, not a second teardown path.
+    if (path === `${ROUTE_PREFIX}/me/unreunite` && req.method === 'POST') {
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('un-reunite an album'));
+      let asked: { mappingId?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (typeof asked.mappingId !== 'string') return send(400, { error: 'name the share to un-reunite' });
+      const mapping = state.mappings.find(m => m.id === asked.mappingId && !m.dead);
+      if (!mapping) return send(404, { error: 'no such share', code: 'unknown_mapping' });
+      // Only a share this caller is in: read as themselves, so a mapping they cannot see is one
+      // they cannot name.
+      const visible = await visibleAlbumIds(signedIn.creds);
+      if (!visible.has(mapping.albumId)) return send(403, { error: 'that share is not yours' });
+      try {
+        return send(200, await leaveAlbum(mapping.id));
+      } catch (e) {
+        return send(400, { error: e.message });
+      }
+    }
     // Reunite: replace one of the caller's shares with an album they already own. The album id
     // names a request, not a decision — the operation re-derives that it is theirs and that it is
     // the album this share is about, on their own credential.

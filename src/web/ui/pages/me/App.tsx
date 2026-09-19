@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { s } from '../../lib/theme.ts';
 import { t } from '../../lib/theme.ts';
-import { myAlbums, myMatches, reunite, type ActionableMatch, type MyAlbum } from './api.ts';
+import { myAlbums, myMatches, reunite, unreunite, type ActionableMatch, type MyAlbum } from './api.ts';
 
 /** The admin panel, for a caller who can actually open it. A link an ordinary user cannot follow
  *  would bounce them to a sign-in page they will never pass. */
@@ -17,6 +17,7 @@ export const App = () => {
   const [matches, setMatches] = useState<ActionableMatch[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reuniting, setReuniting] = useState('');
+  const [detaching, setDetaching] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,6 +52,21 @@ export const App = () => {
     }
   };
 
+  const onUnreunite = async (album: MyAlbum) => {
+    setDetaching(album.mappingId);
+    setNotice(null);
+    try {
+      const r = await unreunite(album.mappingId);
+      setNotice(`"${r.left}" is yours again — ${r.purged} shared photo(s) removed from it.`);
+      const fresh = await myAlbums();
+      setAlbums(fresh.albums);
+    } catch (e) {
+      setNotice(`Could not un-reunite: ${(e as Error).message}`);
+    } finally {
+      setDetaching('');
+    }
+  };
+
   return (
     <main>
       <h1 style={{ fontSize: 20, letterSpacing: '-.02em' }}>
@@ -69,6 +85,28 @@ export const App = () => {
         )}
       </p>
       {notice && <div style={s.card}>{notice}</div>}
+      {albums && albums.some(a => a.reunified) && (
+        <section style={{ marginBottom: 22 }}>
+          <b style={{ fontSize: 18 }}>Reunified albums</b>
+          <p style={{ ...s.muted, marginTop: 6 }}>
+            Albums you merged with another server. Leaving one keeps your album and your own photos, and
+            removes only the photos that came from the other server.
+          </p>
+          <div style={s.card}>
+            {albums
+              .filter(a => a.reunified)
+              .map(a => (
+                <div style={s.item} key={a.mappingId}>
+                  <div>{a.name}</div>
+                  <div style={s.sub}>reunited with {a.peer}</div>
+                  <button style={s.button} disabled={!!detaching} onClick={() => onUnreunite(a)}>
+                    {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite (keep my album)'}
+                  </button>
+                </div>
+              ))}
+          </div>
+        </section>
+      )}
       {matches.length > 0 && (
         <section style={{ marginBottom: 22 }}>
           <b style={{ fontSize: 18 }}>Possible album reunions</b>

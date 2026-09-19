@@ -13,7 +13,16 @@ import { readCallerAlbums, visibleAlbumIds } from '../immich/access.ts';
 import { publishOwnedAlbums, refreshPeerAlbums } from '../sync/album-index.ts';
 import { albumsIPublish, matchesWithPeer, type PeerMatch } from '../sync/matches.ts';
 
-export type MyAlbum = { name: string; role: Mapping['role']; via: Mapping['via']; peer: string };
+export type MyAlbum = {
+  name: string;
+  role: Mapping['role'];
+  via: Mapping['via'];
+  peer: string;
+  /** The mapping's id, so the panel can act on this album rather than name it. */
+  mappingId: string;
+  /** This album is part of a reunion, so the panel lists it with a way out of one. */
+  reunified?: boolean;
+};
 
 /** Everything the panel needs to render itself, in the same call as its albums: who the household
  *  is (so the heading can name it, as the admin panel's does) and whether this caller may open the
@@ -55,7 +64,14 @@ export async function myAlbums(creds: Creds): Promise<MyAlbum[]> {
   for (const m of state.mappings) {
     if (m.dead || !mine.has(m.albumId)) continue;
     const peer = state.peers.find(p => p.pub === m.peer)?.name || 'a linked server';
-    out.push({ name: m.albumName, role: m.role, via: m.via, peer });
+    out.push({
+      name: m.albumName,
+      role: m.role,
+      via: m.via,
+      peer,
+      mappingId: m.id,
+      ...(m.reunified ? { reunified: true } : {}),
+    });
   }
   return out;
 }

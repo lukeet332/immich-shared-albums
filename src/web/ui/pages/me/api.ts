@@ -9,7 +9,14 @@ const json = async (path: string, init?: RequestInit) => {
   return body;
 };
 
-export type MyAlbum = { name: string; role: 'owner' | 'member'; via: string; peer: string };
+export type MyAlbum = {
+  name: string;
+  role: 'owner' | 'member';
+  via: string;
+  peer: string;
+  mappingId: string;
+  reunified?: boolean;
+};
 
 export type MyPage = { albums: MyAlbum[]; household: string; isAdmin: boolean };
 
@@ -30,6 +37,13 @@ export type ActionableMatch = PeerMatch & { mappingId?: string };
 export const myMatches = () => json('/me/matches') as Promise<{ matches: ActionableMatch[] }>;
 
 /** Replace a share with an album I already own. `albumId` is the local album the match showed. */
+export const unreunite = (mappingId: string) =>
+  json('/me/unreunite', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mappingId }),
+  }) as Promise<{ left: string; purged: number }>;
+
 export const reunite = (mappingId: string, albumName: string) =>
   json('/me/reunite', {
     method: 'POST',
