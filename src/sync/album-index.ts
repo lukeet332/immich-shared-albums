@@ -3,7 +3,14 @@
 import type { Creds } from '../immich/access.ts';
 import { readCallerAlbums } from '../immich/access.ts';
 import type { OwnedAlbum, Peer } from '../store.ts';
-import { peerRequest } from '../p2p/transport.ts';
+import { peerRequest, withDeadline } from '../p2p/transport.ts';
+
+/** How long a panel visit waits for a peer's index before answering from the one it has.
+ *
+ *  Opening the panel is a person waiting, and a peer behind a relay that has to be re-dialled costs
+ *  seconds — measured at the transport's own 10s dial deadline, every time. Matching is a pull, so
+ *  an index a visit or two stale is the ordinary case; a blank section for ten seconds is not. */
+export const INDEX_REFRESH_DEADLINE_MS = 2500;
 import { store } from '../state.ts';
 import { albumsIPublish } from './matches.ts';
 
@@ -41,7 +48,11 @@ export function offerAlbumsTo(albums: OwnedAlbum[], callerUserId: string, peerPu
  */
 export async function refreshPeerAlbums(peer: Peer): Promise<OwnedAlbum[]> {
   try {
-    const r = await peerRequest(peer, '/albums');
+    const r = await withDeadline(
+      peerRequest(peer, '/albums'),
+      `album index from "${peer.name}"`,
+      INDEX_REFRESH_DEADLINE_MS
+    );
     if (r.status >= 400 || !Array.isArray(r.json?.albums))
       return store.publishedAlbumsFor(peer.pub, 'from-them');
     // REPLACE the peer's whole index rather than one owner at a time. This answer IS the whole

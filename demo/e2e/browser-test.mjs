@@ -315,11 +315,21 @@ check('the lane can give both households a pair to reunite by invitation',
 // index over iroh — a round trip, not a tick. A fixed sleep reads the page before it has an answer
 // and blames the product; this waits for the answer.
 const waitForRow = async (p, rowRegex, ms = 45000) => {
-  for (let waited = 0; waited < ms; waited += 3000) {
-    if (rowRegex.test(candidates(await panelText(p)))) return true;
-    await p.waitForTimeout(1500);
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    // Give THIS load its chance to answer before replacing it: the panel fetches on mount, and a
+    // reload before that lands throws away the very response being waited for.
+    const shown = await p
+      .waitForFunction(
+        (source) => new RegExp(source).test(document.body.innerText),
+        rowRegex.source,
+        { timeout: Math.min(15000, Math.max(1000, deadline - Date.now())) }
+      )
+      .then(() => true)
+      .catch(() => false);
+    if (shown) return true;
     await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-    await p.waitForTimeout(2500);
+    await p.waitForTimeout(1000);
   }
   return false;
 };
