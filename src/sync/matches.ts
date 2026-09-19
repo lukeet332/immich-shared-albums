@@ -71,6 +71,32 @@ export function matchesWithPeer(
   }));
 }
 
+/** One row of the ledger a mapping keeps, as adoption seeds it. */
+export type SeedRow = { checksum: string; localAsset: string; originAsset?: string };
+
+/**
+ * The ledger rows an ADOPTED mapping must start with, from the album it is adopting.
+ *
+ * Adopting a populated album means the mapping's ledger begins knowing nothing about the assets
+ * already in it — while the ledger is the only thing stopping `shareableAssets` from offering them
+ * back to the peer. Written before the mapping becomes visible to the loops, or the first watcher
+ * cycle advertises the whole album to the household it came from.
+ *
+ * `originAsset` is deliberately left unset: these are this household's own photos, and
+ * deletion propagation skips entries without an origin asset, so a peer withdrawing its copy can
+ * never remove them. Two assets sharing a checksum collapse to one row, because the ledger is
+ * unique on (mapping, checksum) and a duplicate would abort the seed half-written.
+ */
+export function seedRowsFor(assets: { id?: string; checksum?: string }[], _mappingId: string): SeedRow[] {
+  const rows = new Map<string, SeedRow>();
+  for (const asset of assets) {
+    const checksum = asset?.checksum;
+    if (!checksum || !asset?.id) continue; // nothing to key on: skip rather than guess
+    if (!rows.has(checksum)) rows.set(checksum, { checksum, localAsset: asset.id });
+  }
+  return [...rows.values()];
+}
+
 /** Lowercase and collapse whitespace — recall, not privacy (§3). Everything else is significant:
  *  two albums differing in punctuation or digits are different albums, and treating them as one is
  *  how "Photos" swallows "Photos 2024". */
