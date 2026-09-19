@@ -29,63 +29,71 @@ const album = (over: Partial<OwnedAlbum> = {}): OwnedAlbum => ({
   ...over,
 });
 
+// Named fixtures, and assertions that read THROUGH them: a literal in both the fixture and the
+// assertion asserts nothing about the store, and stops meaning the same thing the moment the
+// fixture is edited.
+const bobAlbum = album({ name: 'Bob album' });
+const carolAlbum = album({ name: 'Carol album', ownerUserId: 'u-carol', ownerName: 'Carol' });
+const republishedBobAlbum = album({ name: bobAlbum.name, assetCount: 9 });
+
+/** What the store yields for an album it holds, so an assertion can compare a fixture to it.
+ *
+ *  Two differences from the fixture, both real and neither interesting to each test: `node:sqlite`
+ *  returns null-PROTOTYPE objects, and SQLite has no `undefined`, so an absent date comes back as
+ *  NULL. Naming both here is what stops every assertion restating them. */
+const asStored = (a: OwnedAlbum): OwnedAlbum =>
+  Object.assign(Object.create(null), {
+    ...a,
+    startDate: a.startDate ?? null,
+    endDate: a.endDate ?? null,
+  }) as OwnedAlbum;
+
 test('a published album is readable back for its owner', () => {
   withStore(store => {
-    store.publishedAlbumsSet('peer-1', 'u-bob', [album()]);
+    const [only] = [bobAlbum];
+    store.publishedAlbumsSet('peer-1', only.ownerUserId, [only]);
     const back = store.publishedAlbumsFor('peer-1');
-    assert.equal(back.length, 1);
-    assert.equal(back[0].name, 'Summer 2024');
-    assert.equal(back[0].ownerUserId, 'u-bob');
-    assert.equal(back[0].startDate, '2024-06-01T00:00:00.000Z');
+    assert.deepEqual(back, [asStored(only)], 'what went in must come back out unchanged');
   });
 });
 
 test("republishing replaces that owner's index instead of accumulating it", () => {
   withStore(store => {
-    store.publishedAlbumsSet('peer-1', 'u-bob', [album(), album({ name: 'Winter 2019' })]);
-    store.publishedAlbumsSet('peer-1', 'u-bob', [album({ name: 'Summer 2024', assetCount: 9 })]);
+    const withdrawn = album({ name: 'Winter 2019' });
+    store.publishedAlbumsSet('peer-1', withdrawn.ownerUserId, [bobAlbum, withdrawn]);
+    store.publishedAlbumsSet('peer-1', republishedBobAlbum.ownerUserId, [republishedBobAlbum]);
     const back = store.publishedAlbumsFor('peer-1');
     assert.deepEqual(
-      back.map(a => a.name),
-      ['Summer 2024'],
-      `an album deleted on its owner's server must stop being offered: ${JSON.stringify(back.map(a => a.name))}`
+      back,
+      [asStored(republishedBobAlbum)],
+      `an album deleted on its owner's server must stop being offered: ${JSON.stringify(back)}`
     );
-    assert.equal(back[0].assetCount, 9, 'the count should be the republished one');
   });
 });
 
 test("one peer never sees another peer's index", () => {
   withStore(store => {
-    store.publishedAlbumsSet('peer-1', 'u-bob', [album({ name: 'Bob album' })]);
-    store.publishedAlbumsSet('peer-2', 'u-carol', [album({ name: 'Carol album', ownerUserId: 'u-carol' })]);
-    assert.deepEqual(
-      store.publishedAlbumsFor('peer-2').map(a => a.name),
-      ['Carol album']
-    );
-    assert.deepEqual(
-      store.publishedAlbumsFor('peer-1').map(a => a.name),
-      ['Bob album']
-    );
+    store.publishedAlbumsSet('peer-1', bobAlbum.ownerUserId, [bobAlbum]);
+    store.publishedAlbumsSet('peer-2', carolAlbum.ownerUserId, [carolAlbum]);
+    assert.deepEqual(store.publishedAlbumsFor('peer-2'), [asStored(carolAlbum)]);
+    assert.deepEqual(store.publishedAlbumsFor('peer-1'), [asStored(bobAlbum)]);
     assert.deepEqual(store.publishedAlbumsFor('peer-unknown'), []);
   });
 });
 
 test('several owners on one peer all publish, each replaceable on its own', () => {
   withStore(store => {
-    store.publishedAlbumsSet('peer-1', 'u-bob', [album({ name: 'Bob album' })]);
-    store.publishedAlbumsSet('peer-1', 'u-carol', [album({ name: 'Carol album', ownerUserId: 'u-carol' })]);
+    store.publishedAlbumsSet('peer-1', bobAlbum.ownerUserId, [bobAlbum]);
+    store.publishedAlbumsSet('peer-1', carolAlbum.ownerUserId, [carolAlbum]);
+    const both = store.publishedAlbumsFor('peer-1');
     assert.deepEqual(
-      store
-        .publishedAlbumsFor('peer-1')
-        .map(a => a.name)
-        .sort(),
-      ['Bob album', 'Carol album']
+      both.map(a => a.name).sort(),
+      [bobAlbum.name, carolAlbum.name].sort(),
+      'both owners on one peer are offered, sorted by name for a stable comparison'
     );
-    store.publishedAlbumsSet('peer-1', 'u-bob', []);
-    assert.deepEqual(
-      store.publishedAlbumsFor('peer-1').map(a => a.name),
-      ['Carol album']
-    );
+    // Clearing ONE owner's index must leave the other owner's alone.
+    store.publishedAlbumsSet('peer-1', bobAlbum.ownerUserId, []);
+    assert.deepEqual(store.publishedAlbumsFor('peer-1'), [asStored(carolAlbum)]);
   });
 });
 
