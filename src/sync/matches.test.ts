@@ -120,3 +120,29 @@ test('the same name on both sides of three people yields one candidate per other
   assert.equal(found.length, 2);
   assert.deepEqual(found.map(f => f.theirs.ownerName).sort(), ['Bob', 'Carol']);
 });
+
+// Rows arrive from a peer's client or from Immich, so a malformed album is skipped rather than
+// thrown over: the sidecar has to fail open.
+test('a malformed album is dropped, never thrown over', () => {
+  const junk = [
+    { albumName: 'albumUsers as an object', albumUsers: {} },
+    { albumName: 'albumUsers with nulls', albumUsers: [null, { user: null, role: 'owner' }] },
+    { albumName: 'no albumUsers at all' },
+    null,
+    'a string',
+  ];
+  assert.deepEqual(albumsIPublish(junk, 'u-me'), [], 'every malformed entry must be skipped');
+});
+
+test('one malformed album does not hide the good ones beside it', () => {
+  const good = {
+    albumName: 'Mine',
+    assetCount: 2,
+    albumUsers: [{ user: { id: 'u-me', name: 'Me' }, role: 'owner' }],
+  };
+  const published = albumsIPublish([{ albumUsers: 'not an array' }, good], 'u-me');
+  assert.deepEqual(
+    published.map(a => a.name),
+    ['Mine']
+  );
+});

@@ -1,17 +1,8 @@
 /** sync/matches.ts — finding the other half of a split album. See docs/post-v1-reunification-design.md §4. */
 
-/** One album a person owns, as it travels for matching. No album id: the peer cannot act on an
- *  album id it has no mapping for, so sending them would be disclosure without a use. */
-export type OwnedAlbum = {
-  name: string;
-  assetCount: number;
-  startDate?: string;
-  endDate?: string;
-  /** The person who owns the album HERE, on this server. Required: §4 routes the repair
-   *  request owner-to-owner, and the match surfaces only in that owner's panel. */
-  ownerUserId: string;
-  ownerName: string;
-};
+import type { OwnedAlbum } from '../store.ts';
+
+export type { OwnedAlbum };
 
 export type AlbumCandidate = {
   mine: OwnedAlbum;
@@ -21,30 +12,45 @@ export type AlbumCandidate = {
   why: string;
 };
 
+/** The peer a publish is addressed to, or null when the body does not name one. The ONLY thing a
+ *  publish body is read for: the albums come from Immich, never from the request. */
+export function parseRequestedPeer(body: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body || 'null');
+  } catch {
+    return null; // not JSON at all: nothing to address
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const peer = (parsed as { peer?: unknown }).peer;
+  return typeof peer === 'string' && peer ? peer : null;
+}
+
 /** The album the given user owns, or undefined when they do not own it.
  *
  *  Immich decides this and says so inside `albumUsers` — an album response carries no `ownerId`.
  *  An album with no owner entry is nobody's: skipping it is what keeps a guess out of the index. */
 function ownedAlbumFrom(album, userId: string): OwnedAlbum | undefined {
-  const owner = (album?.albumUsers || []).find(au => au.role === 'owner' && au.user?.id);
+  // A malformed album (albumUsers as an object, a null member) is skipped, not thrown over: this
+  // runs against what a peer or a peer's client produced, and the sidecar fails open.
+  const members = Array.isArray(album?.albumUsers) ? album.albumUsers : [];
+  const owner = members.find(au => au && au.role === 'owner' && au.user?.id);
   if (!owner || owner.user.id !== userId) return undefined;
   return {
-    name: album.albumName,
-    assetCount: Number(album.assetCount) || 0,
-    startDate: album.startDate,
-    endDate: album.endDate,
+    name: String(album.albumName ?? ''),
+    assetCount: Number.isFinite(Number(album.assetCount)) ? Number(album.assetCount) : 0,
+    startDate: album.startDate || undefined,
+    endDate: album.endDate || undefined,
     ownerUserId: userId,
-    ownerName: owner.user.name || '',
+    ownerName: String(owner.user.name ?? ''),
   };
 }
 
-/** What this server offers a linked peer for matching: ONLY albums the caller owns.
- *
- *  Owned-only is the minimal disclosure, and it cannot offer the same album twice when two local
- *  people are both members of it. It is also sufficient, because Takeout flattens ownership — the
- *  Google Photos importer creates an album per Google album through the importing account's key
- *  (`--sync-albums`), so an album that was someone else's on Google is owned here. */
+/** Immich's own album list as an owned index: the shape the panel has in hand, converted once.
+ *  Unknown entries are dropped rather than guessed at, because a guess here offers someone's
+ *  library to a linked server. */
 export function albumsIPublish(albums, userId: string): OwnedAlbum[] {
+  if (!userId || !Array.isArray(albums)) return [];
   return albums.map((album: unknown) => ownedAlbumFrom(album, userId)).filter(Boolean) as OwnedAlbum[];
 }
 

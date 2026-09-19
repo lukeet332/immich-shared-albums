@@ -31,6 +31,13 @@ certificates, and no listening HTTP surface for peers at all.
 | `entitlement.ts` | What a peer may **read**, as distinct from who it is. Records every asset advertised to a mapping, and answers the byte routes' "is this peer allowed this asset".                                                                                                                                                                                                                                                                                                                                            |
 | `unlink.ts`      | Cutting a server link, from the panel. Tears down mirrors held from that peer (via `sync/leave.ts`, so their stubs go too), drops the mappings and entitlement for albums shared _to_ them, and deletes that peer's per-person accounts with `force: true` — **assets leave with their owner**. Unlinking is destructive by design, and the panel confirms it.                                                                                                                                                |
 
+**The album index is published, not derived.** `GET /albums` on the wire answers what the
+caller's people have *published*: each album's owner asked their own server for the albums it says
+they own, because the sidecar holds no credential for a human and Immich scopes `GET /albums` to
+one. Ownership is therefore settled by Immich at publication time and the route only reads back what
+was recorded — a peer that has published nothing gets an empty list, never a server-wide one. Same
+gate as `/directory`: an enrolled peer may ask, and nothing here grants access to any album.
+
 **Completion, not just acceptance:** `POST …/refs` answers whether refs were _accepted_;
 materialisation, offers and comment push are asynchronous, so `GET /albums/:mappingId/status`
 answers the separate question _"is the work finished?"_ — `{settled, pending, cycles, failCount,

@@ -18,7 +18,8 @@ import { state, store, storeSharedAssetsLocally } from '../state.ts';
 import { publicShareLinkMeta } from '../immich/client.ts';
 import { serveInterceptedBytes } from '../media/interceptor.ts';
 import { surfaceFor } from './frontend.ts';
-import { myAlbums } from './me.ts';
+import { myAlbums, publishAlbumsForPeer } from './me.ts';
+import { parseRequestedPeer } from '../sync/matches.ts';
 import { sharePage, signInPage } from './assets.ts';
 import { localAddr } from '../p2p/transport.ts';
 import { keys } from '../state.ts';
@@ -273,6 +274,21 @@ export const server = http.createServer(async (req, res) => {
       const signedIn = await callerSignedIn(req);
       if (!signedIn) return send(401, signInRequired('see your albums'));
       return send(200, { albums: await myAlbums(signedIn.creds) });
+    }
+    // The caller offers their OWN albums to one linked peer, so that peer can look for the other
+    // half of a split album. The peer must be linked, only the CALLER can be recorded as owner,
+    // and the body is filtered to albums Immich told the caller they own — see
+    // publishAlbumsForPeer.
+    if (path === `${ROUTE_PREFIX}/me/albums/publish` && req.method === 'POST') {
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('offer your albums for reunification'));
+      const peerPub = parseRequestedPeer(body);
+      if (!peerPub) return send(400, { error: 'name the linked server to offer albums to' });
+      const peer = state.peers.find(p => p.pub === peerPub);
+      if (!peer) return send(404, { error: 'no such linked server', code: 'unknown_peer' });
+      const published = await publishAlbumsForPeer(signedIn.creds, signedIn.caller.id, peer.pub);
+      log(`${signedIn.caller.name} offered ${published} owned album(s) to "${peer.name}" for matching`);
+      return send(200, { published });
     }
     // Rig-only progress read for the e2e suite: the same derivation `/albums/:id/status` answers
     // over iroh (`sync/status.ts`), plus the loop tick counts, so a test can wait for "the sidecar

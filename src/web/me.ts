@@ -10,8 +10,25 @@ import { state } from '../state.ts';
 import type { Mapping } from '../store.ts';
 import type { Creds } from '../immich/access.ts';
 import { visibleAlbumIds } from '../immich/access.ts';
+import { publishOwnedAlbums } from '../sync/album-index.ts';
 
 export type MyAlbum = { name: string; role: Mapping['role']; via: Mapping['via']; peer: string };
+
+/**
+ * Offer the caller's OWN albums to one linked peer for matching.
+ *
+ * The albums come from Immich, read with the caller's own forwarded credential, never from the
+ * request — so the set is exactly what Immich says the caller owns, and a client cannot widen or
+ * narrow it. See sync/album-index.ts.
+ */
+export async function publishAlbumsForPeer(
+  creds: Creds,
+  callerUserId: string,
+  peer: string
+): Promise<number> {
+  const albums = await publishOwnedAlbums(creds, callerUserId, peer);
+  return albums.length;
+}
 
 /** The caller's shared albums: mappings whose local album the caller can see, as themselves.
  *  A mapping the caller cannot see is absent from the list Immich returns — never leaked. */
