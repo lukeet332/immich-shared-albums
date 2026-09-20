@@ -25,7 +25,7 @@ import { recordNudge, syncStatus } from '../sync/status.ts';
 import { emitPanelEvent } from '../panel-events.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 import { recordOfferedRefs } from './entitlement.ts';
-import { publishedAlbumsFor, refreshPeerIndexes } from '../sync/album-index.ts';
+import { publishedAlbumsFor, refreshPeerAlbums } from '../sync/album-index.ts';
 import { auditLine } from '../sync/audit.ts';
 
 /** Constant-time string compare that tolerates unequal lengths. */
@@ -314,9 +314,9 @@ export function handleIndexNudge(callerPub: string) {
   const caller = peerByPub(callerPub);
   if (!caller) return [403, { error: 'unknown peer' }];
   recordNudge('index');
-  emitPanelEvent('index');
-  // Bounded and best-effort, off the response path: the dials are the caller's own deadline.
-  void refreshPeerIndexes().catch(e => log(`index nudge pull failed: ${e.message}`));
+  // ONLY THE CALLER: a nudge says "what I publish has changed", and refreshing every linked peer
+  // would let one enrolled peer make this server dial all of them once per request (CWE-400).
+  void refreshPeerAlbums(caller).catch(e => log(`index nudge pull failed: ${e.message}`));
   return [200, { ok: true }];
 }
 // Status probe: has the work for this mapping finished? `refs` answers "accepted", which is a

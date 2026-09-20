@@ -553,16 +553,27 @@ export const server = http.createServer(async (req, res) => {
       });
       res.write(': connected\n\n');
       const unsubscribe = subscribeToPanelEvents(type => {
-        res.write(`data: ${JSON.stringify({ type })}\n\n`);
+        try {
+          res.write(`data: ${JSON.stringify({ type })}\n\n`);
+        } catch {
+          /* the panel went away between the event and this write; its close handler unsubscribes */
+        }
       });
-      // A heartbeat, so an idle intermediary does not close a quiet panel — and so a dead one is
-      // noticed here rather than by a write to a socket nobody is reading.
+      // A heartbeat, so an idle intermediary does not close a quiet panel.
       const heartbeat = setInterval(() => res.write(': keep-alive\n\n'), 25_000);
       log(`panel following events (${panelSubscribers()} open)`);
-      req.on('close', () => {
+      // THE RESPONSE'S close, not the request's: a bodyless GET completes immediately, so `req`'s
+      // close fires while the response is still open — cleaning up there would unsubscribe a panel
+      // that is still watching. One idempotent cleanup, whichever of these arrives first.
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         clearInterval(heartbeat);
         unsubscribe();
-      });
+      };
+      res.on('close', cleanup);
+      res.on('error', cleanup);
       return;
     }
     // Rig-only progress read for the e2e suite: the same derivation `/albums/:id/status` answers

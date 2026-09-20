@@ -392,8 +392,35 @@ export async function handleInvitationsNudge(callerPub: string): Promise<[number
   if (!peerByPub(callerPub)) return [403, { error: 'unknown peer' }];
   recordNudge('invitations');
   emitPanelEvent('invitations');
-  void pullInvitationsOnce().catch(e => log(`invitation nudge pull failed: ${e.message}`));
+  pullInvitationsSoon();
   return [200, { ok: true }];
+}
+
+/** One pull at a time, with a single queued follow-up.
+ *
+ *  A nudge is cheap to send and costs a sweep of every linked peer to answer, so an enrolled peer
+ *  could otherwise make this server run overlapping pulls by asking repeatedly. Coalescing keeps the
+ *  guarantee the caller cares about — their change IS seen — while bounding what asking costs us. */
+let pullRunning = false;
+let pullQueued = false;
+function pullInvitationsSoon() {
+  if (pullRunning) {
+    pullQueued = true;
+    return;
+  }
+  pullRunning = true;
+  void (async () => {
+    try {
+      do {
+        pullQueued = false;
+        await pullInvitationsOnce();
+      } while (pullQueued);
+    } catch (e) {
+      log(`invitation nudge pull failed: ${e.message}`);
+    } finally {
+      pullRunning = false;
+    }
+  })();
 }
 
 export async function pullInvitationsOnce() {

@@ -1,6 +1,6 @@
 /** web/ui/pages/me/App.tsx — the per-user panel: your shared albums, the possible reunions and what
  *  can be done about each one, and the albums you have reunited. See ../../../http-router.md. */
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { s, t, toastStyle } from '../../lib/theme.ts';
 import { Confirm, type Confirmation } from '../../lib/confirm.tsx';
 import {
@@ -35,6 +35,7 @@ export const App = () => {
   // "refused" look different, which a bare string could not.
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [asking, setAsking] = useState<Confirmation | null>(null);
+  const refreshGeneration = useRef(0);
 
   useEffect(() => {
     myAlbums()
@@ -68,7 +69,11 @@ export const App = () => {
    *  Settled INDEPENDENTLY. `Promise.all` rejects the pair if either read fails, which would report a
    *  mutation that succeeded as a failure and leave both lists showing the state before it. */
   const refreshBoth = async () => {
+    // GENERATION-GUARDED: the live channel can fire another refresh while this one is in flight, and
+    // a slower earlier answer landing last would put the panel back to a state it has moved past.
+    const generation = ++refreshGeneration.current;
     const [freshMatches, freshAlbums] = await Promise.allSettled([myMatches(), myAlbums()]);
+    if (generation !== refreshGeneration.current) return;
     if (freshMatches.status === 'fulfilled') setMatches(freshMatches.value.matches);
     if (freshAlbums.status === 'fulfilled') setAlbums(freshAlbums.value.albums);
   };
