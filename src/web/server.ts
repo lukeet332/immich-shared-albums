@@ -31,6 +31,7 @@ import { proxyToImmich } from './passthrough.ts';
 import { callerIdentity, callerSignedIn, signInRequired } from './auth.ts';
 import { join } from '../p2p/join.ts';
 import { stripAlbumBots } from '../sync/album-grant.ts';
+import { auditLine } from '../sync/audit.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { syncStatus, loopTicks } from '../sync/status.ts';
 import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
@@ -391,6 +392,18 @@ export const server = http.createServer(async (req, res) => {
         // here. A leftover membership would keep our read access to a private album and make it
         // read as a live mirror to anything enumerating albums by stand-in key.
         const left = await leaveAlbum(mapping.id, { notifyOrigin: false });
+        // The trail's withdrawal line, and it has to be written HERE: `leaveAlbum` has already purged
+        // the peer's stubs, so the line describes the finished state, and `stripAlbumBots` is about to
+        // take our accounts off the album — after which the bot could not comment on it at all. The
+        // origin is deliberately not told (see above), so this album is the only one that gets it.
+        await auditLine(
+          mapping.id,
+          albumId,
+          'unreunited',
+          `Un-reunited with "${state.peers.find(p => p.pub === mapping.peer)?.name ?? 'a linked server'}" — ` +
+            `their photos are out of this album. It is still shared: reunite the two again any time from ` +
+            `your shared-albums page.`
+        );
         // Reported, never swallowed: the owner's credential is gone the moment this request ends, so
         // an account we failed to remove keeps reading a private album and NOTHING can retry it. The
         // caller is told, and `stripFailed` names what is still on the album.

@@ -1116,6 +1116,17 @@ stage('native album invitations, per person (no share link)');
           check('un-reuniting takes our accounts back off the album',
                 (afterDetach.albumUsers || []).every(au => !isBot(au.user?.email)),
                 (afterDetach.albumUsers || []).map(au => au.user?.name).join(', '));
+          // AND IT SAYS SO. The trail is the only record an album carries of what was done to it, and
+          // un-reuniting is the event a reader most needs to find: the photos that vanished were
+          // removed on purpose. The line has to be written while the bot is still a member, which is
+          // between the purge and `stripAlbumBots` — so a line missing here means that window closed.
+          const withdrawal = await until(async () => {
+            const acts = await api(B, BKEY, `/activities?albumId=${bOwnBefore.id}&type=comment`);
+            return (acts || []).find(a => /^Un-reunited with /.test(a.comment || '')) || null;
+          }, 30000);
+          check('un-reuniting leaves its own line in the album, authored by our bot',
+                !!withdrawal && isBot(withdrawal.user?.email),
+                withdrawal ? `${withdrawal.user?.name}: ${withdrawal.comment.slice(0, 60)}` : 'no line within 30s');
           check('the album still exists, holding exactly the photos it held before',
                 !!after && JSON.stringify(after.map(a => a.id).sort()) === JSON.stringify(bOwnAssetsBefore.map(a => a.id).sort()),
                 `before=${bOwnAssetsBefore.length} after=${after?.length}`);
