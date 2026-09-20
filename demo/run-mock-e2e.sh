@@ -141,6 +141,19 @@ purge() { # base key service : delete all albums, sidecar users, non-admin asset
   # both domains: the product made a clean break at v1, but a dev rig may still hold pre-v1 bots
   for U in $(curl -s $BASE/api/admin/users -H "x-api-key: $KEY" | python3 -c "import json,sys;[print(u['id']) for u in json.load(sys.stdin) if u['email'].endswith('@immich-shared-albums.internal') or u['email'].endswith('@immich-shared-albums.invalid') or u['email'].endswith('@immich-shared-albums.local') or u['email'].endswith('@sidecar.local')]" 2>/dev/null); do
     curl -s -X DELETE $BASE/api/admin/users/$U -H "x-api-key: $KEY" -H 'Content-Type: application/json' -d '{"force":true}' -o /dev/null; done
+  # The suite's OWN accounts, which this purge used to leave behind. They are keyed by a per-run
+  # suffix, so every run added another "QA Non Admin" and the rig's "no two users share a display
+  # name" invariant failed on data rather than on behaviour. Scoped to the rig's own domains, so a
+  # real deployment's people are never in reach; the key's owner is skipped, because the suite needs
+  # its admin to exist.
+  local OWNER=$(curl -s $BASE/api/users/me -H "x-api-key: $KEY" | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+  for U in $(curl -s $BASE/api/admin/users -H "x-api-key: $KEY" | OWNER="$OWNER" python3 -c "import json,os,sys
+owner = os.environ.get('OWNER','')
+for u in json.load(sys.stdin):
+    e = u.get('email','')
+    if u['id'] != owner and (e.endswith('@e2e.local') or e.endswith('@demo.local')):
+        print(u['id'])" 2>/dev/null); do
+    curl -s -X DELETE $BASE/api/admin/users/$U -H "x-api-key: $KEY" -H 'Content-Type: application/json' -d '{"force":true}' -o /dev/null; done
   local IDS=$(curl -s -X POST $BASE/api/search/metadata -H "x-api-key: $KEY" -H 'Content-Type: application/json' -d '{"size":500}' | python3 -c "import json,sys;print(json.dumps([i['id'] for i in json.load(sys.stdin)['assets']['items']]))" 2>/dev/null)
   [ "${IDS:-[]}" != "[]" ] && curl -s -X DELETE $BASE/api/assets -H "x-api-key: $KEY" -H 'Content-Type: application/json' -d "{\"ids\":$IDS,\"force\":true}" -o /dev/null
 }
