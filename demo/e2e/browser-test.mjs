@@ -166,6 +166,26 @@ const chooserShown = await page.locator('text=Server settings and pairings').cou
 check('an admin at the root is offered both panels', chooserShown > 0, `grep=${chooserShown}`);
 check('the admin stays at the root rather than being sent to a panel',
   page.url().replace(/\/+$/, '') === sidecarRoot.replace(/\/+$/, ''), page.url());
+// A choice row is a link whose affordance IS its shape: the chevron has to sit at the right end of
+// the same line as the text. It rendered on its own line at the left edge while the layout moved
+// into the `choice` class and the inline flex was dropped, which reads as a bullet, not a target.
+{
+  const rows = await page.evaluate(() =>
+    [...document.querySelectorAll('a.choice')].map((a) => {
+      const box = a.getBoundingClientRect();
+      const chevron = a.lastElementChild?.getBoundingClientRect();
+      return {
+        text: (a.innerText || '').split('\n')[0],
+        display: getComputedStyle(a).display,
+        right: !!chevron && Math.round(chevron.right) > Math.round(box.right) - 40,
+        inline: !!chevron && chevron.top >= box.top && chevron.top < box.bottom - 8,
+      };
+    })
+  );
+  check('each chooser row is a flex line with its chevron at the right end',
+    rows.length > 0 && rows.every((r) => r.display === 'flex' && r.right && r.inline),
+    JSON.stringify(rows));
+}
 
 // The signed-out pages are the only ones whose stylesheet is built on its own, so they are where an
 // un-inlined token import would show up: the accent button renders as plain black text. Assert the
