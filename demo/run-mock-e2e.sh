@@ -156,6 +156,13 @@ for u in json.load(sys.stdin):
     curl -s -X DELETE $BASE/api/admin/users/$U -H "x-api-key: $KEY" -H 'Content-Type: application/json' -d '{"force":true}' -o /dev/null; done
   local IDS=$(curl -s -X POST $BASE/api/search/metadata -H "x-api-key: $KEY" -H 'Content-Type: application/json' -d '{"size":500}' | python3 -c "import json,sys;print(json.dumps([i['id'] for i in json.load(sys.stdin)['assets']['items']]))" 2>/dev/null)
   [ "${IDS:-[]}" != "[]" ] && curl -s -X DELETE $BASE/api/assets -H "x-api-key: $KEY" -H 'Content-Type: application/json' -d "{\"ids\":$IDS,\"force\":true}" -o /dev/null
+  # And the notifications every one of those shares produced. Immich writes one per album a person is
+  # ADDED to and keeps it after the album is gone, so a rig that has run this suite a few dozen times
+  # leaves the mock admin's notification panel holding hundreds of stale rows — which is what a human
+  # sees when they open the rig to click through a flow by hand. This is the key owner's OWN
+  # notification list (the route is self-only, so nothing else is reachable from here).
+  local NIDS=$(curl -s "$BASE/api/notifications?unreadOnly=false" -H "x-api-key: $KEY" | python3 -c "import json,sys;print(json.dumps([n['id'] for n in json.load(sys.stdin)]))" 2>/dev/null)
+  [ "${NIDS:-[]}" != "[]" ] && curl -s -X DELETE "$BASE/api/notifications" -H "x-api-key: $KEY" -H 'Content-Type: application/json' -d "{\"ids\":$NIDS}" -o /dev/null
 }
 
 # D (third household — relay coverage): a first-time local rig provisions its key here; CI
