@@ -2,6 +2,8 @@
 // structurally cannot see. Runs headless against the mocks after the main suite.
 // Env: CKEY (origin admin key). Exits non-zero on any failure.
 import { chromium } from 'playwright';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
 
 // Addresses follow the same PORT_* map as run-mock-e2e.sh and the composes (loopback-bound).
 const PORT = (name, dflt) => process.env[name] || dflt;
@@ -353,6 +355,42 @@ check('the lane can give both households a pair to reunite by invitation',
   !!bInviteAlbum?.id && !!cInviteAlbum?.id,
   `${bInviteAlbum?.id ? 'B ok' : 'B failed'}, ${cInviteAlbum?.id ? 'C ok' : 'C failed'}`);
 
+// A PHOTO IN EACH HALF, because the point of a reunion is the photos and this lane used to reunite
+// two EMPTY albums — which is how a merge that only ever reached one side passed every check here.
+// Distinct bytes on each side, so "who ended up with what" is unambiguous.
+const fixture = (n) => fs.readFileSync(new URL(`./fixtures/fx${n % 12}.jpg`, import.meta.url));
+const putPhoto = async (base, auth, albumId, label, n) => {
+  const fd = new FormData();
+  fd.set('deviceAssetId', `browser-${label}-${Date.now()}`);
+  fd.set('deviceId', 'browser-lane');
+  fd.set('fileCreatedAt', '2024-03-01T10:00:00.000Z');
+  fd.set('fileModifiedAt', '2024-03-01T10:00:00.000Z');
+  fd.set('assetData', new Blob([Buffer.concat([fixture(n), crypto.randomBytes(8)])], { type: 'image/jpeg' }), `${label}.jpg`);
+  const up = await (await fetch(`${base}/api/assets`, { method: 'POST', headers: auth, body: fd })).json();
+  if (!up?.id) return null;
+  // A preview must exist before it can be mirrored, exactly as the API suite waits for one.
+  for (let i = 0; i < 30; i++) {
+    if ((await fetch(`${base}/api/assets/${up.id}/thumbnail?size=preview`, { headers: auth })).ok) break;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  await fetch(`${base}/api/albums/${albumId}/assets`, { method: 'PUT',
+    headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [up.id] }) });
+  return up.id;
+};
+const bPhoto = await putPhoto(B_PANEL_WEB, { Authorization: `Bearer ${bLogin.accessToken}` }, bInviteAlbum.id, 'b-half', 6);
+const cPhoto = await putPhoto(C, { 'x-api-key': CKEY }, cInviteAlbum.id, 'c-half', 7);
+check('each half holds one photo of its own, so the merge is observable', !!bPhoto && !!cPhoto,
+  `${bPhoto ? 'B ok' : 'B failed'}, ${cPhoto ? 'C ok' : 'C failed'}`);
+
+/** How many assets an album holds, and how many of them this account does NOT own (its stubs). */
+const albumShape = async (base, auth, albumId, ownerId) => {
+  const r = await (await fetch(`${base}/api/search/metadata`, { method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ albumIds: [albumId], size: 200 }) })).json();
+  const items = r?.assets?.items || [];
+  return { total: items.length, stubs: items.filter((a) => a.ownerId !== ownerId).length };
+};
+
 /** Click the button labelled `label` in the row that names this album — the row is the smallest
  *  ancestor that mentions it, because the panel repeats the same two labels down the list. */
 // The panel renders its reunions only once its own fetch lands, and that fetch refreshes the peer's
@@ -483,6 +521,30 @@ const survivors = candidates(await panelText(bPanel.p))
   .slice(0, 3);
 check("and the pair leaves the inviter's list once it is done", goneNow,
   survivors.length ? `still listed: ${JSON.stringify(survivors)}` : '(the name is gone from the candidates)');
+
+// THE POINT OF A REUNION: both households end up holding the union, each owning its own half and
+// holding the other's as a stub (design doc §2). Asserted on BOTH albums, because checking only the
+// accepting side is what let a one-way merge pass — the inviter's album never changed and nothing
+// here looked at it.
+{
+  const bMe = await (await fetch(`${B_PANEL_WEB}/api/users/me`, { headers: { Authorization: `Bearer ${bLogin.accessToken}` } })).json();
+  const cMe = await (await fetch(`${C}/api/users/me`, { headers: { 'x-api-key': CKEY } })).json();
+  const bAuth = { Authorization: `Bearer ${bLogin.accessToken}` };
+  const settle = async (base, auth, albumId, ownerId) => {
+    for (let i = 0; i < 60; i++) {
+      const shape = await albumShape(base, auth, albumId, ownerId);
+      if (shape.total >= 2) return shape;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    return albumShape(base, auth, albumId, ownerId);
+  };
+  const bShape = await settle(B_PANEL_WEB, bAuth, bInviteAlbum.id, bMe.id);
+  const cShape = await settle(C, { 'x-api-key': CKEY }, cInviteAlbum.id, cMe.id);
+  check('the accepting household holds the union — its own photo plus the other half as a stub',
+    bShape.total === 2 && bShape.stubs === 1, JSON.stringify(bShape));
+  check('and so does the INVITING household — a reunion merges both ways',
+    cShape.total === 2 && cShape.stubs === 1, JSON.stringify(cShape));
+}
 
 // The invite case above is the last to drive them, so the panels close here.
 await soloPanel.c.close();
