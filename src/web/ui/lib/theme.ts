@@ -152,14 +152,24 @@ export const s = {
   buttonDanger: { background: 'var(--isa-danger)', color: 'var(--isa-surface)' },
   /** A row's own rhythm: what it is, what it is made of, what you can do about it — 4px apart. */
   title: { fontSize: 15, fontWeight: 600, letterSpacing: '-.01em' },
-  /** A real `<h2>`, reset to the page's own type: the padding/margins a heading element brings would
-   *  otherwise land on top of the rhythm above. */
+  /** A real heading, reset to the page's own type: the padding and margins the element brings would
+   *  otherwise land on top of the rhythm above. `h2` is a section title, `cardHeading` a card title. */
   h2: {
     display: 'block',
     fontSize: 18,
     fontWeight: 700,
     lineHeight: 'inherit',
     margin: 'var(--isa-space-6) 0 var(--isa-space-2)',
+    padding: 0,
+  },
+  /** A card's title. Its own size, because a card title is a step down visually whether it sits at
+   *  `h2` (a top-level card) or `h3` (one inside a section) in the page's outline. */
+  cardHeading: {
+    display: 'block',
+    fontSize: 14,
+    fontWeight: 700,
+    lineHeight: 'inherit',
+    margin: 0,
     padding: 0,
   },
   muted: { color: t.muted, fontSize: 13 },
@@ -189,14 +199,6 @@ export const s = {
     color: 'var(--isa-surface)',
     cursor: 'pointer',
   },
-  danger: {
-    background: 'transparent',
-    border: `1px solid var(--isa-focus-ring)`,
-    color: t.danger,
-    padding: '5px 12px',
-    fontSize: 12,
-    borderRadius: 'var(--isa-radius-pill)',
-    cursor: 'pointer',
-  },
-  note: { fontSize: 13, marginTop: 10, color: 'var(--isa-accent-2)', minHeight: 18 },
+  /** A card's own outcome line: neutral, because it carries progress, success and failure alike. */
+  note: { fontSize: 13, marginTop: 10, color: t.muted, minHeight: 18 },
 } as const;

@@ -54,7 +54,7 @@ export const Settings = () => {
 
   return (
     <div style={s.card}>
-      <b style={{ fontSize: 14 }}>Settings</b>
+      <h2 style={s.cardHeading}>Settings</h2>
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14 }}>
         <input type="checkbox" checked={shareLinkJoin} onChange={toggleJoin} />
         Allow other Immich users to join albums via shared links
@@ -76,8 +76,8 @@ export const Settings = () => {
         Store shared photos on this server
       </label>
       <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>
-        On, shared photos are copied here and use real disk space. Off, they stream from their owner. Turning
-        this on uses real disk space, and existing shared photos are copied over gradually in the background.
+        Off, they stream from their owner and use no space here. On, they are copied over in the background
+        and use real disk space.
       </p>
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, marginTop: 12 }}>
         Pairing links stay valid for
@@ -89,10 +89,7 @@ export const Settings = () => {
           ))}
         </select>
       </label>
-      <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>
-        Shown once. If it is lost, create another. Longer validity only widens how long a lost link would
-        matter.
-      </p>
+      <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>Shown once. Create another if it is lost.</p>
     </div>
   );
 };
