@@ -305,6 +305,18 @@ const appeared = await cPanel.p.waitForFunction(
 check('opening the other person\'s panel is enough — the pair appears, with no API call', appeared,
   (await panelText(cPanel.p)).split('\n').find((l) => l.includes(panelName)) || '(never appeared)');
 
+// A panel's own match read refreshes the peer's index on the way past, so a hint emitted on EVERY
+// refresh tells the page that just asked to ask again — an idle panel would spin forever and never
+// land a fresh answer, which is how "Accept invite" failed to appear on an open page. Hints are
+// counted on the server, so a page that quietly stops updating cannot hide behind a passing render.
+const hintCount = async () => (await (await fetch(`${B_PANEL_WEB}/immich-shared-albums/sync/status`, {
+  headers: { Authorization: `Bearer ${bLogin.accessToken}` } })).json()).hints;
+const hintsBefore = await hintCount();
+await bPanel.p.waitForTimeout(6000);
+const hintsAfter = await hintCount();
+check('an idle open panel does not hint itself in circles', hintsAfter - hintsBefore <= 2,
+  `${hintsBefore} -> ${hintsAfter} over 6s with both panels open`);
+
 // Withdrawing the half B offered must reach C: an offer of NOTHING is still an offer, and it is how
 // the peer learns that everything this person had is gone.
 const withdrew = await fetch(`${B_PANEL_WEB}/api/albums/${bAlbum.id}`, { method: 'DELETE',

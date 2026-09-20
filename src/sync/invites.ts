@@ -414,9 +414,6 @@ function pullInvitationsSoon() {
         pullQueued = false;
         await pullInvitationsOnce();
       } while (pullQueued);
-      // AFTER the pull, not when the nudge arrived: the panel re-reads what the pull has just
-      // changed, so emitting on arrival would have it fetch the state it is about to leave.
-      emitPanelEvent('invitations');
     } catch (e) {
       log(`invitation nudge pull failed: ${e.message}`);
     } finally {
@@ -426,6 +423,7 @@ function pullInvitationsSoon() {
 }
 
 export async function pullInvitationsOnce() {
+  let changed = false;
   for (const peer of state.peers) {
     let invitations;
     try {
@@ -477,6 +475,7 @@ export async function pullInvitationsOnce() {
           reunified: inv.reunified === true,
         });
         if (created) {
+          changed = true;
           log(
             `"${peer.name}" invited ${(inv.forUserIds || []).length} of us to "${inv.album.name}" — mirrored it (${inv.permissions})`
           );
@@ -494,12 +493,17 @@ export async function pullInvitationsOnce() {
     for (const mp of [...state.mappings].filter(mp => invitationMirrorWasWithdrawn(mp, peer.pub, offered))) {
       try {
         await leaveAlbum(mp.id);
+        changed = true;
         log(`"${peer.name}" withdrew "${mp.albumName}" — removed the mirror it created`);
       } catch (e) {
         log(`could not remove withdrawn mirror "${mp.albumName}": ${e.message}`);
       }
     }
   }
+  // Told ONCE, at the end, and only when something actually moved: this is the pull that the invite
+  // loop, the accept page and a peer's nudge all funnel through, so a panel hears about a mirror
+  // whichever of them created it — and hears nothing when nothing changed.
+  if (changed) emitPanelEvent('invitations');
 }
 
 /**

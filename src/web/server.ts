@@ -34,7 +34,7 @@ import { stripAlbumBots } from '../sync/album-grant.ts';
 import { auditLine } from '../sync/audit.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { syncStatus, loopTicks, nudgesReceived } from '../sync/status.ts';
-import { emitPanelEvent } from '../panel-events.ts';
+import { emitPanelEvent, panelHintsEmitted } from '../panel-events.ts';
 import { panelSubscribers, subscribeToPanelEvents } from '../panel-events.ts';
 import { forgetVisits, noteIndexTraffic, offerAlbumsFrom } from '../sync/index-freshness.ts';
 import { trafficTriggerFor } from '../sync/traffic-triggers.ts';
@@ -571,6 +571,7 @@ export const server = http.createServer(async (req, res) => {
         cleanedUp = true;
         clearInterval(heartbeat);
         unsubscribe();
+        log(`panel stopped following events (${panelSubscribers()} open)`);
       };
       res.on('close', cleanup);
       res.on('error', cleanup);
@@ -588,13 +589,19 @@ export const server = http.createServer(async (req, res) => {
       const albumId = u.searchParams.get('albumId');
       // No album asked for: the counters alone, which is what a test needs to tell a nudge from a
       // sweep before any mapping exists (a pairing creates none).
-      if (!albumId) return send(200, { ticks: loopTicks(), nudges: nudgesReceived() });
+      if (!albumId)
+        return send(200, { ticks: loopTicks(), nudges: nudgesReceived(), hints: panelHintsEmitted() });
       const mapping = state.mappings.find(m => m.albumId === albumId);
       if (!mapping) return send(404, { error: 'no mapping for that album' });
       // `ticks` and `nudges` together are how a test tells WHICH mechanism delivered a change: a
       // state that moved with no tick in between was the nudge, and a nudge counter that did not
       // move cannot have been. See index-offer.test.ts for the timing rules themselves.
-      return send(200, { ...syncStatus(mapping), ticks: loopTicks(), nudges: nudgesReceived() });
+      return send(200, {
+        ...syncStatus(mapping),
+        ticks: loopTicks(),
+        nudges: nudgesReceived(),
+        hints: panelHintsEmitted(),
+      });
     }
     // Rig-only: emit a panel event on demand. A test that had to wait for a peer to nudge would be
     // testing the peer path as well as the channel; this asks the channel alone, so a browser test

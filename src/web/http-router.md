@@ -43,7 +43,11 @@ exactly like the panel itself (a session), carrying a `{ type }` hint — `invit
 the caller, so a hint cannot show anyone something they could not fetch themselves, and a sidecar
 without the route answers 404 and leaves the panel behaving as it did before. Emitting is
 `emitPanelEvent` from `panel-events.ts`, which the sync and peer layers call when a nudge arrives or
-a share changes.
+a share changes. **Every emit is gated on the change it announces** (`indexChanged` before hinting
+`index`, `changed` before `invitations`, the write itself before `shares`): the panel's own re-read
+goes back through those same refresh paths, so an ungated hint tells a page that just asked to ask
+again, for as long as it stays open. `/sync/status` answers the running total as `hints`, which is
+how the browser lane asserts an idle open panel is not doing that.
 
 **`/immich-shared-albums/` is the chooser.** It is the one URL worth remembering, so it is gated on a
 session rather than on admin: it asks Immich who is calling (`pages/root/App.tsx`) and either opens

@@ -5,6 +5,7 @@ import { readCallerAlbums } from '../immich/access.ts';
 import type { OwnedAlbum, Peer } from '../store.ts';
 import { peerRequest, withDeadline } from '../p2p/transport.ts';
 import { emitPanelEvent } from '../panel-events.ts';
+import { indexChanged } from './index-offer.ts';
 
 /** How long a panel visit waits for a peer's index before answering from the one it has.
  *
@@ -60,9 +61,13 @@ export async function refreshPeerAlbums(peer: Peer): Promise<OwnedAlbum[]> {
     // index, so an owner missing from it has withdrawn everything and must stop being matched
     // against — which the per-owner write cannot express, because it is only ever called FOR an
     // owner the answer still mentions.
+    const before = store.publishedAlbumsFor(peer.pub, 'from-them');
     store.publishedAlbumsReplacePeer(peer.pub, 'from-them', r.json.albums as OwnedAlbum[]);
-    emitPanelEvent('index');
-    return store.publishedAlbumsFor(peer.pub, 'from-them');
+    const after = store.publishedAlbumsFor(peer.pub, 'from-them');
+    // ONLY on a real change: a panel's own match read lands here, so an unconditional hint tells the
+    // page that asked to ask again — forever, and never landing a fresh answer.
+    if (indexChanged(before, after)) emitPanelEvent('index');
+    return after;
   } catch {
     return store.publishedAlbumsFor(peer.pub, 'from-them'); // unreachable right now: keep what we have
   }
