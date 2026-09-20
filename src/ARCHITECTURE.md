@@ -15,8 +15,10 @@ transport — lockfile-pinned, installed by the Dockerfile):
   exit — after which the running sidecar writes into an unlinked WAL and a restart loses that state.
   Linux bind mounts and named volumes are unaffected (see demo/e2e/README.md rule 11).
 - **Sync is nudge-driven with a timed backstop.** A signed HTTP nudge makes the common case
-  near-instant; three timers are the fail-open safety net. No websockets, no push channel to keep
-  alive.
+  near-instant — an album that moved, an index that changed, a share that appeared or was withdrawn —
+  and three timers are the fail-open safety net beneath it. Panels that are OPEN are told the same
+  way, over one server-sent-events response per open panel (`panel-events.ts`, `GET /events`),
+  which carries a hint and no data: the panel re-reads its own caller-scoped lists.
 - **Everything user-facing** is either the stock Immich app rendering ordinary data we planted, or a
   page we serve.
 
@@ -133,7 +135,9 @@ true across our restarts — a random one leaves recovery to whether we happen t
   Plus a transparent proxy for everything else when the sidecar fronts Immich. All fail open.
 - **nudges** — when the origin materialises a member's contribution or comment it pings the other
   member households (a signed POST to `…/nudge`, no payload beyond the album id) so they pull
-  immediately. A latency hint, never a source of truth.
+  immediately; `…/index/nudge` says the same thing about what a household OFFERS, so a person's
+  albums reach the other side the moment they are published. A latency hint, never a source of
+  truth.
 
 **Not built yet:** save-to-library — the explicit per-photo opt-in that stores a true original owned
 by the saving user, and the one deliberate way a copy lands on your disk.

@@ -2,7 +2,9 @@
 
 Fully API-driven cross-household test — **no phone, no emulator, no real server**.
 Runs three throwaway mock Immich stacks (C origin, B and D joiners) and asserts
-the whole flow, exits non-zero on any fail. A Playwright lane (browser-test.mjs) covers the banner/accept browser flows in CI.
+the whole flow, exits non-zero on any fail. A Playwright lane (browser-test.mjs) covers the
+banner/accept browser flows and the panels' live channel in CI — an open page that has to be
+reloaded to see a change fails it.
 
 ```bash
 ./demo/run-mock-e2e.sh

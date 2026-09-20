@@ -8,6 +8,7 @@ import {
   handleRefs,
   handleVersion,
   handleNudge,
+  handleIndexNudge,
   handleManifest,
   handleStatus,
   handleHello,
@@ -17,7 +18,7 @@ import {
 } from './protocol.ts';
 import { handlePair } from './pair.ts';
 import { handleActivity, handleComments } from '../sync/comments.ts';
-import { invitationsFor, localDirectory } from '../sync/invites.ts';
+import { handleInvitationsNudge, invitationsFor, localDirectory } from '../sync/invites.ts';
 import { servePeerBytes } from '../media/proxy.ts';
 
 const shareLinkJoiningEnabled = () =>
@@ -53,6 +54,11 @@ export const peerRoutes: PeerHandler = async (callerPub, path, bodyBuf, range) =
   if ((m = path.match(/^\/albums\/([^/]+)\/reunified$/))) return json(handleReunified(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/comments$/))) return json(await handleComments(callerPub, m[1]));
   if ((m = path.match(/^\/albums\/([^/]+)\/nudge$/))) return json(await handleNudge(callerPub, m[1]));
+  // "What you publish has changed — re-read it." No album, no names, no payload: the receiver
+  // re-pulls only what the caller already offers it. Older peers 404 this, which is "peer too old".
+  if (path === '/index/nudge') return json(handleIndexNudge(callerPub));
+  // "What I share with you has changed" — an invitation appeared or was withdrawn.
+  if (path === '/invitations/nudge') return json(await handleInvitationsNudge(callerPub));
   // The album index, for matching a split album's other half. Same gate as /directory: an enrolled
   // peer may ask what names this household offers, and nothing here grants access to any album.
   if (path === '/albums') {

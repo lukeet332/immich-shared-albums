@@ -21,10 +21,11 @@ import { readCredsFor, readAlbumAs, readAlbumAssetsAs } from '../immich/access.t
 import { buildManifest } from '../immich/refs.ts';
 import { materialiseRef } from '../immich/materialise.ts';
 import { reconcileMapping } from '../sync/engine.ts';
-import { syncStatus } from '../sync/status.ts';
+import { recordNudge, syncStatus } from '../sync/status.ts';
+import { emitPanelEvent } from '../panel-events.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 import { recordOfferedRefs } from './entitlement.ts';
-import { publishedAlbumsFor } from '../sync/album-index.ts';
+import { publishedAlbumsFor, refreshPeerAlbums } from '../sync/album-index.ts';
 import { auditLine } from '../sync/audit.ts';
 
 /** Constant-time string compare that tolerates unequal lengths. */
@@ -210,6 +211,9 @@ export function handleReunified(callerPub: string, albumMappingId: string) {
   mapping.reunified = true;
   save();
   log(`"${peer.name}" reunited the share of "${mapping.albumName}" — it is no longer a possible reunion`);
+  // The inviter's panel lists this pair under "Possible album reunions" until told, and a page that
+  // is already open has to be told the same way it is told everything else.
+  emitPanelEvent('shares');
   // The trail on OUR album too, where the invitation was made: the person who invited is told in the
   // album itself, not only in their panel. `void` — the peer's request is answered either way, and
   // the line is worth a retry rather than worth holding their panel open for.
@@ -284,6 +288,7 @@ export async function handleNudge(callerPub: string, albumMappingId: string) {
   // household's album at a server of its choosing and materialise whatever it served.
   const origin = peerByPub(mapping.peer);
   if (!origin) return [404, { error: 'unknown album mapping' }];
+  recordNudge('album');
   // answer fast; do the pull in the background. `void` marks that as intended, not forgotten.
   void (async () => {
     try {
@@ -295,6 +300,23 @@ export async function handleNudge(callerPub: string, albumMappingId: string) {
       log(`nudge pull error on "${mapping.albumName}": ${e.message}`);
     }
   })();
+  return [200, { ok: true }];
+}
+/**
+ * "What you offer me has changed — read my index again."
+ *
+ * The sibling of the album nudge, and the same contract: it carries no names and no albums, so a
+ * peer can only cause a re-read of what the caller already published for it. That is what lets a
+ * person's albums reach the other household the moment they are published, instead of at the
+ * peer's next sweep.
+ */
+export function handleIndexNudge(callerPub: string) {
+  const caller = peerByPub(callerPub);
+  if (!caller) return [403, { error: 'unknown peer' }];
+  recordNudge('index');
+  // ONLY THE CALLER: a nudge says "what I publish has changed", and refreshing every linked peer
+  // would let one enrolled peer make this server dial all of them once per request (CWE-400).
+  void refreshPeerAlbums(caller).catch(e => log(`index nudge pull failed: ${e.message}`));
   return [200, { ok: true }];
 }
 // Status probe: has the work for this mapping finished? `refs` answers "accepted", which is a

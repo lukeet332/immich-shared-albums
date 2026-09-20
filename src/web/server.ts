@@ -33,7 +33,12 @@ import { join } from '../p2p/join.ts';
 import { stripAlbumBots } from '../sync/album-grant.ts';
 import { auditLine } from '../sync/audit.ts';
 import { leaveAlbum } from '../sync/leave.ts';
-import { syncStatus, loopTicks } from '../sync/status.ts';
+import { syncStatus, loopTicks, nudgesReceived } from '../sync/status.ts';
+import { emitPanelEvent, panelHintsEmitted } from '../panel-events.ts';
+import { panelSubscribers, subscribeToPanelEvents } from '../panel-events.ts';
+import { forgetVisits, noteIndexTraffic, offerAlbumsFrom } from '../sync/index-freshness.ts';
+import { trafficTriggerFor } from '../sync/traffic-triggers.ts';
+import { syncComments } from '../sync/comments.ts';
 import { unlinkPeer, linkedPeers, localHousehold, sharedAlbums } from '../p2p/unlink.ts';
 import {
   mintPairing,
@@ -147,7 +152,33 @@ export const server = http.createServer(async (req, res) => {
       return;
     // Everything that isn't a sidecar route -> transparent proxy to Immich.
     // Streams both ways: uploads must not be buffered here.
-    if (!path.startsWith(ROUTE_PREFIX)) return proxyToImmich(req, res);
+    if (!path.startsWith(ROUTE_PREFIX)) {
+      // THE FRONT DOOR IS WHERE A PERSON ARRIVES. This sidecar serves Immich itself, so a request
+      // that changes an album, or a sign-in, is how we learn their albums need offering — see
+      // `indexTriggerFor`: the byte path for every thumbnail on screen is deliberately NOT a trigger,
+      // because that is the traffic this proxy exists to keep cheap. Fire-and-forget and wrapped:
+      // nothing about a proxied request may depend on it, and it must never be able to fail one.
+      const proxied = proxyToImmich(req, res);
+      // AFTER the response, not before: an album mutation is only a change once Immich has made it,
+      // and reading on the way in races the very write that prompted the read (measured: the album
+      // created by that request was missing from the list we then published).
+      void proxied
+        .then(() => {
+          try {
+            const trigger = trafficTriggerFor(req.method || 'GET', u.pathname);
+            // A comment written in the app is pushed NOW: the comment loop's cadence is a safety
+            // net, not the latency a person should feel waiting for their own message to arrive.
+            if (trigger === 'comment') void syncComments();
+            else if (trigger) noteIndexTraffic(trigger, req.headers);
+          } catch {
+            /* fail-open: Immich traffic never waits on, or breaks from, our bookkeeping */
+          }
+        })
+        .catch(() => {
+          /* the proxy already answered; a failed request changes nothing to offer */
+        });
+      return proxied;
+    }
 
     // ---- the sidecar's own routes: cap the body, then authorise ----
     const body = await readCappedBody(req);
@@ -303,12 +334,21 @@ export const server = http.createServer(async (req, res) => {
     // Pasting a link another server gave us. This is the standalone way to link two servers:
     // no album is involved, and pairing conveys no access to any photo.
     if (path === `${ROUTE_PREFIX}/pair` && req.method === 'POST') {
-      const caller = await callerIdentity(req);
-      if (!caller) return send(401, signInRequired('link a server'));
-      if (!caller.isAdmin) return send(403, { error: 'only an admin can link a server' });
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('link a server'));
+      if (!signedIn.caller.isAdmin) return send(403, { error: 'only an admin can link a server' });
       try {
         const b = JSON.parse(body);
-        return send(200, await redeemPairing(b.link));
+        const linked = await redeemPairing(b.link);
+        emitPanelEvent('shares');
+        // The person who just linked is the only person whose credential is in hand at this moment,
+        // and a link whose albums are not offered yet is a link nothing can be matched against. Read
+        // theirs now, and tell the peer to look — the rest of the household arrives as they use
+        // Immich (see index-freshness.ts).
+        void offerAlbumsFrom(signedIn.creds).catch(e =>
+          log(`could not offer the linking person's albums: ${e.message}`)
+        );
+        return send(200, linked);
       } catch (e) {
         return send(400, { error: e.message });
       }
@@ -407,6 +447,7 @@ export const server = http.createServer(async (req, res) => {
         // Reported, never swallowed: the owner's credential is gone the moment this request ends, so
         // an account we failed to remove keeps reading a private album and NOTHING can retry it. The
         // caller is told, and `stripFailed` names what is still on the album.
+        emitPanelEvent('shares');
         const { removed, failed } = await stripAlbumBots(albumId, signedIn.creds).catch(e => {
           log(`un-reunify could not take our accounts off "${albumName}": ${e.message}`);
           return { removed: 0, failed: ['unknown'] };
@@ -496,6 +537,46 @@ export const server = http.createServer(async (req, res) => {
         return send(400, { error: e.message });
       }
     }
+    // The panels' live channel: one open response per open panel, carrying hints only. Signed in,
+    // like every panel route — the caller's own data is what they will re-read, so the gate is the
+    // same one the panel itself passes.
+    if (path === `${ROUTE_PREFIX}/events` && req.method === 'GET') {
+      const signedIn = await callerSignedIn(req);
+      if (!signedIn) return send(401, signInRequired('follow your albums'));
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        // Proxies that buffer would hold every hint until the connection closed, which is the bug
+        // this header exists to prevent (Caddy and nginx both honour it).
+        'X-Accel-Buffering': 'no',
+      });
+      res.write(': connected\n\n');
+      const unsubscribe = subscribeToPanelEvents(type => {
+        try {
+          res.write(`data: ${JSON.stringify({ type })}\n\n`);
+        } catch {
+          /* the panel went away between the event and this write; its close handler unsubscribes */
+        }
+      });
+      // A heartbeat, so an idle intermediary does not close a quiet panel.
+      const heartbeat = setInterval(() => res.write(': keep-alive\n\n'), 25_000);
+      log(`panel following events (${panelSubscribers()} open)`);
+      // THE RESPONSE'S close, not the request's: a bodyless GET completes immediately, so `req`'s
+      // close fires while the response is still open — cleaning up there would unsubscribe a panel
+      // that is still watching. One idempotent cleanup, whichever of these arrives first.
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clearInterval(heartbeat);
+        unsubscribe();
+        log(`panel stopped following events (${panelSubscribers()} open)`);
+      };
+      res.on('close', cleanup);
+      res.on('error', cleanup);
+      return;
+    }
     // Rig-only progress read for the e2e suite: the same derivation `/albums/:id/status` answers
     // over iroh (`sync/status.ts`), plus the loop tick counts, so a test can wait for "the sidecar
     // has looked N more times" without speaking the peer protocol. Gated like every hook must be:
@@ -506,9 +587,48 @@ export const server = http.createServer(async (req, res) => {
       if (!caller) return send(401, signInRequired('read sync status'));
       if (!caller.isAdmin) return send(403, { error: 'only an admin can read sync status' });
       const albumId = u.searchParams.get('albumId');
+      // No album asked for: the counters alone, which is what a test needs to tell a nudge from a
+      // sweep before any mapping exists (a pairing creates none).
+      if (!albumId)
+        return send(200, { ticks: loopTicks(), nudges: nudgesReceived(), hints: panelHintsEmitted() });
       const mapping = state.mappings.find(m => m.albumId === albumId);
       if (!mapping) return send(404, { error: 'no mapping for that album' });
-      return send(200, { ...syncStatus(mapping), ticks: loopTicks() });
+      // `ticks` and `nudges` together are how a test tells WHICH mechanism delivered a change: a
+      // state that moved with no tick in between was the nudge, and a nudge counter that did not
+      // move cannot have been. See index-offer.test.ts for the timing rules themselves.
+      return send(200, {
+        ...syncStatus(mapping),
+        ticks: loopTicks(),
+        nudges: nudgesReceived(),
+        hints: panelHintsEmitted(),
+      });
+    }
+    // Rig-only: emit a panel event on demand. A test that had to wait for a peer to nudge would be
+    // testing the peer path as well as the channel; this asks the channel alone, so a browser test
+    // (or the lane) can prove an open page reacts to a hint without a reload.
+    if (CFG.testHooks && path === `${ROUTE_PREFIX}/test/emit` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('emit an event'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can emit an event' });
+      let asked: { type?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (asked.type !== 'invitations' && asked.type !== 'index' && asked.type !== 'shares')
+        return send(400, { error: 'type must be invitations, index or shares' });
+      emitPanelEvent(asked.type);
+      return send(200, { ok: true, panels: panelSubscribers() });
+    }
+    // Rig-only: forget every session, so the next authenticated request is treated as the first of
+    // one. The real quiet period is fifteen minutes, which no test can wait out (index-offer.ts).
+    if (CFG.testHooks && path === `${ROUTE_PREFIX}/test/new-session` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('forget sessions'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can forget sessions' });
+      forgetVisits();
+      return send(200, { ok: true });
     }
     // Liveness only. The join banner probes this cross-origin to discover a sidecar, so
     // it stays open — which is exactly why it must not name the household or count peers.

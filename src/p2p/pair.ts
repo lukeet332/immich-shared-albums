@@ -22,6 +22,7 @@ import { store as kvStore } from '../state.ts';
 import { PROTOCOL_VERSION } from '../types.ts';
 import { state, save, store, keys } from '../state.ts';
 import { peerByPub } from '../peers.ts';
+import { offerAdminAlbums } from '../sync/index-freshness.ts';
 import { localAddr, peerRequest } from './transport.ts';
 
 /** How long a freshly minted code stays redeemable — panel-configurable, because "long
@@ -144,6 +145,11 @@ export async function handlePair(callerPub: string, body: string) {
   }
   save();
   log(`paired with "${household.name}" — their people can now be invited to albums`);
+  // A LINK IS USEFUL THE MOMENT IT EXISTS: offer the admin account's own albums to the peer that
+  // just paired, before anyone opens a panel, and tell them to look. The admin is a person here —
+  // an account this addon minted for itself is never the configured key's owner — so this needs no
+  // session, and the peer can match the moment its own side has offered anything.
+  void offerAdminAlbums().catch(e => log(`could not offer albums to the new peer: ${e.message}`));
   return [
     200,
     {

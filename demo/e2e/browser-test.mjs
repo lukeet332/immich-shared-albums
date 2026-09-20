@@ -285,6 +285,16 @@ const panelOf = async (base, token) => {
 
 const bPanel = await panelOf(B_PANEL_WEB, bLogin.accessToken);
 await bPanel.p.waitForTimeout(3000);
+
+// THE PANEL IS SUBSCRIBED TO THE LIVE CHANNEL, asserted from the server's side: the rig-only emit
+// hook answers with how many panels are listening, so a subscription torn down early — the bug this
+// route's cleanup had — reads as 0 here instead of as a page that quietly stops updating.
+const emitted = await (await fetch(`${B_PANEL_WEB}/immich-shared-albums/test/emit`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bLogin.accessToken}` },
+  body: JSON.stringify({ type: 'shares' }),
+})).json();
+check('the open panel holds a live subscription', emitted?.panels >= 1, JSON.stringify(emitted));
 check('the first person to open their panel sees no pair yet — matching is a pull',
   !seesPair(await panelText(bPanel.p)));
 
@@ -294,6 +304,18 @@ const appeared = await cPanel.p.waitForFunction(
   panelName, { timeout: 30000 }).then(() => true).catch(() => false);
 check('opening the other person\'s panel is enough — the pair appears, with no API call', appeared,
   (await panelText(cPanel.p)).split('\n').find((l) => l.includes(panelName)) || '(never appeared)');
+
+// A panel's own match read refreshes the peer's index on the way past, so a hint emitted on EVERY
+// refresh tells the page that just asked to ask again — an idle panel would spin forever and never
+// land a fresh answer, which is how "Accept invite" failed to appear on an open page. Hints are
+// counted on the server, so a page that quietly stops updating cannot hide behind a passing render.
+const hintCount = async () => (await (await fetch(`${B_PANEL_WEB}/immich-shared-albums/sync/status`, {
+  headers: { Authorization: `Bearer ${bLogin.accessToken}` } })).json()).hints;
+const hintsBefore = await hintCount();
+await bPanel.p.waitForTimeout(6000);
+const hintsAfter = await hintCount();
+check('an idle open panel does not hint itself in circles', hintsAfter - hintsBefore <= 2,
+  `${hintsBefore} -> ${hintsAfter} over 6s with both panels open`);
 
 // Withdrawing the half B offered must reach C: an offer of NOTHING is still an offer, and it is how
 // the peer learns that everything this person had is gone.
@@ -491,18 +513,22 @@ check('a pair with nothing shared yet is offered an invitation', inviteRowShown,
 
 check('Invite was clicked', await clickInRow(bPanel.p, '^Invite ', inviteName), await clickDetail(bPanel.p, '^Invite ', inviteName));
 check('and it asked first, rather than sharing on the click alone', await confirmDialog(bPanel.p, 'Invite'));
-// The panel fetches on mount and does not poll, so a row whose state changed on the server can only
-// show it after a reload — waiting on the page as it stands reads a state that is already gone.
+// A page opened before a change needs the change PUSHED to it: the panel follows `/events`, so the
+// waits below reload only where they are testing the fetch path itself, and the invitation case
+// above deliberately does not reload at all.
 check("the inviter's own row now waits on the other person",
   await waitForRow(bPanel.p, /waiting for them to accept/));
 
+// NO RELOAD. The panel follows `/immich-shared-albums/events`, so an invitation that arrives while
+// the page is open has to appear by itself. Reloading in this loop — which is what it used to do —
+// passes for the wrong reason and would keep passing if the live channel never delivered at all.
 let acceptOffered = false;
-for (let waited = 0; waited < 60000 && !acceptOffered; waited += 5000) {
-  await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
-  await cPanel.p.waitForTimeout(3000);
+for (const deadline = Date.now() + 60000; Date.now() < deadline && !acceptOffered; ) {
+  await cPanel.p.waitForTimeout(2000);
   acceptOffered = /Accept invite/.test(candidates(await panelText(cPanel.p)));
 }
-check('the other person is offered Accept invite, having done nothing themselves', acceptOffered);
+check('the other person is offered Accept invite on the page that was already open, with no reload',
+  acceptOffered);
 check('Accept invite was clicked', await clickInRow(cPanel.p, '^Accept invite', inviteName), await clickDetail(cPanel.p, '^Accept invite', inviteName));
 check('and it asked first, rather than merging on the click alone', await confirmDialog(cPanel.p, 'Accept'));
 

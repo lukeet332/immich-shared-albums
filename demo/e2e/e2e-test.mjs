@@ -922,9 +922,25 @@ stage('native album invitations, per person (no share link)');
       check('marker is really a member after the invite',
             (back.albumUsers || []).some(au => au.user?.id === nan.id && au.role === 'editor'));
 
+      // AND IT ARRIVES BECAUSE THE WIRE SAID SO. The rig's cadence is a second, so latency cannot
+      // tell a nudge from the sweep — the counter can: the sidecar counts nudges RECEIVED, so this
+      // is the assertion that the share reached B as a nudge rather than only as a timer coming
+      // round. (What the nudge is worth is measured in the browser lane, where the sweep is slowed
+      // to ten minutes and the open page still updates.)
+      // No albumId: the counters are process-wide, which is what this needs — the mirror this nudge
+      // produces does not exist yet, and B's local album id for it is not the origin's (`invAlb`).
+      const nudgesOnB = async () => {
+        const r = await fetch(`${BS}/immich-shared-albums/sync/status`, { headers: { 'x-api-key': BKEY } });
+        return r.ok ? (await r.json()).nudges : null;
+      };
+      const nudgesBefore = await nudgesOnB();
       let mirrored = await findOnB('natively invited album');
       check('member mirrors an invited album automatically, with no link', !!mirrored,
             mirrored ? '' : 'timed out');
+      const nudgesAfter = await nudgesOnB();
+      check('the invitation reached the member as a NUDGE, not only as a sweep',
+            !!nudgesBefore && !!nudgesAfter && nudgesAfter.invitations > nudgesBefore.invitations,
+            nudgesBefore ? `invitation nudges ${nudgesBefore.invitations} -> ${nudgesAfter?.invitations}` : 'nudges unreadable — is ISA_TEST_HOOKS set on B?');
 
       // Read the invitation contract HERE, while the invitation is still an ordinary one. This stage
       // goes on to reunite this album, and the origin then legitimately learns about it
@@ -1475,6 +1491,10 @@ stage('a revocation survives content arriving in the same window');
           mirroredRace ? '' : 'timed out');
 
     if (mirroredRace) {
+      // The withdrawal is news too, and the same counter proves it travelled as one: sample before
+      // the removal, assert after it that B heard about it over the wire rather than at its sweep.
+      const raceNudgesBefore = await (await fetch(`${BS}/immich-shared-albums/sync/status`,
+        { headers: { 'x-api-key': BKEY } })).json().then(r => r.nudges).catch(() => null);
       // Revoke, then IMMEDIATELY give the origin something to materialise into that same album.
       await fetch(`${A}/api/albums/${raceAlb}/user/${nan.id}`, {
         method: 'DELETE',
@@ -1497,6 +1517,11 @@ stage('a revocation survives content arriving in the same window');
       }, 150000);
       check('the revocation still wins when a photo arrives in the same window', !!withdrawn,
             withdrawn ? '' : 'still offered — a sidecar re-add was read as a fresh invitation');
+      const raceNudgesAfter = await (await fetch(`${BS}/immich-shared-albums/sync/status`,
+        { headers: { 'x-api-key': BKEY } })).json().then(r => r.nudges).catch(() => null);
+      check('a withdrawn invitation is pushed too, not waited out',
+            !!raceNudgesBefore && !!raceNudgesAfter && raceNudgesAfter.invitations > raceNudgesBefore.invitations,
+            raceNudgesBefore ? `invitation nudges ${raceNudgesBefore.invitations} -> ${raceNudgesAfter?.invitations}` : 'nudges unreadable');
 
       const raceGone = await until(async () => {
         for (const k of standInKeys()) {

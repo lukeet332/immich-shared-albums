@@ -51,8 +51,26 @@ export function nudgePeers(albumId: string, exceptPeerPub?: string) {
     if (mp.albumId !== albumId || mp.dead || mp.role !== 'owner' || mp.peer === exceptPeerPub) continue;
     const peer = peerByPub(mp.peer);
     if (!peer) continue;
-    peerRequest(peer, `/albums/${albumId}/nudge`, { album: albumId }).catch(() => {
+    peerRequest(peer, `/albums/${albumId}/nudge`).catch(() => {
       /* fail-open */
     });
   }
+}
+
+// Nudge: tell ONE peer that what this household publishes has changed, so it re-reads the index
+// now instead of at its next tick. Same contract as every nudge — it says "look again" and can
+// never say what to look at, and losing it costs the latency of the next sweep.
+export function nudgePeerIndex(peer: Peer) {
+  peerRequest(peer, '/index/nudge').catch(() => {
+    /* fail-open */
+  });
+}
+
+// Nudge: tell ONE peer that what this household shares with it has changed, so it pulls the
+// invitation list now rather than at its next sweep. Same contract as the others: a hint, no
+// payload, and losing it costs the latency of the sweep.
+export function nudgePeerInvitations(peer: Peer) {
+  peerRequest(peer, '/invitations/nudge').catch(() => {
+    /* fail-open */
+  });
 }

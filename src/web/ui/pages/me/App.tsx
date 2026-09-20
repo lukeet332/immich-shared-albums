@@ -1,9 +1,10 @@
 /** web/ui/pages/me/App.tsx — the per-user panel: your shared albums, the possible reunions and what
  *  can be done about each one, and the albums you have reunited. See ../../../http-router.md. */
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { s, t, toastStyle } from '../../lib/theme.ts';
 import { Confirm, type Confirmation } from '../../lib/confirm.tsx';
 import {
+  ROUTE_PREFIX,
   invite,
   myAlbums,
   myMatches,
@@ -15,7 +16,6 @@ import {
 
 /** The admin panel, for a caller who can actually open it. A link an ordinary user cannot follow
  *  would bounce them to a sign-in page they will never pass. */
-const ROUTE_PREFIX = '/immich-shared-albums';
 
 /** One row's identity: two candidates that agree on all of this are the same row (`asOneRow` on the
  *  server collapses them), so it is also what React needs to keep them apart. */
@@ -35,6 +35,7 @@ export const App = () => {
   // "refused" look different, which a bare string could not.
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [asking, setAsking] = useState<Confirmation | null>(null);
+  const refreshGeneration = useRef(0);
 
   useEffect(() => {
     myAlbums()
@@ -50,6 +51,17 @@ export const App = () => {
       .catch(() => setMatches([]));
   }, []);
 
+  // LIVE, because the other household acts on their own server: an invitation they send, a pair
+  // their panel publishes, a reunion finishing on the wire. The event is a HINT and carries nothing
+  // — every list below is re-read as this caller, so a hint can never show them anything they could
+  // not fetch themselves. EventSource reconnects on its own, and a sidecar that predates the route
+  // simply answers 404 and the panel behaves exactly as it did before.
+  useEffect(() => {
+    const events = new EventSource(`${ROUTE_PREFIX}/events`);
+    events.onmessage = () => void refreshBoth();
+    return () => events.close();
+  }, []);
+
   // The match carries the peer for display and the names for the pair; the ids the server needs
   // come from the same records it built the list from.
   /** One reload for both lists: they describe one state, and a mutation changes both.
@@ -57,7 +69,11 @@ export const App = () => {
    *  Settled INDEPENDENTLY. `Promise.all` rejects the pair if either read fails, which would report a
    *  mutation that succeeded as a failure and leave both lists showing the state before it. */
   const refreshBoth = async () => {
+    // GENERATION-GUARDED: the live channel can fire another refresh while this one is in flight, and
+    // a slower earlier answer landing last would put the panel back to a state it has moved past.
+    const generation = ++refreshGeneration.current;
     const [freshMatches, freshAlbums] = await Promise.allSettled([myMatches(), myAlbums()]);
+    if (generation !== refreshGeneration.current) return;
     if (freshMatches.status === 'fulfilled') setMatches(freshMatches.value.matches);
     if (freshAlbums.status === 'fulfilled') setAlbums(freshAlbums.value.albums);
   };
