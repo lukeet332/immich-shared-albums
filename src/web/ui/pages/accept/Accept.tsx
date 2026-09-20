@@ -168,7 +168,11 @@ export const Accept = ({ household }: { household: string }) => {
         class={joinInProgress ? 'busy' : ''}
         onClick={() => acceptInvite(reunion?.albumId)}
       >
-        {joinInProgress ? (
+        {!signedInUser ? (
+          // Nothing is in flight before there is a session — the preview is not even asked for until
+          // then — so this must not borrow the spinner's words.
+          'Sign in to continue'
+        ) : joinInProgress ? (
           <>
             <span class="spin" />
             Joining — syncing photos…

@@ -40,7 +40,7 @@ export const App = () => {
         <a
           href={`${ROUTE_PREFIX}/me`}
           className="choice"
-          style={{ color: 'inherit', textDecoration: 'none' }}
+          style={{ ...s.choice, color: 'inherit', textDecoration: 'none' }}
         >
           <div style={s.grow}>
             <div style={s.title}>Your shared albums</div>
@@ -51,7 +51,7 @@ export const App = () => {
         <a
           href={`${ROUTE_PREFIX}/admin`}
           className="choice"
-          style={{ color: 'inherit', textDecoration: 'none' }}
+          style={{ ...s.choice, color: 'inherit', textDecoration: 'none' }}
         >
           <div style={s.grow}>
             <div style={s.title}>Server settings and pairings</div>

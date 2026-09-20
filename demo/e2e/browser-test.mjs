@@ -98,6 +98,11 @@ if (reached) {
   const disabled = await page.locator('#go').isDisabled().catch(() => false);
   check('signed-out accept page prompts sign-in and disables Accept',
     /sign in/i.test(who || '') && disabled, (who || '').slice(0, 60));
+  // Nothing is in flight before there is a session — the preview is not even asked for until then —
+  // so the button must not claim it is checking albums.
+  const goLabel = ((await page.locator('#go').textContent().catch(() => '')) || '').trim();
+  check('and the button does not claim work that is not happening',
+    /sign in/i.test(goLabel) && !/checking/i.test(goLabel), `label="${goLabel}"`);
 }
 
 // 5. signed-in accept -> join -> progress button appears and eventually enables
@@ -161,6 +166,45 @@ const chooserShown = await page.locator('text=Server settings and pairings').cou
 check('an admin at the root is offered both panels', chooserShown > 0, `grep=${chooserShown}`);
 check('the admin stays at the root rather than being sent to a panel',
   page.url().replace(/\/+$/, '') === sidecarRoot.replace(/\/+$/, ''), page.url());
+// A choice row is a link whose affordance IS its shape: the chevron has to sit at the right end of
+// the same line as the text. It rendered on its own line at the left edge while the layout moved
+// into the `choice` class and the inline flex was dropped, which reads as a bullet, not a target.
+{
+  const rows = await page.evaluate(() =>
+    [...document.querySelectorAll('a.choice')].map((a) => {
+      const box = a.getBoundingClientRect();
+      const chevron = a.lastElementChild?.getBoundingClientRect();
+      return {
+        text: (a.innerText || '').split('\n')[0],
+        display: getComputedStyle(a).display,
+        right: !!chevron && Math.round(chevron.right) > Math.round(box.right) - 40,
+        inline: !!chevron && chevron.top >= box.top && chevron.top < box.bottom - 8,
+      };
+    })
+  );
+  check('each chooser row is a flex line with its chevron at the right end',
+    rows.length > 0 && rows.every((r) => r.display === 'flex' && r.right && r.inline),
+    JSON.stringify(rows));
+}
+
+// The signed-out pages are the only ones whose stylesheet is built on its own, so they are where an
+// un-inlined token import would show up: the accent button renders as plain black text. Assert the
+// computed colour rather than the markup, because that is what a person sees.
+{
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  await anonPage.goto(sidecarRoot, { waitUntil: 'networkidle' });
+  const cta = await anonPage.evaluate(() => {
+    const a = document.querySelector('a[href="/auth/login"]');
+    if (!a) return null;
+    const cs = getComputedStyle(a);
+    return { text: a.textContent.trim(), background: cs.backgroundColor, body: getComputedStyle(document.body).backgroundColor };
+  });
+  check('a signed-out page renders its theme, not bare HTML',
+    !!cta && cta.background === 'rgb(66, 80, 175)' && cta.body !== 'rgba(0, 0, 0, 0)',
+    cta ? `"${cta.text}" background=${cta.background} body=${cta.body}` : 'no sign-in link');
+  await anon.close();
+}
 
 const adminToken = (await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
   headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json()).accessToken;
