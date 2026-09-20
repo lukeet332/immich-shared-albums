@@ -126,9 +126,9 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
 ## Running the rig on a host that also runs a real Immich
 
 The rig is destructive by design — `purge()` force-deletes every album, bot user and asset it can
-see — so it is built to be **incapable of aiming that at anything but its own mocks**, even on a
-machine where a real Immich (or a real sidecar) is listening. Four layers, and all of them are in
-the repo rather than in anyone's host config:
+see, and clears the key owner's own notifications — so it is built to be **incapable of aiming that
+at anything but its own mocks**, even on a machine where a real Immich (or a real sidecar) is
+listening. Four layers, and all of them are in the repo rather than in anyone's host config:
 
 1. **The address map is one set of variables**, read by the composes, `run-mock-e2e.sh`, the suite
    and the browser lane alike: `PORT_IMMICH_{B,C,D}` (defaults `2284–2286`), `PORT_SIDECAR_{B,C,D}`
