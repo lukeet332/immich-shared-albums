@@ -85,9 +85,9 @@ shared-albums page afterwards. The other button joins as a separate album, which
 when the two albums only happen to share a name.
 
 Albums that have been reunited carry a line in their own comments saying so, written by the addon's
-"Shared albums" account rather than by the person who clicked. That is the record of what happened to
-the album, and it is there because the two albums were paired by name alone — which can be wrong, and
-only the people in the album can tell.
+own account — **immich-shared-albums (bot)** — rather than by the person who clicked. That is the
+record of what happened to the album, and it is there because the two albums were paired by name
+alone — which can be wrong, and only the people in the album can tell.
 
 ## Related
 

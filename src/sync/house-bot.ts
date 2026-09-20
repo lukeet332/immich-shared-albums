@@ -20,14 +20,18 @@ export const HOUSE_BOT_PERMISSIONS = [
   'userProfileImage.update',
 ];
 
+/** The name this account wears wherever a human meets it: an album's People list, and the author
+ *  line of the audit trail it posts. Named after the addon, because that is what it is — not a
+ *  person and not a household, so it carries neither a person's name nor UTILITY_SUFFIX. */
+export const HOUSE_BOT_DISPLAY_NAME = 'immich-shared-albums (bot)';
+
 /** The bot, provisioned on first use. Lazy on purpose: a household that never reunifies anything
  *  and never generates an audit line has no extra account sitting in its member list. */
 export async function ensureHouseBot(): Promise<Contributor> {
   const slug = `${BOT_PREFIX.house}bot`;
-  // The display name lands in Immich's People list, so it says what it is; ensureUtilityUser
-  // appends UTILITY_SUFFIX, giving "Shared albums (via shared albums)".
-  return ensureUtilityUser('Shared albums', {
+  return ensureUtilityUser(HOUSE_BOT_DISPLAY_NAME, {
     stateKey: slug,
+    fullName: HOUSE_BOT_DISPLAY_NAME,
     email: `${slug}@${UTILITY_EMAIL_DOMAIN}`,
     permissions: HOUSE_BOT_PERMISSIONS,
   });
