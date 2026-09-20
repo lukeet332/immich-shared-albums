@@ -19,6 +19,9 @@ boundary between "peers are enrolled" and "peers are isolated from each other".
 
 ## Nudges are fire-and-forget
 
-When an album moves, every other household mapped to it is told to pull now rather than at its next
-tick. A lost nudge costs nothing — the scheduled handshake catches everything regardless — so this
-is fail-open by design and must never be made blocking.
+When an album moves (`nudgePeers`), every other household mapped to it is told to pull now rather
+than at its next tick. `nudgePeerIndex` is the same contract one level up: when what this household
+OFFERS changes, the peer is told to re-read the index, so a reunion can be discovered the second a
+person's albums are published rather than at the peer's next sweep. A lost nudge costs nothing — the
+scheduled handshake catches everything regardless — so this is fail-open by design and must never be
+made blocking.

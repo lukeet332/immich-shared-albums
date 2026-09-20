@@ -30,10 +30,12 @@ import { immichJson, jsonBody } from '../immich/client.ts';
 import { ensureUtilityUser } from '../immich/contributors.ts';
 import { readCredsFor, callAs } from '../immich/access.ts';
 import { peerRequest } from '../p2p/transport.ts';
+import { nudgePeerInvitations, peerByPub } from '../peers.ts';
 import { ensureMirror, fillMirrorInBackground } from '../p2p/mirror.ts';
 import { leaveAlbum } from './leave.ts';
 import { diffInvitees, invitationMirrorWasWithdrawn } from './invitees.ts';
-import { recordLoopTick } from './status.ts';
+import { recordLoopTick, recordNudge } from './status.ts';
+import { emitPanelEvent } from '../panel-events.ts';
 import crypto from 'node:crypto';
 import { refreshPeerIndexes } from './album-index.ts';
 
@@ -203,6 +205,10 @@ export async function detectInvitesOnce() {
           forPeerUserIds,
         });
         save();
+        // THE PERSON IT IS FOR SHOULD NOT HAVE TO WAIT FOR A SWEEP: tell their household to pull
+        // now, the moment the share exists.
+        nudgePeerInvitations(peer);
+        emitPanelEvent('shares');
         // A silent persistence failure here would mean invitations are re-detected on every
         // restart and withdrawals forgotten, so verify rather than assume.
         const persisted = store.state.mappings.some(x => x.albumId === albumId && x.via === 'invite');
@@ -254,6 +260,9 @@ export async function detectInvitesOnce() {
       mp.deadAt = new Date().toISOString();
       mp.deadReason = 'invitation withdrawn';
       save();
+      // A withdrawal is news too: the member must stop mirroring it without waiting for a sweep.
+      nudgePeerInvitations(peer);
+      emitPanelEvent('shares');
       log(`invitation withdrawn: "${peer.name}" removed from "${mp.albumName}" — no longer syncing it`);
       // Clean up after ourselves, or Immich keeps showing these people on an album we have
       // stopped syncing — and that divergence is silent, because re-adding an existing member is
@@ -371,6 +380,22 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
  * pulling — proven on the mock rig — so a push-based invitation would fail for exactly the
  * households that most need this (CGNAT, no port forwarding, no reverse proxy).
  */
+/**
+ * "What you share with me has changed — look again."
+ *
+ * Sent the moment a share appears or is withdrawn on the other side, so an invitation reaches the
+ * person it is for in about a second instead of at their next sweep. It carries nothing: the
+ * receiver re-reads what the caller already offers, and a peer that does not know the route 404s
+ * (wire rule 2: unknown route = peer too old, wait for the sweep instead).
+ */
+export async function handleInvitationsNudge(callerPub: string): Promise<[number, unknown]> {
+  if (!peerByPub(callerPub)) return [403, { error: 'unknown peer' }];
+  recordNudge('invitations');
+  emitPanelEvent('invitations');
+  void pullInvitationsOnce().catch(e => log(`invitation nudge pull failed: ${e.message}`));
+  return [200, { ok: true }];
+}
+
 export async function pullInvitationsOnce() {
   for (const peer of state.peers) {
     let invitations;

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { s, t, toastStyle } from '../../lib/theme.ts';
 import { Confirm, type Confirmation } from '../../lib/confirm.tsx';
 import {
+  ROUTE_PREFIX,
   invite,
   myAlbums,
   myMatches,
@@ -15,7 +16,6 @@ import {
 
 /** The admin panel, for a caller who can actually open it. A link an ordinary user cannot follow
  *  would bounce them to a sign-in page they will never pass. */
-const ROUTE_PREFIX = '/immich-shared-albums';
 
 /** One row's identity: two candidates that agree on all of this are the same row (`asOneRow` on the
  *  server collapses them), so it is also what React needs to keep them apart. */
@@ -48,6 +48,17 @@ export const App = () => {
     myMatches()
       .then(r => setMatches(r.matches))
       .catch(() => setMatches([]));
+  }, []);
+
+  // LIVE, because the other household acts on their own server: an invitation they send, a pair
+  // their panel publishes, a reunion finishing on the wire. The event is a HINT and carries nothing
+  // — every list below is re-read as this caller, so a hint can never show them anything they could
+  // not fetch themselves. EventSource reconnects on its own, and a sidecar that predates the route
+  // simply answers 404 and the panel behaves exactly as it did before.
+  useEffect(() => {
+    const events = new EventSource(`${ROUTE_PREFIX}/events`);
+    events.onmessage = () => void refreshBoth();
+    return () => events.close();
   }, []);
 
   // The match carries the peer for display and the names for the pair; the ids the server needs

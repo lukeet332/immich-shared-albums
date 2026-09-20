@@ -4,6 +4,7 @@ import type { Creds } from '../immich/access.ts';
 import { readCallerAlbums } from '../immich/access.ts';
 import type { OwnedAlbum, Peer } from '../store.ts';
 import { peerRequest, withDeadline } from '../p2p/transport.ts';
+import { emitPanelEvent } from '../panel-events.ts';
 
 /** How long a panel visit waits for a peer's index before answering from the one it has.
  *
@@ -60,6 +61,7 @@ export async function refreshPeerAlbums(peer: Peer): Promise<OwnedAlbum[]> {
     // against — which the per-owner write cannot express, because it is only ever called FOR an
     // owner the answer still mentions.
     store.publishedAlbumsReplacePeer(peer.pub, 'from-them', r.json.albums as OwnedAlbum[]);
+    emitPanelEvent('index');
     return store.publishedAlbumsFor(peer.pub, 'from-them');
   } catch {
     return store.publishedAlbumsFor(peer.pub, 'from-them'); // unreachable right now: keep what we have

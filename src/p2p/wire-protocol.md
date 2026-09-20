@@ -56,6 +56,8 @@ was recorded — a peer that has published nothing gets an empty list, never a s
 answers the `to-them` direction only: the `from-them` half is what we recorded about the caller, and
 answering with it would hand a peer its own albums to match against themselves. Same gate as
 `/directory`: an enrolled peer may ask, and nothing here grants access to any album.
+`POST /index/nudge` is the same shape for the album index: no payload, no names, nothing an
+enrolled peer could not already read — it only makes the other side re-read what we publish.
 
 **Completion, not just acceptance:** `POST …/refs` answers whether refs were _accepted_;
 materialisation, offers and comment push are asynchronous, so `GET /albums/:mappingId/status`

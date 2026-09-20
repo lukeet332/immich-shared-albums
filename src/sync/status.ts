@@ -29,6 +29,16 @@ export const recordLoopTick = (loop: LoopName) => {
 };
 export const loopTicks = (): Record<LoopName, number> => ({ ...ticks });
 
+/** Nudges RECEIVED since boot, by kind. A nudge and a sweep produce the same end state, so a test
+ *  that only looks at the state cannot tell which one did the work — this is what makes "the nudge
+ *  did it" an assertion instead of a hope. Observational, in memory, like the tick counts. */
+export type NudgeKind = 'album' | 'index' | 'invitations';
+const nudges: Record<NudgeKind, number> = { album: 0, index: 0, invitations: 0 };
+export const recordNudge = (kind: NudgeKind) => {
+  nudges[kind] += 1;
+};
+export const nudgesReceived = (): Record<NudgeKind, number> => ({ ...nudges });
+
 /** `album` is the local album as read this cycle: its `updatedAt` is what a settled
  *  `localVersion` must equal. Omit it to answer from state alone (a status probe off the sync
  *  path), where an absent cursor counts as not settled rather than optimistically settled. */
