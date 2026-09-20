@@ -2090,18 +2090,32 @@ stage('panel manages server links (unlink)');
         .filter(u => (u.email || '').startsWith('person-'))
         .map(u => u.id)
     );
-    const leftBehind = [];
-    for (const al of await api(B, BKEY, '/albums').catch(() => [])) {
-      const d = await api(B, BKEY, `/albums/${al.id}?withoutAssets=true`).catch(() => null);
-      for (const au of d?.albumUsers || []) {
-        const uid = au.user?.id;
-        if (personIdsBefore.has(uid) && !afterUsers.some(u => u.id === uid)) {
-          leftBehind.push(`${al.albumName}: ${au.user.email}`);
+    // WAIT for the memberships to go, do not sample once. Immich removes a deleted user's album
+    // memberships in its own background job, while `GET /admin/users` stops listing that user the
+    // moment the delete is accepted — so there is a window where the account is already gone from
+    // the user list and still named on an album, and a single read inside it fails a passing
+    // product. Measured on a Docker Desktop host: the memberships cleared 1.2s after a `200 OK`
+    // unlink, which is why this only ever went red off-CI. A wait on the condition is what the
+    // suite's own rule 1 asks for, and it still fails — on the timeout — if they never go.
+    const stillMembers = async () => {
+      const left = [];
+      for (const al of await api(B, BKEY, '/albums').catch(() => [])) {
+        const d = await api(B, BKEY, `/albums/${al.id}?withoutAssets=true`).catch(() => null);
+        for (const au of d?.albumUsers || []) {
+          const uid = au.user?.id;
+          // Re-read the live users each pass: the set shrinks as Immich works through the job, and
+          // a membership only counts as left behind once its account is actually gone.
+          if (personIdsBefore.has(uid) && !(await api(B, BKEY, '/admin/users').catch(() => []))
+            .some(u => u.id === uid)) {
+            left.push(`${al.albumName}: ${au.user.email}`);
+          }
         }
       }
-    }
+      return left;
+    };
+    const cleared = await until(async () => ((await stillMembers()).length === 0 ? true : null), 60000);
     check('no membership is left behind for a re-link to misread as an invitation',
-          leftBehind.length === 0, leftBehind.join(', ') || 'none');
+          !!cleared, cleared ? 'none' : (await stillMembers()).join(', '));
     const dead = await fetch(`${BS}/immich-shared-albums/unlink`,
       { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
         body: JSON.stringify({ pub: target.pub }) });
