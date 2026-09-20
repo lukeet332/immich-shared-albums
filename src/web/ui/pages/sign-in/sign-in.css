@@ -13,6 +13,9 @@ body {
 }
 .card {
   width: min(400px, 92vw);
+  /* The padding is INSIDE that width. Without this the card is 92vw + 56px + borders, so every
+     signed-out page scrolls sideways on a phone — the one card in this tree that was content-box. */
+  box-sizing: border-box;
   background: var(--isa-surface);
   border: 1px solid var(--isa-line);
   border-radius: 18px;
