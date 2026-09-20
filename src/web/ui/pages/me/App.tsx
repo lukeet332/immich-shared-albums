@@ -128,7 +128,10 @@ export const App = () => {
   };
 
   return (
-    <main>
+    // A fragment, not a <main>: the prerendered document (document.tsx) already provides the page's
+    // one <main>, and nesting a second inside it is invalid, announces two landmarks, and applies
+    // me.css's `padding: 40px 0` twice — which is why this page sat 40px lower than its siblings.
+    <>
       <h1 style={{ fontSize: 20, letterSpacing: '-.02em' }}>
         🔗 Shared albums
         <span style={{ color: t.muted, fontWeight: 400 }}> · {household || '…'}</span>
@@ -274,7 +277,11 @@ export const App = () => {
               <div style={s.grow}>
                 <div style={s.title}>{a.name}</div>
                 <div style={s.sub}>
-                  {a.role === 'owner' ? 'shared by you' : 'shared with you'} · with {a.peer}
+                  {/* A reunion adopts the person's OWN album, so the mapping's role says how the
+                      share arrived, not whose album this is — "shared with you" for an album you
+                      own is the one thing the row must not say. */}
+                  {a.reunified ? 'yours, reunited' : a.role === 'owner' ? 'shared by you' : 'shared with you'}{' '}
+                  · with {a.peer}
                 </div>
               </div>
             </div>
@@ -282,6 +289,6 @@ export const App = () => {
         </div>
       )}
       <Confirm ask={asking} onClose={() => setAsking(null)} />
-    </main>
+    </>
   );
 };
