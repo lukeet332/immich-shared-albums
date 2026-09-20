@@ -1069,12 +1069,29 @@ stage('native album invitations, per person (no share link)');
                 !!heldAudit && heldAudit[0] === 1 && isBot(auditFirst?.user?.email),
                 `count ${JSON.stringify(heldAudit)} from ${auditFirst?.user?.name ?? 'nobody'}`);
 
-          // ECHO: A's count must HOLD, not merely read true once. An unseeded ledger offers B's
-          // whole album back, which shows up as a count that keeps climbing.
+          // THE MERGE REACHES BOTH SIDES. A reunion gives each household the union (design doc §2),
+          // so B's own half must arrive on A as stubs — for a long time it did not, because adoption
+          // seeded B's whole album as already-sent and A therefore heard about none of it.
+          const aAfter = await until(async () => {
+            const x = await albumAssets(A, AKEY, invAlb);
+            return x.length > aBefore ? x : null;
+          }, 120000);
+          check("A's album gains B's half — the reunion merged both ways",
+                !!aAfter, aAfter ? `${aBefore} -> ${aAfter.length}` : `held at ${aBefore}`);
+          // ECHO: and having grown ONCE, it must then HOLD. A ledger that forgets what it sent
+          // offers the same photos every cycle, which shows up as a count that keeps climbing.
           const aCounts = async () => [(await albumAssets(A, AKEY, invAlb)).length];
           const held = await stable(aCounts, TWO_CYCLES_MS, HOLD_DEADLINE_MS);
-          check("A's album does not grow — nothing of B's was offered back",
-                !!held && held[0] === aBefore, `was ${aBefore}, now ${JSON.stringify(held)}`);
+          check("and then stops growing — nothing is offered twice",
+                !!held && held[0] === (aAfter?.length ?? aBefore),
+                `settled at ${JSON.stringify(held)}, expected ${aAfter?.length ?? aBefore}`);
+          // A must hold B's photos as STUBS, not as copies of its own: ownership never moves.
+          const aAdminId = (await api(A, AKEY, '/users/me')).id;
+          const aUsers = Object.fromEntries((await api(A, AKEY, '/admin/users')).map(u => [u.id, u.email]));
+          const aForeign = (await albumAssets(A, AKEY, invAlb)).filter(x => x.ownerId !== aAdminId);
+          check("and holds them as stubs, owned by a stand-in rather than by A",
+                aForeign.length > 0 && aForeign.every(x => isBot(aUsers[x.ownerId])),
+                `${aForeign.length} foreign: ${aForeign.map(x => aUsers[x.ownerId]).join(', ')}`);
 
           // ── DETACH ─────────────────────────────────────────────────────────────────────────
           // Snapshot, un-reunify, and require the album to be exactly as it was: the assertion that

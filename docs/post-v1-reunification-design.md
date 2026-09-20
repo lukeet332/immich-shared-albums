@@ -131,6 +131,21 @@ one stub, so withdrawing one share's copy leaves the other's claim standing.
 For photos **both** own, ownership is moot — each uses its own copy. Ownership only has to be
 resolved for photos that live on **one** side (those get the normal owner→member hotlink).
 
+### What an adoption seeds, and why it is not the whole album **[decided]**
+
+Adopting a populated album seeds the mapping's ledger, and a seeded row means _"the peer has this,
+do not offer it"_. Seeding the WHOLE album stops the echo but also stops the merge: the photos only
+the adopting side holds are exactly the half this feature exists to move, so the other household
+would never receive them. `seedRowsForAdoption` (`../src/sync/matches.ts`) therefore seeds only the
+checksums the peer's own manifest reports, and leaves the rest offerable.
+
+The asymmetry matters because suppression is not symmetric: `existingCopyInAlbum` can only suppress
+a duplicate it can see in the ledger, and a peer's own human-owned photo leaves no ledger row — so
+offering a photo the peer already holds lands a stub beside their original. Hence "seed what they
+have, offer the rest". When the peer cannot be reached the seeding **fails closed** and seeds
+everything: the merge is then lost in one direction, which a later re-reunite repairs, rather than
+duplicating photos in someone's album, which nothing repairs on its own.
+
 ### Matching signals (merge-time, ours to control)
 
 Match an incoming ref to a local asset by:
