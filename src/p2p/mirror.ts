@@ -19,7 +19,8 @@ import { reconcileMapping } from '../sync/engine.ts';
 import { canUnifyOwnAlbum, findAdoptableAlbum } from '../sync/adoption.ts';
 import { addHouseBotToAlbum } from '../sync/house-bot.ts';
 import { deleteProxyAsset } from '../immich/materialise.ts';
-import { seedRowsFor } from '../sync/matches.ts';
+import { seedRowsForAdoption } from '../sync/matches.ts';
+import type { AssetRef } from '../types.ts';
 import { peerRequest, withDeadline } from './transport.ts';
 import { albumTeardown } from '../sync/album-teardown.ts';
 import { grantAlbumWriters, grantInvitedHumans, peerContributors } from '../sync/album-grant.ts';
@@ -52,6 +53,37 @@ export type MirrorRequest = {
    *  caller's own credentials, because only they can read and add a member to an album they own. */
   adopt?: { albumId: string; ownerUserId: string; ownerCreds: Creds };
 };
+
+/**
+ * The checksums the peer already holds for this share — what an adoption must NOT offer back.
+ *
+ * Reunification exists to give each side the union (design doc §2), so an adopted album's photos
+ * have to be offered to the peer: the ones only this side holds are exactly the half the merge is
+ * for. What must not be offered is a photo the peer ALREADY has, because the receiving side can
+ * only suppress a duplicate it can see in its own ledger (`existingCopyInAlbum`) — a peer's own
+ * human-owned photo leaves no ledger row, so an offer of it materialises a stub beside the
+ * original. Their manifest is the authoritative answer to "what do you already have".
+ *
+ * Best-effort, and deliberately fails CLOSED: a peer that cannot be reached returns `undefined`, and
+ * the caller then seeds the whole album exactly as it used to. That costs the merge in one
+ * direction, which a later re-reunite can repair; guessing the other way would duplicate photos in
+ * someone's album, which nothing repairs on its own.
+ */
+async function peerHeldChecksums(peer: Peer, remoteId: string | undefined): Promise<Set<string> | undefined> {
+  if (!remoteId) return undefined;
+  const r = await peerRequest(peer, `/albums/${remoteId}/manifest`).catch(() => null);
+  const manifest = r?.json?.manifest;
+  if (r?.status !== 200 || !Array.isArray(manifest)) return undefined;
+  return new Set(manifest.map((ref: AssetRef) => ref.checksum).filter(Boolean));
+}
+
+/** Write an adoption's seed rows to the ledger. The rule itself is `seedRowsForAdoption`, which is
+ *  pure and unit-tested; this is only the write. Returns how many rows were seeded. */
+function seedAdoptedAlbum(mappingId: string, assets, held: Set<string> | undefined): number {
+  const rows = seedRowsForAdoption(assets, held);
+  for (const row of rows) seenAdd(mappingId, row.checksum, row.localAsset);
+  return rows.length;
+}
 
 /**
  * Ensure a mirror exists for `album` from `peer`. Idempotent: if one already exists this just
@@ -157,12 +189,17 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
       reunified: true,
     };
     // Seeded rows carry no origin asset, so the deletion sweep skips them: these are this person's
-    // own photos, and a peer withdrawing its copy must never remove them.
-    for (const row of seedRowsFor(assets, mapping.id)) seenAdd(mapping.id, row.checksum, row.localAsset);
+    // own photos, and a peer withdrawing its copy must never remove them. Only the photos the peer
+    // ALREADY holds are seeded — the rest are this side's half of the split album, and offering
+    // them is what makes the merge reach both sides (design doc §2).
+    const held = await peerHeldChecksums(peer, req.remoteMappingId || album.id);
+    const seeded = seedAdoptedAlbum(mapping.id, assets, held);
     state.mappings.push(mapping);
     save();
     log(
-      `reunited "${adoptable.name}" with "${peer.name}" — ${assets.length} photo(s) already here, seeded so none is offered back`
+      `reunited "${adoptable.name}" with "${peer.name}" — ${assets.length} photo(s) already here; ` +
+        `${seeded} they already hold, ${assets.length - seeded} to offer them` +
+        (held ? '' : ' (they could not be asked what they hold, so none is offered)')
     );
     await auditLine(
       mapping.id,
@@ -267,9 +304,16 @@ export async function unifyOwnAlbum(
   const previousAlbumId = mapping.albumId;
   const previousHostSlug = mapping.hostSlug;
 
+  // What the peer already has. Asked BEFORE the move, because after it this mapping's ledger is
+  // about to be rewritten and the mirror it describes retired.
+  const held = await peerHeldChecksums(
+    state.peers.find(p => p.pub === mapping.peer)!,
+    mapping.remoteMappingId || mapping.remoteAlbumId
+  );
   // Seeded before the move, so the mapping is never visible with a ledger that describes a
-  // different album — that is the state that offers an album's whole contents back to its origin.
-  for (const row of seedRowsFor(assets, mapping.id)) seenAdd(mapping.id, row.checksum, row.localAsset);
+  // different album. Only the photos the peer already holds are seeded: the rest are this side's
+  // half of the split album, and offering them to the peer IS the merge (design doc §2).
+  const seeded = seedAdoptedAlbum(mapping.id, assets, held);
 
   mapping.albumId = own.albumId;
   mapping.albumName = own.name;
@@ -277,7 +321,11 @@ export async function unifyOwnAlbum(
   mapping.adopted = true;
   mapping.reunified = true;
   save();
-  log(`reunited "${own.name}" — ${assets.length} photo(s) were already here, seeded so none is offered back`);
+  log(
+    `reunited "${own.name}" — ${assets.length} photo(s) were already here; ${seeded} the peer already ` +
+      `holds, ${assets.length - seeded} to offer them` +
+      (held ? '' : ' (the peer could not be asked what it holds, so none is offered)')
+  );
 
   await retireMirror(mapping, previousAlbumId, previousHostSlug);
   // RE-SEED, and it has to be after the retire. `seenAdd` is INSERT OR IGNORE on (mapping,
@@ -286,7 +334,7 @@ export async function unifyOwnAlbum(
   // retireMirror has just dropped that row, so without this pass the checksum is claimed by nobody,
   // `seenHas` is false, the album-level suppression finds nothing, and the next reconcile
   // materialises a stub right beside the person's own photo.
-  for (const row of seedRowsFor(assets, mapping.id)) seenAdd(mapping.id, row.checksum, row.localAsset);
+  seedAdoptedAlbum(mapping.id, assets, held);
 
   // The trail, left once the move is done and the bot is a member — it was granted above, on the
   // owner's credential, which is the only moment an album belonging to a human can gain it.

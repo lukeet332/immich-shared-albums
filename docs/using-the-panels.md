@@ -40,7 +40,8 @@ The personal panel. It answers: _what am I sharing, and with whom?_
 
 Reuniting changes no photo's ownership: each album stays its own owner's, on that owner's own
 server, and the other side's photos arrive as shared copies rather than being copied. A photo both
-of you hold is never shown twice.
+of you hold is never shown twice. It works in both directions — your half reaches them and theirs
+reaches you — so you each end up seeing the whole album.
 
 Un-reuniting undoes the merge and nothing else — your album keeps your own photos, the other side's
 copies are removed, and the share goes back to being an ordinary shared album. It is worth knowing

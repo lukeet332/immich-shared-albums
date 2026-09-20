@@ -122,6 +122,27 @@ export function seedRowsFor(assets: { id?: string; checksum?: string }[], _mappi
   return [...rows.values()];
 }
 
+/**
+ * The rows an adoption must seed: the photos the peer ALREADY holds, and only those.
+ *
+ * Seeding a row means "the peer has this, do not offer it". Reunification exists to give each side
+ * the union (design doc §2), so the photos only THIS side holds must stay unseeded — offering them
+ * is the merge. The photos the peer already holds must be seeded, because the receiving side can
+ * only suppress a duplicate it can see in its own ledger (`existingCopyInAlbum`): a peer's own
+ * human-owned photo leaves no ledger row, so an offer of it lands as a stub beside the original.
+ *
+ * `peerHolds === undefined` means the peer could not be asked, and then EVERY row is seeded — the
+ * merge is lost in one direction, which a later re-reunite repairs, rather than risking duplicates
+ * in someone's album, which nothing repairs on its own.
+ */
+export function seedRowsForAdoption(
+  assets: { id?: string; checksum?: string }[],
+  peerHolds: Set<string> | undefined
+): SeedRow[] {
+  const rows = seedRowsFor(assets, '');
+  return peerHolds ? rows.filter(r => peerHolds.has(r.checksum)) : rows;
+}
+
 /** Lowercase and collapse whitespace — recall, not privacy (§3). Everything else is significant:
  *  two albums differing in punctuation or digits are different albums, and treating them as one is
  *  how "Photos" swallows "Photos 2024". */

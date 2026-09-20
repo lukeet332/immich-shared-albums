@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { seedRowsFor } from './sync/matches.ts';
+import { seedRowsFor, seedRowsForAdoption } from './sync/matches.ts';
 import { albumTeardown, type TeardownMapping } from './sync/album-teardown.ts';
 import { Store } from './store.ts';
 
@@ -22,17 +22,42 @@ const withStore = (fn: (store: Store) => void) => {
 
 const asset = (checksum: string, id = `local-${checksum}`) => ({ id, checksum });
 
-// ── ECHO ─────────────────────────────────────────────────────────────────────────────────────
+// ── ECHO, AND THE MERGE IT MUST NOT SWALLOW ──────────────────────────────────────────────────
 // An adopted mapping starts pointed at a populated album with an empty ledger, and
-// `shareableAssets` filters on that ledger — so an unseeded mapping advertises the whole album
-// back to the household it came from, which then materialises stubs of photos it already owns.
-test('every asset in an adopted album is seeded, so none can be offered back', () => {
+// `shareableAssets` filters on that ledger — so what IS seeded is what is never offered to the
+// peer. Seeding the whole album stops the echo but also stops the merge: the photos only this side
+// holds are exactly the half reunification exists to move (design doc §2). The rule is therefore
+// "seed what they already have, offer the rest".
+test('a photo the peer already holds is seeded, so it is never offered back', () => {
   const album = [asset('sum-1'), asset('sum-2'), asset('sum-3')];
-  const rows = seedRowsFor(album, 'm-adopted');
+  const rows = seedRowsForAdoption(album, new Set(['sum-1', 'sum-2', 'sum-3']));
   assert.deepEqual(
     rows.map(r => r.checksum).sort(),
     ['sum-1', 'sum-2', 'sum-3'],
-    'a missing row is a photo offered back to its origin'
+    'a missing row is a photo offered back to its origin, which stubs it beside the original'
+  );
+});
+
+test('a photo only THIS side holds is NOT seeded, because offering it is the merge', () => {
+  const album = [asset('mine-only'), asset('both')];
+  const rows = seedRowsForAdoption(album, new Set(['both']));
+  assert.deepEqual(
+    rows.map(r => r.checksum),
+    ['both'],
+    'seeding "mine-only" is what left the inviting side without the other half'
+  );
+});
+
+// Asking the peer is a network call, and it can fail. Failing CLOSED costs the merge in one
+// direction, which a later re-reunite repairs; failing open would duplicate photos in an album,
+// which nothing repairs on its own.
+test('when the peer cannot be asked what it holds, everything is seeded', () => {
+  const album = [asset('sum-1'), asset('sum-2')];
+  assert.deepEqual(
+    seedRowsForAdoption(album, undefined)
+      .map(r => r.checksum)
+      .sort(),
+    ['sum-1', 'sum-2']
   );
 });
 
