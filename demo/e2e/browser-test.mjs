@@ -167,6 +167,25 @@ check('an admin at the root is offered both panels', chooserShown > 0, `grep=${c
 check('the admin stays at the root rather than being sent to a panel',
   page.url().replace(/\/+$/, '') === sidecarRoot.replace(/\/+$/, ''), page.url());
 
+// The signed-out pages are the only ones whose stylesheet is built on its own, so they are where an
+// un-inlined token import would show up: the accent button renders as plain black text. Assert the
+// computed colour rather than the markup, because that is what a person sees.
+{
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  await anonPage.goto(sidecarRoot, { waitUntil: 'networkidle' });
+  const cta = await anonPage.evaluate(() => {
+    const a = document.querySelector('a[href="/auth/login"]');
+    if (!a) return null;
+    const cs = getComputedStyle(a);
+    return { text: a.textContent.trim(), background: cs.backgroundColor, body: getComputedStyle(document.body).backgroundColor };
+  });
+  check('a signed-out page renders its theme, not bare HTML',
+    !!cta && cta.background === 'rgb(66, 80, 175)' && cta.body !== 'rgba(0, 0, 0, 0)',
+    cta ? `"${cta.text}" background=${cta.background} body=${cta.body}` : 'no sign-in link');
+  await anon.close();
+}
+
 const adminToken = (await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
   headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json()).accessToken;
 const nonAdminEmail = `browser-nonadmin@e2e.local`;

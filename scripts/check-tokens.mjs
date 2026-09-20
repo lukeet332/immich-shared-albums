@@ -46,4 +46,25 @@ if (tighten.length) {
   for (const line of tighten) console.error('  ' + line);
   process.exit(1);
 }
-console.log(`colours live in ${OWNS_COLOURS} (${Object.keys(ALLOWED).length} file(s) still on the ratchet)`);
+
+// A SHIPPED stylesheet must carry its tokens, not point at them. The sidecar serves `dist/` under
+// `/immich-shared-albums/assets/`, so an un-inlined `@import` resolves to a path that answers 404
+// and the page renders with no token at all — which is a page that looks broken, not unstyled.
+const DIST = 'src/web/dist';
+const withImport = fs.existsSync(DIST)
+  ? fs
+      .readdirSync(DIST)
+      .filter(f => f.endsWith('.css'))
+      .filter(f => /@import/.test(fs.readFileSync(path.join(DIST, f), 'utf8')))
+  : [];
+if (withImport.length) {
+  console.error('built stylesheets still carrying an @import (its target is not served):');
+  for (const f of withImport) console.error(`  ${path.join(DIST, f)}`);
+  console.error('Bundle the stylesheet so the import is inlined — see scripts/build-web.mjs.');
+  process.exit(1);
+}
+
+console.log(
+  `colours live in ${OWNS_COLOURS} (${Object.keys(ALLOWED).length} file(s) still on the ratchet), ` +
+    `and every built stylesheet carries its tokens`
+);

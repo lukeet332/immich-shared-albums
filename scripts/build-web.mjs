@@ -37,10 +37,13 @@ for (const page of BUNDLED_PAGES) {
   report(`${OUT}/${page}.css`);
 }
 
-// sign-in has no script — only its stylesheet ships
+// sign-in has no script — only its stylesheet ships. Bundled, so its @import of the token file is
+// inlined like the pages' is: the pre-rendered document links one stylesheet, and an un-inlined
+// @import would resolve to a path the sidecar does not serve.
 await build({
   entryPoints: ['src/web/ui/pages/sign-in/sign-in.css'],
   outfile: `${OUT}/sign-in.css`,
+  bundle: true,
   minify: true,
   logLevel: 'warning',
 });
