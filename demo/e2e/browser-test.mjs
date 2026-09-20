@@ -98,6 +98,11 @@ if (reached) {
   const disabled = await page.locator('#go').isDisabled().catch(() => false);
   check('signed-out accept page prompts sign-in and disables Accept',
     /sign in/i.test(who || '') && disabled, (who || '').slice(0, 60));
+  // Nothing is in flight before there is a session — the preview is not even asked for until then —
+  // so the button must not claim it is checking albums.
+  const goLabel = ((await page.locator('#go').textContent().catch(() => '')) || '').trim();
+  check('and the button does not claim work that is not happening',
+    /sign in/i.test(goLabel) && !/checking/i.test(goLabel), `label="${goLabel}"`);
 }
 
 // 5. signed-in accept -> join -> progress button appears and eventually enables
