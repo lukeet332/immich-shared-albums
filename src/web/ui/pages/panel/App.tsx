@@ -12,6 +12,7 @@ export const App = () => {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState('');
   const [asking, setAsking] = useState<Confirmation | null>(null);
+  const [unlinking, setUnlinking] = useState('');
   const [note, setNote] = useState('');
 
   const load = () =>
@@ -30,13 +31,18 @@ export const App = () => {
       confirm: 'Unlink',
       danger: true,
       onConfirm: () => {
+        // The dialog closes before this runs and the row stays listed until `load()` answers, so the
+        // button has to be dead for the duration: the route does not deduplicate, and a second
+        // request would come back "unknown household" and print an error over a success.
+        setUnlinking(peer.pub);
         setNote('Unlinking…');
         unlinkPeer(peer.pub)
           .then(r => {
             setNote(`Unlinked ${r.household}.`);
             return load();
           })
-          .catch((e: Error) => setNote(`Error: ${e.message}`));
+          .catch((e: Error) => setNote(`Error: ${e.message}`))
+          .finally(() => setUnlinking(''));
       },
     });
   };
@@ -63,7 +69,7 @@ export const App = () => {
       </p>
       <LinkServer onLinked={load} />
       <SharedAlbums albums={data.albums} />
-      <ConnectedServers peers={data.peers} onUnlink={unlink} note={note} />
+      <ConnectedServers peers={data.peers} onUnlink={unlink} unlinking={unlinking} note={note} />
       <Settings />
       <Confirm ask={asking} onClose={() => setAsking(null)} />
     </>

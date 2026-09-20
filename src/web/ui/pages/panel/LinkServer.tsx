@@ -53,7 +53,7 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
 
   return (
     <div style={s.card}>
-      <h3 style={s.h3}>Link a server</h3>
+      <h2 style={s.cardHeading}>Link a server</h2>
       <p style={s.muted}>One use, and it shares no photos.</p>
       <div style={{ display: 'flex', gap: 8 }}>
         <button style={s.button} onClick={createLink}>

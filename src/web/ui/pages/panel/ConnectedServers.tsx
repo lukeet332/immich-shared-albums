@@ -7,14 +7,17 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 export const ConnectedServers = ({
   peers,
   onUnlink,
+  unlinking,
   note,
 }: {
   peers: Peer[];
   onUnlink: (peer: Peer) => void;
+  /** The `pub` being unlinked right now, so its button cannot submit the same peer twice. */
+  unlinking: string;
   note: string;
 }) => (
   <div style={s.card}>
-    <h3 style={s.h3}>Connected servers</h3>
+    <h2 style={s.cardHeading}>Connected servers</h2>
     <p style={s.muted}>Their people appear in Immich's share picker.</p>
     {peers.length === 0 && <p style={s.muted}>None yet — use “Link a server” above.</p>}
     {peers.map(p => (
@@ -30,9 +33,10 @@ export const ConnectedServers = ({
           <button
             style={{ ...s.buttonQuiet, ...s.buttonDangerTonal }}
             aria-label={`Unlink ${p.name}`}
+            disabled={unlinking === p.pub}
             onClick={() => onUnlink(p)}
           >
-            Unlink
+            {unlinking === p.pub ? 'Unlinking…' : 'Unlink'}
           </button>
         </span>
       </div>

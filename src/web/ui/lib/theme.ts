@@ -152,8 +152,8 @@ export const s = {
   buttonDanger: { background: 'var(--isa-danger)', color: 'var(--isa-surface)' },
   /** A row's own rhythm: what it is, what it is made of, what you can do about it — 4px apart. */
   title: { fontSize: 15, fontWeight: 600, letterSpacing: '-.01em' },
-  /** A real `<h2>`, reset to the page's own type: the padding/margins a heading element brings would
-   *  otherwise land on top of the rhythm above. */
+  /** A real heading, reset to the page's own type: the padding and margins the element brings would
+   *  otherwise land on top of the rhythm above. `h2` is a section title, `cardHeading` a card title. */
   h2: {
     display: 'block',
     fontSize: 18,
@@ -162,8 +162,9 @@ export const s = {
     margin: 'var(--isa-space-6) 0 var(--isa-space-2)',
     padding: 0,
   },
-  /** A card's own heading, one step down from `h2`. */
-  h3: {
+  /** A card's title. Its own size, because a card title is a step down visually whether it sits at
+   *  `h2` (a top-level card) or `h3` (one inside a section) in the page's outline. */
+  cardHeading: {
     display: 'block',
     fontSize: 14,
     fontWeight: 700,

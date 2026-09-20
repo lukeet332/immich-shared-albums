@@ -54,7 +54,7 @@ export const Settings = () => {
 
   return (
     <div style={s.card}>
-      <h3 style={s.h3}>Settings</h3>
+      <h2 style={s.cardHeading}>Settings</h2>
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14 }}>
         <input type="checkbox" checked={shareLinkJoin} onChange={toggleJoin} />
         Allow other Immich users to join albums via shared links
