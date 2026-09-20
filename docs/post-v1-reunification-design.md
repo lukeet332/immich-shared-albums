@@ -57,6 +57,14 @@ contributions as real photos, and holds the other's as hotlink stubs.** So the s
    creates a fresh empty mirror" — so nobody ends up with two copies of the album.
 3. **Bidirectional initial contribute** with non-destructive dedup (§3).
 
+   Concretely, at adoption `peerOffer` (`../src/sync/album-grant.ts`) reads the peer's manifest once
+   for the two facts the seed needs — who contributes there, and **which checksums it holds** — and
+   `seedRowsFor` (`../src/sync/matches.ts`) writes ledger rows for the intersection with the adopted
+   album and nothing else. Those rows stop the peer's own photos being offered back to it; every
+   other photo in the album stays unrecorded, because `watchOnce` offering it is how the peer's
+   album gains this person's half. A peer that cannot be read yields an empty offer, so the whole
+   album is offered — the direction that cannot leave half the reunion behind.
+
 Each person **stays the owner of their own album**. Neither album is copied, transferred or
 re-created, so no step ever produces a second album on either server: the album you own is the
 album that changes, and the mapping that carries the share points at it (§4).

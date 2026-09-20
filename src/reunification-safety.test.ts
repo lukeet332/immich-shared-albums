@@ -22,41 +22,51 @@ const withStore = (fn: (store: Store) => void) => {
 
 const asset = (checksum: string, id = `local-${checksum}`) => ({ id, checksum });
 
-// ── ECHO ─────────────────────────────────────────────────────────────────────────────────────
-// An adopted mapping starts pointed at a populated album with an empty ledger, and
-// `shareableAssets` filters on that ledger — so an unseeded mapping advertises the whole album
-// back to the household it came from, which then materialises stubs of photos it already owns.
-test('every asset in an adopted album is seeded, so none can be offered back', () => {
-  const album = [asset('sum-1'), asset('sum-2'), asset('sum-3')];
-  const rows = seedRowsFor(album, 'm-adopted');
+// ── ECHO AND THE MISSING HALF ───────────────────────────────────────────────────────────────
+// An adopted mapping starts pointed at a populated album with an empty ledger, and the ledger is
+// what `shareableAssets` filters on — so seeding decides which of the album's photos the peer is
+// offered, in both directions of failure:
+//   * a photo the peer ALREADY holds must be seeded, or it is offered back to the household it came
+//     from, which materialises a stub of a photo it already owns;
+//   * a photo the peer does NOT hold must stay unseeded, or the watcher never offers it and the
+//     reunion leaves the peer holding its own half only — the adopter sees the union, the person
+//     who invited never does.
+test('every photo the peer already holds is seeded, so none of them is offered back', () => {
+  const album = [asset('both-1'), asset('both-2'), asset('mine-1')];
+  const rows = seedRowsFor(album, new Set(['both-1', 'both-2']));
   assert.deepEqual(
     rows.map(r => r.checksum).sort(),
-    ['sum-1', 'sum-2', 'sum-3'],
-    'a missing row is a photo offered back to its origin'
+    ['both-1', 'both-2'],
+    'a missing row here is a photo offered back to its origin'
   );
 });
 
-test('a seeded album still offers what it does NOT hold, or nothing would ever arrive', () => {
-  const ours = new Set(seedRowsFor([asset('sum-1')], 'm').map(r => r.checksum));
-  const incoming = [asset('sum-9', 'their-1'), asset('sum-1', 'their-2')];
+test("this person's own half stays unseeded, so the peer is offered it", () => {
+  const album = [asset('both-1'), asset('mine-1'), asset('mine-2')];
+  const seeded = new Set(seedRowsFor(album, new Set(['both-1'])).map(r => r.checksum));
   assert.deepEqual(
-    incoming.filter(a => !ours.has(a.checksum)).map(a => a.id),
-    ['their-1'],
-    'suppression must drop only what is already present'
+    album.filter(a => !seeded.has(a.checksum)).map(a => a.checksum),
+    ['mine-1', 'mine-2'],
+    'these are the photos the watcher must offer, and a row here is how one is lost'
   );
+});
+
+test('a peer holding none of it seeds nothing, so the album is offered whole', () => {
+  // The direction to fail in when the peer cannot be read: a complete album on both sides, rather
+  // than a reunion that silently keeps one half.
+  assert.deepEqual(seedRowsFor([asset('mine-1')], new Set()), []);
 });
 
 // The ledger is what `shareableAssets` reads, so this is the same question asked through the
-// store rather than through the helper: after seeding, the mapping knows about every asset.
+// store rather than through the helper.
 test('the seeded rows are the ones the store will answer for', () => {
   withStore(store => {
-    const album = [asset('sum-1'), asset('sum-2')];
-    for (const row of seedRowsFor(album, 'm-adopted'))
+    const album = [asset('both-1'), asset('mine-1')];
+    for (const row of seedRowsFor(album, new Set(['both-1'])))
       store.seenAdd('m-adopted', row.checksum, row.localAsset);
     const known = store.seenForMapping('m-adopted').map(e => e.checksum);
-    assert.deepEqual(known.sort(), ['sum-1', 'sum-2']);
-    for (const a of album)
-      assert.equal(store.seenHas('m-adopted', a.checksum), true, `${a.checksum} was not recorded`);
+    assert.deepEqual(known, ['both-1'], 'only the photo the peer holds is claimed by the ledger');
+    assert.equal(store.seenHas('m-adopted', 'mine-1'), false, 'this one is still ours to offer');
   });
 });
 

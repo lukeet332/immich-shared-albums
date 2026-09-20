@@ -15,34 +15,40 @@ const GRANT_MANIFEST_DEADLINE_MS = 8_000;
 /** One person on the origin, as the peer's own refs name them. */
 export type PeerContributor = { originUserId: string; displayName: string };
 
+/** What a peer's album offers right now: the people its refs name, and the photos it holds. */
+export type PeerOffer = { contributors: PeerContributor[]; checksums: Set<string> };
+
 /**
- * The distinct contributors the peer currently offers for an album.
+ * The peer's own manifest for an album, reduced to the two facts acquiring a reunion needs: whose
+ * photos are in it (they need a membership to own their stubs here), and which photos are in it (the
+ * ones this person already holds must not be offered back).
  *
- * A ref names its contributor by id on the origin server, which is what `person-<id>` is keyed on.
- * Returns empty rather than throwing: a peer that cannot be reached right now must not fail the
- * reunion that is in progress — the reconcile sweep reports the gap instead.
+ * One pull answers both, and it happens at the only moment the album's owner is present. Returns an
+ * empty offer rather than throwing: a peer that cannot be reached right now must not fail the
+ * reunion that is in progress — the reconcile sweep reports the gap instead, and an empty offer
+ * leaves this person's whole album to be offered, which is the harmless direction.
  */
-export async function peerContributors(
-  peer: Peer,
-  remoteTarget: string | undefined
-): Promise<PeerContributor[]> {
-  if (!remoteTarget) return [];
+export async function peerOffer(peer: Peer, remoteTarget: string | undefined): Promise<PeerOffer> {
+  const nothing: PeerOffer = { contributors: [], checksums: new Set() };
+  if (!remoteTarget) return nothing;
   const r = await withDeadline(
     peerRequest(peer, `/albums/${remoteTarget}/manifest`),
     `grant manifest from "${peer.name}"`,
     GRANT_MANIFEST_DEADLINE_MS
   ).catch(() => null);
-  if (!r || r.status >= 400) return [];
-  const distinct = new Map<string, PeerContributor>();
+  if (!r || r.status >= 400) return nothing;
+  const contributors = new Map<string, PeerContributor>();
+  const checksums = new Set<string>();
   for (const ref of r.json?.manifest ?? []) {
+    if (ref?.checksum) checksums.add(ref.checksum);
     const originUserId = ref?.contributor?.originUserId;
-    if (originUserId && !distinct.has(originUserId))
-      distinct.set(originUserId, {
+    if (originUserId && !contributors.has(originUserId))
+      contributors.set(originUserId, {
         originUserId,
         displayName: ref.contributor.displayName || peer.name,
       });
   }
-  return [...distinct.values()];
+  return { contributors: [...contributors.values()], checksums };
 }
 
 /**

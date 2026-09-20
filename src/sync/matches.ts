@@ -100,23 +100,33 @@ export function reunionStepFor(share: ShareForReunion | undefined): ReunionStep 
 }
 
 /**
- * The ledger rows an ADOPTED mapping must start with, from the album it is adopting.
+ * The ledger rows an ADOPTED mapping starts with: the album's photos the PEER already holds.
  *
- * Adopting a populated album means the mapping's ledger begins knowing nothing about the assets
- * already in it — while the ledger is the only thing stopping `shareableAssets` from offering them
- * back to the peer. Written before the mapping becomes visible to the loops, or the first watcher
- * cycle advertises the whole album to the household it came from.
+ * The ledger is what `shareableAssets` filters on, so this decides which half of a reunion travels:
  *
- * `originAsset` is deliberately left unset: these are this household's own photos, and
- * deletion propagation skips entries without an origin asset, so a peer withdrawing its copy can
- * never remove them. Two assets sharing a checksum collapse to one row, because the ledger is
- * unique on (mapping, checksum) and a duplicate would abort the seed half-written.
+ *  - a photo the peer holds is recorded here, because offering it back makes the peer materialise a
+ *    stub of a photo it already owns;
+ *  - a photo the peer does NOT hold is deliberately left unrecorded, because the watcher offering it
+ *    is how the peer receives this person's half. Seeding it leaves the reunion showing the union on
+ *    one side only — the adopter's — with nothing left to offer it later.
+ *
+ * An empty `heldByPeer` (a peer that could not be read) therefore offers the album whole, which is
+ * the direction that cannot leave photos out of the reunion.
+ *
+ * `originAsset` is deliberately left unset: these are this household's own photos, and deletion
+ * propagation skips entries without an origin asset, so a peer withdrawing its copy can never remove
+ * them. Two assets sharing a checksum collapse to one row, because the ledger is unique on
+ * (mapping, checksum) and a duplicate would abort the seed half-written.
  */
-export function seedRowsFor(assets: { id?: string; checksum?: string }[], _mappingId: string): SeedRow[] {
+export function seedRowsFor(
+  assets: { id?: string; checksum?: string }[],
+  heldByPeer: ReadonlySet<string>
+): SeedRow[] {
   const rows = new Map<string, SeedRow>();
   for (const asset of assets) {
     const checksum = asset?.checksum;
     if (!checksum || !asset?.id) continue; // nothing to key on: skip rather than guess
+    if (!heldByPeer.has(checksum)) continue; // not the peer's to have back: the watcher offers it
     if (!rows.has(checksum)) rows.set(checksum, { checksum, localAsset: asset.id });
   }
   return [...rows.values()];

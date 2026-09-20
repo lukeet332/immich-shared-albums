@@ -2,6 +2,7 @@
 // structurally cannot see. Runs headless against the mocks after the main suite.
 // Env: CKEY (origin admin key). Exits non-zero on any failure.
 import { chromium } from 'playwright';
+import fs from 'node:fs';
 
 // Addresses follow the same PORT_* map as run-mock-e2e.sh and the composes (loopback-bound).
 const PORT = (name, dflt) => process.env[name] || dflt;
@@ -353,6 +354,39 @@ check('the lane can give both households a pair to reunite by invitation',
   !!bInviteAlbum?.id && !!cInviteAlbum?.id,
   `${bInviteAlbum?.id ? 'B ok' : 'B failed'}, ${cInviteAlbum?.id ? 'C ok' : 'C failed'}`);
 
+// EACH SIDE GETS A PHOTO BEFORE THE REUNION, or the merge below is vacuous: a reunion of two empty
+// albums looks exactly like a reunion of two full ones, which is how the inviter's side stayed
+// empty without anything noticing. Distinct fixtures, because identical bytes are ONE photo.
+const bHeaders = { Authorization: `Bearer ${bLogin.accessToken}` };
+const cHeaders = { 'x-api-key': CKEY };
+const uploadToAlbum = async (origin, headers, albumId, fixture) => {
+  const form = new FormData();
+  const takenAt = '2026-05-01T09:00:00.000Z';
+  form.set('deviceAssetId', `panel-invite-${fixture}-${Date.now()}`);
+  form.set('deviceId', 'browser-test');
+  form.set('fileCreatedAt', takenAt);
+  form.set('fileModifiedAt', takenAt);
+  form.set('assetData',
+    new Blob([fs.readFileSync(new URL(`./fixtures/${fixture}`, import.meta.url))], { type: 'image/jpeg' }),
+    `${fixture}`);
+  const asset = await (await fetch(`${origin}/api/assets`, { method: 'POST', headers, body: form })).json();
+  await fetch(`${origin}/api/albums/${albumId}/assets`, { method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify({ ids: [asset.id] }) });
+  return asset.id;
+};
+const bInviteAsset = await uploadToAlbum(B_PANEL_WEB, bHeaders, bInviteAlbum.id, 'fx3.jpg');
+const cInviteAsset = await uploadToAlbum(C, cHeaders, cInviteAlbum.id, 'fx7.jpg');
+/** How many photos an album holds, read as the person who owns it. */
+const photosIn = async (origin, headers, albumId) =>
+  (await (await fetch(`${origin}/api/search/metadata`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify({ albumIds: [albumId], size: 100 }) })).json())?.assets?.items?.length ?? 0;
+check('the lane can give each half of the pair its own photo',
+  !!bInviteAsset && !!cInviteAsset &&
+    (await photosIn(C, cHeaders, cInviteAlbum.id)) === 1 && (await photosIn(B_PANEL_WEB, bHeaders, bInviteAlbum.id)) === 1,
+  `B=${bInviteAsset ? 1 : 0}, C=${cInviteAsset ? 1 : 0}`);
+
 /** Click the button labelled `label` in the row that names this album — the row is the smallest
  *  ancestor that mentions it, because the panel repeats the same two labels down the list. */
 // The panel renders its reunions only once its own fetch lands, and that fetch refreshes the peer's
@@ -473,6 +507,21 @@ check('and it asked first, rather than merging on the click alone', await confir
 const merged = await waitForRow(cPanel.p, /Reunited into/);
 check('accepting merges the other half, as the panel says', merged,
   (await panelText(cPanel.p)).split('\n').find(l => /Reunited|Could not/.test(l)) || '(no notice)');
+
+// THE UNION, ON BOTH SIDES — and the INVITER's album is the half this lane never read. A ledger
+// seeded from everything the adopted album already held made the adopter's photos read as already
+// sent, so the watcher never offered them: the adopter saw the union, the inviter kept its own
+// photo alone, and nothing logged a thing. Two photos in, two photos on each side.
+let union = null;
+for (const deadline = Date.now() + 90000; Date.now() < deadline && !union; ) {
+  const onC = await photosIn(C, cHeaders, cInviteAlbum.id);
+  const onB = await photosIn(B_PANEL_WEB, bHeaders, bInviteAlbum.id);
+  if (onC === 2 && onB === 2) union = { onC, onB };
+  else await new Promise(r => setTimeout(r, 3000));
+}
+check("both albums hold the union after the reunion, not one half each", !!union,
+  union ? `inviter B=${union.onB}, adopter C=${union.onC}`
+        : `inviter B=${await photosIn(B_PANEL_WEB, bHeaders, bInviteAlbum.id)}, adopter C=${await photosIn(C, cHeaders, cInviteAlbum.id)}`);
 
 const cleared = await waitForRow(bPanel.p, new RegExp(`^(?!.*${inviteName}).*$`, 's'), 60000).catch(() => false);
 const goneNow = !new RegExp(inviteName).test(candidates(await panelText(bPanel.p)));

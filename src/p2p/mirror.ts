@@ -11,7 +11,7 @@
 import crypto from 'node:crypto';
 import { CFG, log, isUtilityEmail, BOT_PREFIX, UTILITY_EMAIL_DOMAIN } from '../config.ts';
 import type { Mapping, Peer } from '../store.ts';
-import { state, store, save, seenAdd } from '../state.ts';
+import { state, store, save, seenAdd, wireChecksum } from '../state.ts';
 import { immichJson, jsonBody } from '../immich/client.ts';
 import { readAlbumAssetsAs, readCallerAlbums, callAs, type Creds } from '../immich/access.ts';
 import { ensureUtilityUser, syncAvatar } from '../immich/contributors.ts';
@@ -22,7 +22,7 @@ import { deleteProxyAsset } from '../immich/materialise.ts';
 import { seedRowsFor } from '../sync/matches.ts';
 import { peerRequest, withDeadline } from './transport.ts';
 import { albumTeardown } from '../sync/album-teardown.ts';
-import { grantAlbumWriters, grantInvitedHumans, peerContributors } from '../sync/album-grant.ts';
+import { grantAlbumWriters, grantInvitedHumans, peerOffer } from '../sync/album-grant.ts';
 import { auditLine } from '../sync/audit.ts';
 import { pullCanonicalComments } from '../sync/comments.ts';
 
@@ -108,8 +108,8 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
 
   // ---- ADOPTION: this person's own album becomes the mapping's local half ----
   // The mapping is not pushed to `state.mappings` until its ledger is seeded, because the moment a
-  // loop can see it, `shareableAssets` reads that ledger — and a mapping whose ledger knows nothing
-  // about the album's contents offers every one of them back to the household they came from.
+  // loop can see it, `shareableAssets` reads that ledger — and the photos the peer already holds
+  // would be offered straight back to it.
   if (req.adopt) {
     const { albumId, ownerUserId, ownerCreds } = req.adopt;
     const adoptable = findAdoptableAlbum(
@@ -125,13 +125,10 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
     // owner's own credential, from their own request: the membership is their act, not one we take.
     await addHouseBotToAlbum(albumId, ownerCreds);
     // The stubs' own accounts need a membership only the album's owner can grant, and this request
-    // is the only place that credential exists — see sync/album-grant.ts.
-    await grantAlbumWriters(
-      albumId,
-      ownerCreds,
-      peer,
-      await peerContributors(peer, req.remoteMappingId || album.id)
-    );
+    // is the only place that credential exists — see sync/album-grant.ts. The same pull says what the
+    // peer holds, which is what decides the seed below.
+    const offer = await peerOffer(peer, req.remoteMappingId || album.id);
+    await grantAlbumWriters(albumId, ownerCreds, peer, offer.contributors);
     await grantInvitedHumans(albumId, ownerCreds, forUserIds || [], memberRole);
     const hostSlug = `${BOT_PREFIX.house}bot`;
     const hostKey = state.contributors[hostSlug]?.apiKey;
@@ -156,13 +153,17 @@ export async function ensureMirror(req: MirrorRequest): Promise<{ mapping: Mappi
       // thing that can say the share is part of a reunion.
       reunified: true,
     };
-    // Seeded rows carry no origin asset, so the deletion sweep skips them: these are this person's
-    // own photos, and a peer withdrawing its copy must never remove them.
-    for (const row of seedRowsFor(assets, mapping.id)) seenAdd(mapping.id, row.checksum, row.localAsset);
+    // Only the photos the peer already holds are seeded — the rest are what this person CONTRIBUTES,
+    // and the watcher offering them is how the peer's album gains its half of the reunion. Seeded
+    // rows carry no origin asset, so the deletion sweep skips them: these are this person's own
+    // photos, and a peer withdrawing its copy must never remove them.
+    const ours = assets.map(a => ({ id: a.id, checksum: wireChecksum(a) }));
+    for (const row of seedRowsFor(ours, offer.checksums)) seenAdd(mapping.id, row.checksum, row.localAsset);
     state.mappings.push(mapping);
     save();
     log(
-      `reunited "${adoptable.name}" with "${peer.name}" — ${assets.length} photo(s) already here, seeded so none is offered back`
+      `reunited "${adoptable.name}" with "${peer.name}" — ${assets.length} photo(s) already here, ` +
+        `${offer.checksums.size} of them theirs to keep, the rest to offer them`
     );
     await auditLine(
       mapping.id,
@@ -263,13 +264,24 @@ export async function unifyOwnAlbum(
   const hostKey = state.contributors[hostSlug]?.apiKey;
   if (!hostKey) throw new Error('house bot has no key after provisioning — cannot read the album');
 
+  // What the peer holds decides the seed, and the seed has to be known before the move — so the pull
+  // happens here, at the only moment the album's owner is present to grant the writers too.
+  const peer = state.peers.find(p => p.pub === mapping.peer);
+  const offer = peer
+    ? await peerOffer(peer, mapping.remoteMappingId || mapping.remoteAlbumId)
+    : { contributors: [], checksums: new Set<string>() };
+
   const assets = (await readAlbumAssetsAs(own.albumId, { source: 'mapping', key: hostKey })) ?? [];
   const previousAlbumId = mapping.albumId;
   const previousHostSlug = mapping.hostSlug;
+  // The photos the PEER already holds, and only those: the rest of this album is what the watcher
+  // offers them, which is how their album gains this person's half of the reunion.
+  const ours = assets.map(a => ({ id: a.id, checksum: wireChecksum(a) }));
+  const seed = seedRowsFor(ours, offer.checksums);
 
   // Seeded before the move, so the mapping is never visible with a ledger that describes a
   // different album — that is the state that offers an album's whole contents back to its origin.
-  for (const row of seedRowsFor(assets, mapping.id)) seenAdd(mapping.id, row.checksum, row.localAsset);
+  for (const row of seed) seenAdd(mapping.id, row.checksum, row.localAsset);
 
   mapping.albumId = own.albumId;
   mapping.albumName = own.name;
@@ -277,7 +289,10 @@ export async function unifyOwnAlbum(
   mapping.adopted = true;
   mapping.reunified = true;
   save();
-  log(`reunited "${own.name}" — ${assets.length} photo(s) were already here, seeded so none is offered back`);
+  log(
+    `reunited "${own.name}" — ${assets.length} photo(s) were already here, ` +
+      `${seed.length} of them the peer's own to keep, the rest to offer them`
+  );
 
   await retireMirror(mapping, previousAlbumId, previousHostSlug);
   // RE-SEED, and it has to be after the retire. `seenAdd` is INSERT OR IGNORE on (mapping,
@@ -286,7 +301,7 @@ export async function unifyOwnAlbum(
   // retireMirror has just dropped that row, so without this pass the checksum is claimed by nobody,
   // `seenHas` is false, the album-level suppression finds nothing, and the next reconcile
   // materialises a stub right beside the person's own photo.
-  for (const row of seedRowsFor(assets, mapping.id)) seenAdd(mapping.id, row.checksum, row.localAsset);
+  for (const row of seed) seenAdd(mapping.id, row.checksum, row.localAsset);
 
   // The trail, left once the move is done and the bot is a member — it was granted above, on the
   // owner's credential, which is the only moment an album belonging to a human can gain it.
@@ -303,18 +318,12 @@ export async function unifyOwnAlbum(
   //
   // Clearing the cursor first makes the pull do work: `reconcileMapping` returns early when the
   // origin's version is unchanged, and moving an album changes nothing at the origin.
-  const peer = state.peers.find(p => p.pub === mapping.peer);
   if (peer) {
     // Same grant as acquisition-time adoption, and for the same reason: the contributor accounts
     // that will own this album's stubs can only be given a membership by its owner, who is present
     // here and nowhere else. A peer that cannot be reached now grants nothing and must not fail the
-    // reunion — `peerContributors` returns empty instead.
-    await grantAlbumWriters(
-      own.albumId,
-      ownerCreds,
-      peer,
-      await peerContributors(peer, mapping.remoteMappingId || mapping.remoteAlbumId)
-    );
+    // reunion — `peerOffer` answers with an empty offer instead.
+    await grantAlbumWriters(own.albumId, ownerCreds, peer, offer.contributors);
     await grantInvitedHumans(
       own.albumId,
       ownerCreds,

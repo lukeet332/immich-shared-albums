@@ -1069,12 +1069,25 @@ stage('native album invitations, per person (no share link)');
                 !!heldAudit && heldAudit[0] === 1 && isBot(auditFirst?.user?.email),
                 `count ${JSON.stringify(heldAudit)} from ${auditFirst?.user?.name ?? 'nobody'}`);
 
-          // ECHO: A's count must HOLD, not merely read true once. An unseeded ledger offers B's
-          // whole album back, which shows up as a count that keeps climbing.
+          // THE OTHER HALF, and the direction nothing used to check: the album that INVITED must
+          // receive the photos of the person who adopted into it. Seeding an adopted mapping's whole
+          // ledger made the adopter's own photos read as already sent, so the watcher never offered
+          // them — the adopter saw the union, the inviter kept their own half, permanently and with
+          // nothing in the log. Only the invitee's side of this stage was ever asserted.
+          const aUnion = await until(async () => {
+            const x = await albumAssets(A, AKEY, invAlb);
+            return x.some(a => a.id !== invAsset) ? x : null;
+          }, 120000);
+          check("B's photo reaches A's album, so both sides hold the union",
+                !!aUnion, aUnion ? `${aUnion.length} asset(s)` : 'timed out after 120s');
+
+          // ECHO: and then A's count must HOLD at the union. An unseeded ledger offers B's whole
+          // album back on every cycle, which shows up as a count that keeps climbing rather than as
+          // one wrong reading.
           const aCounts = async () => [(await albumAssets(A, AKEY, invAlb)).length];
           const held = await stable(aCounts, TWO_CYCLES_MS, HOLD_DEADLINE_MS);
-          check("A's album does not grow — nothing of B's was offered back",
-                !!held && held[0] === aBefore, `was ${aBefore}, now ${JSON.stringify(held)}`);
+          check("A's album holds at the union — nothing of B's is offered back a second time",
+                !!held && held[0] === aBefore + 1, `was ${aBefore}, now ${JSON.stringify(held)}`);
 
           // ── DETACH ─────────────────────────────────────────────────────────────────────────
           // Snapshot, un-reunify, and require the album to be exactly as it was: the assertion that

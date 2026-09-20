@@ -24,7 +24,10 @@ contributor attribution + avatar sync + uploader credit + stale-name healing;
 capture-date and GPS preservation (album ordering); album People/owners
 documented in settings; canonical comments (two-way sync, echo prevention, relay/backfill to a later-joining household); view-only links enforced (sync yes, uploads rejected); empty-album joins named after the sharer; owner
 post-join additions; the same photo re-shared into a second album; instant join
-with no preview wait (healed by reconciliation); member→member relay through the
+with no preview wait (healed by reconciliation); **reunification (both halves of
+the union on BOTH albums — the inviter's as well as the adopter's — with the
+reunion reversed on un-reunify, driven through the panels in the browser lane)**;
+member→member relay through the
 origin (third household D receives B's contributions and vice versa, correctly
 attributed); and loop prevention across idle watcher cycles — which also proves
 the version handshake never wedges convergence.

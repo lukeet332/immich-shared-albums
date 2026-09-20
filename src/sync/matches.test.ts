@@ -221,29 +221,26 @@ test('no candidates means an empty list, not a peer record', () => {
 });
 
 // Adopting a populated album means the mapping starts with a ledger that knows nothing about the
-// assets already in it. `shareableAssets` filters on `seenHas`, so an unseeded mapping advertises
-// the whole album back to the peer — which materialises stubs of photos it already owns. These
-// rows are what stop that, and they must be written BEFORE the mapping is visible to the loops.
-test('every asset already in the album is seeded, so none of them is offered back', () => {
+// assets already in it. `shareableAssets` filters on `seenHas`, so what is seeded is exactly what
+// the peer is NOT offered: the photos it already holds, and only those. These rows must be written
+// BEFORE the mapping is visible to the loops.
+test('the photos the peer already holds are seeded, so none of them is offered back', () => {
   const assets = [
     { id: 'a1', checksum: 'c1' },
     { id: 'a2', checksum: 'c2' },
   ];
-  const rows = seedRowsFor(assets, 'm1');
+  const rows = seedRowsFor(assets, new Set(['c1']));
   assert.deepEqual(
     rows.map(r => [r.checksum, r.localAsset]),
-    [
-      ['c1', 'a1'],
-      ['c2', 'a2'],
-    ],
-    'each asset must be keyed by its wire checksum, pointing at itself'
+    [['c1', 'a1']],
+    'the seeded row is keyed by its wire checksum and points at the local asset'
   );
 });
 
 // The deletion-propagation loop skips entries with no originAsset. Seed rows deliberately have
 // none: these are OUR photos, and a peer withdrawing its copy must never remove them.
 test('seed rows carry no origin asset, so deletion propagation cannot touch them', () => {
-  const rows = seedRowsFor([{ id: 'a1', checksum: 'c1' }], 'm1');
+  const rows = seedRowsFor([{ id: 'a1', checksum: 'c1' }], new Set(['c1']));
   assert.equal(rows[0].originAsset, undefined, 'an origin asset would mark it as removable');
 });
 
@@ -255,13 +252,16 @@ test('two assets with the same checksum seed one row, not two', () => {
       { id: 'a1', checksum: 'same' },
       { id: 'a2', checksum: 'same' },
     ],
-    'm1'
+    new Set(['same'])
   );
   assert.equal(rows.length, 1, `seeded ${JSON.stringify(rows)}`);
 });
 
 test('an asset with no checksum cannot be seeded, and is skipped rather than guessed at', () => {
-  const rows = seedRowsFor([{ id: 'a1' }, { id: 'a2', checksum: '' }, { id: 'a3', checksum: 'c3' }], 'm1');
+  const rows = seedRowsFor(
+    [{ id: 'a1' }, { id: 'a2', checksum: '' }, { id: 'a3', checksum: 'c3' }],
+    new Set(['c3'])
+  );
   assert.deepEqual(
     rows.map(r => r.localAsset),
     ['a3']
@@ -269,7 +269,7 @@ test('an asset with no checksum cannot be seeded, and is skipped rather than gue
 });
 
 test('an empty album seeds nothing, so adoption of an empty album is the old behaviour', () => {
-  assert.deepEqual(seedRowsFor([], 'm1'), []);
+  assert.deepEqual(seedRowsFor([], new Set(['c1'])), []);
 });
 
 // What a person can DO about a pairing is entirely a question of the share behind it, and the panel
