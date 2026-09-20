@@ -596,6 +596,24 @@ export const server = http.createServer(async (req, res) => {
       // move cannot have been. See index-offer.test.ts for the timing rules themselves.
       return send(200, { ...syncStatus(mapping), ticks: loopTicks(), nudges: nudgesReceived() });
     }
+    // Rig-only: emit a panel event on demand. A test that had to wait for a peer to nudge would be
+    // testing the peer path as well as the channel; this asks the channel alone, so a browser test
+    // (or the lane) can prove an open page reacts to a hint without a reload.
+    if (CFG.testHooks && path === `${ROUTE_PREFIX}/test/emit` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('emit an event'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can emit an event' });
+      let asked: { type?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (asked.type !== 'invitations' && asked.type !== 'index' && asked.type !== 'shares')
+        return send(400, { error: 'type must be invitations, index or shares' });
+      emitPanelEvent(asked.type);
+      return send(200, { ok: true, panels: panelSubscribers() });
+    }
     // Rig-only: forget every session, so the next authenticated request is treated as the first of
     // one. The real quiet period is fifteen minutes, which no test can wait out (index-offer.ts).
     if (CFG.testHooks && path === `${ROUTE_PREFIX}/test/new-session` && req.method === 'POST') {

@@ -1,4 +1,4 @@
-/** sync/index-freshness.test.ts — when a person's albums are offered, and to whom we say "look again". See sync-loops.md. */
+/** sync/index-offer.test.ts — when a person's albums are offered, and to whom we say "look again". See sync-loops.md. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {

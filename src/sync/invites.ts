@@ -391,7 +391,6 @@ async function syncMirrorMembers(mapping: Mapping, forUserIds: string[]) {
 export async function handleInvitationsNudge(callerPub: string): Promise<[number, unknown]> {
   if (!peerByPub(callerPub)) return [403, { error: 'unknown peer' }];
   recordNudge('invitations');
-  emitPanelEvent('invitations');
   pullInvitationsSoon();
   return [200, { ok: true }];
 }
@@ -415,6 +414,9 @@ function pullInvitationsSoon() {
         pullQueued = false;
         await pullInvitationsOnce();
       } while (pullQueued);
+      // AFTER the pull, not when the nudge arrived: the panel re-reads what the pull has just
+      // changed, so emitting on arrival would have it fetch the state it is about to leave.
+      emitPanelEvent('invitations');
     } catch (e) {
       log(`invitation nudge pull failed: ${e.message}`);
     } finally {

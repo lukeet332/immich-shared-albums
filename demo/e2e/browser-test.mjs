@@ -285,6 +285,16 @@ const panelOf = async (base, token) => {
 
 const bPanel = await panelOf(B_PANEL_WEB, bLogin.accessToken);
 await bPanel.p.waitForTimeout(3000);
+
+// THE PANEL IS SUBSCRIBED TO THE LIVE CHANNEL, asserted from the server's side: the rig-only emit
+// hook answers with how many panels are listening, so a subscription torn down early — the bug this
+// route's cleanup had — reads as 0 here instead of as a page that quietly stops updating.
+const emitted = await (await fetch(`${B_PANEL_WEB}/immich-shared-albums/test/emit`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bLogin.accessToken}` },
+  body: JSON.stringify({ type: 'shares' }),
+})).json();
+check('the open panel holds a live subscription', emitted?.panels >= 1, JSON.stringify(emitted));
 check('the first person to open their panel sees no pair yet — matching is a pull',
   !seesPair(await panelText(bPanel.p)));
 
