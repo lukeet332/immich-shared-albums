@@ -9,6 +9,7 @@ import { state, save, addedRecord, peerIsLinked } from '../state.ts';
 import { immichJson, jsonBody, usersById, USERS } from './client.ts';
 import { peerByteRequest, recvIterable } from '../p2p/transport.ts';
 import { botAvatarPng } from './bot-avatar.ts';
+import { picturePlanFor } from './stand-in-picture.ts';
 import type { Contributor } from '../store.ts';
 
 /**
@@ -42,19 +43,19 @@ const UTILITY_PERMISSIONS = [
   'userProfileImage.update',
 ];
 
-/** Our own face on an account of ours, once.
+/** Our own face on an account of ours, once — and only on an account that IS the addon; see
+ *  `stand-in-picture.ts` for which accounts those are.
  *
- *  Skipped when Immich already holds a picture for it: a person's own avatar, synced from their
- *  server, beats a robot. Best effort by design — the picture is garnish, and the account it
- *  decorates has work to do whether or not it lands.
+ *  Best effort by design: the picture is garnish, and the account it decorates has work to do
+ *  whether or not it lands.
  */
 /** Accounts this process has already given a picture. Immich's own `profileImagePath` is the fact,
  *  but the user list it comes from is cached, so a provisioning burst would re-upload the same
  *  picture for every ref materialised. */
 const gavePicture = new Set<string>();
 
-async function ensureBotAvatar(c: Contributor, alreadyHasPicture: boolean) {
-  if (alreadyHasPicture || !c.apiKey || gavePicture.has(c.userId)) return;
+async function ensureBotAvatar(c: Contributor) {
+  if (!c.apiKey || gavePicture.has(c.userId)) return;
   try {
     const form = new FormData();
     form.set(
@@ -74,6 +75,12 @@ async function ensureBotAvatar(c: Contributor, alreadyHasPicture: boolean) {
   } catch {
     /* garnish */
   }
+}
+
+/** The picture an account of ours wears, applied. See `stand-in-picture.ts` for the rule itself. */
+async function applyPicturePlan(c: Contributor, hasPicture: boolean) {
+  const plan = picturePlanFor({ representsPerson: !!c.peerUserId, hasPicture });
+  if (plan === 'wear') await ensureBotAvatar(c);
 }
 
 /**
@@ -141,7 +148,7 @@ export async function ensureUtilityUser(
         /* cosmetic — retry next time */
       }
     }
-    await ensureBotAvatar(c, !!cached?.profileImagePath);
+    await applyPicturePlan(c, !!cached?.profileImagePath);
     return c;
   }
   // Creating an account is a commitment on behalf of a linked server. If that server is being
@@ -251,7 +258,7 @@ export async function ensureUtilityUser(
     peerUserId: peerUserId ?? c?.peerUserId,
     homePeer: opts.homePeer ?? c?.homePeer,
   };
-  await ensureBotAvatar(c as Contributor, false);
+  await applyPicturePlan(c as Contributor, false);
   if (!passwordRetired)
     c.password = password; // keep it only if the roll failed, so a retry can resume
   else delete c.password;
