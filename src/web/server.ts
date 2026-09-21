@@ -35,7 +35,7 @@ import { auditLine } from '../sync/audit.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { syncStatus, loopTicks, nudgesReceived } from '../sync/status.ts';
 import { emitPanelEvent, panelHintsEmitted } from '../panel-events.ts';
-import { setSweepsPaused, sweepsArePaused } from '../sweeps.ts';
+import { setSweepsPaused, sweepsAreIdle, sweepsArePaused, whenSweepsIdle } from '../sweeps.ts';
 import { panelSubscribers, subscribeToPanelEvents } from '../panel-events.ts';
 import { forgetVisits, noteIndexTraffic, offerAlbumsFrom } from '../sync/index-freshness.ts';
 import { trafficTriggerFor } from '../sync/traffic-triggers.ts';
@@ -637,8 +637,14 @@ export const server = http.createServer(async (req, res) => {
       }
       if (typeof asked.paused !== 'boolean') return send(400, { error: 'paused must be true or false' });
       setSweepsPaused(asked.paused);
-      log(`rig: background sweeps ${asked.paused ? 'held' : 'released'}`);
-      return send(200, { paused: sweepsArePaused() });
+      // A hold stops the NEXT tick, not the one already running: acknowledged before that cycle
+      // finished, it would let a lane claim "no sweep delivered this" while one still could. Bounded,
+      // so a slow cycle answers `idle: false` rather than hanging the request.
+      const idle = asked.paused ? await whenSweepsIdle() : sweepsAreIdle();
+      log(
+        `rig: background sweeps ${asked.paused ? 'held' : 'released'}${idle ? '' : ' (a cycle is still running)'}`
+      );
+      return send(200, { paused: sweepsArePaused(), idle });
     }
     // Rig-only: forget every session, so the next authenticated request is treated as the first of
     // one. The real quiet period is fifteen minutes, which no test can wait out (index-offer.ts).

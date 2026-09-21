@@ -509,12 +509,15 @@ const clickInRow = (p, label, name) => p.evaluate(([label, name]) => {
 // been pushed. Ticks are read back at the end to prove the hold took — a lane that forgot to hold
 // them would otherwise pass for the wrong reason.
 const holdSweeps = async (base, auth, paused) =>
-  (await (await fetch(`${base}/immich-shared-albums/test/pause-sweeps`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...auth }, body: JSON.stringify({ paused }) })).json()).paused;
+  await (await fetch(`${base}/immich-shared-albums/test/pause-sweeps`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...auth }, body: JSON.stringify({ paused }) })).json();
 const bAuthForHooks = { Authorization: `Bearer ${bLogin.accessToken}` };
 const cAuthForHooks = { Authorization: `Bearer ${cLogin.accessToken}` };
-const loopsHeld = (await holdSweeps(B_PANEL_WEB, bAuthForHooks, true)) === true
-  && (await holdSweeps(C_PANEL_WEB, cAuthForHooks, true)) === true;
+// `idle` is the server's own answer to "had the cycle already running finished?": without it a hold
+// is only a promise about the NEXT tick, and a sweep in flight could still deliver the change.
+const heldB = await holdSweeps(B_PANEL_WEB, bAuthForHooks, true);
+const heldC = await holdSweeps(C_PANEL_WEB, cAuthForHooks, true);
+const loopsHeld = [heldB, heldC].every((r) => r?.paused === true && r?.idle === true);
 const ticksAtHold = {
   b: (await (await fetch(`${B_PANEL_WEB}/immich-shared-albums/sync/status`, { headers: bAuthForHooks })).json()).ticks,
   c: (await (await fetch(`${C_PANEL_WEB}/immich-shared-albums/sync/status`, { headers: cAuthForHooks })).json()).ticks,
@@ -593,15 +596,16 @@ check("and the pair leaves the inviter's list once it is done", goneNow,
     bShape.total === 2 && bShape.stubs === 1, JSON.stringify(bShape));
 }
 
-// The loops went still for that case and have to run again for anything after it.
-const loopsReleased = (await holdSweeps(B_PANEL_WEB, bAuthForHooks, false)) === false
-  && (await holdSweeps(C_PANEL_WEB, cAuthForHooks, false)) === false;
+// The ticks are read BEFORE the release: releasing is what lets a tick fire, so reading afterwards
+// would fold the first tick of the resumed loop into a claim about the held ones.
 const ticksAfter = {
   b: (await (await fetch(`${B_PANEL_WEB}/immich-shared-albums/sync/status`, { headers: bAuthForHooks })).json()).ticks,
   c: (await (await fetch(`${C_PANEL_WEB}/immich-shared-albums/sync/status`, { headers: cAuthForHooks })).json()).ticks,
 };
-check('every sweep was held through the reunion, on both households', loopsHeld && loopsReleased,
-  `held=${loopsHeld} released=${loopsReleased} ticks ${JSON.stringify(ticksAtHold)} -> ${JSON.stringify(ticksAfter)}`);
+const loopsReleased = (await holdSweeps(B_PANEL_WEB, bAuthForHooks, false)).paused === false
+  && (await holdSweeps(C_PANEL_WEB, cAuthForHooks, false)).paused === false;
+check('every sweep was held through the reunion, and idle when it was held', loopsHeld && loopsReleased,
+  `held=${JSON.stringify([heldB, heldC])} released=${loopsReleased} ticks ${JSON.stringify(ticksAtHold)} -> ${JSON.stringify(ticksAfter)}`);
 check('and not one of them ticked while the reunion completed', 
   ticksAtHold.b.watcher === ticksAfter.b.watcher && ticksAtHold.c.watcher === ticksAfter.c.watcher,
   `B ${ticksAtHold.b.watcher} -> ${ticksAfter.b.watcher}, C ${ticksAtHold.c.watcher} -> ${ticksAfter.c.watcher}`);

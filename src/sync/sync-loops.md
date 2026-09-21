@@ -25,10 +25,17 @@ catches everything (fail-open by design). `ISA_RECONCILE_DEBUG=1` traces every d
 
 ## Holding the loops (rig-only)
 
-`sweeps.ts` is one boolean: `sweepsArePaused`, set by `POST /test/pause-sweeps` under `ISA_TEST_HOOKS`
-and read by the three loop schedulers — `startWatchLoop` (`watchOnce` + `reconcileOnce`),
-`startInviteLoop`, `startCommentLoop`. A held loop returns before its tick counter and its overlap
-guard, so `ticks` in `/sync/status` stays put and "the loop did not look" is observable.
+`sweeps.ts` holds what the background loops are doing. `setSweepsPaused` — driven by
+`POST /test/pause-sweeps` under `ISA_TEST_HOOKS` — is read by the three loop schedulers:
+`startWatchLoop` (`watchOnce` + `reconcileOnce`), `startInviteLoop`, `startCommentLoop`. A held loop
+returns before its tick counter, so `ticks` in `/sync/status` stays put and "the loop did not look"
+is observable.
+
+The same module owns the per-loop slots (`startSweep`/`finishSweep`), which are the overlap guards
+those loops used to keep privately, and `sweepsAreIdle`/`whenSweepsIdle` read them. Holding answers
+`{ paused, idle }` and waits — bounded by `SWEEP_DRAIN_MS` — for a cycle already in flight to finish
+first: a pause acknowledged while a watch cycle was still running would let a lane claim "no sweep
+delivered this" while one still could.
 
 Nudge handlers are NOT gated: `handleIndexNudge`, `handleInvitationsNudge` and the panel routes run
 their own pulls and pushes whatever the loops are doing. That is the whole point — a lane that holds

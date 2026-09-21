@@ -18,7 +18,7 @@ import { recordOffered } from '../p2p/entitlement.ts';
 import { leaveAlbum } from './leave.ts';
 import { backfillFullCopies, hasStubRows } from './backfill.ts';
 import { recordWatcherCycle, recordLoopTick } from './status.ts';
-import { sweepsArePaused } from '../sweeps.ts';
+import { finishSweep, startSweep, sweepsArePaused } from '../sweeps.ts';
 
 /** Consecutive failed pushes per mapping, in memory. A single 404 is TRANSIENT by protocol — the
  *  member may not have created its mirror yet (see goneOr404 in p2p/protocol.ts) — so the bar is
@@ -279,20 +279,16 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
   }
 }
 
-// overlap guard: a slow cycle (large albums, slow peers) must not stack concurrent
-// full scans — stampedes starve the host Immich's own background jobs.
-let WATCH_RUNNING = false;
 export function startWatchLoop() {
   setInterval(() => {
-    // Held by a rig proving a change was pushed, not swept. Before the tick counter and the
-    // overlap guard: a held loop did not look, and must not read as having looked.
+    // Held by a rig proving a change was pushed, not swept. Before the tick counter and the overlap
+    // guard: a held loop did not look, and must not read as having looked.
     if (sweepsArePaused()) return;
-    if (WATCH_RUNNING) return;
-    WATCH_RUNNING = true;
+    // The overlap guard, shared with the hold: a slow cycle (large albums, slow peers) must not
+    // stack concurrent full scans — stampedes starve the host Immich's own background jobs.
+    if (!startSweep('watch')) return;
     watchOnce()
       .catch(e => log('watch loop:', e.message))
-      .finally(() => {
-        WATCH_RUNNING = false;
-      });
+      .finally(() => finishSweep('watch'));
   }, CFG.syncPollMs);
 }

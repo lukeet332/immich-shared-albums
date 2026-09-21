@@ -12,7 +12,7 @@ import { readCredsFor, albumReadKey } from '../immich/access.ts';
 import { ensureContributor } from '../immich/contributors.ts';
 import { ensureHouseBot } from './house-bot.ts';
 import { peerAlbumMappingId } from './peer-mapping-id.ts';
-import { sweepsArePaused } from '../sweeps.ts';
+import { finishSweep, startSweep, sweepsArePaused } from '../sweeps.ts';
 
 export const getComments = (albumId, key?: string) =>
   immichJson(`/activities?albumId=${albumId}&type=comment`, {}, key);
@@ -144,6 +144,12 @@ export async function syncCommentsOnce() {
         continue;
       }
       const targetMapping = peerAlbumMappingId(mapping);
+      if (!targetMapping) {
+        // A mirror with no remote id addresses nothing: `/albums//activity` is not a route, and the
+        // comment stays pending rather than being posted at a stranger.
+        log(`no remote album id for "${mapping.albumName}" — nothing to push comments to`);
+        continue;
+      }
       const payload = comments.map(a => ({
         id: a.id,
         comment: a.comment,
@@ -191,6 +197,9 @@ export function startCommentLoop() {
   setInterval(() => {
     // Held by a rig proving a change was pushed, not swept — see sync-loops.md.
     if (sweepsArePaused()) return;
-    void syncComments().catch(e => log('comment loop:', e.message));
+    if (!startSweep('comments')) return;
+    void syncComments()
+      .catch(e => log('comment loop:', e.message))
+      .finally(() => finishSweep('comments'));
   }, CFG.commentPollMs);
 }
