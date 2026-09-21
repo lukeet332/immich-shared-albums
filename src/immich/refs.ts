@@ -66,13 +66,20 @@ export async function offerableAssets(assets) {
     return !owner.utility || !!ledgerByAsset(a.id);
   });
   const offer = shareable.filter(a => shapeIsKnown(measuredExif(a)));
-  return { offer, awaitingShape: shareable.length - offer.length };
+  // The assets themselves, not a count: whether a held-back photo should keep the watcher coming
+  // back depends on whether it has already been delivered to the mapping asking (`shareableAssets`),
+  // and only that caller can answer it.
+  return { offer, awaitingShape: shareable.filter(a => !shapeIsKnown(measuredExif(a))) };
 }
-// The push queue: offerable minus what this mapping has already sent, plus how many photos are
-// waiting only on Immich to measure them.
+// The push queue: offerable minus what this mapping has already sent, plus the photos waiting only
+// on Immich to measure them AND not yet delivered here.
 export async function shareableAssets(assets, mappingId) {
   const { offer, awaitingShape } = await offerableAssets(assets);
-  return { refs: offer.filter(a => !seenHas(mappingId, wireChecksum(a))), awaitingShape };
+  const notSentYet = a => !seenHas(mappingId, wireChecksum(a));
+  // A photo we already sent is not waiting on us, however shapeless it looks: an unshaped stub from
+  // an older peer, or one materialised before this rule existed, would otherwise hold the mapping's
+  // version cursor for ever and cost an album read every cycle to re-decide the same thing.
+  return { refs: offer.filter(notSentYet), awaitingShape: awaitingShape.filter(notSentYet).length };
 }
 // Everything shareable with the peer behind mappingId (see shareableAssets for the rules).
 export async function buildManifest(assets) {
