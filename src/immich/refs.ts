@@ -1,24 +1,14 @@
-/**
- * immich/refs.ts — the on-the-wire representation of a shared photo. Converts local
- * assets to AssetRefs, decides what an album may offer a peer (offer set vs push queue),
- * and builds the manifest a member diffs against.
- */
+/** immich/refs.ts — the on-the-wire representation of a shared photo: refs, the offer set, the push
+ *  queue and the manifest. See local-immich-api.md. */
 import type { AssetRef } from '../types.ts';
 import { CFG, personName } from '../config.ts';
 import { usersById } from './client.ts';
 import { wireChecksum, ledgerByAsset, seenHas } from '../state.ts';
+import { displayDims, shapeIsKnown } from './shape.ts';
+import { isHiddenAsUnmeasured } from './unmeasured.ts';
 
-// Immich stores raw sensor dimensions plus an EXIF orientation; the DISPLAYED photo (and the
-// oriented thumbnail the interceptor serves) has width/height swapped for the quarter-turn
-// orientations (5–8). Send the DISPLAY dimensions so the mirror stub's aspect matches what Immich
-// actually renders. Absent/unreadable exif -> no dimensions -> receiver keeps the legacy 1×1 stub.
-function displayDims(exif): { width?: number; height?: number } {
-  const w = Number(exif?.exifImageWidth);
-  const h = Number(exif?.exifImageHeight);
-  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return {};
-  const o = Number(exif?.orientation);
-  return o >= 5 && o <= 8 ? { width: h, height: w } : { width: w, height: h };
-}
+/** What Immich knows about this photo, unless a rig is pretending its metadata job has not run. */
+const measuredExif = a => (isHiddenAsUnmeasured(a.id) ? undefined : a.exifInfo);
 
 // A shared photo, described for a peer. For utility-owned proxies (relayed photos)
 // the true contributor is recovered from the utility user's name; the credit line we
@@ -38,7 +28,7 @@ export async function assetToRef(a): Promise<AssetRef> {
           longitude: a.exifInfo.longitude,
           description,
           rating: a.exifInfo.rating,
-          ...displayDims(a.exifInfo),
+          ...displayDims(measuredExif(a)),
         }
       : undefined,
     contributor: { displayName, originUserId: a.ownerId },
@@ -53,6 +43,13 @@ export async function assetToRef(a): Promise<AssetRef> {
 // The full offer set for an album: media we can vouch for (human-owned, or proxies
 // with known provenance). This is what manifests advertise — members diff against it,
 // so it must NOT exclude already-synced assets.
+//
+// A photo Immich has NOT measured yet is held back as well, from the push and from the manifest
+// both. The shape of a mirror stub lives in the stub's own pixels, and no Immich API can change it
+// afterwards, so one built before the metadata job runs would be square for the rest of its life.
+// Nothing is recorded for what is held back, so the push queue (`shareableAssets`) offers it again
+// on the next cycle — the retry IS the wait, and there is no second pass to run. `awaitingShape`
+// is returned rather than inferred so the watcher can tell "nothing to push" from "not yet".
 export async function offerableAssets(assets) {
   let users = await usersById();
   // An owner the cache has never heard of is NOT a human by default. The cache is refreshed on a
@@ -62,20 +59,25 @@ export async function offerableAssets(assets) {
   // and every household's count went up by one (issue #70). Refresh once for unknown owners; an
   // owner still unknown after that is left out of this cycle and reconsidered on the next.
   if (assets.some(a => a.ownerId && !users[a.ownerId])) users = await usersById(0);
-  return assets.filter(a => {
+  const shareable = assets.filter(a => {
     if (a.type !== 'IMAGE' && a.type !== 'VIDEO') return false;
     const owner = users[a.ownerId];
     if (!owner) return false;
     return !owner.utility || !!ledgerByAsset(a.id);
   });
+  const offer = shareable.filter(a => shapeIsKnown(measuredExif(a)));
+  return { offer, awaitingShape: shareable.length - offer.length };
 }
-// The push queue: offerable minus what this mapping has already sent.
+// The push queue: offerable minus what this mapping has already sent, plus how many photos are
+// waiting only on Immich to measure them.
 export async function shareableAssets(assets, mappingId) {
-  return (await offerableAssets(assets)).filter(a => !seenHas(mappingId, wireChecksum(a)));
+  const { offer, awaitingShape } = await offerableAssets(assets);
+  return { refs: offer.filter(a => !seenHas(mappingId, wireChecksum(a))), awaitingShape };
 }
 // Everything shareable with the peer behind mappingId (see shareableAssets for the rules).
 export async function buildManifest(assets) {
   const out: AssetRef[] = [];
-  for (const a of await offerableAssets(assets)) out.push(await assetToRef(a));
+  const { offer } = await offerableAssets(assets);
+  for (const a of offer) out.push(await assetToRef(a));
   return out;
 }

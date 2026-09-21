@@ -103,6 +103,10 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
     `false` — and a held loop records no tick at all: that is how the browser lane proves an
     invitation, an accept and **both** halves of a union arrived over the wire rather than on a
     timer. `sweeps.ts` holds the flag; `sync-loops.md` says which loops read it.
+    `POST /immich-shared-albums/test/hide-dimensions` with `{"assetId":…,"hidden":true}` is the
+    other half of that idea: it makes one photo look as it does in the window between an upload and
+    Immich's metadata job, so the suite can assert the photo is HELD BACK rather than mirrored as a
+    square stub — and that it arrives shaped once the dimensions are visible again.
 11. **Never open a running sidecar's `state.db` from the host — read it through the container.**
     The store is WAL-mode SQLite, and the WAL protocol relies on POSIX file locks to know who else
     has the database open. Across a Docker Desktop bind mount (macOS) those locks never reach the

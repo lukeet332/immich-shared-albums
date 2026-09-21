@@ -36,6 +36,7 @@ import { leaveAlbum } from '../sync/leave.ts';
 import { syncStatus, loopTicks, nudgesReceived } from '../sync/status.ts';
 import { emitPanelEvent, panelHintsEmitted } from '../panel-events.ts';
 import { setSweepsPaused, sweepsAreIdle, sweepsArePaused, whenSweepsIdle } from '../sweeps.ts';
+import { hideAsUnmeasured } from '../immich/unmeasured.ts';
 import { panelSubscribers, subscribeToPanelEvents } from '../panel-events.ts';
 import { forgetVisits, noteIndexTraffic, offerAlbumsFrom } from '../sync/index-freshness.ts';
 import { trafficTriggerFor } from '../sync/traffic-triggers.ts';
@@ -621,6 +622,26 @@ export const server = http.createServer(async (req, res) => {
         return send(400, { error: 'type must be invitations, index or shares' });
       emitPanelEvent(asked.type);
       return send(200, { ok: true, panels: panelSubscribers() });
+    }
+    // Rig-only: pretend Immich has not measured a photo's dimensions yet, so a lane can stand in
+    // the window between an upload and its metadata job — the photo is held back rather than
+    // mirrored as a square stub, and arrives shaped once the truth is visible again. The mask is
+    // read where refs are built/appraised (`immich/refs.ts`), so it affects this server's view only.
+    if (CFG.testHooks && path === `${ROUTE_PREFIX}/test/hide-dimensions` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('hide dimensions'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can hide dimensions' });
+      let asked: { assetId?: unknown; hidden?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (typeof asked.assetId !== 'string' || typeof asked.hidden !== 'boolean')
+        return send(400, { error: 'name the asset and whether to hide its dimensions' });
+      hideAsUnmeasured(asked.assetId, asked.hidden);
+      log(`rig: dimensions for ${asked.assetId.slice(0, 8)} ${asked.hidden ? 'hidden' : 'visible again'}`);
+      return send(200, { assetId: asked.assetId, hidden: asked.hidden });
     }
     // Rig-only: hold the background loops still, or release them. A lane that holds them and still
     // sees a change arrive has proved the nudge delivered it, which no cadence can be argued into:
