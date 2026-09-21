@@ -106,8 +106,11 @@ export async function pushAlbumRefs(mapping: Mapping, peer: Peer): Promise<{ inS
     assets.map(a => a.id)
   );
   if (revoked) log(`revoked ${revoked} byte entitlement(s) on "${mapping.albumName}"`);
-  const fresh = await shareableAssets(assets, mapping.id);
-  if (!fresh.length) return { inSync: true }; // nothing new to offer, so there is nothing to defer
+  const { refs: fresh, awaitingShape } = await shareableAssets(assets, mapping.id);
+  // A photo held back for Immich's measurement is NOT "in sync": the watcher stores the album's
+  // version cursor on an in-sync answer, and a stored cursor would skip this album until something
+  // else changed it — which is how a held-back photo would never be offered again.
+  if (!fresh.length) return { inSync: awaitingShape === 0 };
   const targetMapping = peerAlbumMappingId(mapping);
   if (!targetMapping) {
     log(`no remote album id for "${mapping.albumName}" — nothing to push to`);
@@ -169,7 +172,7 @@ export async function pushAlbumRefs(mapping: Mapping, peer: Peer): Promise<{ inS
   log(
     `pushed ${landed.length}/${fresh.length} ref(s) to "${peer.name}"${failed.size ? ` (${failed.size} deferred)` : ''}`
   );
-  return { inSync: failed.size === 0 };
+  return { inSync: failed.size === 0 && awaitingShape === 0 };
 }
 
 // Heal member mirrors: re-pull the origin manifest and materialise anything we

@@ -412,6 +412,47 @@ if (mirrorAssets) {
         `x-cache: ${thumbRes2.headers.get('x-cache')}`);
 }
 
+stage('a photo Immich has not measured is held back, then arrives shaped');
+{
+  // The window this stands in for is real — CI hit it once, with a 25-second metadata backlog — and
+  // momentary (measured on the rig: dimensions are readable ~50ms after an upload). It is created on
+  // purpose here, on the ORIGIN, because that is where refs are built: the sidecar is told to treat
+  // one photo as not yet measured.
+  const late = await upload(A, AKEY, 'late-e2e.jpg', `late-${Date.now()}`, '2026-08-15T10:00:00.000Z');
+  const hide = async (hidden) => (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/test/hide-dimensions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': AKEY },
+    body: JSON.stringify({ assetId: late, hidden }) })).json();
+  const hiddenOk = (await hide(true)).hidden === true;
+  check("the rig can hold one photo's dimensions back from the origin sidecar", hiddenOk);
+  await api(A, AKEY, `/albums/${ALBUM_ID}/assets`, { ...j({ ids: [late] }), method: 'PUT' });
+  const originWatcherTicks = async () =>
+    (await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/sync/status`, { headers: { 'x-api-key': AKEY } })).json()).ticks.watcher;
+  // Cycles, not a sleep: the album has to have been READ while the photo was unmeasured, or the
+  // check below would pass on a mirror that simply had not looked yet.
+  const ticksBeforeHold = await originWatcherTicks();
+  const looked = await until(async () => (await originWatcherTicks()) >= ticksBeforeHold + 3, 30000);
+  const held = await albumAssets(B, BKEY, mirror.id);
+  check('an unmeasured photo is held back, not mirrored as a square stub',
+        !!looked && held.length === 4, `mirror has ${held.length} after ${(await originWatcherTicks()) - ticksBeforeHold} look(s)`);
+  check('the photo is in the origin album all the same — held back, not lost',
+        (await albumAssets(A, AKEY, ALBUM_ID)).some(a => a.id === late));
+
+  const revealed = (await hide(false)).hidden === false;
+  const arrived = await until(async () => {
+    const x = await albumAssets(B, BKEY, mirror.id);
+    return x.length === 5 ? x : null;
+  }, 60000);
+  // The cursor must NOT have advanced while the photo waited: if the watcher had stored the album's
+  // version on that empty push, nothing would ever offer this photo again and it would never arrive.
+  check('once measured it arrives, with real dimensions rather than 1x1',
+        revealed && !!arrived && arrived.every(a => (a.exifInfo?.exifImageWidth ?? 0) > 1 && (a.exifInfo?.exifImageHeight ?? 0) > 1),
+        arrived ? arrived.map(a => `${a.exifInfo?.exifImageWidth}x${a.exifInfo?.exifImageHeight}`).join(',') : 'never arrived');
+
+  // Leave the album as later stages expect to find it.
+  await api(A, AKEY, '/assets', { ...j({ ids: [late], force: true }), method: 'DELETE' });
+  await until(async () => (await albumAssets(B, BKEY, mirror.id)).length === 4, 30000);
+}
+
 const bAdminName = (await api(B, BKEY, '/users/me')).name;
 // One account now represents a remote person for BOTH jobs, so its name depends on what we know:
 // "(via <server> server)" once a directory has placed them, "(via shared albums)" until then.
