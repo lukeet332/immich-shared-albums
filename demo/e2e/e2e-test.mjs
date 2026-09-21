@@ -91,6 +91,24 @@ const upload = async (base, key, name, seed, takenAt) => {
   return out.id;
 };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+/** Wait until Immich has extracted each asset's dimensions, and answer which are still unknown.
+ *
+ *  A preview can exist while `exifImageWidth` is still null: Immich fills it from the asset's own
+ *  metadata on its own schedule. A ref taken inside that window mirrors a square stub FOR EVER — the
+ *  ref carries the shape and the ledger marks it delivered — so the mirror-fidelity checks below are
+ *  only about the mirror once the origin knows. Slow runner, slow extraction: said as that, not as a
+ *  broken mirror. */
+const ensureDimensions = async (base, key, ids) => {
+  const unknown = new Set(ids);
+  for (let i = 0; i < 30 && unknown.size; i++) {
+    for (const id of [...unknown]) {
+      const exif = ((await api(base, key, `/assets/${id}`)) || {}).exifInfo || {};
+      if ((exif.exifImageWidth ?? 0) > 1 && (exif.exifImageHeight ?? 0) > 1) unknown.delete(id);
+    }
+    if (unknown.size) await sleep(2000);
+  }
+  return [...unknown];
+};
 const ensurePreviews = async (base, key, ids) => {
   for (const id of ids) {
     for (let i = 0; i < 30; i++) {
@@ -254,6 +272,10 @@ for (let i = 1; i <= 4; i++) {
   aIds.push(await upload(A, AKEY, `origin-e2e-${i}.jpg`, `og${i}${Date.now() % 10000}`, takenAt));
 }
 await ensurePreviews(A, AKEY, aIds);
+// The origin has to KNOW each photo's shape before anything mirrors it — see ensureDimensions.
+const unknownDims = await ensureDimensions(A, AKEY, aIds);
+check("the origin knows each photo's dimensions before anything mirrors them", unknownDims.length === 0,
+  unknownDims.length ? `still unknown after 60s: ${unknownDims.join(',')}` : `all ${aIds.length} known`);
 await api(A, AKEY, `/assets/${aIds[0]}`, { ...j({ latitude: 51.5074, longitude: -0.1278 }), method: 'PUT' });
 { // give the origin admin a profile picture so avatar-sync has a source
   const fd = new FormData();
