@@ -22,8 +22,8 @@ export const forgetWatcherCycles = (mappingId: string) => cycles.delete(mappingI
  *  before any early return. `cycles` above counts passes that did work and therefore stops
  *  advancing the moment a mapping settles; a caller asking "has the sidecar looked N more times
  *  and left things alone?" needs this count instead. Process-wide, in memory, observational. */
-export type LoopName = 'watcher' | 'invites';
-const ticks: Record<LoopName, number> = { watcher: 0, invites: 0 };
+export type LoopName = 'watcher' | 'invites' | 'comments';
+const ticks: Record<LoopName, number> = { watcher: 0, invites: 0, comments: 0 };
 export const recordLoopTick = (loop: LoopName) => {
   ticks[loop] += 1;
 };

@@ -12,6 +12,7 @@ import { readCredsFor, albumReadKey } from '../immich/access.ts';
 import { ensureContributor } from '../immich/contributors.ts';
 import { ensureHouseBot } from './house-bot.ts';
 import { peerAlbumMappingId } from './peer-mapping-id.ts';
+import { recordLoopTick } from './status.ts';
 import { finishSweep, startSweep, sweepsArePaused } from '../sweeps.ts';
 
 export const getComments = (albumId, key?: string) =>
@@ -198,6 +199,9 @@ export function startCommentLoop() {
     // Held by a rig proving a change was pushed, not swept — see sync-loops.md.
     if (sweepsArePaused()) return;
     if (!startSweep('comments')) return;
+    // Counted before the pull, like the other loops: this is "the comment lane looked", which a
+    // held lane must not claim.
+    recordLoopTick('comments');
     void syncComments()
       .catch(e => log('comment loop:', e.message))
       .finally(() => finishSweep('comments'));

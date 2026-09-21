@@ -606,9 +606,9 @@ const loopsReleased = (await holdSweeps(B_PANEL_WEB, bAuthForHooks, false)).paus
   && (await holdSweeps(C_PANEL_WEB, cAuthForHooks, false)).paused === false;
 check('every sweep was held through the reunion, and idle when it was held', loopsHeld && loopsReleased,
   `held=${JSON.stringify([heldB, heldC])} released=${loopsReleased} ticks ${JSON.stringify(ticksAtHold)} -> ${JSON.stringify(ticksAfter)}`);
-check('and not one of them ticked while the reunion completed', 
-  ticksAtHold.b.watcher === ticksAfter.b.watcher && ticksAtHold.c.watcher === ticksAfter.c.watcher,
-  `B ${ticksAtHold.b.watcher} -> ${ticksAfter.b.watcher}, C ${ticksAtHold.c.watcher} -> ${ticksAfter.c.watcher}`);
+check('and not one of them ticked while the reunion completed',
+  JSON.stringify(ticksAtHold) === JSON.stringify(ticksAfter),
+  `${JSON.stringify(ticksAtHold)} -> ${JSON.stringify(ticksAfter)} (every loop, not just the watcher)`);
 
 // The invite case above is the last to drive them, so the panels close here.
 await soloPanel.c.close();
