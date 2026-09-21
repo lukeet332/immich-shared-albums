@@ -20,6 +20,7 @@ import { canUnifyOwnAlbum, findAdoptableAlbum } from '../sync/adoption.ts';
 import { addHouseBotToAlbum } from '../sync/house-bot.ts';
 import { deleteProxyAsset } from '../immich/materialise.ts';
 import { seedRowsForAdoption } from '../sync/matches.ts';
+import { pushAlbumRefs } from '../sync/engine.ts';
 import type { AssetRef } from '../types.ts';
 import { peerRequest, withDeadline } from './transport.ts';
 import { albumTeardown } from '../sync/album-teardown.ts';
@@ -375,6 +376,13 @@ export async function unifyOwnAlbum(
     // `void`: deliberately unawaited. The loops retry, so a lost pull costs a tick, not the move.
     void reconcileMapping(mapping, peer).catch(e =>
       log(`post-reunion reconcile for "${own.name}": ${e.message} — the loops will retry`)
+    );
+    // The OTHER direction, and the one only this side can start: the peer's album is completed by
+    // OUR half arriving, and it cannot pull what it does not know we hold — its only route to these
+    // photos is this push. Left to the watcher's next cycle, the inviter's album read as untouched
+    // while this one was whole. Same code the watcher runs, so nothing new can drift from it.
+    void pushAlbumRefs(mapping, peer).catch(e =>
+      log(`post-reunion push for "${own.name}": ${e.message} — the loops will retry`)
     );
   }
   if (CFG.reconcileDebug)

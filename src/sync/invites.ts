@@ -38,6 +38,7 @@ import { recordLoopTick, recordNudge } from './status.ts';
 import { emitPanelEvent } from '../panel-events.ts';
 import crypto from 'node:crypto';
 import { refreshPeerIndexes } from './album-index.ts';
+import { sweepsArePaused } from '../sweeps.ts';
 
 /**
  * Our own human users, as offered to a paired household so they can invite one of us
@@ -515,6 +516,9 @@ export async function pullInvitationsOnce() {
 export let INVITES_RUNNING = false;
 export function startInviteLoop() {
   setInterval(() => {
+    // Held by a rig proving a change was pushed, not swept. Before the tick counter and the
+    // overlap guard: a held loop did not look, and must not read as having looked.
+    if (sweepsArePaused()) return;
     if (INVITES_RUNNING) return;
     INVITES_RUNNING = true;
     // Counted before anything can skip: this is "the loop looked", not "the loop worked".

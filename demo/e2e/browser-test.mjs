@@ -503,6 +503,23 @@ const clickInRow = (p, label, name) => p.evaluate(([label, name]) => {
   return true;
 }, [label, name]);
 
+// EVERY SWEEP IS HELD for the case below, on both households. The rig's one-second cadence cannot
+// tell a nudge from a timer, and this case is the one that must be a nudge: with the loops held
+// still, the invitation, the accept, both panel rows and BOTH halves of the union can only have
+// been pushed. Ticks are read back at the end to prove the hold took — a lane that forgot to hold
+// them would otherwise pass for the wrong reason.
+const holdSweeps = async (base, auth, paused) =>
+  (await (await fetch(`${base}/immich-shared-albums/test/pause-sweeps`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...auth }, body: JSON.stringify({ paused }) })).json()).paused;
+const bAuthForHooks = { Authorization: `Bearer ${bLogin.accessToken}` };
+const cAuthForHooks = { Authorization: `Bearer ${cLogin.accessToken}` };
+const loopsHeld = (await holdSweeps(B_PANEL_WEB, bAuthForHooks, true)) === true
+  && (await holdSweeps(C_PANEL_WEB, cAuthForHooks, true)) === true;
+const ticksAtHold = {
+  b: (await (await fetch(`${B_PANEL_WEB}/immich-shared-albums/sync/status`, { headers: bAuthForHooks })).json()).ticks,
+  c: (await (await fetch(`${C_PANEL_WEB}/immich-shared-albums/sync/status`, { headers: cAuthForHooks })).json()).ticks,
+};
+
 // C looks first so its offer is in B's index; B is the household that invites.
 await cPanel.p.goto(`${C_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'domcontentloaded' });
 await cPanel.p.waitForTimeout(3000);
@@ -556,21 +573,38 @@ check("and the pair leaves the inviter's list once it is done", goneNow,
   const bMe = await (await fetch(`${B_PANEL_WEB}/api/users/me`, { headers: { Authorization: `Bearer ${bLogin.accessToken}` } })).json();
   const cMe = await (await fetch(`${C}/api/users/me`, { headers: { 'x-api-key': CKEY } })).json();
   const bAuth = { Authorization: `Bearer ${bLogin.accessToken}` };
+  // Fifteen seconds, with every loop held: the two halves arrive by push and by the accept's own
+  // reconcile, so anything still missing after this could not have been swept in behind us.
   const settle = async (base, auth, albumId, ownerId) => {
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 30; i++) {
       const shape = await albumShape(base, auth, albumId, ownerId);
       if (shape.total >= 2) return shape;
-      await new Promise((r) => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 500));
     }
     return albumShape(base, auth, albumId, ownerId);
   };
-  const bShape = await settle(B_PANEL_WEB, bAuth, bInviteAlbum.id, bMe.id);
+  // C accepted, so C's own album is the one that adopted: it holds B's half as a stub.
   const cShape = await settle(C, { 'x-api-key': CKEY }, cInviteAlbum.id, cMe.id);
+  // B invited, so B's own album is completed by C's half ARRIVING — the push this case exists for.
+  const bShape = await settle(B_PANEL_WEB, bAuth, bInviteAlbum.id, bMe.id);
   check('the accepting household holds the union — its own photo plus the other half as a stub',
-    bShape.total === 2 && bShape.stubs === 1, JSON.stringify(bShape));
-  check('and so does the INVITING household — a reunion merges both ways',
     cShape.total === 2 && cShape.stubs === 1, JSON.stringify(cShape));
+  check('and so does the INVITING household — a reunion merges both ways, with no sweep to do it',
+    bShape.total === 2 && bShape.stubs === 1, JSON.stringify(bShape));
 }
+
+// The loops went still for that case and have to run again for anything after it.
+const loopsReleased = (await holdSweeps(B_PANEL_WEB, bAuthForHooks, false)) === false
+  && (await holdSweeps(C_PANEL_WEB, cAuthForHooks, false)) === false;
+const ticksAfter = {
+  b: (await (await fetch(`${B_PANEL_WEB}/immich-shared-albums/sync/status`, { headers: bAuthForHooks })).json()).ticks,
+  c: (await (await fetch(`${C_PANEL_WEB}/immich-shared-albums/sync/status`, { headers: cAuthForHooks })).json()).ticks,
+};
+check('every sweep was held through the reunion, on both households', loopsHeld && loopsReleased,
+  `held=${loopsHeld} released=${loopsReleased} ticks ${JSON.stringify(ticksAtHold)} -> ${JSON.stringify(ticksAfter)}`);
+check('and not one of them ticked while the reunion completed', 
+  ticksAtHold.b.watcher === ticksAfter.b.watcher && ticksAtHold.c.watcher === ticksAfter.c.watcher,
+  `B ${ticksAtHold.b.watcher} -> ${ticksAfter.b.watcher}, C ${ticksAtHold.c.watcher} -> ${ticksAfter.c.watcher}`);
 
 // The invite case above is the last to drive them, so the panels close here.
 await soloPanel.c.close();

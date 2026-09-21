@@ -35,6 +35,7 @@ import { auditLine } from '../sync/audit.ts';
 import { leaveAlbum } from '../sync/leave.ts';
 import { syncStatus, loopTicks, nudgesReceived } from '../sync/status.ts';
 import { emitPanelEvent, panelHintsEmitted } from '../panel-events.ts';
+import { setSweepsPaused, sweepsArePaused } from '../sweeps.ts';
 import { panelSubscribers, subscribeToPanelEvents } from '../panel-events.ts';
 import { forgetVisits, noteIndexTraffic, offerAlbumsFrom } from '../sync/index-freshness.ts';
 import { trafficTriggerFor } from '../sync/traffic-triggers.ts';
@@ -620,6 +621,24 @@ export const server = http.createServer(async (req, res) => {
         return send(400, { error: 'type must be invitations, index or shares' });
       emitPanelEvent(asked.type);
       return send(200, { ok: true, panels: panelSubscribers() });
+    }
+    // Rig-only: hold the background loops still, or release them. A lane that holds them and still
+    // sees a change arrive has proved the nudge delivered it, which no cadence can be argued into:
+    // the loops are the only thing that could otherwise have carried it. See sync-loops.md.
+    if (CFG.testHooks && path === `${ROUTE_PREFIX}/test/pause-sweeps` && req.method === 'POST') {
+      const caller = await callerIdentity(req);
+      if (!caller) return send(401, signInRequired('hold the sweeps'));
+      if (!caller.isAdmin) return send(403, { error: 'only an admin can hold the sweeps' });
+      let asked: { paused?: unknown };
+      try {
+        asked = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'malformed request body' });
+      }
+      if (typeof asked.paused !== 'boolean') return send(400, { error: 'paused must be true or false' });
+      setSweepsPaused(asked.paused);
+      log(`rig: background sweeps ${asked.paused ? 'held' : 'released'}`);
+      return send(200, { paused: sweepsArePaused() });
     }
     // Rig-only: forget every session, so the next authenticated request is treated as the first of
     // one. The real quiet period is fifteen minutes, which no test can wait out (index-offer.ts).

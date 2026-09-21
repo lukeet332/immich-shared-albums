@@ -12,11 +12,13 @@ import { peerRequest } from '../p2p/transport.ts';
 import { usersById } from '../immich/client.ts';
 import { readCredsFor, readAlbumAs, readAlbumAssetsAs } from '../immich/access.ts';
 import { shareableAssets, assetToRef } from '../immich/refs.ts';
+import { peerAlbumMappingId } from './peer-mapping-id.ts';
 import { materialiseRef, deleteProxyAsset } from '../immich/materialise.ts';
 import { recordOffered } from '../p2p/entitlement.ts';
 import { leaveAlbum } from './leave.ts';
 import { backfillFullCopies, hasStubRows } from './backfill.ts';
 import { recordWatcherCycle, recordLoopTick } from './status.ts';
+import { sweepsArePaused } from '../sweeps.ts';
 
 /** Consecutive failed pushes per mapping, in memory. A single 404 is TRANSIENT by protocol — the
  *  member may not have created its mirror yet (see goneOr404 in p2p/protocol.ts) — so the bar is
@@ -57,88 +59,15 @@ export async function watchOnce() {
         }
       }
       if (mapping.role === 'member' && mapping.permissions === 'view') continue; // view-only: nothing to push
-      const assets = await readAlbumAssetsAs(mapping.albumId, access);
-      if (!assets) throw new Error(`no album.read access to "${mapping.albumName}"`);
-      mapping.failCount = 0;
-      // Revocation, per photo: an asset removed from the album must stop being served to
-      // this mapping's peer, not just stop being advertised.
-      const revoked = store.offeredReconcile(
-        mapping.id,
-        assets.map(a => a.id)
-      );
-      if (revoked) log(`revoked ${revoked} byte entitlement(s) on "${mapping.albumName}"`);
-      const fresh = await shareableAssets(assets, mapping.id);
-      if (!fresh.length) {
+      const peer = state.peers.find(p => p.pub === mapping.peer);
+      if (!peer) continue; // no peer record: nothing to push to
+      const { inSync } = await pushAlbumRefs(mapping, peer);
+      // The cursor is the WATCHER's handshake, so only the watcher moves it: a reunion pushes the
+      // same way and has no business claiming the album was checked at a version it never read.
+      if (inSync) {
         mapping.localVersion = album.updatedAt;
         recordWatcherCycle(mapping.id);
         save();
-        continue;
-      }
-      const peer = state.peers.find(p => p.pub === mapping.peer);
-      if (!peer) continue; // no peer record: nothing to push to
-      const targetMapping =
-        mapping.role === 'member' ? mapping.remoteMappingId || mapping.remoteAlbumId : mapping.albumId;
-      const add: AssetRef[] = [];
-      for (const a of fresh) add.push(await assetToRef(a));
-      // Offering IS the grant: the peer materialises DURING the push, fetching stub bytes
-      // back from us before any response lands — so entitlement must be recorded first.
-      // A failed push leaves rows for assets still in the album, which the reconcile above
-      // keeps honest.
-      recordOffered(
-        mapping.id,
-        fresh.map(a => a.id)
-      );
-      // Chunked: one giant frame would trip the receiver's ISA_MAX_BODY_KB on big albums
-      // (~3k refs at the default) and protocol 2 has no way to signal "split and resend".
-      const BATCH = 400;
-      const failed = new Set<string>();
-      let pushFailed = false;
-      for (let at = 0; at < add.length; at += BATCH) {
-        const r = await peerRequest(peer, `/albums/${targetMapping}/refs`, {
-          add: add.slice(at, at + BATCH),
-        });
-        if (r.status === 410) {
-          mapping.dead = true;
-          mapping.deadAt = new Date().toISOString();
-          mapping.deadReason = 'peer answered 410 gone';
-          save();
-          log(`"${peer.name}" says "${mapping.albumName}" has ended (410) — no longer pushing it`);
-          pushFailed = true;
-          break;
-        }
-        if (r.status >= 400) {
-          pushFailed = true;
-          const n = (pushFailures.get(mapping.id) || 0) + 1;
-          pushFailures.set(mapping.id, n);
-          if (r.status === 404 && n >= PUSH_404_DEAD_AFTER) {
-            // The peer keeps saying it has no such album. Whatever happened over there — they
-            // unlinked us, lost their state, left — retrying every cycle forever only fills the
-            // log. Retire the mapping like a 410; re-sharing the album starts a fresh one.
-            mapping.dead = true;
-            mapping.deadAt = new Date().toISOString();
-            mapping.deadReason = `peer answered 404 to ${n} pushes in a row — it no longer has this album`;
-            pushFailures.delete(mapping.id);
-            save();
-            log(`"${peer.name}" no longer has "${mapping.albumName}" (404 x${n}) — no longer pushing it`);
-          } else if (n === 1 || n % 10 === 0) {
-            log(`ref push to "${peer.name}" failed: ${r.status}${n > 1 ? ` (x${n})` : ''}`);
-          }
-          break;
-        }
-        for (const c of r.json?.failed || []) failed.add(c);
-      }
-      if (!pushFailed) {
-        pushFailures.delete(mapping.id);
-        const landed = fresh.filter(a => !failed.has(wireChecksum(a)));
-        landed.forEach(a => seenAdd(mapping.id, wireChecksum(a), a.id));
-        if (!failed.size) {
-          mapping.localVersion = album.updatedAt;
-          recordWatcherCycle(mapping.id);
-          save();
-        }
-        log(
-          `pushed ${landed.length}/${fresh.length} ref(s) to "${peer.name}"${failed.size ? ` (${failed.size} deferred)` : ''}`
-        );
       }
     } catch (e) {
       mapping.failCount = (mapping.failCount || 0) + 1;
@@ -155,6 +84,94 @@ export async function watchOnce() {
   }
   await reconcileOnce();
 }
+
+/**
+ * Offer this mapping's album to its peer, and record what landed.
+ *
+ * The watcher's push, callable on its own: a reunion completes the OTHER side's album with this
+ * side's half, and leaving that to the watcher's next cycle is what made a merged pair read as
+ * merged in one album and untouched in the other. `inSync` is true when every ref landed, which is
+ * the watcher's cue to store the version it read — not this function's, because a caller that has
+ * not read a version must not record one.
+ */
+export async function pushAlbumRefs(mapping: Mapping, peer: Peer): Promise<{ inSync: boolean }> {
+  const access = readCredsFor(mapping);
+  const assets = await readAlbumAssetsAs(mapping.albumId, access);
+  if (!assets) throw new Error(`no album.read access to "${mapping.albumName}"`);
+  mapping.failCount = 0;
+  // Revocation, per photo: an asset removed from the album must stop being served to
+  // this mapping's peer, not just stop being advertised.
+  const revoked = store.offeredReconcile(
+    mapping.id,
+    assets.map(a => a.id)
+  );
+  if (revoked) log(`revoked ${revoked} byte entitlement(s) on "${mapping.albumName}"`);
+  const fresh = await shareableAssets(assets, mapping.id);
+  if (!fresh.length) return { inSync: true }; // nothing new to offer, so there is nothing to defer
+  const targetMapping = peerAlbumMappingId(mapping);
+  if (!targetMapping) {
+    log(`no remote album id for "${mapping.albumName}" — nothing to push to`);
+    return { inSync: false };
+  }
+  const add: AssetRef[] = [];
+  for (const a of fresh) add.push(await assetToRef(a));
+  // Offering IS the grant: the peer materialises DURING the push, fetching stub bytes
+  // back from us before any response lands — so entitlement must be recorded first.
+  // A failed push leaves rows for assets still in the album, which the reconcile above
+  // keeps honest.
+  recordOffered(
+    mapping.id,
+    fresh.map(a => a.id)
+  );
+  // Chunked: one giant frame would trip the receiver's ISA_MAX_BODY_KB on big albums
+  // (~3k refs at the default) and protocol 2 has no way to signal "split and resend".
+  const BATCH = 400;
+  const failed = new Set<string>();
+  let pushFailed = false;
+  for (let at = 0; at < add.length; at += BATCH) {
+    const r = await peerRequest(peer, `/albums/${targetMapping}/refs`, {
+      add: add.slice(at, at + BATCH),
+    });
+    if (r.status === 410) {
+      mapping.dead = true;
+      mapping.deadAt = new Date().toISOString();
+      mapping.deadReason = 'peer answered 410 gone';
+      save();
+      log(`"${peer.name}" says "${mapping.albumName}" has ended (410) — no longer pushing it`);
+      pushFailed = true;
+      break;
+    }
+    if (r.status >= 400) {
+      pushFailed = true;
+      const n = (pushFailures.get(mapping.id) || 0) + 1;
+      pushFailures.set(mapping.id, n);
+      if (r.status === 404 && n >= PUSH_404_DEAD_AFTER) {
+        // The peer keeps saying it has no such album. Whatever happened over there — they
+        // unlinked us, lost their state, left — retrying every cycle forever only fills the
+        // log. Retire the mapping like a 410; re-sharing the album starts a fresh one.
+        mapping.dead = true;
+        mapping.deadAt = new Date().toISOString();
+        mapping.deadReason = `peer answered 404 to ${n} pushes in a row — it no longer has this album`;
+        pushFailures.delete(mapping.id);
+        save();
+        log(`"${peer.name}" no longer has "${mapping.albumName}" (404 x${n}) — no longer pushing it`);
+      } else if (n === 1 || n % 10 === 0) {
+        log(`ref push to "${peer.name}" failed: ${r.status}${n > 1 ? ` (x${n})` : ''}`);
+      }
+      break;
+    }
+    for (const c of r.json?.failed || []) failed.add(c);
+  }
+  if (pushFailed) return { inSync: false };
+  pushFailures.delete(mapping.id);
+  const landed = fresh.filter(a => !failed.has(wireChecksum(a)));
+  landed.forEach(a => seenAdd(mapping.id, wireChecksum(a), a.id));
+  log(
+    `pushed ${landed.length}/${fresh.length} ref(s) to "${peer.name}"${failed.size ? ` (${failed.size} deferred)` : ''}`
+  );
+  return { inSync: failed.size === 0 };
+}
+
 // Heal member mirrors: re-pull the origin manifest and materialise anything we
 // missed (e.g. previews not yet generated at join time). Cheap no-op when in sync.
 export async function reconcileOnce() {
@@ -267,6 +284,9 @@ export async function reconcileMapping(mapping: Mapping, peer: Peer) {
 let WATCH_RUNNING = false;
 export function startWatchLoop() {
   setInterval(() => {
+    // Held by a rig proving a change was pushed, not swept. Before the tick counter and the
+    // overlap guard: a held loop did not look, and must not read as having looked.
+    if (sweepsArePaused()) return;
     if (WATCH_RUNNING) return;
     WATCH_RUNNING = true;
     watchOnce()
