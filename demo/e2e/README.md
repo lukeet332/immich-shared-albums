@@ -98,7 +98,11 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
     did work and therefore stops the moment a mapping settles). The rig reads it over
     `GET /immich-shared-albums/sync/status?albumId=` — present only with `ISA_TEST_HOOKS`,
     admin-only, absent from every real install. Wait for both counts to advance by N, then assert
-    the value held. This is why the suite has no literal `sleep` left.
+    the value held. This is why the suite has no literal `sleep` left. The loops can also be held
+    outright — `POST /immich-shared-albums/test/pause-sweeps` with `{"paused":true}`, released with
+    `false` — and a held loop records no tick at all: that is how the browser lane proves an
+    invitation, an accept and **both** halves of a union arrived over the wire rather than on a
+    timer. `sweeps.ts` holds the flag; `sync-loops.md` says which loops read it.
 11. **Never open a running sidecar's `state.db` from the host — read it through the container.**
     The store is WAL-mode SQLite, and the WAL protocol relies on POSIX file locks to know who else
     has the database open. Across a Docker Desktop bind mount (macOS) those locks never reach the

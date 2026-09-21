@@ -11,6 +11,9 @@ import { immichJson, jsonBody, usersById } from '../immich/client.ts';
 import { readCredsFor, albumReadKey } from '../immich/access.ts';
 import { ensureContributor } from '../immich/contributors.ts';
 import { ensureHouseBot } from './house-bot.ts';
+import { peerAlbumMappingId } from './peer-mapping-id.ts';
+import { recordLoopTick } from './status.ts';
+import { finishSweep, startSweep, sweepsArePaused } from '../sweeps.ts';
 
 export const getComments = (albumId, key?: string) =>
   immichJson(`/activities?albumId=${albumId}&type=comment`, {}, key);
@@ -141,8 +144,13 @@ export async function syncCommentsOnce() {
         }
         continue;
       }
-      const targetMapping =
-        mapping.role === 'member' ? mapping.remoteMappingId || mapping.remoteAlbumId : mapping.albumId;
+      const targetMapping = peerAlbumMappingId(mapping);
+      if (!targetMapping) {
+        // A mirror with no remote id addresses nothing: `/albums//activity` is not a route, and the
+        // comment stays pending rather than being posted at a stranger.
+        log(`no remote album id for "${mapping.albumName}" — nothing to push comments to`);
+        continue;
+      }
       const payload = comments.map(a => ({
         id: a.id,
         comment: a.comment,
@@ -187,5 +195,15 @@ export async function pullCanonicalComments(mapping, peer) {
 // comments ride a fast lane: the count statistic is one indexed query, so seconds-level
 // cadence stays cheap even on low-power hosts; the full activity fetch only runs on change
 export function startCommentLoop() {
-  setInterval(() => syncComments().catch(e => log('comment loop:', e.message)), CFG.commentPollMs);
+  setInterval(() => {
+    // Held by a rig proving a change was pushed, not swept — see sync-loops.md.
+    if (sweepsArePaused()) return;
+    if (!startSweep('comments')) return;
+    // Counted before the pull, like the other loops: this is "the comment lane looked", which a
+    // held lane must not claim.
+    recordLoopTick('comments');
+    void syncComments()
+      .catch(e => log('comment loop:', e.message))
+      .finally(() => finishSweep('comments'));
+  }, CFG.commentPollMs);
 }
