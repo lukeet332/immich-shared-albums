@@ -17,6 +17,14 @@ on:
       pr:
         description: Pull request number to review
         required: true
+      # Both default to the script's own constants rather than repeating them here, and exist for one
+      # case: a pull request so large that four chunks is not a review.
+      max_chunks:
+        description: Chunks to review (blank = the script's default)
+        required: false
+      max_requests:
+        description: Model requests this run may spend (blank = the script's default)
+        required: false
 
 permissions:
   contents: read
@@ -90,6 +98,15 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SAMBANOVA_API_KEY: ${{ secrets.SAMBANOVA_API_KEY }}
         run: |
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.max_chunks }}" ]; then
+            extra+=(--max-chunks "${{ inputs.max_chunks }}")
+          fi
+          if [ -n "${{ inputs.max_requests }}" ]; then
+            extra+=(--max-requests "${{ inputs.max_requests }}")
+          fi
           python .github/scripts/review.py \
             --repo "$GITHUB_REPOSITORY" \
-            --pr "${{ steps.pr.outputs.number }}"
+            --pr "${{ steps.pr.outputs.number }}" \
+            "${extra[@]}"
