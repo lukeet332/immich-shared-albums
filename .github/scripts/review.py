@@ -53,16 +53,22 @@ EXCLUDED_FALLBACK = (
     "src/web/accept.bundle.js",
     "src/web/share.bundle.js",
 )
-DEADLINE_SECONDS = 300
+DEADLINE_SECONDS = 900
 # Outer bounds rather than targets: DEADLINE_SECONDS is what actually stops a large pull request,
 # and both are overridable per run for one that is too big to cover in four chunks.
 MAX_REQUESTS = 8
 MAX_CHUNKS = 4
 # Workers, not threads: `http` bounds each request with a process-global SIGALRM. See review.md.
-PARALLEL = 1
-CALL_TIMEOUT_SECONDS = 60
+# Two rather than one because every model in the chain reasons before it answers: see the token cap.
+PARALLEL = 2
+CALL_TIMEOUT_SECONDS = 240
 CALL_ATTEMPTS = 1
-MAX_OUTPUT_TOKENS = 3000
+# Sized for a reasoning model, which thinks for thousands of tokens before it writes a word: a 6,451
+# token prompt cost one 9,398 reasoning tokens to answer, so a 3,000 cap came back
+# `finish_reason=length` with empty content — a wasted request that read as a model with nothing to say.
+MAX_OUTPUT_TOKENS = 16000
+# The most room a retry may ask for: a chunk that cannot answer in this much has not been cut off.
+MAX_OUTPUT_ROOM = 32000
 DEAD_KEY_STATUS_CODES = (401, 402, 403)
 DEAD_MODEL_STATUS_CODES = (404, 429)
 
@@ -199,36 +205,47 @@ def complete(stage, candidates, system, user, budget, max_tokens=MAX_OUTPUT_TOKE
             warn(f"{stage}: skipped — this run's budget is spent")
             return None
         base_url, env_name = PROVIDERS[provider]
-        body = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": 0,
-            "max_tokens": max_tokens,
-        }
+        room = max_tokens
         for attempt in range(CALL_ATTEMPTS):
             try:
-                budget.spend()
-                payload = http(
-                    "POST",
-                    f"{base_url}/chat/completions",
-                    os.environ.get(env_name, ""),
-                    body=body,
-                    timeout=CALL_TIMEOUT_SECONDS,
-                )
-                if not isinstance(payload, dict) or "choices" not in payload:
-                    # Print the provider's own body: a bare KeyError hides what it actually said.
-                    raise RuntimeError(f"unexpected response: {str(payload)[:300]}")
-                content = payload["choices"][0].get("message", {}).get("content")
-                if not content:
-                    choice = payload["choices"][0]
-                    raise RuntimeError(
-                        f"no content (finish_reason={choice.get('finish_reason')}): {str(payload)[:200]}"
+                while True:
+                    budget.spend()
+                    payload = http(
+                        "POST",
+                        f"{base_url}/chat/completions",
+                        os.environ.get(env_name, ""),
+                        body={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": system},
+                                {"role": "user", "content": user},
+                            ],
+                            "temperature": 0,
+                            "max_tokens": room,
+                        },
+                        timeout=CALL_TIMEOUT_SECONDS,
                     )
-                log(f"  {stage}: {identifier} answered ({len(content)} chars)")
-                return content
+                    if not isinstance(payload, dict) or "choices" not in payload:
+                        # Print the provider's own body: a bare KeyError hides what it actually said.
+                        raise RuntimeError(f"unexpected response: {str(payload)[:300]}")
+                    choice = payload["choices"][0]
+                    content = choice.get("message", {}).get("content")
+                    if content:
+                        log(f"  {stage}: {identifier} answered ({len(content)} chars)")
+                        return content
+                    last_error = (
+                        f"{identifier} no content (finish_reason={choice.get('finish_reason')}, "
+                        f"usage={payload.get('usage') or {}})"
+                    )
+                    if not (choice.get("finish_reason") == "length" and room < MAX_OUTPUT_ROOM):
+                        break
+                    # A reasoning model that ran out of room has not failed — it was cut off mid
+                    # thought, before it wrote a word. The same request with more room answers.
+                    room = min(room * 2, MAX_OUTPUT_ROOM)
+                    warn(f"{stage}: {identifier} was cut off; retrying with max_tokens={room}")
+                    if budget.exhausted():
+                        break
+                raise RuntimeError(last_error)
             except urllib.error.HTTPError as error:
                 detail = error.read().decode("utf-8", "replace")[:300]
                 last_error = f"{identifier} HTTP {error.code}: {detail}"

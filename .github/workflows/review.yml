@@ -56,7 +56,8 @@ jobs:
     # Above the script's own DEADLINE_SECONDS, so the pipeline always reaches the code that posts.
     # A dispatch may ask for a longer slice, so it gets the higher ceiling and DEADLINE_SECONDS is
     # what actually governs: a deadline past this ceiling would be killed before it could post.
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 45 || 8 }}
+    # 20 minutes, not 8, because a reasoning model spends minutes on a chunk rather than seconds.
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 45 || 20 }}
     permissions:
       contents: read
       pull-requests: write

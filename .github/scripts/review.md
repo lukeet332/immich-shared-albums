@@ -139,7 +139,7 @@ gh workflow run review.yml -f pr=131 -f chunk_offset=4
 ```
 
 `deadline_seconds` is exposed for the same reason and raises the job's ceiling to 45 minutes; the
-default 300 still governs every automatic run, because a review that has not posted by then is worth
+automatic 900 seconds still governs every push, because a review that has not posted by then is worth
 less than the next push starting.
 
 Two things to know before slicing. The order is deterministic for one head SHA — `split_into_chunks`
@@ -155,8 +155,9 @@ its own `Budget`, and `max_requests` is **divided** between them (`max(1, max_re
 each). Parallelism therefore spends the same budget in less wall clock rather than spending more —
 which is the only lever that matters, since the request allowances were never the binding constraint.
 
-`PARALLEL` is 1 by default, and at 1 `run` calls `review_slice` in its own process, which is exactly
-what it did before there was a worker path at all.
+`PARALLEL` is 2 by default — an automatic four-chunk review is two chunks per worker, which is what
+fits inside `DEADLINE_SECONDS` now that a chunk takes minutes rather than seconds. At 1 `run` calls
+`review_slice` in its own process, which is exactly what it did before there was a worker path at all.
 
 Processes rather than threads, for a specific reason: `http` bounds a request with
 `signal.setitimer(SIGALRM)`, and a signal is process-global and can only be installed from a main
@@ -215,11 +216,37 @@ reaches `integrate.api.nvidia.com`, `api.mistral.ai` and `api.sambanova.ai`, so 
 is added to `review_models.json` without touching the script; the order inside that file is what
 decides which allowance is spent first.
 
-`chunk_priority` puts source before config before prose, so with `MAX_CHUNKS` at 2 the files
-reviewed are the consequential ones rather than whichever sorted first.
+`chunk_priority` puts source before config before prose, so with `MAX_CHUNKS` at 4 the files reviewed
+are the consequential ones rather than whichever sorted first.
 
 `CALL_ATTEMPTS` is 1: a queued free endpoint does not answer faster on retry, and each retry is
-another request against the daily allowance.
+another request against the daily allowance. The one retry that does pay is a different shape and is
+handled separately — see the token budget below.
+
+## The token budget is a reasoning budget
+
+`MAX_OUTPUT_TOKENS` was 3,000, which suited the fast code model the chain used to open on and fails
+every reasoning model in it now. Measured on `rust/src/config.rs` of the Rust port, a 6,451-token
+prompt against a reasoning model:
+
+| `max_tokens` | `finish_reason` | completion | of which reasoning | content |
+| --- | --- | --- | --- | --- |
+| 3,000 | `length` | 3,000 | 3,000 | **0 chars** |
+| 16,000 | `stop` | 9,516 | 9,398 | 480 chars |
+
+`length` with empty content is not a model with nothing to say; it is a model cut off mid-thought
+before it wrote a word, and it used to read as "no provider answered" and spend a request. So
+`complete` doubles the room once when it sees exactly that (`MAX_OUTPUT_ROOM` caps the doubling at
+32,000, and a chunk that still cannot answer stops there), and `CALL_TIMEOUT_SECONDS` is 240 because
+those 9,398 reasoning tokens take minutes, not the 60 seconds a non-reasoning model needed.
+
+The chain is affected unevenly: `gemma-3-27b-it` writes content immediately, `gemini-3.1-flash-lite`
+and `openai/gpt-oss-120b` think first, and OpenRouter's free router lands on whatever reasoner is
+free — observed: `inclusionai/ling-3.0-flash-vl`, `nex-agi/nex-n2.5-mini`. Groq's 8,000 tokens per
+minute also means a reasoning model there will 429 on a large chunk and fall through to the next
+candidate, which is the chain doing its job rather than a fault.
+
+`usage` is in the warning for exactly this reason: `finish_reason` alone once cost an afternoon.
 
 ## Context given to the review stage
 
