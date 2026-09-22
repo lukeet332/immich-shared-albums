@@ -28,6 +28,10 @@ For a comment event the pull request is not in the payload, so the workflow reso
 head SHA from the API in a step before `actions/checkout`. That SHA is what `file_excerpt` and
 `rules_for` read, so a command reviews the tree it was issued against.
 
+`concurrency` sits on the job, not the workflow, and its group carries the event name: a comment the
+job's own condition skips must not take the group at all, or a bot's comment cancels the review it
+was just posted against, and a comment must not cancel an in-flight push review.
+
 ## The budget is requests, not tokens
 
 OpenRouter's free tier allows **50 free-model requests per UTC day** (`free_model_daily_requests` on

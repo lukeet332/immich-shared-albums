@@ -21,16 +21,18 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
-  cancel-in-progress: true
-
 jobs:
   review:
     # A bot's own comment must not re-trigger the job, and issue_comment fires for plain issues too.
     if: >-
       github.event.sender.type != 'Bot' &&
       (github.event_name == 'pull_request' || github.event.issue.pull_request)
+    # Job level, not workflow level: a job this condition skips must not take the group, or a bot's
+    # comment cancels the review it just posted against. The event name is in the group so a comment
+    # cannot cancel an in-flight push review either.
+    concurrency:
+      group: review-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     # Above the script's own DEADLINE_SECONDS, so the pipeline always reaches the code that posts.
     timeout-minutes: 8
