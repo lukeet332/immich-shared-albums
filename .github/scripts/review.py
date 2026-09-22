@@ -533,6 +533,7 @@ def main():
     parser.add_argument("--max-requests", type=int, default=MAX_REQUESTS)
     parser.add_argument("--deadline-seconds", type=int, default=DEADLINE_SECONDS)
     parser.add_argument("--max-chunks", type=int, default=MAX_CHUNKS)
+    parser.add_argument("--chunk-offset", type=int, default=0)
     args = parser.parse_args()
     try:
         return run(args)
@@ -591,13 +592,19 @@ def run(args):
     files = changed_lines_by_file(diff_text)
     chunks = split_into_chunks(files, excluded_patterns(args.root))
     total_chunks = len(chunks)
-    if total_chunks > args.max_chunks:
+    start, end = args.chunk_offset, args.chunk_offset + args.max_chunks
+    if end < total_chunks:
         notice(
-            f"{total_chunks} chunks, reviewing the first {args.max_chunks}: each chunk costs up to two "
-            "requests against the providers' free daily allowances."
+            f"{total_chunks} chunks, reviewing {start + 1}-{min(end, total_chunks)}: each chunk costs "
+            "a request against the providers' free daily allowances."
         )
-        chunks = chunks[: args.max_chunks]
-    log(f"{len(files)} files → {len(chunks)}/{total_chunks} chunks, budget {args.max_requests} requests")
+    chunks = chunks[start:end]
+    if not chunks:
+        warn(f"No chunks at offset {start}: this pull request has {total_chunks}.")
+    log(
+        f"{len(files)} files → {len(chunks)} chunks from offset {start} of {total_chunks}, "
+        f"budget {args.max_requests} requests"
+    )
 
     findings = []
     answered = False
@@ -683,9 +690,13 @@ def run(args):
     if total_chunks > len(chunks):
         lines.append("")
         lines.append(
-            f"_Scope: {len(chunks)} of {total_chunks} chunks across {len(files)} changed files. "
-            "Raise `max_chunks` to cover the rest._"
+            f"_Scope: {len(chunks)} of {total_chunks} chunks from offset {start}, across "
+            f"{len(files)} changed files._"
         )
+        if end < total_chunks:
+            lines.append(
+                f"_Next slice: `gh workflow run review.yml -f pr={args.pr} -f chunk_offset={end}`_"
+            )
     if findings and not verified:
         lines.append("")
         lines.append("_The verification stage did not answer, so these findings are unverified._")

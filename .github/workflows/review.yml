@@ -25,6 +25,12 @@ on:
       max_requests:
         description: Model requests this run may spend (blank = the script's default)
         required: false
+      chunk_offset:
+        description: Chunk to start at (blank = 0), which is how the next slice of a huge diff is read
+        required: false
+      deadline_seconds:
+        description: Wall clock this run may take (blank = 300; keep it under the 45-minute job cap)
+        required: false
 
 permissions:
   contents: read
@@ -45,7 +51,9 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     # Above the script's own DEADLINE_SECONDS, so the pipeline always reaches the code that posts.
-    timeout-minutes: 8
+    # A dispatch may ask for a longer slice, so it gets the higher ceiling and DEADLINE_SECONDS is
+    # what actually governs: a deadline past this ceiling would be killed before it could post.
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 45 || 8 }}
     permissions:
       contents: read
       pull-requests: write
@@ -124,6 +132,12 @@ jobs:
           fi
           if [ -n "${{ inputs.max_requests }}" ]; then
             extra+=(--max-requests "${{ inputs.max_requests }}")
+          fi
+          if [ -n "${{ inputs.chunk_offset }}" ]; then
+            extra+=(--chunk-offset "${{ inputs.chunk_offset }}")
+          fi
+          if [ -n "${{ inputs.deadline_seconds }}" ]; then
+            extra+=(--deadline-seconds "${{ inputs.deadline_seconds }}")
           fi
           script=.github/scripts/review.py
           config=.github/review_models.json
