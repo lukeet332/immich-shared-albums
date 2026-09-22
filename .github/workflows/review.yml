@@ -23,10 +23,12 @@ permissions:
 
 jobs:
   review:
-    # A bot's own comment must not re-trigger the job, and issue_comment fires for plain issues too.
+    # A bot's own comment must not re-trigger the job, issue_comment fires for plain issues too, and
+    # a dispatch carries neither a pull request nor an issue in its payload.
     if: >-
       github.event.sender.type != 'Bot' &&
-      (github.event_name == 'pull_request' || github.event.issue.pull_request)
+      (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' ||
+      github.event.issue.pull_request)
     # Job level, not workflow level: a job this condition skips must not take the group, or a bot's
     # comment cancels the review it just posted against. The event name is in the group so a comment
     # cannot cancel an in-flight push review either.

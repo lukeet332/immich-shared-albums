@@ -16,6 +16,10 @@ first line decides specifically so that quoting a command inside a reply is not 
 `acknowledge` and `reply_to_trigger` read the kind back to choose between the review-comment and the
 issue-comment endpoints.
 
+The job's own condition admits exactly three ways in, because each carries the pull request
+differently: a `pull_request` event (the number is in the payload), a `workflow_dispatch` (only the
+`pr` input names it), and a comment on a pull request from a non-bot sender.
+
 | Command | Effect |
 | --- | --- |
 | `/review` | the full review now, updating the summary and posting inline comments |
