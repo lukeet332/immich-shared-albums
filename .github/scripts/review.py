@@ -513,8 +513,12 @@ def review_chunk(chunk, allowed, stages, root, budget, label):
 
 
 def review_slice(work, stages, root, budget, total):
-    """A contiguous slice of `work` sharing one budget: a sequential run is the slice of everything."""
-    findings, answered = [], False
+    """A contiguous slice of `work` sharing one budget: a sequential run is the slice of everything.
+
+    `read` counts the chunks a model actually answered, which is not the same as the chunks handed to
+    it: a run that is rate limited out reads one of twelve and must not report twelve.
+    """
+    findings, answered, read = [], False, 0
     for done, (position, chunk, allowed) in enumerate(work):
         if budget.exhausted():
             warn(f"stopping after {done} of {len(work)} assigned chunks — budget spent")
@@ -529,7 +533,8 @@ def review_slice(work, stages, root, budget, total):
             warn(f"chunk {position + 1} failed: {type(error).__name__}: {error}")
         findings.extend(chunk_findings)
         answered = answered or chunk_answered
-    return findings, answered
+        read += 1 if chunk_answered else 0
+    return findings, answered, read
 
 
 def review_in_parallel(work, stages, root, workers, max_requests, deadline_seconds, total):
@@ -554,11 +559,11 @@ def review_in_parallel(work, stages, root, workers, max_requests, deadline_secon
         pid = os.fork()
         if pid == 0:
             try:
-                found, heard = review_slice(
+                found, heard, read = review_slice(
                     piece, stages, root, Budget(share, deadline_seconds), total
                 )
                 with open(path, "w", encoding="utf-8") as result:
-                    json.dump({"findings": found, "answered": heard}, result)
+                    json.dump({"findings": found, "answered": heard, "read": read}, result)
                 log(f"worker {order + 1} read {len(piece)} chunk(s), {len(found)} finding(s)")
             except BaseException as error:
                 # A worker must never take the run down: `os._exit` skips the parent's own cleanup.
@@ -575,7 +580,7 @@ def review_in_parallel(work, stages, root, workers, max_requests, deadline_secon
             warn(f"worker {order + 1} ran past the deadline; its chunks are unreviewed")
             os.kill(pid, signal.SIGKILL)
             os.waitpid(pid, 0)
-    findings, answered = [], False
+    findings, answered, read = [], False, 0
     for _, _, path in children:
         try:
             with open(path, encoding="utf-8") as result:
@@ -590,7 +595,8 @@ def review_in_parallel(work, stages, root, workers, max_requests, deadline_secon
                 pass
         findings.extend(piece["findings"])
         answered = answered or piece["answered"]
-    return findings, answered
+        read += piece["read"]
+    return findings, answered, read
 
 
 def read_trigger():
@@ -619,6 +625,28 @@ def parse_command(body, mention=DEFAULT_MENTION):
         # A bare mention with a question is the natural way to ask one.
         return "ask", rest
     return None, ""
+
+
+def already_commented(repo, pr, token):
+    """The (path, line, title) triples this account has already commented on.
+
+    Inline comments are not rewritten in place the way the summary is, so without this a re-run of the
+    same slice posts the same finding again — which is what the Rust port's first two runs did.
+    """
+    try:
+        login = (http("GET", f"{API}/user", token) or {}).get("login", "")
+    except Exception:
+        return set()
+    if not login:
+        return set()
+    existing = api(repo, f"/pulls/{pr}/comments?per_page=100", token)
+    posted = set()
+    for comment in existing if isinstance(existing, list) else []:
+        if (comment.get("user") or {}).get("login") != login:
+            continue
+        title = comment.get("body", "").split("\n", 1)[0].strip("* ").strip()
+        posted.add((comment.get("path"), comment.get("line") or comment.get("original_line"), title))
+    return posted
 
 
 def post_comment(repo, pr, token, body, marker=MARKER):
@@ -780,7 +808,7 @@ def run(args):
         (start + offset, chunk, sorted(files[chunk["path"]]["added"]))
         for offset, chunk in enumerate(chunks)
     ]
-    findings, answered, parallel = [], False, None
+    findings, answered, read, parallel = [], False, 0, None
     if args.parallel > 1 and len(work) > 1:
         parallel = review_in_parallel(
             work,
@@ -792,9 +820,9 @@ def run(args):
             total_chunks,
         )
     if parallel is None:
-        findings, answered = review_slice(work, stages, args.root, budget, total_chunks)
+        findings, answered, read = review_slice(work, stages, args.root, budget, total_chunks)
     else:
-        findings, answered = parallel
+        findings, answered, read = parallel
     log(f"{len(findings)} candidate findings")
 
     verified = False
@@ -842,11 +870,14 @@ def run(args):
             f"- **{finding.get('severity', 'medium')}** `{finding['path']}:{finding['line']}` — "
             f"{finding.get('title', '')}"
         )
-    if total_chunks > len(chunks):
+    if read < total_chunks:
         lines.append("")
+        given = (
+            f"chunks {start + 1}-{start + len(chunks)}" if chunks else f"no chunks, at offset {start}"
+        )
         lines.append(
-            f"_Scope: {len(chunks)} of {total_chunks} chunks from offset {start}, across "
-            f"{len(files)} changed files._"
+            f"**{total_chunks - read} of {total_chunks} chunks were not reviewed.** This run was given "
+            f"{given} and a model read {read} of them, across {len(files)} changed files."
         )
         if end < total_chunks:
             lines.append(
@@ -871,6 +902,16 @@ def run(args):
             }
             for finding in findings
         ]
+        already = already_commented(args.repo, args.pr, token) if comments else set()
+        fresh = [
+            comment
+            for comment in comments
+            if (comment["path"], comment["line"], comment["body"].split("\n", 1)[0].strip("* ").strip())
+            not in already
+        ]
+        if len(fresh) < len(comments):
+            log(f"{len(comments) - len(fresh)} finding(s) already have a comment; not repeating them")
+        comments = fresh
         if comments:
             posted = False
             try:

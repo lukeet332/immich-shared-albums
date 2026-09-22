@@ -290,6 +290,13 @@ blacklist exists for.
 `report_failure` and returns 0. A reviewer must never decide whether a merge happens, and the gates
 stay the fast checks and the two e2e lanes (AGENTS.md, "How changes land").
 
+The summary states coverage in the same weight as the findings — **"N of M chunks were not
+reviewed"** — because a partial read presented as a review is the same lie as silence. `read` counts
+the chunks a model actually answered, not the chunks handed to it: a run rate limited out after one
+chunk has read one of twelve, however many it was given. Inline comments are de-duplicated across
+runs by `already_commented`, which skips a `(path, line, title)` this account has already posted on,
+since unlike the summary an inline comment is never rewritten in place.
+
 Silence is the failure mode that matters here, because a run that posted nothing is indistinguishable
 from a clean pull request — which is how a 406 on the Rust port's pull request produced no review at
 all and nobody noticed. So `report_failure` writes the reason into the same summary comment
