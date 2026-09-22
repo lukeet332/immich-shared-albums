@@ -202,6 +202,12 @@ all and nobody noticed. So `report_failure` writes the reason into the same summ
 `MAX_CHUNKS` the summary also states the scope it did read, because "no findings" over four of 248
 chunks is not the same claim as no findings.
 
+`verify` is held to the same rule, one stage further in. `verdicts is None` means the verifier
+answered nothing, which is not the same as refuting everything — dropping the candidates there turns
+an outage into "no issues found" — so the findings are kept and the summary says they are unverified.
+An answered `{"verdicts": []}` is the verifier working and finding nothing worth confirming, and that
+does drop them.
+
 ## Known limits
 
 - Fork PRs are skipped: the `pull_request` token is read-only, and `pull_request_target` would hand

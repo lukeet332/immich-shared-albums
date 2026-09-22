@@ -635,23 +635,31 @@ def run(args):
                 findings.append(finding)
     log(f"{len(findings)} candidate findings")
 
+    verified = False
     if findings and "verify" in stages:
         payload = json.dumps([{k: f.get(k) for k in ("path", "line", "severity", "title", "body")} for f in findings])
         verdicts = parse_json_object(
             complete("verify", stages["verify"], SYSTEM_VERIFY, f"Candidates:\n{payload}", budget)
         )
-        confirmed = []
-        for verdict in (verdicts or {}).get("verdicts", []):
-            index = verdict.get("index")
-            if (
-                isinstance(index, int)
-                and 0 <= index < len(findings)
-                and verdict.get("verdict") == "confirm"
-            ):
-                findings[index]["verification"] = verdict.get("reason", "")
-                confirmed.append(findings[index])
-        log(f"{len(confirmed)} of {len(findings)} survived verification")
-        findings = confirmed
+        if verdicts is None:
+            # A verifier that answered nothing must not read as one that refuted everything: dropping
+            # the findings here turns an outage into "no issues found", which is the same false clean
+            # the review stage avoids by tracking whether anything answered at all.
+            warn("verification did not run, so the findings are posted unverified")
+        else:
+            verified = True
+            confirmed = []
+            for verdict in verdicts.get("verdicts", []):
+                index = verdict.get("index")
+                if (
+                    isinstance(index, int)
+                    and 0 <= index < len(findings)
+                    and verdict.get("verdict") == "confirm"
+                ):
+                    findings[index]["verification"] = verdict.get("reason", "")
+                    confirmed.append(findings[index])
+            log(f"{len(confirmed)} of {len(findings)} survived verification")
+            findings = confirmed
 
     findings = [f for f in findings if f.get("severity") in SEVERITIES][: args.max_comments]
     log(f"{len(findings)} findings to post")
@@ -678,6 +686,9 @@ def run(args):
             f"_Scope: {len(chunks)} of {total_chunks} chunks across {len(files)} changed files. "
             "Raise `max_chunks` to cover the rest._"
         )
+    if findings and not verified:
+        lines.append("")
+        lines.append("_The verification stage did not answer, so these findings are unverified._")
     body = "\n".join(lines)[:60000]
     post_comment(args.repo, args.pr, token, body)
 
