@@ -1,15 +1,15 @@
 {
-  "$comment": "Stage → model, first entry that has a key wins and a failure falls through. See .github/scripts/review.md.",
-  "summarise": [
-    { "provider": "cerebras", "model": "gpt-oss-120b" },
-    { "provider": "openrouter", "model": "nvidia/nemotron-3.5-lightning:free" }
-  ],
+  "$comment": "Stage → model, rotated per pull request. Both stages name the same providers in the same order with verify one entry behind, so review and verify never open on the same provider. See .github/scripts/review.md.",
   "review": [
-    { "provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free" },
-    { "provider": "gemini", "model": "gemini-3.1-flash-lite" }
+    { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+    { "provider": "groq", "model": "openai/gpt-oss-120b" },
+    { "provider": "gemini", "model": "gemma-3-27b-it" },
+    { "provider": "openrouter", "model": "openrouter/free" }
   ],
   "verify": [
-    { "provider": "mistral", "model": "mistral-small-latest" },
-    { "provider": "cerebras", "model": "gpt-oss-120b" }
+    { "provider": "groq", "model": "openai/gpt-oss-120b" },
+    { "provider": "gemini", "model": "gemma-3-27b-it" },
+    { "provider": "openrouter", "model": "openrouter/free" },
+    { "provider": "gemini", "model": "gemini-3.1-flash-lite" }
   ]
 }

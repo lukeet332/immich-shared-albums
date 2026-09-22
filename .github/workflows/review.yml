@@ -5,28 +5,69 @@ name: review
 
 on:
   pull_request:
+    # `synchronize` reviews every push: each pull request rotates to a different provider, and the
+    # chain's free allowances total far more than this repo's push rate.
     types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    # This is what makes the bot conversational. Every comment fires the job; review.py ignores the
+    # ones not addressed to it, so an ordinary discussion costs nothing.
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to review
+        required: true
 
 permissions:
   contents: read
 
-concurrency:
-  group: review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   review:
-    if: github.event.sender.type != 'Bot'
+    # A bot's own comment must not re-trigger the job, issue_comment fires for plain issues too, and
+    # a dispatch carries neither a pull request nor an issue in its payload.
+    if: >-
+      github.event.sender.type != 'Bot' &&
+      (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' ||
+      github.event.issue.pull_request)
+    # Job level, not workflow level: a job this condition skips must not take the group, or a bot's
+    # comment cancels the review it just posted against. The event name is in the group so a comment
+    # cannot cancel an in-flight push review either.
+    concurrency:
+      group: review-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Above the script's own DEADLINE_SECONDS, so the pipeline always reaches the code that posts.
+    timeout-minutes: 8
     permissions:
       contents: read
       pull-requests: write
       issues: write
     steps:
+      # The pull request is not in the event payload for a comment, so it is resolved from the API.
+      # The head ref matters: file_excerpt and rules_for read the tree that is checked out.
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          number="${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" -q .head.sha)
+          # An EMPTY kind is how review.py is told this is not a comment, so only a comment sets one.
+          kind=""
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            kind=issue
+            if [ -n "${{ github.event.comment.pull_request_review_id }}" ]; then kind=review; fi
+          fi
+          {
+            echo "number=$number"
+            echo "ref=$ref"
+            echo "kind=$kind"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.pr.outputs.ref }}
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -35,8 +76,12 @@ jobs:
       - name: Review
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_KIND: ${{ steps.pr.outputs.kind }}
           # Only the keys that exist are used: a stage skips providers without one and falls through
           # its candidate list. With no key at all the pipeline prints a notice and does nothing.
+          # Which provider serves which stage is .github/review_models.json, not this file.
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -47,4 +92,4 @@ jobs:
         run: |
           python .github/scripts/review.py \
             --repo "$GITHUB_REPOSITORY" \
-            --pr "${{ github.event.pull_request.number }}"
+            --pr "${{ steps.pr.outputs.number }}"
