@@ -25,7 +25,10 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
-    auto_incremental_review: true
+    # CodeRabbit counts a review per PUSH, not per PR, and the OSS allowance is a rolling per-hour
+    # budget — so incremental review spends it several times over on any PR that gets pushed twice.
+    # The opening push is reviewed automatically; later ones on request with `@coderabbitai review`.
+    auto_incremental_review: false
     # Reviews are a limited resource, so they are SPENT rather than spent by default: label a PR
     # `skip-coderabbit` when a human has already decided the diff is safe (mechanical, size-only,
     # a doc tweak) and a review would be noise. Removing the label puts it back in the queue.
