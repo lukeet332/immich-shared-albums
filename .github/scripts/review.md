@@ -42,6 +42,14 @@ For a comment event the pull request is not in the payload, so the workflow reso
 head SHA from the API in a step before `actions/checkout`. That SHA is what `file_excerpt` and
 `rules_for` read, so a command reviews the tree it was issued against.
 
+`review.py` and `review_models.json` are the exception, and they come from the **default branch**: a
+step fetches them into `.review-tool` and the run uses those, while `--root` still points at the pull
+request's tree. Two reasons, one of which cost a review of the Rust port — that branch was cut before
+`fetch_diff` existed, so the dispatch that was meant to review it ran the old script and hit the same
+406 the fix had already handled. The other is that a pull request editing `review.py` would otherwise
+be choosing how it is reviewed, with the provider keys in scope. If the default branch cannot be read
+the run falls back to the pull request's copy and warns rather than going red.
+
 `concurrency` sits on the job, not the workflow, and its group carries the event name: a comment the
 job's own condition skips must not take the group at all, or a bot's comment cancels the review it
 was just posted against, and a comment must not cancel an in-flight push review.
