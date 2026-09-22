@@ -26,10 +26,7 @@ differently: a `pull_request` event (the number is in the payload), a `workflow_
 | `/summary` | the same review, but only the summary comment is posted |
 | `/ask <question>` | one model call answering a question about the pull request |
 | `/help` | `HELP_TEXT` |
-
-No mention is needed — the bot reads every comment on the pull request, and `parse_command` only
-looks at the first line. A bare `@isa` still parses so old comments keep working, but it is
-deliberately not advertised: `isa` is another GitHub account, and mentioning it notifies them.
+| `@isa <anything>` | treated as `/ask`, so a bare mention with a question reads naturally |
 
 `acknowledge` reacts with 👀 before the work starts, because a command that shows nothing looks
 broken. `reply_to_trigger` answers a review comment **inside its own thread** — AGENTS.md requires

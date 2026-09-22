@@ -18,8 +18,6 @@ MAX_FILE_CHARS = 12000
 MAX_RULES_CHARS = 4000
 SOURCE_SUFFIXES = (".ts", ".tsx", ".rs", ".mjs", ".js")
 MAX_DIFF_CHARS = 20000
-# Kept only so a comment that already addresses the bot this way still works. It is NOT advertised:
-# `isa` is another GitHub account, so typing this mention notifies a stranger. `/review` needs none.
 DEFAULT_MENTION = "@isa"
 COMMANDS = ("review", "summary", "ask", "help")
 HELP_TEXT = f"""{MARKER}
@@ -32,8 +30,8 @@ HELP_TEXT = f"""{MARKER}
 | `/ask <question>` | answer a question about this pull request |
 | `/help` | this list |
 
-No mention is needed: the bot reads every comment on the pull request, so `/review` on its own is
-enough. Replies to an inline comment arrive in that comment's own thread.
+`{DEFAULT_MENTION} <anything>` also works and is treated as `/ask`, so a plain question reads
+naturally. Replies to an inline comment arrive in that comment's own thread.
 
 The automatic review runs on `opened`, `reopened`, `ready_for_review` and every push to the branch."""
 MAX_COMMENTS = 12
@@ -147,40 +145,6 @@ def http(method, url, token, body=None, accept="application/vnd.github+json", ti
 
 def api(repo, path, token, method="GET", body=None, accept="application/vnd.github+json"):
     return http(method, f"{API}/repos/{repo}{path}", token, body=body, accept=accept)
-
-
-def pull_diff(repo, pr, token):
-    """The pull request's diff, and the files GitHub would not show.
-
-    The diff media type answers 406 once a pull request passes 20,000 lines, and that single refusal
-    used to end the run: no diff, no review, no comment — which is exactly what a large port looks
-    like from the outside. `/files` answers per-file patches instead, so the review continues over
-    what GitHub will show, and the summary says how much it could not see.
-    """
-    try:
-        return api(repo, f"/pulls/{pr}", token, accept="application/vnd.github.v3.diff"), []
-    except urllib.error.HTTPError as error:
-        if error.code != 406:
-            raise
-        warn("the diff is over GitHub's 20,000-line limit — building it from per-file patches")
-
-    pieces, unseen, page = [], [], 1
-    while True:
-        batch = api(repo, f"/pulls/{pr}/files?per_page=100&page={page}", token)
-        if not batch:
-            break
-        for entry in batch:
-            name = entry.get("filename") or ""
-            patch = entry.get("patch")
-            if not patch:
-                # Binary, or a file GitHub also refuses to patch: name it, review the rest.
-                unseen.append(name)
-                continue
-            pieces.append(f"--- a/{name}\n+++ b/{name}\n{patch}")
-        if len(batch) < 100:
-            break
-        page += 1
-    return "\n".join(pieces), unseen
 
 
 def key_for(provider):
@@ -521,9 +485,7 @@ def main():
             reply_to_trigger(args.repo, args.pr, token, trigger, HELP_TEXT)
             return 0
 
-    diff_text, unseen = pull_diff(args.repo, args.pr, token)
-    if unseen:
-        notice(f"{len(unseen)} file(s) came without a patch and could not be reviewed: {', '.join(unseen[:5])}")
+    diff_text = api(args.repo, f"/pulls/{args.pr}", token, accept="application/vnd.github.v3.diff")
     if command == "ask":
         answer = answer_question(argument, pull, diff_text, args.root, stages, budget)
         reply_to_trigger(
