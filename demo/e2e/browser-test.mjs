@@ -251,11 +251,23 @@ const seesPair = (t) => new RegExp(panelName).test(candidates(t));
 // lane has ever driven its panel — the panel needs a session, and there was no way to mint one. Open
 // it for this case and put it back, so the hardening the rig exists to prove stays proven.
 const cConfig = await (await fetch(`${C}/api/system-config`, { headers: { 'x-api-key': CKEY } })).json();
-const setPasswordLogin = (enabled) => fetch(`${C}/api/system-config`, { method: 'PUT',
-  headers: { 'x-api-key': CKEY, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ ...cConfig, passwordLogin: { ...cConfig.passwordLogin, enabled } }) });
+const systemConfig = async () => (await fetch(`${C}/api/system-config`, { headers: { 'x-api-key': CKEY } })).json();
+// WAITED FOR, not assumed: Immich answers the PUT before the change is visible to a login, and a
+// lane that assumes otherwise reports "C failed" — which reads like a broken product rather than a
+// setting that had not been applied yet. The previous version checked nothing and slept nowhere.
+const setPasswordLogin = async (enabled) => {
+  const put = await fetch(`${C}/api/system-config`, { method: 'PUT',
+    headers: { 'x-api-key': CKEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...cConfig, passwordLogin: { ...cConfig.passwordLogin, enabled } }) });
+  if (!put.ok) return `PUT answered ${put.status}`;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if ((await systemConfig())?.passwordLogin?.enabled === enabled) return '';
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return `still ${enabled ? 'disabled' : 'enabled'} after 30s`;
+};
 const cWasHardened = cConfig.passwordLogin.enabled === false;
-if (cWasHardened) await setPasswordLogin(true);
+const toggleProblem = cWasHardened ? await setPasswordLogin(true) : '';
 
 // BOUNDED RETRY, because the toggle above is applied asynchronously: Immich caches its system config,
 // so a login issued the instant the PUT returns can still be refused with password login off. That is
@@ -273,7 +285,15 @@ const signIn = async (base) => {
 const bLogin = await signIn(B_PANEL_WEB);
 const cLogin = await signIn(C_PANEL_WEB);
 check('the lane can sign in on both households\' panels', !!bLogin.accessToken && !!cLogin.accessToken,
-  `${bLogin.accessToken ? 'B ok' : 'B failed'}, ${cLogin.accessToken ? 'C ok' : 'C failed'}`);
+  `${bLogin.accessToken ? 'B ok' : 'B failed'}, ${cLogin.accessToken ? 'C ok' : 'C failed'}` +
+  (toggleProblem ? ` (C's password login: ${toggleProblem})` : ''));
+// STOP CLEANLY. The rest of this lane drives C's panel, and a missing token used to crash the run on
+// `addCookies` — one bad line, then no output at all for the thirty checks after it. A lane that
+// cannot meet its precondition says so and exits; it does not disappear.
+if (!bLogin.accessToken || !cLogin.accessToken) {
+  console.log(`\n💥 STOPPING: the panels need a session${toggleProblem ? ` — C's password login: ${toggleProblem}` : ''}`);
+  process.exit(1);
+}
 
 const bAlbum = await (await fetch(`${B_PANEL_WEB}/api/albums`, { method: 'POST',
   headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bLogin.accessToken}` },

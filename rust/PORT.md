@@ -15,8 +15,8 @@ Layout: `src/lib.rs` is the crate root, `src/main.rs` is the composition root (t
 | --- | --- | --- | --- |
 | Wire protocol | `PROTOCOL_VERSION = 2`, ALPN `isa/2`, `/hello` answers protocol + version + features | `src/protocol.rs`, `src/p2p/transport.rs` | `rust/peer-interop.mjs`, `rust/verify-sync.mjs` against a Node peer |
 | Framing | 4-byte big-endian length prefix per frame, JSON headers | `src/p2p/frame.rs` | `rust/frame-interop.mjs` (Node writes, Rust reads, and back) |
-| `state.db` schema | `SCHEMA_VERSION = 4`, same tables and columns | `src/store.rs` | the `reads_a_real_node_written_state_db` test, run against a database a Node sidecar wrote (below) |
-| Identity key | `kv` row `identity`, `{v:1,alg:"ed25519",pub,priv,createdAt}`, raw 32-byte base64url — `pub` IS the iroh endpoint id | `src/state.rs` | the same test: the stored seed DERIVES the stored public key, so the identity is usable as the transport |
+| `state.db` schema | `SCHEMA_VERSION = 4`, same tables and columns | `src/store.rs` | `bash rust/verify-upgrade.sh` — the Rust build boots on a POPULATED database a Node sidecar wrote and loads its identity, peers, mappings and contributors |
+| Identity key | `kv` row `identity`, `{v:1,alg:"ed25519",pub,priv,createdAt}`, raw 32-byte base64url — `pub` IS the iroh endpoint id | `src/state.rs` | `verify-upgrade.sh`: the Rust build takes over the SAME endpoint id a Node sidecar minted, so existing links keep working; the seed also DERIVES the stored public key |
 | Env vars | the same 18 `ISA_*` names and defaults | `src/config.rs` | `grep -rho 'ISA_[A-Z0-9_]*' src/config.ts rust/src \| sort -u` — 18 shared names, plus `ISA_COMPAT_DB` (test-only) and two matches inside comments (`ISA_`, `ISA_INVITE_POLL_MS`, the latter being a name the TypeScript documents but does not define) |
 | Route prefix | `/immich-shared-albums`, clean break away from `/sidecar` | `src/config.rs` | rig stage `route prefix rename + legacy compatibility` |
 | HTTP routes | every path in the table below | `src/web/server.rs` | rig: each route has at least one check |
@@ -145,6 +145,9 @@ valid connection can never address someone else's album.
   `clippy::await_holding_lock` names the line. Bind what you need from the guard, drop it, then await.
 - **The Docker build context is the REPO ROOT**, not `rust/`: `src/web/assets.rs` embeds the built UI
   with `include_str!("../../../src/web/dist/…")`. Build with `docker build -f rust/Dockerfile .`.
+- **`/tmp` is not shared with the Docker daemon.** A file a container writes to a bind-mounted `/tmp`
+  lands in the daemon's `/tmp` while this shell reads its own — so a state database "copied to /tmp"
+  reads as empty and the failure looks like a compatibility bug. Keep rig state under `rust/target/`.
 - **The sidecar image has no Node.** Nothing in it may shell out to `node`, and no test harness may
   assume it can: the rig runs its probes from a separate Node image (`immich-shared-albums:probe`).
 - **A stale comment is a bug.** Several rounds were lost to comments that described code that had
@@ -202,6 +205,7 @@ container-based ones start their own sidecar unless they say otherwise.
 | `verify-join.sh` | pass | the MEMBER half of the handshake against a real origin: a refused join pins no peer, a re-dial does not enrol twice, a password-gated album asks for a password | the rig |
 | `verify-leave.sh` | pass | the purge reclaims the space: the stand-in's stub is gone, the mapping is gone, and the admin key could never have seen it | the rig |
 | `verify-leave-route.sh` | pass | `POST /leave` reaches the engine, and the admin gate in front of it holds | the rig |
+| `verify-upgrade.sh` | 9/9 | **the drop-in upgrade**: drives a NODE sidecar to a populated state (mapping, ledger row with an origin, contributors), stops it, boots the RUST image on that database, and checks the identity is the same, the peers and mapping are read back, the ledger row's stub streams byte-identically from its owner, and the store's compat test parses it | the rig with the NODE image as B's sidecar |
 | `verify-image.sh` | pass | the container contract: uid 1000, `/data`, `HEALTHCHECK`, identity across a restart | the Rust image |
 | `verify-install.sh` | pass | `deploy/install.sh` end to end, through its prompts: health, the 600 `.env`, uid 1000, the panel's 401, Immich pass-through | the rig |
 | `verify-panel.sh` | 5/5 | the panel signs in and renders through ONE origin, offers the "Create a link" button the install docs name, and logs no page errors | the rig |
@@ -209,8 +213,11 @@ container-based ones start their own sidecar unless they say otherwise.
 
 ## Differences from the TypeScript, and how they are known
 
-The module map above is the claim that every module has a counterpart. Two differences are
-deliberate, and neither is reachable from the wire:
+The module map above is the claim that every module has a counterpart. Upgrading a populated install
+is verified rather than assumed: `verify-upgrade.sh` boots the Rust build on a database a Node sidecar
+wrote while it was serving — identity, peers, a member mapping, ledger rows and contributor keys — and
+serves a Node-written ledger stub from its owner, byte for byte. Two differences are deliberate, and
+neither is reachable from the wire:
 
 - `ISA_COMPAT_DB` exists only in the Rust build. It points the compatibility check at a
   Node-written `state.db`, so it has no meaning in the build that writes them.
