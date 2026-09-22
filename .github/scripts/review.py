@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import signal
 import sys
 import time
 import urllib.error
@@ -13,7 +14,9 @@ import urllib.request
 API = "https://api.github.com"
 MARKER = "<!-- isa-review-pipeline -->"
 MAX_CHUNK_DIFF_LINES = 120
-MAX_FILE_CHARS = 60000
+MAX_FILE_CHARS = 12000
+MAX_RULES_CHARS = 4000
+SOURCE_SUFFIXES = (".ts", ".tsx", ".rs", ".mjs", ".js")
 MAX_COMMENTS = 12
 SEVERITIES = ("high", "medium")
 STAGES = ("summarise", "review", "verify")
@@ -25,12 +28,14 @@ EXCLUDED_PATHS = (
     "src/web/accept.bundle.js",
     "src/web/share.bundle.js",
 )
-DEADLINE_SECONDS = 540
-MAX_REQUESTS = 12
-MAX_CHUNKS = 4
-CALL_TIMEOUT_SECONDS = 45
-CALL_ATTEMPTS = 2
-DEAD_STATUS_CODES = (401, 402, 403, 404, 429)
+DEADLINE_SECONDS = 300
+MAX_REQUESTS = 4
+MAX_CHUNKS = 2
+CALL_TIMEOUT_SECONDS = 60
+CALL_ATTEMPTS = 1
+MAX_OUTPUT_TOKENS = 3000
+DEAD_KEY_STATUS_CODES = (401, 402, 403)
+DEAD_MODEL_STATUS_CODES = (404, 429)
 
 
 class Budget:
@@ -40,6 +45,7 @@ class Budget:
         self.requests_left = max_requests
         self.deadline = time.monotonic() + deadline_seconds
         self.dead_providers = set()
+        self.dead_candidates = set()
 
     def exhausted(self):
         return self.requests_left <= 0 or time.monotonic() >= self.deadline
@@ -90,6 +96,10 @@ def notice(message):
     print(f"::notice::{message}", flush=True)
 
 
+def request_timed_out(signum, frame):
+    raise TimeoutError("wall-clock deadline reached")
+
+
 def http(method, url, token, body=None, accept="application/vnd.github+json", timeout=60):
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request(url, data=data, method=method)
@@ -99,8 +109,16 @@ def http(method, url, token, body=None, accept="application/vnd.github+json", ti
         request.add_header("Authorization", f"Bearer {token}")
     if data:
         request.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = response.read().decode("utf-8", "replace")
+    # urlopen's timeout is per socket read, and a queued free endpoint streams keep-alive whitespace,
+    # which resets it indefinitely. Only an alarm bounds the request by wall clock.
+    previous = signal.signal(signal.SIGALRM, request_timed_out)
+    signal.setitimer(signal.ITIMER_REAL, timeout)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = response.read().decode("utf-8", "replace")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
     return json.loads(payload) if payload.strip().startswith(("{", "[")) else payload
 
 
@@ -128,12 +146,13 @@ def load_stage_models(path):
     return usable
 
 
-def complete(stage, candidates, system, user, budget, max_tokens=4000):
+def complete(stage, candidates, system, user, budget, max_tokens=MAX_OUTPUT_TOKENS):
     """First candidate that answers wins; a provider failing is not an error, it is a fallback."""
     last_error = None
     for candidate in candidates:
         provider, model = candidate["provider"], candidate["model"]
-        if provider in budget.dead_providers:
+        identifier = f"{provider}/{model}"
+        if provider in budget.dead_providers or identifier in budget.dead_candidates:
             continue
         if budget.exhausted():
             warn(f"{stage}: skipped — this run's budget is spent")
@@ -158,22 +177,35 @@ def complete(stage, candidates, system, user, budget, max_tokens=4000):
                     body=body,
                     timeout=CALL_TIMEOUT_SECONDS,
                 )
-                content = payload["choices"][0]["message"]["content"]
-                log(f"  {stage}: {provider}/{model} answered ({len(content)} chars)")
+                if not isinstance(payload, dict) or "choices" not in payload:
+                    # Print the provider's own body: a bare KeyError hides what it actually said.
+                    raise RuntimeError(f"unexpected response: {str(payload)[:300]}")
+                content = payload["choices"][0].get("message", {}).get("content")
+                if not content:
+                    choice = payload["choices"][0]
+                    raise RuntimeError(
+                        f"no content (finish_reason={choice.get('finish_reason')}): {str(payload)[:200]}"
+                    )
+                log(f"  {stage}: {identifier} answered ({len(content)} chars)")
                 return content
             except urllib.error.HTTPError as error:
                 detail = error.read().decode("utf-8", "replace")[:300]
-                last_error = f"{provider}/{model} HTTP {error.code}: {detail}"
-                if error.code in DEAD_STATUS_CODES:
-                    # Spending the rest of the run's requests on a dead key buys nothing.
+                last_error = f"{identifier} HTTP {error.code}: {detail}"
+                if error.code in DEAD_KEY_STATUS_CODES:
+                    # The key is dead, so no model behind this provider can answer either.
                     budget.dead_providers.add(provider)
                     warn(f"{stage}: {provider} unusable this run (HTTP {error.code}) — {detail[:120]}")
                     break
+                if error.code in DEAD_MODEL_STATUS_CODES:
+                    # Only this model is saturated or gone; the next candidate may be fine.
+                    budget.dead_candidates.add(identifier)
+                    warn(f"{stage}: {identifier} unavailable this run (HTTP {error.code})")
+                    break
                 time.sleep(2**attempt + random.random())
             except Exception as error:
-                last_error = f"{provider}/{model}: {error}"
+                last_error = f"{identifier}: {error}"
                 time.sleep(2**attempt + random.random())
-        warn(f"{stage}: falling back past {provider}/{model} — {last_error}")
+        warn(f"{stage}: falling back past {identifier} — {last_error}")
     warn(f"{stage}: no provider answered ({last_error})")
     return None
 
@@ -258,7 +290,13 @@ def split_into_chunks(files):
                 added += slice_added
         if pending:
             chunks.append({"path": path, "lines": pending})
-    return chunks
+    return sorted(chunks, key=chunk_priority)
+
+
+def chunk_priority(chunk):
+    """Source before config before prose: with few chunks, review the most consequential file."""
+    is_source = chunk["path"].endswith(SOURCE_SUFFIXES)
+    return (0 if is_source else 1, -len(chunk["lines"]))
 
 
 def render_chunk_lines(lines):
@@ -277,7 +315,7 @@ def rules_for(path, root):
         full = os.path.join(root, relative)
         if os.path.isfile(full):
             with open(full, encoding="utf-8") as handle:
-                collected.append(f"--- {relative} ---\n{handle.read()[:12000]}")
+                collected.append(f"--- {relative} ---\n{handle.read()[:MAX_RULES_CHARS]}")
     return "\n\n".join(collected)
 
 

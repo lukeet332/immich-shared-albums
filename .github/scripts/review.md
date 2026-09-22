@@ -11,6 +11,12 @@ OpenRouter's free tier allows **50 free-model requests per UTC day** (`free_mode
 `GET /api/v1/key`), and this repo pushes far more often than that. `Budget` therefore counts requests
 as well as wall clock: `MAX_REQUESTS` per run, `DEADLINE_SECONDS` overall, and the loop stops
 starting chunks once either is spent rather than being killed mid-run by the job timeout.
+`DEADLINE_SECONDS` is set below the workflow's `timeout-minutes` so the pipeline always reaches the
+code that posts.
+
+A queued free endpoint streams keep-alive whitespace, which resets `urlopen`'s per-socket timeout
+indefinitely — a request was observed running past every bound. `http` therefore bounds each request
+with `signal.setitimer` and `CALL_TIMEOUT_SECONDS`, because only an alarm measures wall clock.
 
 `MAX_CHUNKS` caps work on a large pull request, and the workflow runs on `opened`, `reopened` and
 `ready_for_review` — deliberately not `synchronize` — with `workflow_dispatch` for a re-run on
@@ -41,11 +47,28 @@ actually changed something.
 
 ## Model choice
 
-`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` serves review and
-`nvidia/nemotron-3-ultra-550b-a55b:free` verifies. Latency drove that: on a trivial prompt the nano
-model answers in ~2s and the ultra in ~10s, while `nemotron-3.5-lightning:free` exceeded a 120s
-timeout. Verification uses a different model from review, which is weaker than using a different
-provider family — add a second provider's key and put it first in the `verify` list to restore that.
+Review prefers `cohere/north-mini-code:free` (a code model, measured at 0.7s), then
+`qwen/qwen3.8-27b:free`, then the Nemotron nano, then OpenRouter's own `openrouter/free` router.
+Verification uses a different vendor from review's primary — `qwen/qwen3.8-27b:free`, then
+`nex-agi/nex-n2.5-pro:free`.
+
+The chain exists because a single free endpoint is not reliable. Observed on OpenRouter's free tier:
+`ResourceExhausted: Worker local total request limit reached (16/16)` from NVIDIA,
+`is temporarily rate-limited upstream` from Qwen, and repeated wall-clock deadline hits on Cohere and
+`openrouter/free`. `complete` walking its candidate list turns a saturated model into a slower
+review rather than a failed one, and when every candidate fails the run still posts — with no
+findings, which `main` reports as such.
+
+Going direct to a provider's own endpoint avoids OpenRouter's shared free pool: an `NVIDIA_API_KEY`
+from `build.nvidia.com` reaches the same Nemotron models through `integrate.api.nvidia.com`, so put
+`nvidia` first in the candidate lists and `openrouter` behind it. OpenRouter's own message points the
+same way — "add your own key to accumulate your rate limits".
+
+`chunk_priority` puts source before config before prose, so with `MAX_CHUNKS` at 2 the files
+reviewed are the consequential ones rather than whichever sorted first.
+
+`CALL_ATTEMPTS` is 1: a queued free endpoint does not answer faster on retry, and each retry is
+another request against the daily allowance.
 
 ## Context given to the review stage
 

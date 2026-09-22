@@ -25,7 +25,8 @@ jobs:
   review:
     if: github.event.sender.type != 'Bot'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Above the script's own DEADLINE_SECONDS, so the pipeline always reaches the code that posts.
+    timeout-minutes: 8
     permissions:
       contents: read
       pull-requests: write
