@@ -8,6 +8,7 @@ import random
 import re
 import signal
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -57,6 +58,8 @@ DEADLINE_SECONDS = 300
 # and both are overridable per run for one that is too big to cover in four chunks.
 MAX_REQUESTS = 8
 MAX_CHUNKS = 4
+# Workers, not threads: `http` bounds each request with a process-global SIGALRM. See review.md.
+PARALLEL = 1
 CALL_TIMEOUT_SECONDS = 60
 CALL_ATTEMPTS = 1
 MAX_OUTPUT_TOKENS = 3000
@@ -431,6 +434,110 @@ def chunk_prompt(chunk, root, extra=""):
     )
 
 
+def review_chunk(chunk, allowed, stages, root, budget, label):
+    """One chunk's model calls. Splitting these out is what lets a slice run in another process."""
+    log(f"chunk {label}: {chunk['path']}")
+    summary = None
+    if "summarise" in stages:
+        summary = parse_json_object(
+            complete(
+                "summarise", stages["summarise"], SYSTEM_SUMMARISE, chunk_prompt(chunk, root), budget
+            )
+        )
+    extra = f"\nSummary of this change:\n{json.dumps(summary)}\n" if summary else ""
+    raw = complete(
+        "review", stages["review"], SYSTEM_REVIEW, chunk_prompt(chunk, root, extra), budget
+    )
+    found = []
+    for finding in (parse_json_object(raw) or {}).get("findings", []):
+        if isinstance(finding.get("line"), int) and finding["line"] in allowed:
+            finding["path"] = chunk["path"]
+            found.append(finding)
+    # None means no candidate answered at all, which is not the same as a clean chunk.
+    return found, raw is not None
+
+
+def review_slice(work, stages, root, budget, total):
+    """A contiguous slice of `work` sharing one budget: a sequential run is the slice of everything."""
+    findings, answered = [], False
+    for done, (position, chunk, allowed) in enumerate(work):
+        if budget.exhausted():
+            warn(f"stopping after {done} of {len(work)} assigned chunks — budget spent")
+            break
+        chunk_findings, chunk_answered = [], False
+        try:
+            chunk_findings, chunk_answered = review_chunk(
+                chunk, set(allowed), stages, root, budget, f"{position + 1}/{total}"
+            )
+        except Exception as error:
+            # One unbuildable prompt must not cost the chunks either side of it their review.
+            warn(f"chunk {position + 1} failed: {type(error).__name__}: {error}")
+        findings.extend(chunk_findings)
+        answered = answered or chunk_answered
+    return findings, answered
+
+
+def review_in_parallel(work, stages, root, workers, max_requests, deadline_seconds, total):
+    """One child process per slice of the work, or None if this platform cannot fork.
+
+    Not threads: `http` bounds a request with SIGALRM, which is process-global and settable only from
+    a main thread, so a thread would either lose that bound or refuse to start. Not a process pool
+    either, because a pool's queue needs a semaphore and a container can refuse `sem_open` — here,
+    that is a fallback to one process rather than a lost review.
+    """
+    if not hasattr(os, "fork"):
+        warn("this platform cannot fork, so the chunks are reviewed one at a time")
+        return None
+    share = max(1, max_requests // workers)
+    size = max(1, (len(work) + workers - 1) // workers)
+    slices = [work[at : at + size] for at in range(0, len(work), size)]
+    log(f"{len(work)} chunks → {len(slices)} workers, {share} request(s) and one budget each")
+    children = []
+    for order, piece in enumerate(slices):
+        handle, path = tempfile.mkstemp(prefix=f"isa-review-{order}-", suffix=".json")
+        os.close(handle)
+        pid = os.fork()
+        if pid == 0:
+            try:
+                found, heard = review_slice(
+                    piece, stages, root, Budget(share, deadline_seconds), total
+                )
+                with open(path, "w", encoding="utf-8") as result:
+                    json.dump({"findings": found, "answered": heard}, result)
+                log(f"worker {order + 1} read {len(piece)} chunk(s), {len(found)} finding(s)")
+            except BaseException as error:
+                # A worker must never take the run down: `os._exit` skips the parent's own cleanup.
+                warn(f"worker {order + 1} failed: {type(error).__name__}: {error}")
+            os._exit(0)
+        children.append((order, pid, path))
+    finish_by = time.monotonic() + deadline_seconds + 60
+    for order, pid, _ in children:
+        reaped = 0
+        while not reaped and time.monotonic() < finish_by:
+            reaped = os.waitpid(pid, os.WNOHANG)[0]
+            time.sleep(0.2)
+        if not reaped:
+            warn(f"worker {order + 1} ran past the deadline; its chunks are unreviewed")
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+    findings, answered = [], False
+    for _, _, path in children:
+        try:
+            with open(path, encoding="utf-8") as result:
+                piece = json.load(result)
+        except (OSError, ValueError):
+            continue
+        finally:
+            # The child is reaped, so its result is complete or was never written.
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        findings.extend(piece["findings"])
+        answered = answered or piece["answered"]
+    return findings, answered
+
+
 def read_trigger():
     """An empty kind means a pull_request event, not a comment."""
     return {
@@ -534,7 +641,15 @@ def main():
     parser.add_argument("--deadline-seconds", type=int, default=DEADLINE_SECONDS)
     parser.add_argument("--max-chunks", type=int, default=MAX_CHUNKS)
     parser.add_argument("--chunk-offset", type=int, default=0)
-    args = parser.parse_args()
+    parser.add_argument("--parallel", type=int, default=PARALLEL)
+    try:
+        args = parser.parse_args()
+    except SystemExit as failure:
+        # The workflow comes from the dispatch ref but the reviewer comes from the default branch, so
+        # a flag can arrive before the script that understands it. Warn; never fail the job.
+        if failure.code:
+            warn(f"unusable arguments ({failure}) — is the reviewer older than this workflow?")
+        return 0
     try:
         return run(args)
     except Exception as failure:
@@ -606,40 +721,25 @@ def run(args):
         f"budget {args.max_requests} requests"
     )
 
-    findings = []
-    answered = False
-    for index, chunk in enumerate(chunks, start=1):
-        if budget.exhausted():
-            warn(f"stopping after {index - 1} of {len(chunks)} chunks — budget spent")
-            break
-        log(f"chunk {index}/{len(chunks)}: {chunk['path']}")
-        summary = None
-        if "summarise" in stages:
-            summary = parse_json_object(
-                complete(
-                    "summarise",
-                    stages["summarise"],
-                    SYSTEM_SUMMARISE,
-                    chunk_prompt(chunk, args.root),
-                    budget,
-                )
-            )
-        extra = f"\nSummary of this change:\n{json.dumps(summary)}\n" if summary else ""
-        raw = complete(
-            "review",
-            stages["review"],
-            SYSTEM_REVIEW,
-            chunk_prompt(chunk, args.root, extra),
-            budget,
+    work = [
+        (start + offset, chunk, sorted(files[chunk["path"]]["added"]))
+        for offset, chunk in enumerate(chunks)
+    ]
+    findings, answered, parallel = [], False, None
+    if args.parallel > 1 and len(work) > 1:
+        parallel = review_in_parallel(
+            work,
+            stages,
+            args.root,
+            args.parallel,
+            args.max_requests,
+            args.deadline_seconds,
+            total_chunks,
         )
-        # None means no candidate answered at all, which is not the same as a clean chunk.
-        answered = answered or raw is not None
-        reviewed = parse_json_object(raw)
-        allowed = set(files[chunk["path"]]["added"])
-        for finding in (reviewed or {}).get("findings", []):
-            if isinstance(finding.get("line"), int) and finding["line"] in allowed:
-                finding["path"] = chunk["path"]
-                findings.append(finding)
+    if parallel is None:
+        findings, answered = review_slice(work, stages, args.root, budget, total_chunks)
+    else:
+        findings, answered = parallel
     log(f"{len(findings)} candidate findings")
 
     verified = False

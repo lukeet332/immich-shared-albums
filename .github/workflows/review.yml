@@ -31,6 +31,9 @@ on:
       deadline_seconds:
         description: Wall clock this run may take (blank = 300; keep it under the 45-minute job cap)
         required: false
+      parallel:
+        description: Worker processes (blank = 1); max_requests is split between them
+        required: false
 
 permissions:
   contents: read
@@ -138,6 +141,9 @@ jobs:
           fi
           if [ -n "${{ inputs.deadline_seconds }}" ]; then
             extra+=(--deadline-seconds "${{ inputs.deadline_seconds }}")
+          fi
+          if [ -n "${{ inputs.parallel }}" ]; then
+            extra+=(--parallel "${{ inputs.parallel }}")
           fi
           script=.github/scripts/review.py
           config=.github/review_models.json
