@@ -519,8 +519,21 @@ if (aAfter) {
   check('contributions NOT owned by origin admin (timeline clean)', contributed.every(a => a.ownerId !== ownerId_A),
         contributed.map(a => a.ownerId.slice(0, 8)).join(','));
   check('contributions owned by the contributor utility user', nanUser && contributed.every(a => a.ownerId === nanUser.id));
-  const credited = contributed.every(a => (a.exifInfo?.description || '').includes('Shared by'));
-  check('uploader credited in photo description', credited, contributed.map(a => a.exifInfo?.description).join(' | ').slice(0,80));
+  // POLLED, not sampled: the credit is written by a PUT after the upload, and this read can land
+  // between the two — the Rust lane in CI lost that race by 10ms against the TypeScript lane, on the
+  // same commit, which is a property of the read and not of either implementation. The assertion is
+  // unchanged: BOTH contributed photos must carry the credit, within the window.
+  const creditIds = contributed.map(a => a.id);
+  const credited = await until(async () => {
+    const now = await albumAssets(A, AKEY, ALBUM_ID);
+    const mine = now.filter(a => creditIds.includes(a.id));
+    return mine.length === creditIds.length &&
+      mine.every(a => (a.exifInfo?.description || '').includes('Shared by'))
+      ? mine
+      : null;
+  }, 30000);
+  check('uploader credited in photo description', !!credited,
+        (credited || contributed).map(a => a.exifInfo?.description || '(none)').join(' | ').slice(0, 80));
   const cDates = contributed.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
   check('contribution capture dates preserved', JSON.stringify(cDates) === JSON.stringify(['2026-07-01','2026-07-02']), cDates.join(','));
 
