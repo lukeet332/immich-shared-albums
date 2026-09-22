@@ -17,6 +17,35 @@ MAX_FILE_CHARS = 60000
 MAX_COMMENTS = 12
 SEVERITIES = ("high", "medium")
 STAGES = ("summarise", "review", "verify")
+# The same generated output .coderabbit.yaml excludes: reviewing compiled bytes wastes a request.
+EXCLUDED_PATHS = (
+    "package-lock.json",
+    "src/web/dist/",
+    "src/web/panel.bundle.js",
+    "src/web/accept.bundle.js",
+    "src/web/share.bundle.js",
+)
+DEADLINE_SECONDS = 540
+MAX_REQUESTS = 12
+MAX_CHUNKS = 4
+CALL_TIMEOUT_SECONDS = 45
+CALL_ATTEMPTS = 2
+DEAD_STATUS_CODES = (401, 402, 403, 404, 429)
+
+
+class Budget:
+    """Stops the pipeline outliving either the CI timeout or the provider's daily allowance."""
+
+    def __init__(self, max_requests, deadline_seconds):
+        self.requests_left = max_requests
+        self.deadline = time.monotonic() + deadline_seconds
+        self.dead_providers = set()
+
+    def exhausted(self):
+        return self.requests_left <= 0 or time.monotonic() >= self.deadline
+
+    def spend(self):
+        self.requests_left -= 1
 
 PROVIDERS = {
     "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY"),
@@ -89,20 +118,26 @@ def load_stage_models(path):
         configured = json.load(handle)
     usable = {}
     for stage in STAGES:
-        candidates = configured.get(stage) or []
-        usable[stage] = [
+        candidates = [
             candidate
-            for candidate in candidates
+            for candidate in (configured.get(stage) or [])
             if isinstance(candidate, dict) and key_for(candidate["provider"])
         ]
+        if candidates:
+            usable[stage] = candidates
     return usable
 
 
-def complete(stage, candidates, system, user, max_tokens=4000):
+def complete(stage, candidates, system, user, budget, max_tokens=4000):
     """First candidate that answers wins; a provider failing is not an error, it is a fallback."""
     last_error = None
     for candidate in candidates:
         provider, model = candidate["provider"], candidate["model"]
+        if provider in budget.dead_providers:
+            continue
+        if budget.exhausted():
+            warn(f"{stage}: skipped — this run's budget is spent")
+            return None
         base_url, env_name = PROVIDERS[provider]
         body = {
             "model": model,
@@ -113,13 +148,15 @@ def complete(stage, candidates, system, user, max_tokens=4000):
             "temperature": 0,
             "max_tokens": max_tokens,
         }
-        for attempt in range(3):
+        for attempt in range(CALL_ATTEMPTS):
             try:
+                budget.spend()
                 payload = http(
                     "POST",
                     f"{base_url}/chat/completions",
                     os.environ.get(env_name, ""),
                     body=body,
+                    timeout=CALL_TIMEOUT_SECONDS,
                 )
                 content = payload["choices"][0]["message"]["content"]
                 log(f"  {stage}: {provider}/{model} answered ({len(content)} chars)")
@@ -127,7 +164,10 @@ def complete(stage, candidates, system, user, max_tokens=4000):
             except urllib.error.HTTPError as error:
                 detail = error.read().decode("utf-8", "replace")[:300]
                 last_error = f"{provider}/{model} HTTP {error.code}: {detail}"
-                if error.code in (400, 401, 403, 404):
+                if error.code in DEAD_STATUS_CODES:
+                    # Spending the rest of the run's requests on a dead key buys nothing.
+                    budget.dead_providers.add(provider)
+                    warn(f"{stage}: {provider} unusable this run (HTTP {error.code}) — {detail[:120]}")
                     break
                 time.sleep(2**attempt + random.random())
             except Exception as error:
@@ -205,6 +245,8 @@ def split_into_chunks(files):
     """Keep each chunk near MAX_CHUNK_DIFF_LINES: review quality collapses as diffs grow."""
     chunks = []
     for path, data in files.items():
+        if path.startswith(EXCLUDED_PATHS):
+            continue
         pending, added = [], 0
         for hunk in data["hunks"]:
             for slice_lines in split_hunk(hunk, MAX_CHUNK_DIFF_LINES):
@@ -267,6 +309,9 @@ def main():
     parser.add_argument("--config", default=".github/review_models.json")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-comments", type=int, default=MAX_COMMENTS)
+    parser.add_argument("--max-requests", type=int, default=MAX_REQUESTS)
+    parser.add_argument("--deadline-seconds", type=int, default=DEADLINE_SECONDS)
+    parser.add_argument("--max-chunks", type=int, default=MAX_CHUNKS)
     args = parser.parse_args()
 
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -289,15 +334,31 @@ def main():
     diff_text = api(args.repo, f"/pulls/{args.pr}", token, accept="application/vnd.github.v3.diff")
     files = changed_lines_by_file(diff_text)
     chunks = split_into_chunks(files)
-    log(f"{len(files)} files → {len(chunks)} chunks")
+    if len(chunks) > args.max_chunks:
+        notice(
+            f"{len(chunks)} chunks, reviewing the first {args.max_chunks}: OpenRouter's free tier "
+            "allows 50 requests per day."
+        )
+        chunks = chunks[: args.max_chunks]
+    budget = Budget(args.max_requests, args.deadline_seconds)
+    log(f"{len(files)} files → {len(chunks)} chunks, budget {args.max_requests} requests")
 
     findings = []
     for index, chunk in enumerate(chunks, start=1):
+        if budget.exhausted():
+            warn(f"stopping after {index - 1} of {len(chunks)} chunks — budget spent")
+            break
         log(f"chunk {index}/{len(chunks)}: {chunk['path']}")
         summary = None
         if "summarise" in stages:
             summary = parse_json_object(
-                complete("summarise", stages["summarise"], SYSTEM_SUMMARISE, chunk_prompt(chunk, args.root))
+                complete(
+                    "summarise",
+                    stages["summarise"],
+                    SYSTEM_SUMMARISE,
+                    chunk_prompt(chunk, args.root),
+                    budget,
+                )
             )
         extra = f"\nSummary of this change:\n{json.dumps(summary)}\n" if summary else ""
         reviewed = parse_json_object(
@@ -306,6 +367,7 @@ def main():
                 stages["review"],
                 SYSTEM_REVIEW,
                 chunk_prompt(chunk, args.root, extra),
+                budget,
             )
         )
         allowed = set(files[chunk["path"]]["added"])
@@ -318,7 +380,7 @@ def main():
     if findings and "verify" in stages:
         payload = json.dumps([{k: f.get(k) for k in ("path", "line", "severity", "title", "body")} for f in findings])
         verdicts = parse_json_object(
-            complete("verify", stages["verify"], SYSTEM_VERIFY, f"Candidates:\n{payload}")
+            complete("verify", stages["verify"], SYSTEM_VERIFY, f"Candidates:\n{payload}", budget)
         )
         confirmed = []
         for verdict in (verdicts or {}).get("verdicts", []):

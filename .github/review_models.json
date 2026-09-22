@@ -1,15 +1,9 @@
 {
-  "$comment": "Stage → model, first entry that has a key wins and a failure falls through. See .github/scripts/review.md.",
-  "summarise": [
-    { "provider": "cerebras", "model": "gpt-oss-120b" },
-    { "provider": "openrouter", "model": "nvidia/nemotron-3.5-lightning:free" }
-  ],
+  "$comment": "Stage → model. First entry with a key wins; a failure falls through. See .github/scripts/review.md.",
   "review": [
-    { "provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free" },
-    { "provider": "gemini", "model": "gemini-3.1-flash-lite" }
+    { "provider": "openrouter", "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" }
   ],
   "verify": [
-    { "provider": "mistral", "model": "mistral-small-latest" },
-    { "provider": "cerebras", "model": "gpt-oss-120b" }
+    { "provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free" }
   ]
 }
