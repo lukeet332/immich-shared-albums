@@ -33,9 +33,22 @@ broken. `reply_to_trigger` answers a review comment **inside its own thread** �
 that, and a top-level comment cannot be resolved against a line. Replies to ordinary PR comments are
 posted as new comments rather than through `post_comment`, whose marker belongs to the summary.
 
+`DEFAULT_MENTION` is `@isa`, and there is a real GitHub account by that name — so a mention is a local
+alias that GitHub renders as a link to a stranger, and `HELP_TEXT` says so rather than recommending
+it. The slash commands are the interface to use; the mention stays because it reads naturally in a
+question and `parse_command` treats it as `/ask`.
+
 For a comment event the pull request is not in the payload, so the workflow resolves its number and
 head SHA from the API in a step before `actions/checkout`. That SHA is what `file_excerpt` and
 `rules_for` read, so a command reviews the tree it was issued against.
+
+`review.py` and `review_models.json` are the exception, and they come from the **default branch**: a
+step fetches them into `.review-tool` and the run uses those, while `--root` still points at the pull
+request's tree. Two reasons, one of which cost a review of the Rust port — that branch was cut before
+`fetch_diff` existed, so the dispatch that was meant to review it ran the old script and hit the same
+406 the fix had already handled. The other is that a pull request editing `review.py` would otherwise
+be choosing how it is reviewed, with the provider keys in scope. If the default branch cannot be read
+the run falls back to the pull request's copy and warns rather than going red.
 
 `concurrency` sits on the job, not the workflow, and its group carries the event name: a comment the
 job's own condition skips must not take the group at all, or a bot's comment cancels the review it
@@ -57,9 +70,11 @@ allowance added up across the chain is what buys per-push review — 500 request
 against this repo's ~10 pull requests a day averaging 4 commits, at up to two requests per push.
 
 A run does not split one review across providers: `complete` walks its list and stops at the first
-answer, so rotation spreads load between pull requests, not inside one. The per-run caps stay small
-for that reason — the median pull request here changes 92 lines, which is one chunk, so a larger
-`MAX_CHUNKS` would buy wall-clock risk and no extra coverage.
+answer, so rotation spreads load between pull requests, not inside one. For the same reason
+`MAX_REQUESTS` and `MAX_CHUNKS` are outer bounds rather than targets — `DEADLINE_SECONDS` is what
+actually stops a large pull request — and `workflow_dispatch` takes `max_chunks` and `max_requests`
+overrides, because four chunks is not a review of a 200-chunk diff and the caps should not have to
+move for one.
 
 A queued free endpoint streams keep-alive whitespace, which resets `urlopen`'s per-socket timeout
 indefinitely — a request was observed running past every bound. `http` therefore bounds each request
@@ -90,6 +105,25 @@ A 2026 evaluation of five models on 150 samples found F1 falls from **0.657 on d
 `split_hunk` slices **inside** a hunk as well as between them — a new file is one hunk — and
 `changed_lines_by_file` keeps the added-line set so a finding can only be anchored where the diff
 actually changed something.
+
+`split_into_chunks` takes its exclusions from `.coderabbit.yaml`'s `path_filters` rather than a list
+of its own (`excluded_patterns`), matched with `is_excluded`. That config already encodes which files
+are not worth review budget — generated bundles, the lockfile, and on the Rust port's branch
+`rust/examples/**` and the two benchmark scripts — so both reviewers spend their file budget on the
+same files, and the rule has one home. An include-list form of `path_filters` excludes nothing, which
+is also what an unreadable config falls back to (`EXCLUDED_FALLBACK`).
+
+## A pull request too large to have a diff
+
+GitHub serves no unified diff over `GITHUB_DIFF_LINE_LIMIT` (20,000) lines: the request comes back
+**406**, which is not a review of zero findings but no review at all. `fetch_diff` catches that one
+status and rebuilds a diff from `GET /pulls/{n}/files` (`diff_via_files`), which has no line limit —
+`FILES_PER_PAGE` per page, `MAX_DIFF_FILES` in total, warning about files that carry no patch at all
+because they are binary or too large. The rebuilt text uses the same `+++`/`@@` shape
+`changed_lines_by_file` already parses, and the two forms are equivalent: the added-line sets and hunk
+headers are identical to the ones the real diff produces.
+
+The Rust port's pull request is the case that found this — 25,629 added lines, 118 files, 248 chunks.
 
 ## Model choice
 
@@ -156,10 +190,17 @@ blacklist exists for.
 
 ## Fail-open, deliberately
 
-`main` is wrapped so any exception prints a warning and exits 0: a reviewer must never decide whether
-a merge happens, and the gates stay the fast checks and the two e2e lanes (AGENTS.md, "How changes
-land"). The cost is that a broken run looks like a green job, so the pipeline warns loudly and
-`--dry-run` exists for local checking.
+`main` parses the arguments and hands them to `run`; any exception from `run` prints a warning, calls
+`report_failure` and returns 0. A reviewer must never decide whether a merge happens, and the gates
+stay the fast checks and the two e2e lanes (AGENTS.md, "How changes land").
+
+Silence is the failure mode that matters here, because a run that posted nothing is indistinguishable
+from a clean pull request — which is how a 406 on the Rust port's pull request produced no review at
+all and nobody noticed. So `report_failure` writes the reason into the same summary comment
+`post_comment` maintains, and the summary distinguishes three outcomes: findings, a clean result
+(`answered`), and **no model answered, so nothing was reviewed**. When `total_chunks` exceeded
+`MAX_CHUNKS` the summary also states the scope it did read, because "no findings" over four of 248
+chunks is not the same claim as no findings.
 
 ## Known limits
 

@@ -17,6 +17,14 @@ on:
       pr:
         description: Pull request number to review
         required: true
+      # Both default to the script's own constants rather than repeating them here, and exist for one
+      # case: a pull request so large that four chunks is not a review.
+      max_chunks:
+        description: Chunks to review (blank = the script's default)
+        required: false
+      max_requests:
+        description: Model requests this run may spend (blank = the script's default)
+        required: false
 
 permissions:
   contents: read
@@ -73,6 +81,25 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The reviewer is not the reviewed. The checkout above is the pull request's tree, so a branch
+      # cut before a fix runs the old review.py, and a change to review.py would be deciding how it
+      # is itself reviewed. Both come from the default branch; `--root` still reads the pull request.
+      - name: Take the reviewer from the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          set -uo pipefail
+          mkdir -p .review-tool
+          if git fetch --depth 1 origin "$DEFAULT_BRANCH" &&
+             git show FETCH_HEAD:.github/scripts/review.py > .review-tool/review.py &&
+             git show FETCH_HEAD:.github/review_models.json > .review-tool/review_models.json; then
+            echo "reviewer taken from $DEFAULT_BRANCH"
+          else
+            # Never red: an advisory reviewer that cannot find its own script still must not block.
+            rm -rf .review-tool
+            echo "::warning::no reviewer on $DEFAULT_BRANCH; using the pull request's own copy"
+          fi
+
       - name: Review
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -90,6 +117,22 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SAMBANOVA_API_KEY: ${{ secrets.SAMBANOVA_API_KEY }}
         run: |
-          python .github/scripts/review.py \
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.max_chunks }}" ]; then
+            extra+=(--max-chunks "${{ inputs.max_chunks }}")
+          fi
+          if [ -n "${{ inputs.max_requests }}" ]; then
+            extra+=(--max-requests "${{ inputs.max_requests }}")
+          fi
+          script=.github/scripts/review.py
+          config=.github/review_models.json
+          if [ -f .review-tool/review.py ]; then
+            script=.review-tool/review.py
+            config=.review-tool/review_models.json
+          fi
+          python "$script" \
             --repo "$GITHUB_REPOSITORY" \
-            --pr "${{ steps.pr.outputs.number }}"
+            --pr "${{ steps.pr.outputs.number }}" \
+            --config "$config" \
+            "${extra[@]}"

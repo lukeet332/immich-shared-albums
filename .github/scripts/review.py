@@ -1,6 +1,7 @@
 # .github/scripts/review.py — a free re-implementation of the CodeRabbit review pipeline. See review.md.
 
 import argparse
+import fnmatch
 import json
 import os
 import random
@@ -13,6 +14,10 @@ import urllib.request
 
 API = "https://api.github.com"
 MARKER = "<!-- isa-review-pipeline -->"
+# Above this many lines GitHub serves no unified diff at all, and answers the request with 406.
+GITHUB_DIFF_LINE_LIMIT = 20000
+FILES_PER_PAGE = 100
+MAX_DIFF_FILES = 300
 MAX_CHUNK_DIFF_LINES = 120
 MAX_FILE_CHARS = 12000
 MAX_RULES_CHARS = 4000
@@ -30,24 +35,28 @@ HELP_TEXT = f"""{MARKER}
 | `/ask <question>` | answer a question about this pull request |
 | `/help` | this list |
 
-`{DEFAULT_MENTION} <anything>` also works and is treated as `/ask`, so a plain question reads
-naturally. Replies to an inline comment arrive in that comment's own thread.
+`{DEFAULT_MENTION} <anything>` also works and is treated as `/ask`, but `{DEFAULT_MENTION}` is a
+local alias rather than an account — GitHub links it to an unrelated user — so the slash commands are
+the ones to use. Replies to an inline comment arrive in that comment's own thread.
 
 The automatic review runs on `opened`, `reopened`, `ready_for_review` and every push to the branch."""
 MAX_COMMENTS = 12
 SEVERITIES = ("high", "medium")
 STAGES = ("summarise", "review", "verify")
-# The same generated output .coderabbit.yaml excludes: reviewing compiled bytes wastes a request.
-EXCLUDED_PATHS = (
+# Read from .coderabbit.yaml's `path_filters`, so both reviewers spend the file budget on the same
+# files. These are the same exclusions in glob form, used only when that file cannot be read.
+EXCLUDED_FALLBACK = (
     "package-lock.json",
-    "src/web/dist/",
+    "src/web/dist/**",
     "src/web/panel.bundle.js",
     "src/web/accept.bundle.js",
     "src/web/share.bundle.js",
 )
 DEADLINE_SECONDS = 300
-MAX_REQUESTS = 4
-MAX_CHUNKS = 2
+# Outer bounds rather than targets: DEADLINE_SECONDS is what actually stops a large pull request,
+# and both are overridable per run for one that is too big to cover in four chunks.
+MAX_REQUESTS = 8
+MAX_CHUNKS = 4
 CALL_TIMEOUT_SECONDS = 60
 CALL_ATTEMPTS = 1
 MAX_OUTPUT_TOKENS = 3000
@@ -255,6 +264,42 @@ def parse_json_object(raw):
         return None
 
 
+def diff_via_files(repo, pr, token):
+    """Rebuild a unified diff from the files API, for a pull request too large to serve one."""
+    parts, unpatched, page = [], 0, 1
+    while page <= MAX_DIFF_FILES // FILES_PER_PAGE:
+        batch = api(repo, f"/pulls/{pr}/files?per_page={FILES_PER_PAGE}&page={page}", token)
+        if not isinstance(batch, list) or not batch:
+            break
+        for entry in batch:
+            patch = entry.get("patch")
+            if not patch:
+                # Binary, or changed too much for GitHub to inline a patch: not reviewable input.
+                unpatched += 1
+                continue
+            parts.append(f"+++ b/{entry['filename']}\n{patch}\n")
+        if len(batch) < FILES_PER_PAGE:
+            break
+        page += 1
+    if unpatched:
+        warn(f"{unpatched} file(s) carry no patch (binary or oversized) and were not reviewable")
+    return "\n".join(parts)
+
+
+def fetch_diff(repo, pr, token):
+    """The unified diff, or one rebuilt from the files API when GitHub refuses to serve it."""
+    try:
+        return api(repo, f"/pulls/{pr}", token, accept="application/vnd.github.v3.diff")
+    except urllib.error.HTTPError as error:
+        if error.code != 406:
+            raise
+        warn(
+            f"#{pr} has no unified diff (HTTP 406: over {GITHUB_DIFF_LINE_LIMIT} lines) "
+            "— rebuilding it from the files API"
+        )
+        return diff_via_files(repo, pr, token)
+
+
 def changed_lines_by_file(diff_text):
     """Per path: the NEW-file line numbers the diff adds, and hunks as (line_number, text)."""
     files, path, new_line = {}, None, 0
@@ -302,11 +347,29 @@ def split_hunk(hunk, limit):
     return slices
 
 
-def split_into_chunks(files):
+def excluded_patterns(root):
+    """The `!` patterns under .coderabbit.yaml's path_filters, so one config decides what is reviewed."""
+    try:
+        with open(os.path.join(root, ".coderabbit.yaml"), encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return EXCLUDED_FALLBACK
+    block = re.search(r"^ {2}path_filters:\n((?: {4}.*\n|\n)*)", text, re.M)
+    found = tuple(re.findall(r"^ {4}- '(![^']+)'", block.group(1), re.M)) if block else ()
+    # An include-list form carries no `!`, so there is nothing to exclude and the fallback holds.
+    return found or EXCLUDED_FALLBACK
+
+
+def is_excluded(path, patterns):
+    """fnmatch, not a prefix test: `rust/examples/**` is a pattern, and `**` spans separators here."""
+    return any(fnmatch.fnmatch(path, pattern.lstrip("!").replace("**", "*")) for pattern in patterns)
+
+
+def split_into_chunks(files, patterns):
     """Keep each chunk near MAX_CHUNK_DIFF_LINES: review quality collapses as diffs grow."""
     chunks = []
     for path, data in files.items():
-        if path.startswith(EXCLUDED_PATHS):
+        if is_excluded(path, patterns):
             continue
         pending, added = [], 0
         for hunk in data["hunks"]:
@@ -405,6 +468,25 @@ def post_comment(repo, pr, token, body, marker=MARKER):
     return api(repo, f"/issues/{pr}/comments", token, method="POST", body={"body": body})
 
 
+def report_failure(args, failure):
+    """A run that posted nothing reads as a clean pull request, so say it failed instead."""
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token or args.dry_run:
+        return
+    reason = f"{type(failure).__name__}: {failure}"[:300].replace("\n", " ")
+    body = (
+        f"{MARKER}\n### Review\n\n"
+        f"The review did not complete — `{reason}`.\n\n"
+        "**Nothing here has been reviewed**, and no findings were produced. The job log carries the "
+        "full warning."
+    )
+    try:
+        post_comment(args.repo, args.pr, token, body)
+    except Exception as error:
+        # The exit code must not change: a reviewer never decides whether a merge happens.
+        warn(f"could not report the failure on the pull request: {type(error).__name__}: {error}")
+
+
 def reply_to_trigger(repo, pr, token, trigger, body):
     """AGENTS.md: answer a finding in its own thread, never as a top-level comment."""
     if trigger["kind"] == "review" and trigger["id"]:
@@ -452,7 +534,16 @@ def main():
     parser.add_argument("--deadline-seconds", type=int, default=DEADLINE_SECONDS)
     parser.add_argument("--max-chunks", type=int, default=MAX_CHUNKS)
     args = parser.parse_args()
+    try:
+        return run(args)
+    except Exception as failure:
+        # A reviewer must never decide whether a merge happens. See AGENTS.md ("How changes land").
+        warn(f"review pipeline failed open: {type(failure).__name__}: {failure}")
+        report_failure(args, failure)
+        return 0
 
+
+def run(args):
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     stages = stage_models_for(args.config, args.pr)
     ready = {name for name, candidates in stages.items() if candidates}
@@ -485,7 +576,7 @@ def main():
             reply_to_trigger(args.repo, args.pr, token, trigger, HELP_TEXT)
             return 0
 
-    diff_text = api(args.repo, f"/pulls/{args.pr}", token, accept="application/vnd.github.v3.diff")
+    diff_text = fetch_diff(args.repo, args.pr, token)
     if command == "ask":
         answer = answer_question(argument, pull, diff_text, args.root, stages, budget)
         reply_to_trigger(
@@ -498,16 +589,18 @@ def main():
         return 0
 
     files = changed_lines_by_file(diff_text)
-    chunks = split_into_chunks(files)
-    if len(chunks) > args.max_chunks:
+    chunks = split_into_chunks(files, excluded_patterns(args.root))
+    total_chunks = len(chunks)
+    if total_chunks > args.max_chunks:
         notice(
-            f"{len(chunks)} chunks, reviewing the first {args.max_chunks}: each chunk costs up to two "
+            f"{total_chunks} chunks, reviewing the first {args.max_chunks}: each chunk costs up to two "
             "requests against the providers' free daily allowances."
         )
         chunks = chunks[: args.max_chunks]
-    log(f"{len(files)} files → {len(chunks)} chunks, budget {args.max_requests} requests")
+    log(f"{len(files)} files → {len(chunks)}/{total_chunks} chunks, budget {args.max_requests} requests")
 
     findings = []
+    answered = False
     for index, chunk in enumerate(chunks, start=1):
         if budget.exhausted():
             warn(f"stopping after {index - 1} of {len(chunks)} chunks — budget spent")
@@ -525,15 +618,16 @@ def main():
                 )
             )
         extra = f"\nSummary of this change:\n{json.dumps(summary)}\n" if summary else ""
-        reviewed = parse_json_object(
-            complete(
-                "review",
-                stages["review"],
-                SYSTEM_REVIEW,
-                chunk_prompt(chunk, args.root, extra),
-                budget,
-            )
+        raw = complete(
+            "review",
+            stages["review"],
+            SYSTEM_REVIEW,
+            chunk_prompt(chunk, args.root, extra),
+            budget,
         )
+        # None means no candidate answered at all, which is not the same as a clean chunk.
+        answered = answered or raw is not None
+        reviewed = parse_json_object(raw)
         allowed = set(files[chunk["path"]]["added"])
         for finding in (reviewed or {}).get("findings", []):
             if isinstance(finding.get("line"), int) and finding["line"] in allowed:
@@ -567,11 +661,22 @@ def main():
 
     lines = [MARKER, "### Review", ""]
     if not findings:
-        lines.append("No high-confidence issues found in the changed lines.")
+        if answered:
+            lines.append("No high-confidence issues found in the changed lines.")
+        else:
+            lines.append(
+                "**No model answered, so nothing on this pull request was reviewed.** See the job warnings."
+            )
     for finding in findings:
         lines.append(
             f"- **{finding.get('severity', 'medium')}** `{finding['path']}:{finding['line']}` — "
             f"{finding.get('title', '')}"
+        )
+    if total_chunks > len(chunks):
+        lines.append("")
+        lines.append(
+            f"_Scope: {len(chunks)} of {total_chunks} chunks across {len(files)} changed files. "
+            "Raise `max_chunks` to cover the rest._"
         )
     body = "\n".join(lines)[:60000]
     post_comment(args.repo, args.pr, token, body)
@@ -617,13 +722,12 @@ def main():
                         warn(f"could not anchor {comment['path']}:{comment['line']} ({error.code})")
 
     if trigger["kind"]:
-        reply_to_trigger(
-            args.repo,
-            args.pr,
-            token,
-            trigger,
-            f"Reviewed {len(chunks)} chunk(s) and found {len(findings)} issue(s) — see the summary comment.",
+        outcome = (
+            f"Reviewed {len(chunks)} chunk(s) and found {len(findings)} issue(s)"
+            if answered
+            else "No model answered, so nothing was reviewed"
         )
+        reply_to_trigger(args.repo, args.pr, token, trigger, f"{outcome} — see the summary comment.")
     log("posted")
     return 0
 
@@ -632,6 +736,7 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as failure:
-        # A reviewer must never decide whether a merge happens. See AGENTS.md ("How changes land").
-        warn(f"review pipeline failed open: {type(failure).__name__}: {failure}")
+        # Last resort: `main` reports its own failures, so this covers what it cannot — a bad
+        # invocation, or the reporting itself throwing. A review must never turn the job red.
+        warn(f"review pipeline could not run: {type(failure).__name__}: {failure}")
         sys.exit(0)
