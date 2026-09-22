@@ -17,6 +17,23 @@ MAX_CHUNK_DIFF_LINES = 120
 MAX_FILE_CHARS = 12000
 MAX_RULES_CHARS = 4000
 SOURCE_SUFFIXES = (".ts", ".tsx", ".rs", ".mjs", ".js")
+MAX_DIFF_CHARS = 20000
+DEFAULT_MENTION = "@isa"
+COMMANDS = ("review", "summary", "ask", "help")
+HELP_TEXT = f"""{MARKER}
+### Review bot commands
+
+| Command | What it does |
+| --- | --- |
+| `/review` | review the current changes now |
+| `/summary` | review, but post only the summary — no inline comments |
+| `/ask <question>` | answer a question about this pull request |
+| `/help` | this list |
+
+`{DEFAULT_MENTION} <anything>` also works and is treated as `/ask`, so a plain question reads
+naturally. Replies to an inline comment arrive in that comment's own thread.
+
+The automatic review runs on `opened`, `reopened` and `ready_for_review`, not on every push."""
 MAX_COMMENTS = 12
 SEVERITIES = ("high", "medium")
 STAGES = ("summarise", "review", "verify")
@@ -82,6 +99,10 @@ SYSTEM_VERIFY = """You are an adversarial verifier. For each candidate finding, 
 whether it is a real defect in the code shown. Refute anything speculative, stylistic, already caught
 by CI, or unsupported by the diff. Return ONLY JSON:
 {"verdicts":[{"index":int,"verdict":"confirm"|"refute","reason":str}]}"""
+
+SYSTEM_ASK = """You are answering a question about a pull request, for the person who opened it.
+Answer in a few sentences. Name the file and line you mean. Say plainly when the diff does not tell
+you. Do not review the change unless the question asks for that, and do not list findings."""
 
 
 def log(message):
@@ -339,6 +360,78 @@ def chunk_prompt(chunk, root, extra=""):
     )
 
 
+def read_trigger():
+    """An empty kind means a pull_request event, not a comment."""
+    return {
+        "kind": os.environ.get("COMMENT_KIND", "").strip(),
+        "id": os.environ.get("COMMENT_ID", "").strip(),
+        "body": os.environ.get("COMMENT_BODY", ""),
+    }
+
+
+def parse_command(body, mention=DEFAULT_MENTION):
+    """The first line decides, so a quoted command deeper in a reply is not mistaken for one."""
+    lines = (body or "").strip().splitlines()
+    if not lines:
+        return None, ""
+    line = lines[0].strip()
+    slash = re.match(r"^/([A-Za-z]+)\b\s*(.*)$", line)
+    if slash and slash.group(1).lower() in COMMANDS:
+        return slash.group(1).lower(), slash.group(2).strip()
+    if line.lower().startswith(mention.lower()):
+        rest = line[len(mention) :].strip()
+        words = rest.split(maxsplit=1)
+        if words and words[0].lower() in COMMANDS:
+            return words[0].lower(), words[1] if len(words) > 1 else ""
+        # A bare mention with a question is the natural way to ask one.
+        return "ask", rest
+    return None, ""
+
+
+def post_comment(repo, pr, token, body, marker=MARKER):
+    """Update our own comment rather than stacking one per reply."""
+    existing = api(repo, f"/issues/{pr}/comments?per_page=100", token)
+    mine = next((comment for comment in existing if marker in comment.get("body", "")), None)
+    if mine:
+        return api(repo, f"/issues/comments/{mine['id']}", token, method="PATCH", body={"body": body})
+    return api(repo, f"/issues/{pr}/comments", token, method="POST", body={"body": body})
+
+
+def reply_to_trigger(repo, pr, token, trigger, body):
+    """AGENTS.md: answer a finding in its own thread, never as a top-level comment."""
+    if trigger["kind"] == "review" and trigger["id"]:
+        return api(
+            repo,
+            f"/pulls/{pr}/comments/{trigger['id']}/replies",
+            token,
+            method="POST",
+            body={"body": body},
+        )
+    # A fresh comment, not post_comment: the marker belongs to the summary, which this must not clobber.
+    return api(repo, f"/issues/{pr}/comments", token, method="POST", body={"body": body})
+
+
+def acknowledge(repo, pr, token, trigger):
+    """React before working: a command that shows nothing looks broken."""
+    if not trigger["id"]:
+        return
+    base = f"/pulls/comments/{trigger['id']}" if trigger["kind"] == "review" else f"/issues/comments/{trigger['id']}"
+    try:
+        api(repo, f"{base}/reactions", token, method="POST", body={"content": "eyes"})
+    except urllib.error.HTTPError as error:
+        warn(f"could not react to the triggering comment ({error.code})")
+
+
+def answer_question(question, pull, diff_text, root, stages, budget):
+    prompt = (
+        f"Repository rules:\n{rules_for('AGENTS.md', root)}\n\n"
+        f"Pull request: {pull.get('title', '')}\n\n{(pull.get('body') or '')[:4000]}\n\n"
+        f"Diff, truncated to {MAX_DIFF_CHARS} characters:\n{diff_text[:MAX_DIFF_CHARS]}\n\n"
+        f"Question:\n{question}"
+    )
+    return complete("ask", stages["review"], SYSTEM_ASK, prompt, budget)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
@@ -369,7 +462,33 @@ def main():
         notice("Fork PR: the pull_request token is read-only, so no review is posted.")
         return 0
 
+    budget = Budget(args.max_requests, args.deadline_seconds)
+
+    trigger = read_trigger()
+    command, argument = None, ""
+    if trigger["kind"]:
+        command, argument = parse_command(trigger["body"])
+        if command is None:
+            log("the triggering comment is not addressed to this bot")
+            return 0
+        log(f"command: {command}")
+        acknowledge(args.repo, args.pr, token, trigger)
+        if command == "help":
+            reply_to_trigger(args.repo, args.pr, token, trigger, HELP_TEXT)
+            return 0
+
     diff_text = api(args.repo, f"/pulls/{args.pr}", token, accept="application/vnd.github.v3.diff")
+    if command == "ask":
+        answer = answer_question(argument, pull, diff_text, args.root, stages, budget)
+        reply_to_trigger(
+            args.repo,
+            args.pr,
+            token,
+            trigger,
+            answer or "No model answered just now, so I cannot answer that.",
+        )
+        return 0
+
     files = changed_lines_by_file(diff_text)
     chunks = split_into_chunks(files)
     if len(chunks) > args.max_chunks:
@@ -378,7 +497,6 @@ def main():
             "allows 50 requests per day."
         )
         chunks = chunks[: args.max_chunks]
-    budget = Budget(args.max_requests, args.deadline_seconds)
     log(f"{len(files)} files → {len(chunks)} chunks, budget {args.max_requests} requests")
 
     findings = []
@@ -448,50 +566,56 @@ def main():
             f"{finding.get('title', '')}"
         )
     body = "\n".join(lines)[:60000]
+    post_comment(args.repo, args.pr, token, body)
 
-    existing = api(args.repo, f"/issues/{args.pr}/comments?per_page=100", token)
-    mine = next((c for c in existing if MARKER in c.get("body", "")), None)
-    if mine:
-        api(args.repo, f"/issues/comments/{mine['id']}", token, method="PATCH", body={"body": body})
+    if command == "summary":
+        log("summary only: inline comments skipped")
     else:
-        api(args.repo, f"/issues/{args.pr}/comments", token, method="POST", body={"body": body})
+        head_sha = pull["head"]["sha"]
+        comments = [
+            {
+                "path": finding["path"],
+                "line": finding["line"],
+                "side": "RIGHT",
+                "body": f"**{finding.get('title', '')}**\n\n{finding.get('body', '')}"[:60000],
+            }
+            for finding in findings
+        ]
+        if comments:
+            posted = False
+            try:
+                api(
+                    args.repo,
+                    f"/pulls/{args.pr}/reviews",
+                    token,
+                    method="POST",
+                    body={"commit_id": head_sha, "event": "COMMENT", "comments": comments},
+                )
+                posted = True
+            except urllib.error.HTTPError as error:
+                warn(f"batched inline review rejected ({error.code}); retrying one at a time")
+            if not posted:
+                # One unanchorable line must not cost the other findings their inline comments.
+                for comment in comments:
+                    try:
+                        api(
+                            args.repo,
+                            f"/pulls/{args.pr}/reviews",
+                            token,
+                            method="POST",
+                            body={"commit_id": head_sha, "event": "COMMENT", "comments": [comment]},
+                        )
+                    except urllib.error.HTTPError as error:
+                        warn(f"could not anchor {comment['path']}:{comment['line']} ({error.code})")
 
-    head_sha = pull["head"]["sha"]
-    comments = [
-        {
-            "path": finding["path"],
-            "line": finding["line"],
-            "side": "RIGHT",
-            "body": f"**{finding.get('title', '')}**\n\n{finding.get('body', '')}"[:60000],
-        }
-        for finding in findings
-    ]
-    if comments:
-        posted = False
-        try:
-            api(
-                args.repo,
-                f"/pulls/{args.pr}/reviews",
-                token,
-                method="POST",
-                body={"commit_id": head_sha, "event": "COMMENT", "comments": comments},
-            )
-            posted = True
-        except urllib.error.HTTPError as error:
-            warn(f"batched inline review rejected ({error.code}); retrying one at a time")
-        if not posted:
-            # One unanchorable line must not cost the other findings their inline comments.
-            for comment in comments:
-                try:
-                    api(
-                        args.repo,
-                        f"/pulls/{args.pr}/reviews",
-                        token,
-                        method="POST",
-                        body={"commit_id": head_sha, "event": "COMMENT", "comments": [comment]},
-                    )
-                except urllib.error.HTTPError as error:
-                    warn(f"could not anchor {comment['path']}:{comment['line']} ({error.code})")
+    if trigger["kind"]:
+        reply_to_trigger(
+            args.repo,
+            args.pr,
+            token,
+            trigger,
+            f"Reviewed {len(chunks)} chunk(s) and found {len(findings)} issue(s) — see the summary comment.",
+        )
     log("posted")
     return 0
 

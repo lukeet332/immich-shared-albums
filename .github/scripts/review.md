@@ -5,6 +5,29 @@
 A free re-implementation of the shape CodeRabbit uses, run in CI so it has no shared quota. Every
 stage is a model call against a provider OpenAI-compatible endpoint; `review.py` holds no vendor SDK.
 
+## Commands
+
+`issue_comment` fires the job on every comment; `parse_command` reads only the first line, and a
+comment that names no command returns `None` so an ordinary discussion costs nothing at all. The
+first line decides specifically so that quoting a command inside a reply is not mistaken for one.
+
+| Command | Effect |
+| --- | --- |
+| `/review` | the full review now, updating the summary and posting inline comments |
+| `/summary` | the same review, but only the summary comment is posted |
+| `/ask <question>` | one model call answering a question about the pull request |
+| `/help` | `HELP_TEXT` |
+| `@isa <anything>` | treated as `/ask`, so a bare mention with a question reads naturally |
+
+`acknowledge` reacts with 👀 before the work starts, because a command that shows nothing looks
+broken. `reply_to_trigger` answers a review comment **inside its own thread** — AGENTS.md requires
+that, and a top-level comment cannot be resolved against a line. Replies to ordinary PR comments are
+posted as new comments rather than through `post_comment`, whose marker belongs to the summary.
+
+For a comment event the pull request is not in the payload, so the workflow resolves its number and
+head SHA from the API in a step before `actions/checkout`. That SHA is what `file_excerpt` and
+`rules_for` read, so a command reviews the tree it was issued against.
+
 ## The budget is requests, not tokens
 
 OpenRouter's free tier allows **50 free-model requests per UTC day** (`free_model_daily_requests` on
