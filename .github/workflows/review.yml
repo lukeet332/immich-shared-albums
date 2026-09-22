@@ -5,20 +5,28 @@ name: review
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
+    # NOT `synchronize`: OpenRouter's free tier allows 50 requests per day, and this repo pushes far
+    # more often than that. Review the opening push and on request, as CodeRabbit's OSS tier does.
+    types: [opened, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to review
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: review-${{ github.event.pull_request.number }}
+  group: review-${{ github.event.pull_request.number || inputs.pr }}
   cancel-in-progress: true
 
 jobs:
   review:
     if: github.event.sender.type != 'Bot'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Above the script's own DEADLINE_SECONDS, so the pipeline always reaches the code that posts.
+    timeout-minutes: 8
     permissions:
       contents: read
       pull-requests: write
@@ -26,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -37,6 +45,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Only the keys that exist are used: a stage skips providers without one and falls through
           # its candidate list. With no key at all the pipeline prints a notice and does nothing.
+          # Which provider serves which stage is .github/review_models.json, not this file.
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -47,4 +56,4 @@ jobs:
         run: |
           python .github/scripts/review.py \
             --repo "$GITHUB_REPOSITORY" \
-            --pr "${{ github.event.pull_request.number }}"
+            --pr "${{ github.event.pull_request.number || inputs.pr }}"

@@ -5,58 +5,106 @@
 A free re-implementation of the shape CodeRabbit uses, run in CI so it has no shared quota. Every
 stage is a model call against a provider OpenAI-compatible endpoint; `review.py` holds no vendor SDK.
 
+## The budget is requests, not tokens
+
+OpenRouter's free tier allows **50 free-model requests per UTC day** (`free_model_daily_requests` on
+`GET /api/v1/key`), and this repo pushes far more often than that. `Budget` therefore counts requests
+as well as wall clock: `MAX_REQUESTS` per run, `DEADLINE_SECONDS` overall, and the loop stops
+starting chunks once either is spent rather than being killed mid-run by the job timeout.
+`DEADLINE_SECONDS` is set below the workflow's `timeout-minutes` so the pipeline always reaches the
+code that posts.
+
+A queued free endpoint streams keep-alive whitespace, which resets `urlopen`'s per-socket timeout
+indefinitely — a request was observed running past every bound. `http` therefore bounds each request
+with `signal.setitimer` and `CALL_TIMEOUT_SECONDS`, because only an alarm measures wall clock.
+
+`MAX_CHUNKS` caps work on a large pull request, and the workflow runs on `opened`, `reopened` and
+`ready_for_review` — deliberately not `synchronize` — with `workflow_dispatch` for a re-run on
+demand. Paying the one-time $10 on OpenRouter raises the cap to 1,000 requests/day and would allow
+`synchronize` back.
+
 ## Stages
 
-| Stage | Function | Model slot | Purpose |
+| Stage | Function | Configured | Purpose |
 | --- | --- | --- | --- |
-| chunk | `split_into_chunks` | — | keep each review request small |
-| summarise | `complete("summarise", …)` | cheap, long context | what changed and where the risk sits |
-| review | `complete("review", …)` | strongest available | findings as strict JSON |
-| verify | `complete("verify", …)` | **different family** to review | refute anything unsupported |
+| chunk | `split_into_chunks` | always | keep each review request small |
+| summary | `rules_for` | always | the applicable `AGENTS.md`, no model call |
+| review | `complete("review", …)` | yes | findings as strict JSON |
+| summarise | `complete("summarise", …)` | **no** | dropped: it doubles the request count |
+| verify | `complete("verify", …)` | yes | refute anything unsupported |
 
-CodeRabbit routes the same way: an open model summarises, frontier models reason, and verification is
-a separate agentic pass.
+CodeRabbit routes a cheap summariser before its reasoning models; here a stage only runs when
+`review_models.json` lists it, because each one costs a request from a 50/day allowance. Add
+`"summarise"` back to that file to enable it.
 
 ## Why chunks, and why `MAX_CHUNK_DIFF_LINES` is 120
 
 A 2026 evaluation of five models on 150 samples found F1 falls from **0.657 on diffs under 10 lines to
 0.043 on diffs over 150**. Diff size, not model choice, is the dominant predictor of review quality.
-`split_into_chunks` therefore starts a new chunk as soon as a file's added lines reach the limit, and
+`split_hunk` slices **inside** a hunk as well as between them — a new file is one hunk — and
 `changed_lines_by_file` keeps the added-line set so a finding can only be anchored where the diff
 actually changed something.
 
+## Model choice
+
+Review prefers `cohere/north-mini-code:free` (a code model, measured at 0.7s), then
+`qwen/qwen3.8-27b:free`, then the Nemotron nano, then OpenRouter's own `openrouter/free` router.
+Verification uses a different vendor from review's primary — `qwen/qwen3.8-27b:free`, then
+`nex-agi/nex-n2.5-pro:free`.
+
+The chain exists because a single free endpoint is not reliable. Observed on OpenRouter's free tier:
+`ResourceExhausted: Worker local total request limit reached (16/16)` from NVIDIA,
+`is temporarily rate-limited upstream` from Qwen, and repeated wall-clock deadline hits on Cohere and
+`openrouter/free`. `complete` walking its candidate list turns a saturated model into a slower
+review rather than a failed one, and when every candidate fails the run still posts — with no
+findings, which `main` reports as such.
+
+Going direct to a provider's own endpoint avoids OpenRouter's shared free pool: an `NVIDIA_API_KEY`
+from `build.nvidia.com` reaches the same Nemotron models through `integrate.api.nvidia.com`, so put
+`nvidia` first in the candidate lists and `openrouter` behind it. OpenRouter's own message points the
+same way — "add your own key to accumulate your rate limits".
+
+`chunk_priority` puts source before config before prose, so with `MAX_CHUNKS` at 2 the files
+reviewed are the consequential ones rather than whichever sorted first.
+
+`CALL_ATTEMPTS` is 1: a queued free endpoint does not answer faster on retry, and each retry is
+another request against the daily allowance.
+
 ## Context given to the review stage
 
-- every `AGENTS.md` from the repository root down to the changed file's directory (`rules_for`), which
-  is how Codex applies the same rules
+- every `AGENTS.md` from the repository root down to the changed file's directory (`rules_for`)
 - the changed file at head, truncated to `MAX_FILE_CHARS`
-- the chunk's diff, and the summarise output when that stage ran
+- the chunk's diff, with the new file's line number in the left column (`render_chunk_lines`) so no
+  model has to compute an anchor
 
 `SYSTEM_REVIEW` forbids reporting what CI already catches, matching `.coderabbit.yaml`'s
 `path_instructions`, and keeps only `high` and `medium` severities (`SEVERITIES`).
 
 ## Providers
 
-`PROVIDERS` maps a provider name to its OpenAI-compatible base URL and the environment variable
-holding its key. The model per stage and its fallback order live in `.github/review_models.json`. A
-provider without a key is skipped at load (`load_stage_models`), and a provider that errors falls
-through to the next candidate, so the pipeline runs on whatever subset of keys exists.
+`PROVIDERS` maps a provider name to its OpenAI-compatible base URL and the key's environment
+variable. `load_stage_models` skips a provider with no key, `complete` falls through its candidate
+list on error, and a status in `DEAD_STATUS_CODES` adds the provider to `Budget.dead_providers` so
+the rest of the run does not keep spending requests on it.
 
-Cerebras is called with its native model id (`gpt-oss-120b`), not LiteLLM's prefixed form.
+A Cerebras key returns `payment_required` until that account has billing, which is the case this
+blacklist exists for.
 
 ## Fail-open, deliberately
 
-`main` is wrapped so any exception prints a warning and exits 0. A reviewer must never decide whether
-a merge happens — the gates stay the fast checks and the two e2e lanes (AGENTS.md, "How changes land").
-A broken pipeline is therefore a warning in the run log, not a red check. The cost is that a silent
-failure looks like a green job; `--dry-run` and the `::notice::` lines exist for that.
+`main` is wrapped so any exception prints a warning and exits 0: a reviewer must never decide whether
+a merge happens, and the gates stay the fast checks and the two e2e lanes (AGENTS.md, "How changes
+land"). The cost is that a broken run looks like a green job, so the pipeline warns loudly and
+`--dry-run` exists for local checking.
 
 ## Known limits
 
 - Fork PRs are skipped: the `pull_request` token is read-only, and `pull_request_target` would hand
   repository secrets to fork code.
-- The summary comment is updated in place via `MARKER`, so pushes do not stack comments.
-- No linter or SAST output is fed in, unlike CodeRabbit's second context stage. CI runs those; the
-  prompt tells the model not to duplicate them.
-- Nothing here reads the diff as a whole: cross-file consequences are only visible through each
-  chunk's own context.
+- A `workflow_dispatch` run checks out the default branch, so `file_excerpt` and `rules_for` read
+  that ref while the diff still comes from the requested pull request.
+- The summary comment is updated in place via `MARKER`, so re-runs do not stack comments.
+- No linter or SAST output is fed in, unlike CodeRabbit's second context stage. CI runs those, and
+  the prompt tells the model not to duplicate them.
+- Nothing reads the diff as a whole: cross-file consequences are only visible through each chunk's
+  own context.
