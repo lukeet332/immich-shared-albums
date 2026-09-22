@@ -15,7 +15,15 @@ const BASE = process.argv[2] || 'http://127.0.0.1:8391';
 const PORT = (name, dflt) => process.env[name] || dflt;
 const IMMICH = `http://localhost:${PORT('PORT_IMMICH_B', 2284)}`;
 const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
-const BKEY = fs.readFileSync(`${REPO}/demo/.env`, 'utf8').match(/^B_API_KEY=(.*)$/m)[1].trim();
+// The key comes from the ENVIRONMENT, exactly as the e2e suite takes it (the rig exports BKEY):
+// a lane has no business reading a credential off disk and putting it in a request header.
+//   BKEY=$(grep -m1 '^B_API_KEY=' demo/.env | cut -d= -f2-) node rust/<this lane>.mjs
+const BKEY = process.env.BKEY || process.env.B_SIDECAR_API_KEY;
+if (!BKEY) {
+  console.error('BKEY is required — export the rig\'s household-B key first:');
+  console.error("  BKEY=$(grep -m1 '^B_API_KEY=' demo/.env | cut -d= -f2-) node rust/<lane>");
+  process.exit(2);
+}
 
 const checks = [];
 const check = (name, ok, detail = '') => { checks.push(ok); console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };

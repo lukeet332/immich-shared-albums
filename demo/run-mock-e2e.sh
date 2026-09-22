@@ -96,18 +96,22 @@ if [ -z "${SKIP_BUILD:-}" ]; then
   # hang that has to be diagnosed with gdb. Every normal run passes none.
   ( cd "$DIR" && docker build -q --label "isa.commit=$COMMIT" -f "$IMAGE_DOCKERFILE" -t immich-shared-albums:demo ${ISA_BUILD_ARGS:-} . >/dev/null ) \
     || { echo "!! image build failed — not testing a stale image" >&2; exit 1; }
-  # The iroh probe is the INDEPENDENT JavaScript oracle, so it must not run in the sidecar image:
-  # that image is what is under test, and under ISA_DOCKERFILE=rust/Dockerfile it has no node at all
-  # (every probe then dies with "exec: node: not found", which reads as a product failure). Build
-  # the NODE image under its own tag first, from the root Dockerfile, whatever the sidecar uses.
-  ( cd "$DIR" && docker build -q -t immich-shared-albums:probe . >/dev/null ) \
-    || { echo "!! probe image build failed — the independent oracle cannot run" >&2; exit 1; }
-  export PROBE_IMAGE=immich-shared-albums:probe
 else
   built=$(docker inspect -f '{{index .Config.Labels "isa.commit"}}' immich-shared-albums:demo 2>/dev/null || true)
   echo "== SKIP_BUILD set: testing the existing image (built from ${built:-an unlabelled commit}; HEAD is $COMMIT) =="
   [ "$built" = "$COMMIT" ] || echo "  !! that image is NOT built from HEAD — the results describe ${built:-something else}, not this checkout"
 fi
+
+# The iroh probe is the INDEPENDENT JavaScript oracle, and it is NOT the image under test: under
+# ISA_DOCKERFILE=rust/Dockerfile the sidecar image has no node at all, and every probe would die with
+# "exec: node: not found", which reads as a product failure. So it is built from the root Dockerfile
+# whatever the sidecar uses — and it is built OUTSIDE the branch above, because a SKIP_BUILD run
+# (CI pre-builds the sidecar image in the background) still needs an oracle to ask anything at all.
+# Always built rather than `docker image inspect`-guarded: the layer cache makes an unchanged build
+# about a second, and a probe image left over from an older lockfile would answer for the wrong code.
+( cd "$DIR" && docker build -q -t immich-shared-albums:probe . >/dev/null ) \
+  || { echo "!! probe image build failed — the independent oracle cannot run" >&2; exit 1; }
+export PROBE_IMAGE=immich-shared-albums:probe
 
 # Delete a sidecar's state as ROOT, but only while the container is stopped.
 #

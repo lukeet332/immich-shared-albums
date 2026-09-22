@@ -190,14 +190,14 @@ container-based ones start their own sidecar unless they say otherwise.
 | --- | --- | --- | --- |
 | `frame-interop.mjs` | 10/10 | the `isa/2` framing codec against `demo/e2e/iroh-client.mjs`, the independent JavaScript implementation the e2e suite itself uses | `cargo build --example frame_server`, `ISA_ROOT=<repo>` |
 | `peer-interop.mjs` | 9/9 | a real JS iroh endpoint dials the Rust endpoint: handshake, features, the caller's identity from the connection, Range and body bytes verbatim, 404 for an unknown route | `cargo build --example peer_server` |
-| `verify-refs.mjs` | 21/21 | a JS peer pushes a ref into the real `isa` binary: the stub's owner, size, aspect, capture date, GPS, rating and credit line | self-hosting |
-| `verify-sync.mjs` | 16/16 | the pull side: the version token's shape, manifest, `/status`, entitlement from a pull, and 410 GONE (not 404) after a leave | a sidecar on `:9410` |
-| `verify-bytes.mjs` | 10/10 | the byte routes and the entitlement gate: an offered asset IS readable, an unshared one is 403, an invented asset id is 403, an unknown peer is 403 | a sidecar on `:9410` |
-| `verify-redeem.mjs` | 25/25 | the enrolment path and every gate that can refuse it: a reused link, an unknown key, a password-gated link with no password or the wrong one, a malformed body, and the setting that turns link joining off at the PEER route as well as on the page | a sidecar on `:9410` |
+| `verify-refs.mjs` | 21/21 | a JS peer pushes a ref into the real `isa` binary: the stub's owner, size, aspect, capture date, GPS, rating and credit line | self-hosting, `BKEY` exported |
+| `verify-sync.mjs` | 16/16 | the pull side: the version token's shape, manifest, `/status`, entitlement from a pull, and 410 GONE (not 404) after a leave | a sidecar on `:9410`, `BKEY` exported |
+| `verify-bytes.mjs` | 10/10 | the byte routes and the entitlement gate: an offered asset IS readable, an unshared one is 403, an invented asset id is 403, an unknown peer is 403 | a sidecar on `:9410`, `BKEY` exported |
+| `verify-redeem.mjs` | 25/25 | the enrolment path and every gate that can refuse it: a reused link, an unknown key, a password-gated link with no password or the wrong one, a malformed body, and the setting that turns link joining off at the PEER route as well as on the page | a sidecar on `:9410`, `BKEY` exported |
 | `verify-pairing.mjs` | 17/17 | two Rust sidecars pairing over the real wire: single-use links, replay refused, stale refused, both sides listed, the protocol the peer advertised | two sidecars on `:9410`/`:9420` named `Household Alpha`/`Beta` |
-| `verify-interceptor.mjs` | 10/10 | `/api/assets/:id/thumbnail` across two servers: a MISS comes from the owner byte for byte, a repeat is a cache HIT | self-hosting |
+| `verify-interceptor.mjs` | 10/10 | `/api/assets/:id/thumbnail` across two servers: a MISS comes from the owner byte for byte, a repeat is a cache HIT | self-hosting, `BKEY` exported |
 | `verify-share.mjs` | 13/13 | the join card in Chromium over the framed native album, `?native=1` untouched, dismissal handing over to Immich | a sidecar on `:9400`, a share key in `/tmp/sharekey` |
-| `verify-share-browser.mjs` | 7/7 | `deploy/INSTALL-AI.md`'s VERIFY step 2 on its own: the card only exists once `share.js` has mounted, so a browser is the only thing that can answer it | a sidecar on `:8391` |
+| `verify-share-browser.mjs` | 7/7 | `deploy/INSTALL-AI.md`'s VERIFY step 2 on its own: the card only exists once `share.js` has mounted, so a browser is the only thing that can answer it | a sidecar on `:8391`, `BKEY` exported |
 | `jpeg-parity.mjs` | 12/12 | the stub generator's bytes against the TypeScript's, size for size | |
 | `verify-join.sh` | pass | the MEMBER half of the handshake against a real origin: a refused join pins no peer, a re-dial does not enrol twice, a password-gated album asks for a password | the rig |
 | `verify-leave.sh` | pass | the purge reclaims the space: the stand-in's stub is gone, the mapping is gone, and the admin key could never have seen it | the rig |

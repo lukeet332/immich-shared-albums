@@ -50,9 +50,24 @@ jobs:
         run: npm test
 
   e2e:
+    # TWO LANES, one job definition: the TypeScript sidecar (the reference implementation and the
+    # baseline) and the Rust one (what install.sh ships). Separate runners, so neither can time the
+    # other out and a failure in one still reports the other's result. The Rust lane pays a cold
+    # cargo build (~15 minutes: musl, LTO, bundled SQLite), which is why the timeout covers both.
+    strategy:
+      fail-fast: false
+      matrix:
+        sidecar:
+          - name: typescript
+            dockerfile: Dockerfile
+          - name: rust
+            dockerfile: rust/Dockerfile
+    name: e2e (${{ matrix.sidecar.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
+      # Which Dockerfile builds the image under test, read by the background build below.
+      ISA_DOCKERFILE: ${{ matrix.sidecar.dockerfile }}
       # push/PR runs pin the known-good Immich BY DIGEST (upstream mutates even version
       # tags — observed live 2026-08-16); the weekly cron chases :release as a canary
       IMMICH_REF: ${{ github.event_name == 'schedule' && ':release' || '@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb' }}
@@ -76,7 +91,7 @@ jobs:
           mkdir -p /tmp/bg
           # Labelled with the commit, like run-mock-e2e.sh's own build, so its SKIP_BUILD path can
           # confirm the image it is testing is this checkout's.
-          ( docker build -q --label "isa.commit=$(git rev-parse --short HEAD)" -t immich-shared-albums:demo . > /tmp/bg/build.log 2>&1; echo $? > /tmp/bg/build.rc ) &
+          ( docker build -q --label "isa.commit=$(git rev-parse --short HEAD)" -f "$ISA_DOCKERFILE" -t immich-shared-albums:demo . > /tmp/bg/build.log 2>&1; echo $? > /tmp/bg/build.rc ) &
           ( cd demo/e2e && npm install --silent && npx playwright install --with-deps chromium; echo $? > /tmp/bg/playwright.rc ) > /tmp/bg/playwright.log 2>&1 &
           echo "started"
 
@@ -134,21 +149,6 @@ jobs:
           # Browser tooling was installed in the background at the start of the job.
           until [ -f /tmp/bg/playwright.rc ]; do sleep 1; done
           if [ "$(cat /tmp/bg/playwright.rc)" != "0" ]; then cat /tmp/bg/playwright.log; echo "::error::browser tooling install failed"; exit 1; fi
-          cd demo/e2e
-          CKEY=$(grep -m1 C_API_KEY ../household-c/.env | cut -d= -f2-) \
-          B_EMAIL=admin@e2e.local B_PASS=e2e-admin-pass-1 node browser-test.mjs
-
-      # THE PORT, against the same rig. `deploy/install.sh` ships the Rust image by default, so the
-      # lane that gates a release has to prove THAT image, not only the TypeScript one. The script
-      # rebuilds `immich-shared-albums:demo` from rust/Dockerfile itself (no SKIP_BUILD), redeploys
-      # the three sidecars onto it and purges their state, so the two lanes cannot contaminate each
-      # other. Both implementations stay covered here rather than one replacing the other: the
-      # TypeScript build is the reference the port is checked against.
-      - name: Rust lane (the port, same rig)
-        run: ISA_DOCKERFILE=rust/Dockerfile bash demo/run-mock-e2e.sh
-
-      - name: Browser tests against the Rust sidecar
-        run: |
           cd demo/e2e
           CKEY=$(grep -m1 C_API_KEY ../household-c/.env | cut -d= -f2-) \
           B_EMAIL=admin@e2e.local B_PASS=e2e-admin-pass-1 node browser-test.mjs

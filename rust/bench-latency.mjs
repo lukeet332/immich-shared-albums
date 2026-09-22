@@ -73,4 +73,10 @@ for (const key of ['throughput health rps', 'throughput passthrough rps']) {
   const a = results[NAMES[0]][key], b = results[NAMES[1]][key];
   console.log(key.padEnd(28), `${a.toFixed(0)} rps`.padEnd(24), `${b.toFixed(0)} rps`.padEnd(24), `${(b / a).toFixed(2)}x`);
 }
-fs.writeFileSync('/tmp/bench-latency.json', JSON.stringify(results, null, 2));
+// Build output, not the shared temporary directory: a fixed, predictable path inside the checkout,
+// next to the target/ dir it belongs with (gitignored), so two runs cannot collide or be squatted.
+const outDir = new URL('./target/', import.meta.url);
+fs.mkdirSync(outDir, { recursive: true });
+const outPath = new URL('./target/bench-latency.json', import.meta.url);
+fs.writeFileSync(outPath, JSON.stringify(results, null, 2));
+console.log('results written to', outPath.pathname);

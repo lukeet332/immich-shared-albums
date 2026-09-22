@@ -357,14 +357,16 @@ const PROBE_IMAGE = process.env.PROBE_IMAGE || 'immich-shared-albums:probe';
 // status the checks can fail on, so a probe problem reads as one red check instead of no output.
 const irohProbe = (keys, endpoint, path, opts = {}) => {
   const job = JSON.stringify({ keys, peerPub: endpoint.pub, addrs: endpoint.addrs, path, ...opts });
-  const cmd =
-    `docker run --rm --network isa-demo -e ISA_ROOT=/app -e RELAY=off ` +
-    `-v "${E2E_DIR}":/probe:ro ${PROBE_IMAGE} ` +
-    `node /probe/probe.mjs '${job.replace(/'/g, String.raw`'\''`)}'`;
+  // ARGV, not a shell string: the job is JSON that no quoting rule survives intact, and a shell is
+  // one more thing between the suite and the oracle that can mangle it.
+  const argv = [
+    'run', '--rm', '--network', 'isa-demo', '-e', 'ISA_ROOT=/app', '-e', 'RELAY=off',
+    '-v', `${E2E_DIR}:/probe:ro`, PROBE_IMAGE, 'node', '/probe/probe.mjs', job,
+  ];
   let last;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const out = execSync(cmd, { timeout: 120000 }).toString().trim().split('\n').pop();
+      const out = execFileSync('docker', argv, { timeout: 120000 }).toString().trim().split('\n').pop();
       return JSON.parse(out);
     } catch (e) {
       last = e;

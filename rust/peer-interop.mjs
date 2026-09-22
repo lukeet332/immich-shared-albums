@@ -9,6 +9,10 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 
 const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+// The shared JS oracle resolves its dependencies from ISA_ROOT (the probe container sets it to
+// /app). A lane run from a checkout is the repo root, so default it here rather than making every
+// caller remember an environment variable the lane can work out for itself.
+process.env.ISA_ROOT ??= REPO;
 const require = createRequire(REPO + '/package.json');
 // The oracle itself, unmodified: the same module the e2e suite uses for F-05/F-06.
 const { bindAs, request } = await import(REPO + '/demo/e2e/iroh-client.mjs');
