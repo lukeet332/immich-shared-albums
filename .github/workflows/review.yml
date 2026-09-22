@@ -5,9 +5,9 @@ name: review
 
 on:
   pull_request:
-    # NOT `synchronize`: OpenRouter's free tier allows 50 requests per day, and this repo pushes far
-    # more often than that. Review the opening push and on request, as CodeRabbit's OSS tier does.
-    types: [opened, reopened, ready_for_review]
+    # `synchronize` reviews every push: each pull request rotates to a different provider, and the
+    # chain's free allowances total far more than this repo's push rate.
+    types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
     # This is what makes the bot conversational. Every comment fires the job; review.py ignores the
     # ones not addressed to it, so an ordinary discussion costs nothing.

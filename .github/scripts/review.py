@@ -33,7 +33,7 @@ HELP_TEXT = f"""{MARKER}
 `{DEFAULT_MENTION} <anything>` also works and is treated as `/ask`, so a plain question reads
 naturally. Replies to an inline comment arrive in that comment's own thread.
 
-The automatic review runs on `opened`, `reopened` and `ready_for_review`, not on every push."""
+The automatic review runs on `opened`, `reopened`, `ready_for_review` and every push to the branch."""
 MAX_COMMENTS = 12
 SEVERITIES = ("high", "medium")
 STAGES = ("summarise", "review", "verify")
@@ -152,7 +152,15 @@ def key_for(provider):
     return os.environ.get(env_name, "").strip()
 
 
-def load_stage_models(path):
+def rotate(candidates, offset):
+    """Start each pull request at a different candidate, so one provider's daily allowance is not drained first."""
+    if not candidates:
+        return candidates
+    offset %= len(candidates)
+    return candidates[offset:] + candidates[:offset]
+
+
+def stage_models_for(path, seed):
     with open(path, encoding="utf-8") as handle:
         configured = json.load(handle)
     usable = {}
@@ -163,7 +171,7 @@ def load_stage_models(path):
             if isinstance(candidate, dict) and key_for(candidate["provider"])
         ]
         if candidates:
-            usable[stage] = candidates
+            usable[stage] = rotate(candidates, seed)
     return usable
 
 
@@ -446,7 +454,7 @@ def main():
     args = parser.parse_args()
 
     token = os.environ.get("GITHUB_TOKEN", "").strip()
-    stages = load_stage_models(args.config)
+    stages = stage_models_for(args.config, args.pr)
     ready = {name for name, candidates in stages.items() if candidates}
     if not token:
         warn("GITHUB_TOKEN is not set — nothing to do")
@@ -493,8 +501,8 @@ def main():
     chunks = split_into_chunks(files)
     if len(chunks) > args.max_chunks:
         notice(
-            f"{len(chunks)} chunks, reviewing the first {args.max_chunks}: OpenRouter's free tier "
-            "allows 50 requests per day."
+            f"{len(chunks)} chunks, reviewing the first {args.max_chunks}: each chunk costs up to two "
+            "requests against the providers' free daily allowances."
         )
         chunks = chunks[: args.max_chunks]
     log(f"{len(files)} files → {len(chunks)} chunks, budget {args.max_requests} requests")
