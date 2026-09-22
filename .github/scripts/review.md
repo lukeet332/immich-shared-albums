@@ -11,6 +11,11 @@ stage is a model call against a provider OpenAI-compatible endpoint; `review.py`
 comment that names no command returns `None` so an ordinary discussion costs nothing at all. The
 first line decides specifically so that quoting a command inside a reply is not mistaken for one.
 
+`read_trigger` tells the two event kinds apart by emptiness: `COMMENT_KIND` is set only for an
+`issue_comment`, so an empty kind is a push or a dispatch — a review to run, not a comment to parse.
+`acknowledge` and `reply_to_trigger` read the kind back to choose between the review-comment and the
+issue-comment endpoints.
+
 | Command | Effect |
 | --- | --- |
 | `/review` | the full review now, updating the summary and posting inline comments |
@@ -155,9 +160,9 @@ land"). The cost is that a broken run looks like a green job, so the pipeline wa
 ## Known limits
 
 - Fork PRs are skipped: the `pull_request` token is read-only, and `pull_request_target` would hand
-  repository secrets to fork code.
-- A `workflow_dispatch` run checks out the default branch, so `file_excerpt` and `rules_for` read
-  that ref while the diff still comes from the requested pull request.
+  repository secrets to fork code. A `workflow_dispatch` run on one fails earlier, at
+  `actions/checkout`, because the resolve step checks out the pull request's head SHA and a fork's
+  commit is not in this repository.
 - The summary comment is updated in place via `MARKER`, so re-runs do not stack comments.
 - No linter or SAST output is fed in, unlike CodeRabbit's second context stage. CI runs those, and
   the prompt tells the model not to duplicate them.

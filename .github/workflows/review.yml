@@ -51,8 +51,12 @@ jobs:
           set -euo pipefail
           number="${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
           ref=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" -q .head.sha)
-          kind=issue
-          if [ -n "${{ github.event.comment.pull_request_review_id }}" ]; then kind=review; fi
+          # An EMPTY kind is how review.py is told this is not a comment, so only a comment sets one.
+          kind=""
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            kind=issue
+            if [ -n "${{ github.event.comment.pull_request_review_id }}" ]; then kind=review; fi
+          fi
           {
             echo "number=$number"
             echo "ref=$ref"
