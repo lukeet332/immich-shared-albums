@@ -21,3 +21,6 @@ demo/household-d/.env
 demo/recordings/
 demo/e2e/fixtures/demo-photos/
 demo/e2e/demo-targets.md
+
+# .github/scripts is Python — bytecode is never committed
+__pycache__/
