@@ -248,6 +248,18 @@ candidate, which is the chain doing its job rather than a fault.
 
 `usage` is in the warning for exactly this reason: `finish_reason` alone once cost an afternoon.
 
+## A per-minute limit is a pause, not a retirement
+
+Groq's free tier allows 8,000 tokens a minute and the prompt alone is about 6,500, so a chunk is
+answered there roughly once a minute. `retry_after` reads the `retry-after` header, or Groq's own
+"try again in 44.5s", and `complete` waits that long — up to `MAX_RATE_LIMIT_WAITS` times — before it
+retires the model. A limit longer than `RATE_LIMIT_MAX_WAIT`, or a 429 carrying no hint at all, is a
+daily cap wearing a per-minute's clothes and still retires it for the run.
+
+Measured on the Rust port before this existed: twelve chunks, the first answered, the second 429 with
+"try again in 44.5s", and the remaining ten skipped in two seconds because one 429 had retired the
+model for the whole run. One chunk in twelve is not a rate limit, it is a silent outage.
+
 ## Context given to the review stage
 
 - every `AGENTS.md` from the repository root down to the changed file's directory (`rules_for`)
@@ -277,6 +289,13 @@ blacklist exists for.
 `main` parses the arguments and hands them to `run`; any exception from `run` prints a warning, calls
 `report_failure` and returns 0. A reviewer must never decide whether a merge happens, and the gates
 stay the fast checks and the two e2e lanes (AGENTS.md, "How changes land").
+
+The summary states coverage in the same weight as the findings — **"N of M chunks were not
+reviewed"** — because a partial read presented as a review is the same lie as silence. `read` counts
+the chunks a model actually answered, not the chunks handed to it: a run rate limited out after one
+chunk has read one of twelve, however many it was given. Inline comments are de-duplicated across
+runs by `already_commented`, which skips a `(path, line, title)` this account has already posted on,
+since unlike the summary an inline comment is never rewritten in place.
 
 Silence is the failure mode that matters here, because a run that posted nothing is indistinguishable
 from a clean pull request — which is how a 406 on the Rust port's pull request produced no review at
