@@ -48,7 +48,9 @@ request's tree. Two reasons, one of which cost a review of the Rust port — tha
 `fetch_diff` existed, so the dispatch that was meant to review it ran the old script and hit the same
 406 the fix had already handled. The other is that a pull request editing `review.py` would otherwise
 be choosing how it is reviewed, with the provider keys in scope. If the default branch cannot be read
-the run falls back to the pull request's copy and warns rather than going red.
+the run falls back to the pull request's copy and warns rather than going red. The same split is why
+`main` catches a rejected argument list: a flag can arrive before the script that understands it, and
+a warning is the right answer to that rather than a failed job.
 
 `concurrency` sits on the job, not the workflow, and its group carries the event name: a comment the
 job's own condition skips must not take the group at all, or a bot's comment cancels the review it
@@ -144,6 +146,41 @@ Two things to know before slicing. The order is deterministic for one head SHA �
 sorts by `chunk_priority`, ties broken by the diff's own file order — but a push renumbers the
 offsets, so slices are only coherent against a fixed head. And an offset past the end reviews nothing
 and says so: the summary reports `0 of 12 chunks from offset 12` rather than a clean pull request.
+
+## Workers, because the free endpoints are the slow part
+
+A chunk spends most of its time waiting on a queued free endpoint, so `--parallel` divides the run's
+chunks between child processes: `review_in_parallel` forks one child per contiguous slice, each with
+its own `Budget`, and `max_requests` is **divided** between them (`max(1, max_requests // parallel)`
+each). Parallelism therefore spends the same budget in less wall clock rather than spending more —
+which is the only lever that matters, since the request allowances were never the binding constraint.
+
+`PARALLEL` is 1 by default, and at 1 `run` calls `review_slice` in its own process, which is exactly
+what it did before there was a worker path at all.
+
+Processes rather than threads, for a specific reason: `http` bounds a request with
+`signal.setitimer(SIGALRM)`, and a signal is process-global and can only be installed from a main
+thread. A thread pool would either lose that bound — the bug that once let a queued endpoint run for
+ten minutes — or refuse to start. `os.fork` rather than `ProcessPoolExecutor` for a second reason: a
+pool's queue needs a semaphore, `sem_open` can be refused inside a container, and a review that
+degrades to one process is worth more than one that fails to start.
+
+What the parent guarantees:
+
+- **Order.** Results are collected in slice order, so the summary lists findings by `chunk_priority`
+  however the workers happened to finish.
+- **Isolation.** `review_slice` catches per chunk, so one unbuildable prompt costs its own chunk and
+  not the chunks either side of it — in the sequential path too, where such an error used to end the
+  run before anything posted. A child that still fails warns and contributes nothing.
+- **A bound.** A child that outlives `deadline_seconds + 60` is killed with `SIGKILL` and its chunks
+  are reported unreviewed, rather than the job hanging until `timeout-minutes`.
+- **A fallback.** No `os.fork` on the platform means a warning and one process, never a lost review.
+
+A whole Rust port — 182 chunks of `rust/src` — is 8 workers reading ~23 chunks each, about 20 minutes:
+
+```
+gh workflow run review.yml -f pr=131 -f max_chunks=182 -f max_requests=200 -f parallel=8 -f deadline_seconds=2400
+```
 
 ## Model choice
 
