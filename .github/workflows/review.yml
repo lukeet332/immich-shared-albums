@@ -8,6 +8,10 @@ on:
     # NOT `synchronize`: OpenRouter's free tier allows 50 requests per day, and this repo pushes far
     # more often than that. Review the opening push and on request, as CodeRabbit's OSS tier does.
     types: [opened, reopened, ready_for_review]
+  issue_comment:
+    # This is what makes the bot conversational. Every comment fires the job; review.py ignores the
+    # ones not addressed to it, so an ordinary discussion costs nothing.
+    types: [created]
   workflow_dispatch:
     inputs:
       pr:
@@ -18,12 +22,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: review-${{ github.event.pull_request.number || inputs.pr }}
+  group: review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
   cancel-in-progress: true
 
 jobs:
   review:
-    if: github.event.sender.type != 'Bot'
+    # A bot's own comment must not re-trigger the job, and issue_comment fires for plain issues too.
+    if: >-
+      github.event.sender.type != 'Bot' &&
+      (github.event_name == 'pull_request' || github.event.issue.pull_request)
     runs-on: ubuntu-latest
     # Above the script's own DEADLINE_SECONDS, so the pipeline always reaches the code that posts.
     timeout-minutes: 8
@@ -32,9 +39,27 @@ jobs:
       pull-requests: write
       issues: write
     steps:
+      # The pull request is not in the event payload for a comment, so it is resolved from the API.
+      # The head ref matters: file_excerpt and rules_for read the tree that is checked out.
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          number="${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" -q .head.sha)
+          kind=issue
+          if [ -n "${{ github.event.comment.pull_request_review_id }}" ]; then kind=review; fi
+          {
+            echo "number=$number"
+            echo "ref=$ref"
+            echo "kind=$kind"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          ref: ${{ steps.pr.outputs.ref }}
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -43,6 +68,9 @@ jobs:
       - name: Review
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_KIND: ${{ steps.pr.outputs.kind }}
           # Only the keys that exist are used: a stage skips providers without one and falls through
           # its candidate list. With no key at all the pipeline prints a notice and does nothing.
           # Which provider serves which stage is .github/review_models.json, not this file.
@@ -56,4 +84,4 @@ jobs:
         run: |
           python .github/scripts/review.py \
             --repo "$GITHUB_REPOSITORY" \
-            --pr "${{ github.event.pull_request.number || inputs.pr }}"
+            --pr "${{ steps.pr.outputs.number }}"
