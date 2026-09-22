@@ -1,13 +1,15 @@
 {
-  "$comment": "Stage → model. First entry with a key wins; a failure falls through. See .github/scripts/review.md.",
+  "$comment": "Stage → model, rotated per pull request. Both stages name the same providers in the same order with verify one entry behind, so review and verify never open on the same provider. See .github/scripts/review.md.",
   "review": [
-    { "provider": "openrouter", "model": "cohere/north-mini-code:free" },
-    { "provider": "openrouter", "model": "qwen/qwen3.8-27b:free" },
-    { "provider": "openrouter", "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" },
+    { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+    { "provider": "groq", "model": "openai/gpt-oss-120b" },
+    { "provider": "gemini", "model": "gemma-3-27b-it" },
     { "provider": "openrouter", "model": "openrouter/free" }
   ],
   "verify": [
-    { "provider": "openrouter", "model": "qwen/qwen3.8-27b:free" },
-    { "provider": "openrouter", "model": "nex-agi/nex-n2.5-pro:free" }
+    { "provider": "groq", "model": "openai/gpt-oss-120b" },
+    { "provider": "gemini", "model": "gemma-3-27b-it" },
+    { "provider": "openrouter", "model": "openrouter/free" },
+    { "provider": "gemini", "model": "gemini-3.1-flash-lite" }
   ]
 }

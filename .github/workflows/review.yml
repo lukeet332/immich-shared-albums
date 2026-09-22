@@ -5,9 +5,9 @@ name: review
 
 on:
   pull_request:
-    # NOT `synchronize`: OpenRouter's free tier allows 50 requests per day, and this repo pushes far
-    # more often than that. Review the opening push and on request, as CodeRabbit's OSS tier does.
-    types: [opened, reopened, ready_for_review]
+    # `synchronize` reviews every push: each pull request rotates to a different provider, and the
+    # chain's free allowances total far more than this repo's push rate.
+    types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
     # This is what makes the bot conversational. Every comment fires the job; review.py ignores the
     # ones not addressed to it, so an ordinary discussion costs nothing.
@@ -21,16 +21,18 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
-  cancel-in-progress: true
-
 jobs:
   review:
     # A bot's own comment must not re-trigger the job, and issue_comment fires for plain issues too.
     if: >-
       github.event.sender.type != 'Bot' &&
       (github.event_name == 'pull_request' || github.event.issue.pull_request)
+    # Job level, not workflow level: a job this condition skips must not take the group, or a bot's
+    # comment cancels the review it just posted against. The event name is in the group so a comment
+    # cannot cancel an in-flight push review either.
+    concurrency:
+      group: review-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     # Above the script's own DEADLINE_SECONDS, so the pipeline always reaches the code that posts.
     timeout-minutes: 8
@@ -49,8 +51,12 @@ jobs:
           set -euo pipefail
           number="${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
           ref=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" -q .head.sha)
-          kind=issue
-          if [ -n "${{ github.event.comment.pull_request_review_id }}" ]; then kind=review; fi
+          # An EMPTY kind is how review.py is told this is not a comment, so only a comment sets one.
+          kind=""
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            kind=issue
+            if [ -n "${{ github.event.comment.pull_request_review_id }}" ]; then kind=review; fi
+          fi
           {
             echo "number=$number"
             echo "ref=$ref"
