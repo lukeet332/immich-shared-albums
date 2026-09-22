@@ -72,9 +72,9 @@ against this repo's ~10 pull requests a day averaging 4 commits, at up to two re
 A run does not split one review across providers: `complete` walks its list and stops at the first
 answer, so rotation spreads load between pull requests, not inside one. For the same reason
 `MAX_REQUESTS` and `MAX_CHUNKS` are outer bounds rather than targets — `DEADLINE_SECONDS` is what
-actually stops a large pull request — and `workflow_dispatch` takes `max_chunks` and `max_requests`
-overrides, because four chunks is not a review of a 200-chunk diff and the caps should not have to
-move for one.
+actually stops a large pull request — and `workflow_dispatch` takes `max_chunks`, `max_requests`,
+`chunk_offset` and `deadline_seconds` overrides, because four chunks is not a review of a 225-chunk
+diff and the caps should not have to move for one.
 
 A queued free endpoint streams keep-alive whitespace, which resets `urlopen`'s per-socket timeout
 indefinitely — a request was observed running past every bound. `http` therefore bounds each request
@@ -82,7 +82,7 @@ with `signal.setitimer` and `CALL_TIMEOUT_SECONDS`, because only an alarm measur
 
 `MAX_CHUNKS` caps work on a large pull request, and the workflow runs on `opened`, `reopened`,
 `ready_for_review` and `synchronize`, so a push is reviewed without anyone asking for it;
-`workflow_dispatch` re-runs on demand.
+`workflow_dispatch` re-runs on demand, and takes the slice and budget it should use.
 
 ## Stages
 
@@ -124,6 +124,26 @@ because they are binary or too large. The rebuilt text uses the same `+++`/`@@` 
 headers are identical to the ones the real diff produces.
 
 The Rust port's pull request is the case that found this — 25,629 added lines, 118 files, 248 chunks.
+
+## Reading a diff larger than one run
+
+Rebuilding the diff removes GitHub's ceiling but not the wall clock: 225 chunks at roughly 50 seconds
+each is three hours of model calls, and the free endpoints start answering 429 long before that.
+`chunk_offset` is what makes such a diff reviewable at all — a dispatch reads `max_chunks` chunks
+starting there, and the summary states the slice and prints the next command to run:
+
+```
+gh workflow run review.yml -f pr=131 -f chunk_offset=4
+```
+
+`deadline_seconds` is exposed for the same reason and raises the job's ceiling to 45 minutes; the
+default 300 still governs every automatic run, because a review that has not posted by then is worth
+less than the next push starting.
+
+Two things to know before slicing. The order is deterministic for one head SHA — `split_into_chunks`
+sorts by `chunk_priority`, ties broken by the diff's own file order — but a push renumbers the
+offsets, so slices are only coherent against a fixed head. And an offset past the end reviews nothing
+and says so: the summary reports `0 of 12 chunks from offset 12` rather than a clean pull request.
 
 ## Model choice
 
