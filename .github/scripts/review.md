@@ -248,6 +248,18 @@ candidate, which is the chain doing its job rather than a fault.
 
 `usage` is in the warning for exactly this reason: `finish_reason` alone once cost an afternoon.
 
+## A per-minute limit is a pause, not a retirement
+
+Groq's free tier allows 8,000 tokens a minute and the prompt alone is about 6,500, so a chunk is
+answered there roughly once a minute. `retry_after` reads the `retry-after` header, or Groq's own
+"try again in 44.5s", and `complete` waits that long — up to `MAX_RATE_LIMIT_WAITS` times — before it
+retires the model. A limit longer than `RATE_LIMIT_MAX_WAIT`, or a 429 carrying no hint at all, is a
+daily cap wearing a per-minute's clothes and still retires it for the run.
+
+Measured on the Rust port before this existed: twelve chunks, the first answered, the second 429 with
+"try again in 44.5s", and the remaining ten skipped in two seconds because one 429 had retired the
+model for the whole run. One chunk in twelve is not a rate limit, it is a silent outage.
+
 ## Context given to the review stage
 
 - every `AGENTS.md` from the repository root down to the changed file's directory (`rules_for`)
