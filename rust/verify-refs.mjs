@@ -42,8 +42,10 @@ const originKeys = {
 };
 
 // ---- seed a member sidecar whose linked peer IS this origin ----
-execFileSync('pkill', ['-x', 'isa']).toString?.();
-await delay(1500);
+// NO host-wide `pkill -x isa`: it returns 1 when nothing matched (which threw before any check ran)
+// and it would kill sidecars other lanes are using. This lane starts its own process below and kills
+// only that one, by pid.
+await delay(200);
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 const seeded = JSON.parse(
   execFileSync(`${RUST_DIR}/target/debug/examples/seed_member`, {
@@ -62,6 +64,11 @@ const server = spawn(`${RUST_DIR}/target/debug/isa`, [], {
   detached: true, stdio: 'ignore',
 });
 server.unref();
+// Its OWN process group, killed on any exit: without the host-wide pkill above, a lane that throws
+// mid-run would otherwise leave an `isa` holding these ports for the next run.
+process.on('exit', () => {
+  try { process.kill(-server.pid); } catch { /* already gone */ }
+});
 await delay(4000);
 
 const health = await fetch(`http://localhost:${SIDECAR_PORT}/immich-shared-albums/health`).catch(() => null);

@@ -136,7 +136,11 @@ docker run -d --name "$RUNNER" --network "$NET" --user 0:0 \
 docker network connect "$IMMICH_NET" "$RUNNER" 2>/dev/null || true
 for _ in $(seq 1 60); do curl -fsS "http://127.0.0.1:$SIDECAR_PORT/immich-shared-albums/health" >/dev/null 2>&1 && break; sleep 1; done
 RUST_PUB=$(docker logs "$RUNNER" 2>&1 | grep -o 'identity [A-Za-z0-9_-]*' | head -1 | awk '{print $2}')
-check "the Rust build took over the SAME identity" "$([ "$RUST_PUB" = "${NODE_PUB:0:${#RUST_PUB}}" ] && echo 1 || echo 0)" "node=${NODE_PUB:0:12} rust=${RUST_PUB:0:12}"
+# BOTH non-empty, or the comparison is vacuous: ${NODE_PUB:0:0} is the empty string, so an empty
+# RUST_PUB would make this check pass exactly when the evidence is missing.
+check "the Rust build took over the SAME identity" \
+  "$([ -n "$RUST_PUB" ] && [ -n "$NODE_PUB" ] && [ "$RUST_PUB" = "${NODE_PUB:0:${#RUST_PUB}}" ] && echo 1 || echo 0)" \
+  "node=${NODE_PUB:0:12} rust=${RUST_PUB:0:12}"
 
 PEERS=$(curl -s "http://127.0.0.1:$SIDECAR_PORT/immich-shared-albums/peers" -H "x-api-key: $BKEY" \
   | python3 -c 'import json,sys;print(len(json.load(sys.stdin).get("peers",[])))' 2>/dev/null)

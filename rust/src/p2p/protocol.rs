@@ -674,7 +674,11 @@ pub fn handle_leave(caller_pub: &str, album_mapping_id: &str) -> (u16, Value) {
     }
     // Deliberately NOT `gone_or_404`: a plain 404 here even when the mapping is already dead, so a
     // repeated leave is idempotent rather than reporting a relationship that is already over.
-    let found = {
+    // The id resolved HERE is the one reclaimed below. Re-searching afterwards matched on the album
+    // alone, which one album shared to several peers makes ambiguous — a leave from peer A could
+    // reclaim peer B's offered rows — and a caller that addressed the mapping by `remote_album_id`
+    // matched nothing at all, so its rows were never released.
+    let mapping_id = {
         let mut collections = state.collections();
         match collections.mappings.iter_mut().find(|m| {
             m.peer == caller_pub
@@ -686,25 +690,17 @@ pub fn handle_leave(caller_pub: &str, album_mapping_id: &str) -> (u16, Value) {
                 m.dead = true;
                 m.dead_at = Some(crate::config::iso_now());
                 m.dead_reason = Some("member left".to_string());
-                true
+                Some(m.id.clone())
             }
-            None => false,
+            None => None,
         }
     };
-    if !found {
+    let Some(mapping_id) = mapping_id else {
         return (404, json!({ "error": "unknown album mapping" }));
-    }
+    };
     // Reclaim what the dead mapping was holding, exactly as a leave does locally.
-    if let Some(mapping) = state
-        .collections()
-        .mappings
-        .iter()
-        .find(|m| m.id == album_mapping_id || m.album_id == album_mapping_id)
-        .cloned()
-    {
-        crate::p2p::entitlement::forget_offered(state, &mapping.id);
-        crate::sync::status::forget_watcher_cycles(&mapping.id);
-    }
+    crate::p2p::entitlement::forget_offered(state, &mapping_id);
+    crate::sync::status::forget_watcher_cycles(&mapping_id);
     let _ = state.save();
     (200, json!({ "ok": true }))
 }

@@ -1,6 +1,6 @@
 /** sync/engine.rs — the watcher: pushing what is new here out to peers. See PORT.md. */
 use crate::immich::access::read_album_assets_as;
-use crate::immich::client::{Auth, Client};
+use crate::immich::client::Client;
 use crate::immich::refs::{self, AssetRef};
 use crate::p2p::entitlement::{record_offered, record_offered_refs};
 use crate::p2p::frame::RequestHeader;
@@ -33,16 +33,7 @@ fn push_failures() -> &'static Mutex<HashMap<String, u32>> {
 /// be a member and Immich refuses it. An owner mapping IS this household's album, so the admin key
 /// is the correct one there. Returning `None` for a member mapping with no host key is deliberate:
 /// falling back to the admin key would reproduce the exact refusal this exists to avoid.
-fn read_creds_for<'a>(state: &State, mapping: &'a Mapping) -> Option<Auth<'a>> {
-    if mapping.role != Role::Member {
-        return Some(Auth::Admin);
-    }
-    let key = mapping
-        .host_slug
-        .as_ref()
-        .and_then(|slug| state.collections().contributors.get(slug).and_then(|c| c.api_key.clone()));
-    key.map(|k| Auth::Key(Box::leak(k.into_boxed_str())))
-}
+
 
 /// What a push achieved. `in_sync` is true when every ref landed, which is the WATCHER's cue to
 /// store the version it read — not this function's, because a caller that has not read a version
@@ -53,12 +44,10 @@ pub struct PushOutcome {
 
 /// Offer this mapping's album to its peer, and record what landed.
 pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, peer: &Peer) -> Result<PushOutcome, String> {
-    let Some(auth) = read_creds_for(state, mapping) else {
-        return Err(format!(
-            "mapping \"{}\" has no host key — refusing to read its mirror with the admin key",
-            mapping.album_name
-        ));
-    };
+    // OWNED first, then borrowed: `Auth::Key` borrows, and the old helper leaked a key per call to
+    // hand out a `'static` one.
+    let creds = crate::immich::access::MappingAuth::for_mapping(state, mapping)?;
+    let auth = creds.auth();
     let Some(assets) = read_album_assets_as(client, &mapping.album_id, &auth).await else {
         return Err(format!("no album.read access to \"{}\"", mapping.album_name));
     };
@@ -478,7 +467,7 @@ pub async fn watch_once(state: &State, client: &Client) {
                 if access_error && failures >= 5 {
                     live.dead = true;
                     live.dead_at = Some(crate::config::iso_now());
-                    live.dead_reason = Some(format!("watcher: {}", &e[..e.len().min(120)]));
+                    live.dead_reason = Some(format!("watcher: {}", e.chars().take(120).collect::<String>()));
                     retired = true;
                 }
             }
@@ -499,12 +488,8 @@ pub async fn watch_once(state: &State, client: &Client) {
 async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Result<(), String> {
     // The local side is read with the credential that can actually see it: a member mirror is owned
     // by the ORIGIN owner's stand-in, not by this household's admin.
-    let Some(auth) = read_creds_for(state, mapping) else {
-        return Err(format!(
-            "no album.read access to \"{}\" — no host key",
-            mapping.album_name
-        ));
-    };
+    let creds = crate::immich::access::MappingAuth::for_mapping(state, mapping)?;
+    let auth = creds.auth();
     let Some(album) = crate::immich::access::read_album_as(client, &mapping.album_id, &auth).await else {
         return Err(format!("no album.read access to \"{}\"", mapping.album_name));
     };

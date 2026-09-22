@@ -126,7 +126,7 @@ pub async fn redeem_invite(
                 let detail = answered
                     .get("error")
                     .and_then(|e| e.as_str())
-                    .map(|e| format!(" ({})", &e[..e.len().min(120)]))
+                    .map(|e| format!(" ({})", e.chars().take(120).collect::<String>()))
                     .unwrap_or_default();
                 if code.is_empty() {
                     format!("the other server refused the join ({}){detail}", head.status)

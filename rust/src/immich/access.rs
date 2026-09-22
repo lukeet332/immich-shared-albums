@@ -2,10 +2,57 @@
 use axum::http::HeaderMap;
 use std::collections::HashMap;
 
+use crate::immich::client::Auth;
+use crate::state::State;
+use crate::store::{Mapping, Role};
+
 /// Credentials forwarded on behalf of a signed-in caller, exactly as Immich receives them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Creds {
     pub headers: HashMap<String, String>,
+}
+
+/// The credential that can read a mapping's album, OWNED.
+///
+/// `Auth::Key` borrows, so a helper that built it from a freshly cloned key had to `Box::leak` it —
+/// which leaked one API key per mapping per tick. Returning the owned key lets each call site borrow
+/// it from a local that outlives the call.
+pub enum MappingAuth {
+    Admin,
+    Key(String),
+}
+
+impl MappingAuth {
+    /// The stand-in that OWNS a member mirror, or the household key for an owner mapping.
+    ///
+    /// A member mapping with NO key is refused rather than read with the household key: the mirror is
+    /// owned by the origin's stand-in, and holding the household key is not evidence that this
+    /// household may read someone else's album. The TypeScript throws here for the same reason
+    /// (`readCredsFor`).
+    pub fn for_mapping(state: &State, mapping: &Mapping) -> Result<MappingAuth, String> {
+        if mapping.role != Role::Member {
+            return Ok(MappingAuth::Admin);
+        }
+        mapping
+            .host_slug
+            .as_ref()
+            .and_then(|slug| state.collections().contributors.get(slug).and_then(|c| c.api_key.clone()))
+            .map(MappingAuth::Key)
+            .ok_or_else(|| {
+                format!(
+                    "mapping \"{}\" ({}) has no host key — refusing to read its mirror with the admin key",
+                    mapping.album_name, mapping.id
+                )
+            })
+    }
+
+    /// Borrow it for one call.
+    pub fn auth(&self) -> Auth<'_> {
+        match self {
+            MappingAuth::Admin => Auth::Admin,
+            MappingAuth::Key(key) => Auth::Key(key),
+        }
+    }
 }
 
 /// Headers that carry a caller's identity. ONE list, because a second copy drifts.
@@ -74,6 +121,78 @@ mod tests {
     fn header_lookup_is_case_insensitive_as_http_requires() {
         let creds = creds_from_headers(&headers(&[("X-Api-Key", "key-1")])).unwrap();
         assert_eq!(creds.headers.get("x-api-key").unwrap(), "key-1");
+    }
+
+    fn mapping(role: Role, host_slug: Option<&str>) -> Mapping {
+        let mut m: Mapping = serde_json::from_value(serde_json::json!({
+            "id": "m1",
+            "role": if role == Role::Member { "member" } else { "owner" },
+            "albumId": "album-1",
+            "albumName": "Holidays",
+            "peer": "peer-1",
+            "permissions": "view",
+            "via": "link",
+            "dead": false,
+        }))
+        .expect("a mapping as it is stored");
+        m.host_slug = host_slug.map(str::to_string);
+        m
+    }
+
+    /// A booted state with one contributor key — `State::boot` rather than a literal, because the
+    /// store is private to `state` and a test elsewhere has no business assembling one.
+    fn state_with_one_key() -> std::sync::Arc<State> {
+        crate::config::install_test_config();
+        let state = State::boot().expect("boot");
+        let mut contributors = HashMap::new();
+        contributors.insert(
+            "person-abc".to_string(),
+            crate::store::Contributor {
+                user_id: Some("u1".into()),
+                api_key: Some("stand-in-key".into()),
+                password: None,
+                avatar_done: true,
+                via_peer: None,
+                peer_user_id: None,
+                home_peer: None,
+            },
+        );
+        state.collections().contributors = contributors;
+        state
+    }
+
+    #[test]
+    fn a_member_mirror_is_read_with_the_key_that_owns_it() {
+        let state = state_with_one_key();
+        let creds = MappingAuth::for_mapping(&state, &mapping(Role::Member, Some("person-abc")))
+            .expect("the stand-in's key");
+        assert!(matches!(creds, MappingAuth::Key(ref k) if k == "stand-in-key"));
+        match creds.auth() {
+            Auth::Key(k) => assert_eq!(k, "stand-in-key"),
+            _ => panic!("a member mirror must not be read as the household"),
+        }
+    }
+
+    #[test]
+    fn a_member_mirror_with_no_key_is_refused_rather_than_borrowing_the_admin_key() {
+        // The unsafe direction: holding the household key is not evidence that this household may
+        // read someone else's album.
+        let state = state_with_one_key();
+        assert!(
+            MappingAuth::for_mapping(&state, &mapping(Role::Member, None)).is_err(),
+            "no key means refuse, not fall back"
+        );
+        assert!(
+            MappingAuth::for_mapping(&state, &mapping(Role::Member, Some("person-gone"))).is_err(),
+            "a key for an account we do not hold is not a key"
+        );
+    }
+
+    #[test]
+    fn an_owner_mapping_reads_as_the_household() {
+        let state = state_with_one_key();
+        let creds = MappingAuth::for_mapping(&state, &mapping(Role::Owner, None)).expect("admin");
+        assert!(matches!(creds.auth(), Auth::Admin));
     }
 }
 

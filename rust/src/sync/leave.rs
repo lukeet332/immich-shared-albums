@@ -1,5 +1,5 @@
 /** sync/leave.rs — undoing a join. See PORT.md. */
-use crate::immich::client::{Auth, Client};
+use crate::immich::client::Client;
 use crate::p2p::entitlement::forget_offered;
 use crate::p2p::frame::RequestHeader;
 use crate::p2p::transport::transport;
@@ -73,9 +73,11 @@ pub async fn leave_album(
     }
 
     if plan.delete_album {
-        // The local side is read with the credential that can see it — a member mirror is owned by
-        // the origin owner's stand-in, not by this household's admin.
-        let auth = mirror_creds(state, &mapping);
+        // The local side is deleted with the credential that can see it — a member mirror is owned by
+        // the origin owner's stand-in, not by this household's admin. A member mapping with no key is
+        // REFUSED rather than deleted as the household (`MappingAuth::for_mapping`).
+        let creds = crate::immich::access::MappingAuth::for_mapping(state, &mapping)?;
+        let auth = creds.auth();
         if let Err(e) = client
             .json(
                 reqwest::Method::DELETE,
@@ -131,13 +133,3 @@ pub async fn leave_album(
     Ok(LeaveOutcome { left: mapping.album_name, purged, refused, failed })
 }
 
-/// The credential that can delete this mirror: the stand-in that OWNS it, falling back to the admin
-/// key only when the mapping is an owner mapping (which it never is here).
-fn mirror_creds<'a>(state: &State, mapping: &'a crate::store::Mapping) -> Auth<'a> {
-    mapping
-        .host_slug
-        .as_ref()
-        .and_then(|slug| state.collections().contributors.get(slug).and_then(|c| c.api_key.clone()))
-        .map(|k| Auth::Key(Box::leak(k.into_boxed_str())))
-        .unwrap_or(Auth::Admin)
-}

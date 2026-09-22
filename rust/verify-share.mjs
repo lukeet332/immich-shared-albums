@@ -7,7 +7,26 @@ const require = createRequire(REPO + '/package.json');
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE || 'http://localhost:9400';
-const SHARE_KEY = fs.readFileSync('/tmp/sharekey', 'utf8').trim();
+// The key comes from the caller, not from a file this lane hopes exists: `/tmp/sharekey` was written
+// by hand once, so a fresh checkout failed at import with ENOENT before any check ran.
+const SHARE_KEY = process.env.SHARE_KEY || '';
+if (!SHARE_KEY) {
+  console.error('SHARE_KEY is required — the share key of an album on the household this sidecar fronts.');
+  console.error('Create one with the rig household key, start the sidecar fronting it, then run:');
+  console.error("  KEY=$(grep -m1 '^B_API_KEY=' demo/.env | cut -d= -f2-)");
+  console.error('  SHARE_KEY=$(curl -s -X POST http://localhost:2384/api/shared-links -H "x-api-key: $KEY" \\');
+  console.error("    -H 'Content-Type: application/json' \\");
+  console.error("    -d '{\"type\":\"ALBUM\",\"albumId\":\"<album id>\",\"allowUpload\":true}' | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"key\"])')");
+  console.error('  BASE=http://localhost:9400 SHARE_KEY=$SHARE_KEY node rust/verify-share.mjs');
+  process.exit(2);
+}
+// The album's NAME is the caller's as well, for the same reason the key is: this check used to assert
+// the literal "share verify", so the lane only passed against whatever album one developer seeded.
+const SHARE_ALBUM = process.env.SHARE_ALBUM || '';
+if (!SHARE_ALBUM) {
+  console.error('SHARE_ALBUM is required — the album name the share link points at.');
+  process.exit(2);
+}
 const SHARE_URL = `${BASE}/share/${SHARE_KEY}`;
 
 const results = [];
@@ -31,7 +50,7 @@ const doc = await fetch(SHARE_URL);
 const docBody = await doc.text();
 check('the share document is served', doc.status === 200 && docBody.includes('data-origin-endpoint'));
 check('its tokens are all substituted', !/%%[A-Z]+%%/.test(docBody));
-check('it names the album from Immich', docBody.includes('share verify'), docBody.match(/<title>([^<]*)</)?.[1]);
+check('it names the album from Immich', docBody.includes(SHARE_ALBUM), docBody.match(/<title>([^<]*)</)?.[1]);
 
 const browser = await chromium.launch({ args: ['--disable-features=LocalNetworkAccessChecks'] });
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 950 } });
@@ -45,7 +64,12 @@ page.on('response', r => {
 
 await page.goto(SHARE_URL, { waitUntil: 'networkidle' });
 await page.waitForTimeout(2000);
-await page.screenshot({ path: '/tmp/explore/rust-share-banner.png', fullPage: true }).catch(() => {});
+// Under rust/target/, which exists and is gitignored: /tmp/explore was a scratch directory nothing
+// creates, so the screenshot was silently lost behind the `.catch`.
+fs.mkdirSync(`${REPO}/rust/target`, { recursive: true });
+await page
+  .screenshot({ path: `${REPO}/rust/target/rust-share-banner.png`, fullPage: true })
+  .catch((e) => console.log(`  (screenshot not written: ${e.message})`));
 
 // The DOM contract the browser lane drives.
 const banner = await page.evaluate(() => {

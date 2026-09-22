@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// invited human, so the sidecar's own admin may not be a member at all and Immich answers
 /// `400 Not found or no album.read access` on every poll. The mirror-owning stand-in always has
 /// access, because it owns the album. An owner mapping keeps the household key.
-fn album_reader_auth(_state: &State, _mapping: &Mapping) -> Auth<'static> {
-    Auth::Admin
+fn album_reader_auth(state: &State, mapping: &Mapping) -> Result<crate::immich::access::MappingAuth, String> {
+    crate::immich::access::MappingAuth::for_mapping(state, mapping)
 }
 
 async fn get_comments(client: &Client, album_id: &str, auth: &Auth<'_>) -> Result<Vec<Value>, String> {
@@ -228,7 +228,12 @@ pub async fn handle_comments(
         return (404, json!({ "error": "unknown album mapping", "code": "unknown_mapping" }));
     };
     let users = users_by_id(client, 10_000).await;
-    let auth = album_reader_auth(state, &mapping);
+    // An owner mapping reads as the household; a member mapping reads as the stand-in that owns the
+    // mirror, and is refused when this household holds no key for it.
+    let Ok(creds) = album_reader_auth(state, &mapping) else {
+        return (500, json!({ "error": "could not read the album's activity" }));
+    };
+    let auth = creds.auth();
     let Ok(activities) = get_comments(client, &mapping.album_id, &auth).await else {
         return (500, json!({ "error": "could not read the album's activity" }));
     };
@@ -299,7 +304,8 @@ async fn sync_one_album(
         pull_canonical_comments(state, client, mapping, peer).await;
     }
 
-    let auth = album_reader_auth(state, mapping);
+    let creds = album_reader_auth(state, mapping)?;
+    let auth = creds.auth();
     let stats = client
         .get(&format!("/activities/statistics?albumId={}", mapping.album_id), &auth)
         .await

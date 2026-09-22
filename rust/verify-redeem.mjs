@@ -144,6 +144,20 @@ const session = (await (await fetch(`${IMMICH}/api/auth/login`, {
   body: JSON.stringify({ email: 'admin@e2e.local', password: 'e2e-admin-pass-1' }),
 })).headers.getSetCookie?.() ?? []).map(c => c.split(';')[0]).find(c => c.includes('access_token'));
 
+// RESTORED even if a check above throws: this lane turns a household setting OFF, and leaving it off
+// makes the NEXT lane fail for reasons that look like a product bug.
+process.on('exit', () => {
+  try {
+    // fire-and-forget: an exit handler cannot await, and the request is one small PUT
+    fetch(`${SIDECAR}/immich-shared-albums/settings`, {
+      method: 'POST', headers: { cookie: session, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shareLinkJoin: true }),
+    });
+  } catch {
+    /* already gone */
+  }
+});
+
 const off = await fetch(`${SIDECAR}/immich-shared-albums/settings`, {
   method: 'POST', headers: { cookie: session, 'Content-Type': 'application/json' },
   body: JSON.stringify({ shareLinkJoin: false }),

@@ -19,8 +19,8 @@ pub struct State {
 
 static STATE: OnceLock<Arc<State>> = OnceLock::new();
 
-/// Set while THIS thread holds a `collections()` guard. The flag is per thread because the lock is
-/// held by one thread at a time: another thread waiting for it is contention, not re-entrancy.
+// Set while THIS thread holds a `collections()` guard. The flag is per thread because the lock is
+// held by one thread at a time: another thread waiting for it is contention, not re-entrancy.
 thread_local! {
     static HOLDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
