@@ -1,0 +1,143 @@
+/** sync/leave.rs — undoing a join. See PORT.md. */
+use crate::immich::client::{Auth, Client};
+use crate::p2p::entitlement::forget_offered;
+use crate::p2p::frame::RequestHeader;
+use crate::p2p::transport::transport;
+use crate::state::State;
+use crate::store::Role;
+use crate::sync::album_teardown::{album_teardown, TeardownMapping};
+
+/// Leave and purge: the reverse of joining.
+///
+/// Removes every stub this album materialised (utility-owner-guarded), the mirror album, the mapping
+/// and its ledger — a join is FULLY REVERSIBLE and reclaims all the space it ever took, except for
+/// an asset another mapping still claims.
+///
+/// An ADOPTED mapping is the exception, and `album_teardown` decides it: that album existed before
+/// the share and holds a person's OWN photos, so leaving gives up the mapping and nothing else. A
+/// mistaken reunification therefore costs exactly the stubs.
+pub struct LeaveOutcome {
+    pub left: String,
+    pub purged: usize,
+    /// Stubs left in place because they belong to an account we hold no key for.
+    pub refused: usize,
+    /// Stubs we could not even decide about — the caller must not read this as reclaimed space.
+    pub failed: usize,
+}
+
+/// `notify_origin: false` is for un-reunifying, which undoes the ADOPTION but not the SHARE: the
+/// person goes back to an ordinary mirror, and the invitation they still hold re-creates it through
+/// the normal invite path. Telling the origin "we left" would retire its owner mapping and the share
+/// would be GONE rather than mirrored.
+pub async fn leave_album(
+    state: &State,
+    client: &Client,
+    mapping_id: &str,
+    notify_origin: bool,
+) -> Result<LeaveOutcome, String> {
+    let Some(mapping) = state.collections().mappings.iter().find(|m| m.id == mapping_id).cloned()
+    else {
+        return Err("unknown mapping (only joined albums can be left)".to_string());
+    };
+    if mapping.role != Role::Member {
+        return Err("unknown mapping (only joined albums can be left)".to_string());
+    }
+    let plan = album_teardown(TeardownMapping::from(&mapping));
+
+    let mut purged = 0usize;
+    let mut refused = 0usize;
+    let mut failed = 0usize;
+    for entry in state.store.seen_for_mapping(&mapping.id).unwrap_or_default() {
+        if entry.origin_asset.is_none() {
+            continue;
+        }
+        // A deduped proxy can carry ledger rows from several mappings, so another mapping may still
+        // be serving this very asset. Ask the AUTHORITATIVE row (the one holding the true wire
+        // identity) rather than whether any row mentions the id — a stale row must never pin a
+        // stored copy that nothing else claims.
+        let owner = state.store.ledger_by_asset(&entry.local_asset).ok().flatten();
+        if owner.map(|o| o.mapping != mapping.id).unwrap_or(false) {
+            continue;
+        }
+        match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset).await {
+            Ok(crate::immich::materialise::PurgeOutcome::Purged) => purged += 1,
+            // Absent to every credential we hold is the outcome the caller wanted, but it is not
+            // evidence of a deletion and must not be counted as one.
+            Ok(crate::immich::materialise::PurgeOutcome::AlreadyGone) => {}
+            Ok(crate::immich::materialise::PurgeOutcome::NotOurs) => refused += 1,
+            Err(e) => {
+                crate::log!("could not purge {}: {e}", entry.local_asset);
+                failed += 1;
+            }
+        }
+    }
+
+    if plan.delete_album {
+        // The local side is read with the credential that can see it — a member mirror is owned by
+        // the origin owner's stand-in, not by this household's admin.
+        let auth = mirror_creds(state, &mapping);
+        if let Err(e) = client
+            .json(
+                reqwest::Method::DELETE,
+                &format!("/albums/{}", mapping.album_id),
+                &auth,
+                None,
+            )
+            .await
+        {
+            crate::log!("mirror album delete failed: {e}");
+        }
+    } else {
+        crate::log!("kept \"{}\" — {}", mapping.album_name, plan.reason);
+    }
+
+    crate::sync::status::forget_watcher_cycles(&mapping.id);
+    let _ = state.store.seen_remove_mapping(&mapping.id);
+    let _ = state.store.seen_act_remove_mapping(&mapping.id);
+    forget_offered(state, &mapping.id);
+    // SPLICE, never reassign. Loops run concurrently (watch, comments, invites), and replacing the
+    // array silently discards anything another loop pushed onto the old reference in the meantime —
+    // which lost freshly-created mirrors until this was found.
+    state.collections().mappings.retain(|m| m.id != mapping.id);
+    let _ = state.save();
+
+    // Courtesy signal so the origin stops pushing to a household that left. Best-effort and
+    // unawaited: leaving must NEVER block on the origin being reachable, and a peer too old to know
+    // the route just 404s.
+    let origin = state
+        .collections()
+        .peers
+        .iter()
+        .find(|p| p.pub_key == mapping.peer)
+        .cloned();
+    let target = mapping
+        .remote_mapping_id
+        .clone()
+        .or_else(|| mapping.remote_album_id.clone());
+    if notify_origin {
+        if let (Some(origin), Some(target), Some(transport)) = (origin, target, transport()) {
+            let transport = transport.clone();
+            let header = RequestHeader { path: format!("/albums/{target}/leave"), ..Default::default() };
+            // Fire-and-forget, on purpose: the leaving side owes the origin a courtesy, not a wait.
+            tokio::spawn(async move {
+                let _ = transport.round_trip(&origin, &header, None).await;
+            });
+        }
+    }
+    crate::log!(
+        "left \"{}\" — {purged} stub(s) purged, {refused} refused, {failed} failed",
+        mapping.album_name
+    );
+    Ok(LeaveOutcome { left: mapping.album_name, purged, refused, failed })
+}
+
+/// The credential that can delete this mirror: the stand-in that OWNS it, falling back to the admin
+/// key only when the mapping is an owner mapping (which it never is here).
+fn mirror_creds<'a>(state: &State, mapping: &'a crate::store::Mapping) -> Auth<'a> {
+    mapping
+        .host_slug
+        .as_ref()
+        .and_then(|slug| state.collections().contributors.get(slug).and_then(|c| c.api_key.clone()))
+        .map(|k| Auth::Key(Box::leak(k.into_boxed_str())))
+        .unwrap_or(Auth::Admin)
+}

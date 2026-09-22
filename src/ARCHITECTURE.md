@@ -2,6 +2,22 @@
 
 > 🎬 The end-user experience this produces: [video demo](https://www.youtube.com/watch?v=c3GO-YFchYo).
 
+## Two builds of one sidecar
+
+The addon exists twice in this tree, and they are the same sidecar:
+
+- **`src/` — TypeScript.** The reference implementation and the **source of truth for behaviour**:
+  the wire protocol, the routes, the state machine and every rule in this document are defined here.
+  It is also the rig's baseline lane, so a change that breaks it is a change that broke the contract.
+- **`rust/` — Rust.** What `deploy/install.sh` ships by default. Same wire protocol (`isa/2`), same
+  `state.db` (schema 4, same identity key), same 18 `ISA_*` variables, same HTTP surface, same uid
+  1000 and healthcheck — so either build can sit on either end of a link, and a Rust sidecar reads a
+  `state.db` a Node one wrote. Its module map, route tables, verification commands and the two rules
+  that bite in Rust are in [rust/PORT.md](../rust/PORT.md).
+
+Everything below describes the TypeScript build; where the Rust build differs in structure (a module
+moved, a lane given its own file) `rust/PORT.md` says how, and nothing differs in behaviour.
+
 One process, **zero JavaScript dependencies and one native one** (`@number0/iroh`, the peer
 transport — lockfile-pinned, installed by the Dockerfile):
 
@@ -9,7 +25,9 @@ transport — lockfile-pinned, installed by the Dockerfile):
   `node index.ts`, Node ≥ 23.6. The front-end pages are Preact TSX bundled by esbuild, but the
   bundles are **committed**, so deploying builds nothing.
 - **State is SQLite** via the built-in `node:sqlite` — WAL, crash-safe, indexed ledgers. Inspect it
-  from inside the container (`docker exec <sidecar> node -e …` with `node:sqlite`), never with a host
+  from inside the container (`docker exec <sidecar> node -e …` with `node:sqlite`; the shipped Rust
+  build has no Node, so [deploy/INSTALL-AI.md](../deploy/INSTALL-AI.md) gives the throwaway-container
+  recipe instead), never with a host
   `sqlite3` across a Docker Desktop bind mount: WAL relies on POSIX locks that do not cross that VM
   boundary, so a host reader thinks it is the last connection and deletes `state.db-wal`/`-shm` on
   exit — after which the running sidecar writes into an unlinked WAL and a restart loses that state.

@@ -88,8 +88,21 @@ docker network inspect isa-demo >/dev/null 2>&1 || docker network create isa-dem
 COMMIT=$(git -C "$DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)
 if [ -z "${SKIP_BUILD:-}" ]; then
   echo "== build image (commit $COMMIT) =="
-  ( cd "$DIR" && docker build -q --label "isa.commit=$COMMIT" -t immich-shared-albums:demo . >/dev/null ) \
+  # ISA_DOCKERFILE names WHICH Dockerfile builds the rig's sidecar, so the port's replacement can be
+  # run through this whole suite before it becomes the default. Every normal run uses the default.
+  IMAGE_DOCKERFILE="${ISA_DOCKERFILE:-Dockerfile}"
+  echo "   (from $IMAGE_DOCKERFILE)"
+  # ISA_BUILD_ARGS exists so a build can carry extra --build-arg flags, e.g. debug symbols for a
+  # hang that has to be diagnosed with gdb. Every normal run passes none.
+  ( cd "$DIR" && docker build -q --label "isa.commit=$COMMIT" -f "$IMAGE_DOCKERFILE" -t immich-shared-albums:demo ${ISA_BUILD_ARGS:-} . >/dev/null ) \
     || { echo "!! image build failed — not testing a stale image" >&2; exit 1; }
+  # The iroh probe is the INDEPENDENT JavaScript oracle, so it must not run in the sidecar image:
+  # that image is what is under test, and under ISA_DOCKERFILE=rust/Dockerfile it has no node at all
+  # (every probe then dies with "exec: node: not found", which reads as a product failure). Build
+  # the NODE image under its own tag first, from the root Dockerfile, whatever the sidecar uses.
+  ( cd "$DIR" && docker build -q -t immich-shared-albums:probe . >/dev/null ) \
+    || { echo "!! probe image build failed — the independent oracle cannot run" >&2; exit 1; }
+  export PROBE_IMAGE=immich-shared-albums:probe
 else
   built=$(docker inspect -f '{{index .Config.Labels "isa.commit"}}' immich-shared-albums:demo 2>/dev/null || true)
   echo "== SKIP_BUILD set: testing the existing image (built from ${built:-an unlabelled commit}; HEAD is $COMMIT) =="
@@ -120,9 +133,38 @@ reset_state() { # reset_state <compose-dir> <service>
 # local-only e2e failure.) A reader inside the container shares the locks and is safe. Linux (CI)
 # never had the problem, which is why it looked like flakiness. One row per line, first column.
 SQLITE_COL='const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db",{readOnly:true});process.stdout.write(db.prepare(process.argv[1]).all().map(r=>Object.values(r)[0]).join("\n"))'
-sidecar_col() { # sidecar_col <service> <sql> — run from that household's compose dir
-  docker compose exec -T "$1" node -e "$SQLITE_COL" "$2" 2>/dev/null
+# ...but WHAT reads it must not depend on the sidecar's runtime: the Node image has `node`, the Rust
+# one does not, and `docker compose exec ... node` then fails with "executable file not found". This
+# tiny reader is the language-agnostic path, still a container on the same Docker host, so it shares
+# the WAL locks exactly as the in-container reader does.
+READER_IMAGE=immich-shared-albums:sqlite-reader
+ensure_reader() {
+  docker image inspect "$READER_IMAGE" >/dev/null 2>&1 && return 0
+  printf 'FROM alpine:3.22\nRUN apk add --no-cache sqlite\n' | docker build -q -t "$READER_IMAGE" - >/dev/null 2>&1
 }
+sidecar_data_dir() { # the host path behind a sidecar's /data
+  local cid; cid=$(docker compose ps -q "$1" 2>/dev/null)
+  [ -n "$cid" ] || return 1
+  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$cid" 2>/dev/null
+}
+sidecar_col() { # sidecar_col <service> <sql> — run from that household's compose dir
+  # -readonly matters: it cannot checkpoint or unlink the WAL, so it is safe even where the locks
+  # do not reach (the macOS bind-mount case this comment block exists for).
+  # Probe for the runtime rather than trusting an exit code: `docker compose exec` reports a missing
+  # binary on STDOUT with status 0, so a fallback keyed on failure never fires and the error text is
+  # read as the query's result.
+  if docker compose exec -T "$1" sh -c 'command -v node >/dev/null 2>&1' 2>/dev/null; then
+    docker compose exec -T "$1" node -e "$SQLITE_COL" "$2" 2>/dev/null
+    return 0
+  fi
+  local src; src=$(sidecar_data_dir "$1") || return 1
+  [ -n "$src" ] || return 1
+  ensure_reader || return 1
+  docker run --rm -v "$src":/data "$READER_IMAGE" sqlite3 -readonly /data/state.db "$2" 2>/dev/null
+}
+
+# Built here, once, so the JS lane (demo/e2e/e2e-test.mjs) can rely on it without building it itself.
+ensure_reader
 
 purge() { # base key service : delete all albums, sidecar users, non-admin assets (run from the compose dir)
   local BASE=$1 KEY=$2 SVC=${3:-}

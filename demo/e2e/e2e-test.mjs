@@ -155,10 +155,44 @@ const rigOwns = (container, env) => {
 const SQLITE_ROWS_JSON =
   'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db",{readOnly:true});' +
   'process.stdout.write(JSON.stringify(db.prepare(process.argv[1]).all()))';
-const sidecarSql = (stateDir, sql) => {
+// The Rust sidecar's image has no `node` in it, so reading its state must not go through one. Same
+// rule as the shell helper: a throwaway sqlite container on the same Docker host, so the WAL locks
+// are shared exactly as they are for the in-container reader. `-readonly` cannot unlink the WAL.
+const READER_IMAGE = 'immich-shared-albums:sqlite-reader';
+const sidecarDataDir = stateDir => {
   try {
-    return execFileSync('docker', ['exec', containerFor(stateDir), 'node', '-e', SQLITE_ROWS_JSON, sql],
-                        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
+    return execFileSync('docker', ['inspect', '-f',
+      '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}', containerFor(stateDir)],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
+  } catch { return ''; }
+};
+// Probe for the runtime rather than catching a failure: `docker exec` reports a missing binary on
+// STDOUT with status 0, so a catch-based fallback never fires and the error text is parsed as rows.
+let nodeInSidecar = null;
+const sidecarHasNode = stateDir => {
+  if (nodeInSidecar === null) {
+    try {
+      execFileSync('docker', ['exec', containerFor(stateDir), 'sh', '-c', 'command -v node >/dev/null 2>&1'],
+                   { stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 });
+      nodeInSidecar = true;
+    } catch { nodeInSidecar = false; }
+  }
+  return nodeInSidecar;
+};
+const sidecarSql = (stateDir, sql) => {
+  if (sidecarHasNode(stateDir)) {
+    try {
+      return execFileSync('docker', ['exec', containerFor(stateDir), 'node', '-e', SQLITE_ROWS_JSON, sql],
+                          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
+    } catch { return null; }
+  }
+  const src = sidecarDataDir(stateDir);
+  if (!src) return null;
+  try {
+    const out = execFileSync('docker', ['run', '--rm', '-v', `${src}:/data`, READER_IMAGE,
+      'sqlite3', '-json', '-readonly', '/data/state.db', sql],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
+    return out || null;
   } catch { return null; }
 };
 const readSidecarKv = (stateDir, name) => {
@@ -313,7 +347,10 @@ const E2E_DIR = new URL('.', import.meta.url).pathname.replace(/\/$/, '');
 // It used to run `npm ci` inside a bare node image on every call — ~3.5s of pure overhead per
 // probe, seven probes a run — and the rig has already built this image before the suite starts.
 // Only demo/e2e is mounted, read-only, so a probe can see nothing but its own client code.
-const PROBE_IMAGE = process.env.PROBE_IMAGE || 'immich-shared-albums:demo';
+// The INDEPENDENT JavaScript oracle. It must NOT default to the sidecar image: under a Rust sidecar
+// that image has no node, and the probe would fail for a reason that looks like a product bug. The
+// rig builds a Node image under this tag whatever the sidecar is built from.
+const PROBE_IMAGE = process.env.PROBE_IMAGE || 'immich-shared-albums:probe';
 // A probe spawns a container and does a live iroh round trip, so it can fail transiently — the
 // native addon has been seen to exit on SIGBUS (135) mid-run. That used to throw out of execSync
 // and kill the whole suite, hiding every other result behind one flake. Retry once, then report a
@@ -2262,8 +2299,14 @@ if (DKEY) {
   let wiped = false;
   try {
     dsh('docker compose stop sidecar-d', { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
-    dsh(`docker compose run --rm --no-deps --entrypoint node sidecar-d -e 'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db");db.exec("DELETE FROM mappings");console.log("mappings wiped")'`,
-        { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
+    // A throwaway sqlite container on the same volume, NOT `--entrypoint node`: the sidecar image
+    // is what is under test, and under a Rust sidecar it has no node. The sidecar is STOPPED for
+    // this (above), so nothing holds the database and there is no lock to share.
+    const dVolume = sidecarDataDir('household-d/d-sidecar');
+    if (!dVolume) throw new Error('could not resolve sidecar-d\'s data dir');
+    execFileSync('docker', ['run', '--rm', '-v', `${dVolume}:/data`, READER_IMAGE,
+                            'sqlite3', '/data/state.db', 'DELETE FROM mappings'],
+                 { stdio: ['ignore', 'pipe', 'ignore'], env: dockerEnv2, timeout: 30000 });
     dsh('docker compose start sidecar-d', { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
     wiped = true;
   } catch (e) { console.log(`  (could not wipe D's mappings: ${String(e.message).split('\n')[0].slice(0, 100)})`); }

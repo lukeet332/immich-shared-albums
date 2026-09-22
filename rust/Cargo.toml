@@ -1,0 +1,49 @@
+[package]
+name = "immich-shared-albums"
+version = "1.1.1"
+edition = "2021"
+description = "Cross-server album sharing for Immich — the sidecar."
+license = "AGPL-3.0"
+
+[[bin]]
+name = "isa"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "fs", "io-util"] }
+axum = { version = "0.8", features = ["http1", "json", "query", "tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+# gzip/brotli/deflate are NOT optional: Immich serves its own SPA bundles compressed, and the
+# passthrough strips `content-encoding` on the way out (as the TypeScript does) because undici hands
+# it a DECOMPRESSED body. Without these features reqwest passes the compressed bytes through while
+# the header saying so is removed, and every `/_app/immutable/*.js` reaches the browser as binary
+# garbage. `default-features = false` is why they have to be listed explicitly.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart", "gzip", "brotli", "deflate"] }
+anyhow = "1"
+# The identity is a raw ed25519 keypair — the same bytes iroh uses as the endpoint id.
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+# base64url, unpadded — exactly what Node's JWK export produces.
+base64 = "0.22"
+# The peer transport. The TypeScript side reaches this through @number0/iroh, which is napi
+# bindings over exactly this crate — so the wire protocol is the same library in both languages.
+iroh = "1"
+futures-lite = "2"
+# The avatar is a PNG this crate draws itself; only the one compressed chunk needs deflate.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# A websocket upgrade is proxied at the socket level, which needs the upgrade handoff itself.
+hyper = { version = "1", features = ["http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+# Pairing codes are stored as SHA-256 hashes and compared in constant time.
+sha2 = "0.10"
+sha1 = "0.10"
+subtle = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

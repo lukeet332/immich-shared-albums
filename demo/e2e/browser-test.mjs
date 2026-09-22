@@ -257,10 +257,21 @@ const setPasswordLogin = (enabled) => fetch(`${C}/api/system-config`, { method: 
 const cWasHardened = cConfig.passwordLogin.enabled === false;
 if (cWasHardened) await setPasswordLogin(true);
 
-const bLogin = await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
-  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json();
-const cLogin = await (await fetch(`${C_PANEL_WEB}/api/auth/login`, { method: 'POST',
-  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json();
+// BOUNDED RETRY, because the toggle above is applied asynchronously: Immich caches its system config,
+// so a login issued the instant the PUT returns can still be refused with password login off. That is
+// a race in the lane's own setup, not a product failure, and it reads as one failed check plus a
+// crash on the missing token — so wait for the sign-in the lane needs rather than for the PUT.
+const signIn = async (base) => {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const r = await (await fetch(`${base}/api/auth/login`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json();
+    if (r?.accessToken) return r;
+    await new Promise((res) => setTimeout(res, 1000));
+  }
+  return {};
+};
+const bLogin = await signIn(B_PANEL_WEB);
+const cLogin = await signIn(C_PANEL_WEB);
 check('the lane can sign in on both households\' panels', !!bLogin.accessToken && !!cLogin.accessToken,
   `${bLogin.accessToken ? 'B ok' : 'B failed'}, ${cLogin.accessToken ? 'C ok' : 'C failed'}`);
 
