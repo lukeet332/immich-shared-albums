@@ -1,0 +1,55 @@
+# .github/workflows/pr-agent.yml — the second advisory reviewer. See AGENTS.md ("How changes land").
+#
+# Why this exists: CodeRabbit's OSS tier is a rolling per-hour budget scaled by stars, and this
+# repo's push rate exceeds it, so most PRs were receiving no review at all. This runs in CI, so it
+# has no shared quota — the only ceiling is the model provider's free tier.
+#
+# Inert until CEREBRAS_API_KEY exists as a repository secret: the step below skips with a notice.
+name: pr-agent
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    # A bot comment must not re-trigger a review, and issue_comment fires for plain issues too.
+    if: >-
+      github.event.sender.type != 'Bot' &&
+      (github.event_name == 'pull_request' || github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+    steps:
+      - name: No model key configured
+        if: env.CEREBRAS_API_KEY == ''
+        run: |
+          echo "::notice title=PR-Agent skipped::CEREBRAS_API_KEY is not set. Add it under Settings > Secrets and variables > Actions to enable this reviewer."
+
+      - name: Review
+        if: env.CEREBRAS_API_KEY != ''
+        uses: The-PR-Agent/pr-agent@1d01f24f455bb879c1d9c557ad7de3d72dcc7975 # v0.46.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Cerebras speaks the OpenAI protocol, so it is configured as an OpenAI base URL. The model
+          # keeps the `openai/` prefix that routes through LiteLLM's OpenAI-compatible path, which is
+          # also why the token ceiling has to be declared rather than looked up.
+          OPENAI_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          OPENAI.API_BASE: https://api.cerebras.ai/v1
+          config.model: openai/gpt-oss-120b
+          config.fallback_models: '["openai/gpt-oss-120b"]'
+          config.custom_model_max_tokens: '65536'
+          # Review only. /describe rewrites the PR description, which this repo deliberately does not
+          # let a bot do, and /improve would spend the daily token budget on suggestions.
+          github_action_config.auto_review: 'true'
+          github_action_config.auto_describe: 'false'
+          github_action_config.auto_improve: 'false'
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "synchronize"]'

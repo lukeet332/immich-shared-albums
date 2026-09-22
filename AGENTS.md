@@ -113,11 +113,14 @@ worse without saying so.**
   `npm run verify`, `bash demo/run-mock-e2e.sh` (API lane, purges its rig first), and
   `demo/e2e/browser-test.mjs` (browser lane — the only coverage that loads a page).
   The e2e suite is deliberately NOT in the hook: a seven-minute hook is a hook people bypass.
-- **CodeRabbit reviews every PR, advisory only.** Config is `.coderabbit.yaml`, and the conventions
-  it reviews against are this file, ingested through its `knowledge_base.code_guidelines` setting —
-  so a rule changed here changes what it enforces, with no second copy to drift. It is deliberately
-  **not** a required status check: the gates stay the fast checks and the two e2e lanes, because a
-  bot's request-changes must never block a merge that CI passed.
+- **Two reviewers run on every PR, both advisory only.** CodeRabbit's config is `.coderabbit.yaml`,
+  and the conventions it reviews against are this file, ingested through its
+  `knowledge_base.code_guidelines` setting — so a rule changed here changes what it enforces, with no
+  second copy to drift. PR-Agent is `.github/workflows/pr-agent.yml`: it runs in CI against a model
+  endpoint, because CodeRabbit's OSS tier is a per-hour budget this repo's push rate exceeds, and it
+  stays inert until `CEREBRAS_API_KEY` is set. Neither is a required status check: the gates stay the
+  fast checks and the two e2e lanes, because a bot's request-changes must never block a merge that CI
+  passed.
 - **Answer a review finding in its own thread, not in a PR comment.** A top-level comment hangs off
   no line: the reviewer sees conversation rather than an answer and cannot mark anything addressed,
   because the reply carries no `in_reply_to_id`, path or line to review against. Reply inside the
