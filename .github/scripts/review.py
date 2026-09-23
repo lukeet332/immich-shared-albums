@@ -20,9 +20,43 @@ GITHUB_DIFF_LINE_LIMIT = 20000
 FILES_PER_PAGE = 100
 MAX_DIFF_FILES = 300
 MAX_CHUNK_DIFF_LINES = 120
-MAX_FILE_CHARS = 12000
+# The declaration a chunk sits inside, rather than the first N characters of the file. A window is
+# capped by this many lines; an unclosed block (SQL, prose) becomes a labelled window of the same size.
+MAX_ITEM_LINES = 150
+# An unclosed block means the heuristic failed — prose, SQL in a string — so show a modest window
+# rather than 150 lines of markdown. MAX_SPAN_CHARS is the real guard: the point is a prompt that
+# fits Groq's 8,000-token minute, and the head of a 900-line file never did.
+MAX_WINDOW_LINES = 40
+MAX_SPAN_CHARS = 6000
+# A file this small is shown whole: the declarations are not a summary of it, they are a worse copy.
+MAX_WHOLE_FILE_CHARS = 8000
+# A chunk that is this much additions already IS the code — a slice of a new file — so pasting a
+# declaration beside it adds nothing. Measured on the Rust port: the span picked lines 1-29 of a
+# 362-line new file while the diff carried the changed lines.
+SELF_CONTAINED_ADDED_RATIO = 0.6
+MAX_DOC_CHARS = 3000
+# Groq rejects above ~8,000 tokens, and a token measured ~2.4 characters on this content, so this is
+# roughly 6,600 tokens — inside the minute with room for the answer. Context is added only while it
+# fits, in priority order, and the diff is never trimmed: it is what is being reviewed.
+MAX_PROMPT_CHARS = 16000
+MAX_DOC_WINDOW = 6
+ITEM_LOOKBACK = 200
+MAX_VERIFY_CHARS = 1200
+MAX_VERIFY_WITH_CODE = 8
 MAX_RULES_CHARS = 4000
 SOURCE_SUFFIXES = (".ts", ".tsx", ".rs", ".mjs", ".js")
+# AGENTS.md: every source file opens with `path — description. See <doc>.md.`, and says why that
+# pointer is machine-followable. Following it is how a reviewer learns a behaviour is deliberate.
+DOC_POINTER = re.compile(r"See ([A-Za-z0-9_./-]+\.md)")
+# What opens a block worth showing in full. Deliberately shallow: it only has to be right about the
+# declaration ABOVE a changed line, and `_enclosing_end` closes the span on braces.
+ITEM_OPENERS = (
+    "fn ", "pub fn ", "pub(crate) fn ", "pub(super) fn ", "async fn ", "pub async fn ",
+    "impl ", "struct ", "enum ", "trait ", "mod ", "union ",
+    "function ", "export function ", "export async function ", "async function ",
+    "class ", "interface ", "def ", "async def ",
+    "describe(", "it(", "test(",
+)
 MAX_DIFF_CHARS = 20000
 DEFAULT_MENTION = "@isa"
 COMMANDS = ("review", "summary", "ask", "help")
@@ -112,7 +146,13 @@ SYSTEM_REVIEW = """You are a code reviewer for a repository whose conventions li
 Return ONLY JSON. Report a finding only when you can name the concrete failure it causes.
 Rules:
 - Obey the repository rules given to you; they override your defaults.
-- Do NOT report anything CI already catches: formatting, lint, types, import cycles, test failures.
+- Do NOT repeat what CI already enforces: Prettier formatting, ESLint, `tsc`, the import-cycle check,
+  the unit tests, and both e2e lanes. Nothing lints Rust — no clippy runs anywhere — so a narrowing
+  cast, an unchecked `unwrap`, or any Rust defect CI cannot see IS yours to report, provided you can
+  name the failure it causes. "A linter would say this" is not a reason to stay quiet when no linter runs.
+- The enclosing code shown is one declaration, and sometimes only a window that ends mid-file: code
+  continues outside it. Absence from it proves nothing, so never report a missing definition, an
+  unclosed block, or an "incomplete" implementation on that basis.
 - Do NOT report style, naming preferences, or missing tests unless a rule says otherwise.
 - Prefer few high-confidence findings over many speculative ones. Reporting nothing is correct when
   the change is sound.
@@ -124,8 +164,10 @@ Return ONLY JSON: {"intent":str,"what_changed":[str],"risk_areas":[str],"rules_t
 Be terse and factual. Do not review, judge, or suggest anything."""
 
 SYSTEM_VERIFY = """You are an adversarial verifier. For each candidate finding, decide independently
-whether it is a real defect in the code shown. Refute anything speculative, stylistic, already caught
-by CI, or unsupported by the diff. Return ONLY JSON:
+whether it is a real defect in the code shown. Each candidate may carry the enclosing code at its own
+line — when it does, decide against that code. Refute anything speculative, stylistic, already
+enforced by CI, contradicted by the code, or claiming a missing or incomplete definition the code
+plainly contains. Return ONLY JSON:
 {"verdicts":[{"index":int,"verdict":"confirm"|"refute","reason":str}]}"""
 
 SYSTEM_ASK = """You are answering a question about a pull request, for the person who opened it.
@@ -510,24 +552,194 @@ def rules_for(path, root):
     return "\n\n".join(collected)
 
 
-def file_excerpt(path, root):
-    full = os.path.join(root, path)
-    if not os.path.isfile(full):
+def _without_literals(text):
+    """The line with string and comment bodies removed, so braces inside them cannot close a span."""
+    out, quote, escaped, index = [], None, False, 0
+    while index < len(text):
+        char = text[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in "\"'`":
+            quote = char
+        elif char == "/" and index + 1 < len(text) and text[index + 1] == "/":
+            break
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _enclosing_start(lines, focus):
+    """Walk up to the line that opens the block the focus sits in, or to the nearest blank line."""
+    indent = len(lines[focus]) - len(lines[focus].lstrip())
+    for index in range(focus, max(-1, focus - ITEM_LOOKBACK), -1):
+        if lines[index].strip().startswith(ITEM_OPENERS):
+            if len(lines[index]) - len(lines[index].lstrip()) <= indent:
+                return index
+    for index in range(focus, max(-1, focus - 6), -1):
+        if not lines[index].strip():
+            return index + 1
+    return max(0, focus - 5)
+
+
+def _enclosing_end(lines, start):
+    """The matching closing brace, or a bounded window when the block never closes."""
+    depth, opened = 0, False
+    last = min(len(lines) - 1, start + MAX_ITEM_LINES)
+    for index in range(start, last + 1):
+        clean = _without_literals(lines[index])
+        delta = clean.count("{") - clean.count("}")
+        if delta:
+            depth += delta
+            opened = opened or delta > 0
+            if opened and depth <= 0:
+                return index, True
+    return min(last, start + MAX_WINDOW_LINES), False
+
+
+def code_span(path, root, focus):
+    """The declaration the changed lines sit inside.
+
+    The head of the file was a poor proxy: a changed line 900 lines in never saw its own function, so
+    a model reported missing definitions and unclosed blocks that were simply not in front of it.
+    """
+    focus = [line for line in focus if line]
+    try:
+        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return {"text": "", "first": 0, "last": 0, "complete": False}
+    if not lines or not focus:
+        return {"text": "", "first": 0, "last": 0, "complete": False}
+    start = _enclosing_start(lines, min(len(lines) - 1, max(0, min(focus) - 1)))
+    end, complete = _enclosing_end(lines, start)
+    return {
+        "text": "\n".join(lines[start : end + 1]),
+        "first": start + 1,
+        "last": end + 1,
+        "complete": complete,
+    }
+
+
+def _read_lines(path, root):
+    try:
+        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as handle:
+            return handle.read().splitlines()
+    except OSError:
+        return []
+
+
+def _hunk_focus(lines):
+    """Per hunk, the line numbers a span anchors on: the added ones, or any if it only deletes."""
+    groups, current = [], {"added": [], "any": []}
+    for number, text in lines:
+        if text.startswith("@@"):
+            if current["any"]:
+                groups.append(current)
+            current = {"added": [], "any": []}
+            continue
+        if number is None:
+            continue
+        current["any"].append(number)
+        if text.startswith("+"):
+            current["added"].append(number)
+    if current["any"]:
+        groups.append(current)
+    return [group["added"] or group["any"] for group in groups]
+
+
+def doc_for(path, root):
+    """What the file's own header points at, near where that doc mentions this file.
+
+    The header is a wrapped comment, so the pointer is not always on the first physical line, and a
+    doc's mention of a file can sit inside one enormous table row — hence the window inside the line.
+    """
+    lines = _read_lines(path, root)
+    if not lines:
         return ""
-    with open(full, encoding="utf-8", errors="replace") as handle:
-        return handle.read()[:MAX_FILE_CHARS]
+    pointer = DOC_POINTER.search("\n".join(lines[:12]))
+    folder = os.path.dirname(path)
+    if pointer:
+        candidates = (f"{folder}/{pointer.group(1)}", f"src/{pointer.group(1)}", pointer.group(1))
+    else:
+        # No pointer in the header — the convention allows a folder doc instead, and a folder with
+        # exactly one markdown file has an unambiguous one. `src/sync/` is the case that needs it.
+        siblings = sorted(
+            name for name in os.listdir(os.path.join(root, folder)) if name.endswith(".md")
+        ) if os.path.isdir(os.path.join(root, folder)) else []
+        if len(siblings) != 1:
+            return ""
+        candidates = (f"{folder}/{siblings[0]}",)
+    for candidate in (item.lstrip("/") for item in candidates):
+        if not os.path.isfile(os.path.join(root, candidate)):
+            continue
+        doc = _read_lines(candidate, root)
+        base = os.path.basename(path)
+        windows = []
+        for line in doc:
+            at = line.find(base)
+            if at < 0:
+                continue
+            windows.append(line[max(0, at - 700) : at + 700])
+            if len(windows) == 2:
+                break
+        if not windows:
+            return f"{candidate} (head):\n" + "\n".join(doc)[:MAX_DOC_CHARS]
+        body = "\n…\n".join(windows)[:MAX_DOC_CHARS]
+        return f"{candidate}, where it describes {base}:\n{body}"
+    return ""
+
+
+def code_context(path, root, lines):
+    """The whole file when it is small, the declarations behind each hunk when it is not, and nothing
+    when the chunk is mostly additions — a slice of a new file already shows the code itself."""
+    source = _read_lines(path, root)
+    if not source:
+        return ""
+    body = [text for number, text in lines if number is not None]
+    added = sum(1 for text in body if text.startswith("+"))
+    if body and added / len(body) >= SELF_CONTAINED_ADDED_RATIO:
+        return ""
+    whole = "\n".join(source)
+    if len(whole) <= MAX_WHOLE_FILE_CHARS:
+        return f"Whole file at head ({len(source)} lines):\n{whole}"
+    parts, spent = [], 0
+    for focus in _hunk_focus(lines):
+        start = _enclosing_start(source, min(len(source) - 1, max(0, min(focus) - 1)))
+        end, complete = _enclosing_end(source, start)
+        shape = "complete declaration" if complete else "window, code continues below"
+        piece = f"Lines {start + 1}-{end + 1} ({shape}):\n" + "\n".join(source[start : end + 1])
+        if spent + len(piece) > MAX_SPAN_CHARS:
+            room = MAX_SPAN_CHARS - spent
+            if room > 400:
+                parts.append(piece[:room] + "\n… context truncated here")
+            break
+        parts.append(piece)
+        spent += len(piece)
+    return "Declarations around the changed lines:\n" + "\n\n".join(parts) if parts else ""
 
 
 def chunk_prompt(chunk, root, extra=""):
-    diff = render_chunk_lines(chunk["lines"])
-    rules = rules_for(chunk["path"], root)
-    excerpt = file_excerpt(chunk["path"], root)
-    return (
-        f"Repository rules:\n{rules}\n\n"
-        f"File: {chunk['path']}\n\n"
-        f"Diff (left column is the line number in the new file; use it verbatim as `line`):\n{diff}\n\n"
-        f"Full file at head (truncated):\n{excerpt}\n{extra}"
-    )
+    sections = [
+        f"Repository rules:\n{rules_for(chunk['path'], root)}",
+        f"File: {chunk['path']}",
+        f"Diff (left column is the line number in the new file; use it verbatim as `line`):\n"
+        f"{render_chunk_lines(chunk['lines'])}",
+    ]
+    room = MAX_PROMPT_CHARS - len("\n\n".join(sections)) - len(extra)
+    code = code_context(chunk["path"], root, chunk["lines"])
+    if code and len(code) <= room:
+        sections.append(f"Code at head:\n{code}")
+        room -= len(code) + 20
+    doc = doc_for(chunk["path"], root)
+    if doc and len(doc) <= room:
+        sections.append(f"Why this behaves as it does — {doc}")
+    return "\n\n".join(sections) + extra
 
 
 def review_chunk(chunk, allowed, stages, root, budget, label):
@@ -886,7 +1098,19 @@ def run(args):
 
     verified = False
     if findings and "verify" in stages:
-        payload = json.dumps([{k: f.get(k) for k in ("path", "line", "severity", "title", "body")} for f in findings])
+        payload = json.dumps(
+            [
+                {
+                    **{k: finding.get(k) for k in ("path", "line", "severity", "title", "body")},
+                    **(
+                        {"code": code_span(finding["path"], args.root, [finding["line"]])["text"][:MAX_VERIFY_CHARS]}
+                        if order < MAX_VERIFY_WITH_CODE
+                        else {}
+                    ),
+                }
+                for order, finding in enumerate(findings)
+            ]
+        )
         verdicts = parse_json_object(
             complete(
                 "verify",
