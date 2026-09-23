@@ -122,7 +122,9 @@ pub async fn serve(
         }
         // The owner is unreachable and nothing is cached: the LOCAL stub thumbnail, which is the
         // blurred placeholder the row was created with. Never cached — it is not the true bytes,
-        // and caching it would poison every later view.
+        // and caching it would poison every later view. The BROWSER may hold it for a minute —
+        // long enough to ride the outage out — and must then re-ask, or a tile would stay a
+        // placeholder for the 7-day lifetime real bytes carry.
         let stub = format!("/assets/{asset_id}/thumbnail?size=preview");
         if let Ok(response) = client.request(reqwest::Method::GET, &stub, &Auth::Admin, &[]).await {
             let content_type = response
@@ -135,7 +137,7 @@ pub async fn serve(
                 let bytes = bytes.to_vec();
                 return Some(bytes_response(
                     StatusCode::OK,
-                    preview_header_list("BYPASS", bytes.len(), Some(&content_type)),
+                    bypass_header_list(bytes.len(), Some(&content_type)),
                     bytes,
                 ));
             }
@@ -178,6 +180,17 @@ fn preview_header_list(
         ("content-type".to_string(), content_type.unwrap_or("image/jpeg").to_string()),
         ("cache-control".to_string(), "private, max-age=604800, immutable".to_string()),
         ("x-cache".to_string(), cache_state.to_string()),
+        ("content-length".to_string(), length.to_string()),
+    ]
+}
+
+/// The placeholder's headers: unlike the owner's bytes this is not the photo, so it may only be
+/// held briefly — a minute, not the 7 days real bytes carry — and the browser must re-ask.
+fn bypass_header_list(length: usize, content_type: Option<&str>) -> Vec<(String, String)> {
+    vec![
+        ("content-type".to_string(), content_type.unwrap_or("image/jpeg").to_string()),
+        ("cache-control".to_string(), "private, max-age=60".to_string()),
+        ("x-cache".to_string(), "BYPASS".to_string()),
         ("content-length".to_string(), length.to_string()),
     ]
 }
@@ -241,5 +254,19 @@ mod tests {
         // A preview is ~100KB. The interceptor refuses well before the transport's blanket 64 MiB,
         // because buffering 32 MiB of "preview" is a page load spent on one broken tile.
         assert!(PREVIEW_LIMIT < crate::p2p::transport::BYTE_BODY_LIMIT);
+    }
+
+    #[test]
+    fn the_placeholder_is_cached_briefly_not_like_the_bytes_it_stands_in_for() {
+        // Real bytes never change, so they are advertised immutable for a week. The placeholder
+        // does change — it becomes the real bytes the moment the owner is reachable again — so a
+        // browser that saw it during an outage must re-ask within a minute, not after 7 days.
+        let bypass = bypass_header_list(1047, None);
+        let cc = bypass.iter().find(|(n, _)| n == "cache-control").map(|(_, v)| v).unwrap();
+        assert!(cc.contains("max-age=60"), "cache-control={cc}");
+        assert!(!cc.contains("immutable"), "cache-control={cc}");
+        let real = preview_header_list("MISS", 1047, None);
+        let real_cc = real.iter().find(|(n, _)| n == "cache-control").map(|(_, v)| v).unwrap();
+        assert!(real_cc.contains("immutable"), "cache-control={real_cc}");
     }
 }
