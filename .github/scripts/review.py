@@ -59,8 +59,9 @@ DEADLINE_SECONDS = 900
 MAX_REQUESTS = 8
 MAX_CHUNKS = 4
 # Workers, not threads: `http` bounds each request with a process-global SIGALRM. See review.md.
-# Two rather than one because every model in the chain reasons before it answers: see the token cap.
-PARALLEL = 2
+# One: Groq's tokens-per-minute is per organization, so a second worker waits behind the first rather
+# than overlapping it. Raise it per run when the model is one with per-minute room to spare.
+PARALLEL = 1
 CALL_TIMEOUT_SECONDS = 240
 CALL_ATTEMPTS = 1
 # Sized for a reasoning model, which thinks for thousands of tokens before it writes a word: a 6,451
@@ -199,6 +200,35 @@ def rotate(candidates, offset):
         return candidates
     offset %= len(candidates)
     return candidates[offset:] + candidates[:offset]
+
+
+def review_providers(path):
+    """The providers the `review` stage names, so a missing reviewer can be named rather than guessed."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            configured = json.load(handle)
+    except (OSError, ValueError):
+        return set()
+    return {
+        candidate["provider"]
+        for candidate in (configured.get("review") or [])
+        if isinstance(candidate, dict) and "provider" in candidate
+    }
+
+
+def configured_providers(path):
+    """Every provider the file names, keyed or not, so the notice can name the one that is missing."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            configured = json.load(handle)
+    except (OSError, ValueError):
+        return set()
+    return {
+        candidate["provider"]
+        for stage in STAGES
+        for candidate in (configured.get(stage) or [])
+        if isinstance(candidate, dict) and "provider" in candidate
+    }
 
 
 def stage_models_for(path, seed):
@@ -771,7 +801,16 @@ def run(args):
 
     log(f"stages configured: {sorted(ready) or 'none'}")
     if not ready:
-        notice("No model key is configured; add one (e.g. OPENROUTER_API_KEY) to enable reviews.")
+        missing = sorted(p for p in configured_providers(args.config) if not key_for(p))
+        notice(
+            f"No model key is configured; reviews here need one of {', '.join(missing) or 'the configured providers'}."
+        )
+        return 0
+    if "review" not in ready:
+        # A keyed verifier with no keyed reviewer would only judge findings nobody produced, and every
+        # chunk would fail on a missing stage rather than saying so once.
+        need = ", ".join(sorted(review_providers(args.config)))
+        notice(f"No key for the review stage; it needs one of {need or 'the configured providers'}.")
         return 0
 
     pull = api(args.repo, f"/pulls/{args.pr}", token)
