@@ -121,7 +121,26 @@ pub fn cfg() -> &'static Config {
 /// Write one timestamped line. The `log!` macro is the interface — this is named for what it does
 /// to the world so it cannot be confused with the macro at an import site.
 pub fn write_log_line(args: std::fmt::Arguments<'_>) {
-    println!("{} {}", iso_now(), args);
+    println!("{} {}", iso_now(), one_line(&args.to_string()));
+}
+
+/// Newlines are collapsed so text that arrived from a peer cannot forge a second log entry. Mirrors
+/// `oneLine` in config.ts.
+fn one_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut after_newline = false;
+    for ch in text.chars() {
+        if matches!(ch, '\r' | '\n' | '\u{2028}' | '\u{2029}') {
+            if !after_newline {
+                out.push(' ');
+                after_newline = true;
+            }
+        } else {
+            out.push(ch);
+            after_newline = false;
+        }
+    }
+    out
 }
 
 /// `log!` mirrors config.ts's `log(...)`: a timestamp, then the message.
@@ -256,6 +275,14 @@ pub const ROUTE_PREFIX: &str = "/immich-shared-albums";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_peer_cannot_forge_a_second_log_line() {
+        let forged = "album \"x\"\nforged: identity rotated";
+        assert_eq!(one_line(forged), "album \"x\" forged: identity rotated");
+        assert_eq!(one_line("two\r\n\r\nbreaks"), "two breaks");
+        assert_eq!(one_line("nothing to collapse"), "nothing to collapse");
+    }
 
     #[test]
     fn utility_email_matches_current_and_legacy_domains() {

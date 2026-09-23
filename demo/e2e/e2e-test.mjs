@@ -340,7 +340,6 @@ const endpointOf = async pageBase => {
   return JSON.parse(Buffer.from(invite.endpointToken, 'base64url').toString());
 };
 // One iroh request from INSIDE the rig's network (the host cannot dial container IPs).
-const { execSync } = await import('node:child_process');
 const E2E_DIR = new URL('.', import.meta.url).pathname.replace(/\/$/, '');
 // The probe runs in the sidecar's own image: it already holds the one dependency the probe needs
 // (`@number0/iroh`, pinned by the same lockfile the sidecar runs on), so there is no install step.
@@ -868,7 +867,6 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   const cachedSha = sha1(await fetchBytes(`${A}/api/assets/${aIds[0]}/thumbnail?size=preview`, AKEY));
   // an origin-owned photo that has NEVER been viewed through the interceptor
   const uncachedProxy = all.find(a => !a.exifInfo?.latitude && (a.fileCreatedAt || '').startsWith('2026-08-1'));
-  const { execSync } = await import('node:child_process');
   const dockerEnv = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
   // The one name-addressed destructive verb in the suite. On a host that also runs a real
   // sidecar, a stale or mistyped name here would kill THAT — so the container must prove it
@@ -882,11 +880,13 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   // the member can still reach; if either changed, the recovery check's detail says which, so a red
   // run explains itself instead of reading like a transport bug.
   const originWhere = async () => {
-    const sh = cmd => { try { return execSync(cmd, { env: dockerEnv, encoding: 'utf8' }).trim(); } catch (e) { return `? (${String(e.message).split('\n')[0].slice(0, 60)})`; } };
-    const ip = sh(`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' ${ORIGIN_CONTAINER}`);
+    // ARGV, never a shell string: the container name is resolved from this host's compose
+    // project, and passing it as one argument is what keeps a name out of shell syntax.
+    const sh = argv => { try { return execFileSync('docker', argv, { env: dockerEnv, encoding: 'utf8' }).trim(); } catch (e) { return `? (${String(e.message).split('\n')[0].slice(0, 60)})`; } };
+    const ip = sh(['inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}', ORIGIN_CONTAINER]);
     // What the origin holds on disk and what it believes in memory: a restart can only recover if
     // both survived. Sizes of state.db and its WAL, and the origin's own peer list.
-    const files = sh(`docker exec ${ORIGIN_CONTAINER} sh -c 'ls -l /data | grep state | awk "{print \\$5, \\$9}" | tr "\\n" " "'`);
+    const files = sh(['exec', ORIGIN_CONTAINER, 'sh', '-c', 'ls -l /data | grep state | awk "{print \\$5, \\$9}" | tr "\\n" " "']);
     const peers = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/peers`, { headers: { 'x-api-key': AKEY } })
       .then(r => r.json()).then(j => (j.peers || []).map(p => `${p.name}:${p.sharedTo ?? '?'}/${p.sharedFrom ?? '?'}`).join(',') || 'none').catch(e => `? ${e.message}`);
     const ep = await endpointOf(ORIGIN_DIRECT).catch(() => null);
@@ -897,9 +897,9 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   // signal and it returns at once. `stop` would additionally wait out the grace period the sidecar
   // now uses to exit cleanly — a graceful exit is covered by a unit test, and paying for it here
   // would only make the crash simulation slower, not more realistic.
-  if (isRig) execSync(`docker kill ${ORIGIN_CONTAINER}`, { env: dockerEnv, stdio: 'ignore' });
+  if (isRig) execFileSync('docker', ['kill', ORIGIN_CONTAINER], { env: dockerEnv, stdio: 'ignore' });
   await waitFor(() => {
-    try { return execSync(`docker inspect -f {{.State.Running}} ${ORIGIN_CONTAINER}`, { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
+    try { return execFileSync('docker', ['inspect', '-f', '{{.State.Running}}', ORIGIN_CONTAINER], { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
     catch { return true; }
   }, 15000);
   // B may still be tearing down requests to the container we just stopped, so a closed socket
@@ -914,7 +914,7 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   const cachedRes = await fetch(`${BS}/api/assets/${cachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
   check('owner offline: recently viewed photo still renders FROM CACHE',
         cachedRes.headers.get('x-cache') === 'HIT' && sha1(await cachedRes.arrayBuffer()) === cachedSha);
-  if (isRig) execSync(`docker start ${ORIGIN_CONTAINER}`, { env: dockerEnv, stdio: 'ignore' });
+  if (isRig) execFileSync('docker', ['start', ORIGIN_CONTAINER], { env: dockerEnv, stdio: 'ignore' });
   // Wait for the thing that restarted — the origin SIDECAR — to answer again, instead of guessing
   // how long a start takes. (This used to ping the origin's Immich, which never went down.)
   await waitFor(async () => (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`).catch(() => ({ ok: false }))).ok, 20000);
@@ -2301,7 +2301,6 @@ if (DKEY) {
   // Reproduce it exactly: stop D's sidecar, delete ONLY its mapping rows — identity and peers stay,
   // so D still answers C as the same peer — and start it again.
   const dDir = new URL('../household-d', import.meta.url).pathname;
-  const { execSync: dsh } = await import('node:child_process');
   const dockerEnv2 = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
   const dPub = readSidecarKv('household-d/d-sidecar', 'identity')?.pub;
   const liveMappingsForD = () => {
@@ -2313,7 +2312,7 @@ if (DKEY) {
   check('rig: the origin holds live owner mappings for D', (liveBefore ?? 0) > 0, `live: ${liveBefore}`);
   let wiped = false;
   try {
-    dsh('docker compose stop sidecar-d', { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
+    execFileSync('docker', ['compose', 'stop', 'sidecar-d'], { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
     // A throwaway sqlite container on the same volume, NOT `--entrypoint node`: the sidecar image
     // is what is under test, and under a Rust sidecar it has no node. The sidecar is STOPPED for
     // this (above), so nothing holds the database and there is no lock to share.
@@ -2322,7 +2321,7 @@ if (DKEY) {
     execFileSync('docker', ['run', '--rm', '-v', `${dVolume}:/data`, READER_IMAGE,
                             'sqlite3', '/data/state.db', 'DELETE FROM mappings'],
                  { stdio: ['ignore', 'pipe', 'ignore'], env: dockerEnv2, timeout: 30000 });
-    dsh('docker compose start sidecar-d', { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
+    execFileSync('docker', ['compose', 'start', 'sidecar-d'], { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
     wiped = true;
   } catch (e) { console.log(`  (could not wipe D's mappings: ${String(e.message).split('\n')[0].slice(0, 100)})`); }
   check("rig: D's sidecar restarted with its mappings wiped and its identity intact", wiped);

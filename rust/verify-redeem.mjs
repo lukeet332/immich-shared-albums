@@ -144,39 +144,30 @@ const session = (await (await fetch(`${IMMICH}/api/auth/login`, {
   body: JSON.stringify({ email: 'admin@e2e.local', password: 'e2e-admin-pass-1' }),
 })).headers.getSetCookie?.() ?? []).map(c => c.split(';')[0]).find(c => c.includes('access_token'));
 
-// RESTORED even if a check above throws: this lane turns a household setting OFF, and leaving it off
-// makes the NEXT lane fail for reasons that look like a product bug.
-process.on('exit', () => {
-  try {
-    // fire-and-forget: an exit handler cannot await, and the request is one small PUT
-    fetch(`${SIDECAR}/immich-shared-albums/settings`, {
-      method: 'POST', headers: { cookie: session, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ shareLinkJoin: true }),
-    });
-  } catch {
-    /* already gone */
-  }
-});
-
-const off = await fetch(`${SIDECAR}/immich-shared-albums/settings`, {
+const setShareLinkJoin = enabled => fetch(`${SIDECAR}/immich-shared-albums/settings`, {
   method: 'POST', headers: { cookie: session, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ shareLinkJoin: false }),
+  body: JSON.stringify({ shareLinkJoin: enabled }),
 });
-check('the panel can turn share-link joining OFF', off.status === 200, `${off.status}`);
 
-const refused = await redeem({ shareKey: openLink.key, household, protocol: 2 });
-check('and the PEER route then refuses with 403 — the setting does not merely hide a card',
-  refused.status === 403 && /does not accept album joins/i.test(refused.json?.error || ''),
-  `${refused.status} ${refused.json?.error}`);
+// ORDER IS LOAD-BEARING: the restore is AWAITED in a `finally`, so every throw path puts the
+// setting back. An async fetch started from a process 'exit' handler never lands — the loop is
+// already finished — and this lane shares its sidecar with the other lanes, which all drive
+// /invites/redeem and would fail 403 for a reason this lane created.
+try {
+  const off = await setShareLinkJoin(false);
+  check('the panel can turn share-link joining OFF', off.status === 200, `${off.status}`);
 
-const sharePageOff = await (await fetch(`${SIDECAR}/share/${openLink.key}`)).text();
-check('while the share page itself falls through to Immich', !sharePageOff.includes('data-origin-endpoint'));
+  const refused = await redeem({ shareKey: openLink.key, household, protocol: 2 });
+  check('and the PEER route then refuses with 403 — the setting does not merely hide a card',
+    refused.status === 403 && /does not accept album joins/i.test(refused.json?.error || ''),
+    `${refused.status} ${refused.json?.error}`);
 
-// Restore, so the next run starts clean.
-await fetch(`${SIDECAR}/immich-shared-albums/settings`, {
-  method: 'POST', headers: { cookie: session, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ shareLinkJoin: true }),
-});
+  const sharePageOff = await (await fetch(`${SIDECAR}/share/${openLink.key}`)).text();
+  check('while the share page itself falls through to Immich', !sharePageOff.includes('data-origin-endpoint'));
+} finally {
+  const back = await setShareLinkJoin(true).catch(e => ({ status: `unreachable: ${e.message}` }));
+  if (back.status !== 200) console.log(`  ⚠️  share-link joining NOT restored (${back.status}) — the next lane will fail 403`);
+}
 const restored = await redeem({ shareKey: openLink.key, household, protocol: 2 });
 check('turning it back on accepts joins again', restored.status === 200, `${restored.status}`);
 
