@@ -86,6 +86,10 @@ class Budget:
         self.deadline = time.monotonic() + deadline_seconds
         self.dead_providers = set()
         self.dead_candidates = set()
+        # Whichever providers actually answered. `verify` avoids them, because a model that has just
+        # written a finding is the worst possible judge of it — on #130 the verifier was the same
+        # model as the reviewer and confirmed all three of its own false positives.
+        self.answered_by = set()
 
     def exhausted(self):
         return self.requests_left <= 0 or time.monotonic() >= self.deadline
@@ -212,10 +216,16 @@ def stage_models_for(path, seed):
     return usable
 
 
-def complete(stage, candidates, system, user, budget, max_tokens=MAX_OUTPUT_TOKENS):
-    """First candidate that answers wins; a provider failing is not an error, it is a fallback."""
+def complete(stage, candidates, system, user, budget, max_tokens=MAX_OUTPUT_TOKENS, avoid=()):
+    """First candidate that answers wins; a provider failing is not an error, it is a fallback.
+
+    `avoid` is pushed to the back of the queue, not dropped: if it is all there is, it still answers.
+    """
     last_error = None
-    for candidate in candidates:
+    order = [c for c in candidates if c["provider"] not in avoid] + [
+        c for c in candidates if c["provider"] in avoid
+    ]
+    for candidate in order:
         provider, model = candidate["provider"], candidate["model"]
         identifier = f"{provider}/{model}"
         if provider in budget.dead_providers or identifier in budget.dead_candidates:
@@ -252,6 +262,7 @@ def complete(stage, candidates, system, user, budget, max_tokens=MAX_OUTPUT_TOKE
                     content = choice.get("message", {}).get("content")
                     if content:
                         log(f"  {stage}: {identifier} answered ({len(content)} chars)")
+                        budget.answered_by.add(provider)
                         return content
                     last_error = (
                         f"{identifier} no content (finish_reason={choice.get('finish_reason')}, "
@@ -559,11 +570,18 @@ def review_in_parallel(work, stages, root, workers, max_requests, deadline_secon
         pid = os.fork()
         if pid == 0:
             try:
-                found, heard, read = review_slice(
-                    piece, stages, root, Budget(share, deadline_seconds), total
-                )
+                worker = Budget(share, deadline_seconds)
+                found, heard, read = review_slice(piece, stages, root, worker, total)
                 with open(path, "w", encoding="utf-8") as result:
-                    json.dump({"findings": found, "answered": heard, "read": read}, result)
+                    json.dump(
+                        {
+                            "findings": found,
+                            "answered": heard,
+                            "read": read,
+                            "answered_by": sorted(worker.answered_by),
+                        },
+                        result,
+                    )
                 log(f"worker {order + 1} read {len(piece)} chunk(s), {len(found)} finding(s)")
             except BaseException as error:
                 # A worker must never take the run down: `os._exit` skips the parent's own cleanup.
@@ -580,7 +598,7 @@ def review_in_parallel(work, stages, root, workers, max_requests, deadline_secon
             warn(f"worker {order + 1} ran past the deadline; its chunks are unreviewed")
             os.kill(pid, signal.SIGKILL)
             os.waitpid(pid, 0)
-    findings, answered, read = [], False, 0
+    findings, answered, read, reviewed_by = [], False, 0, set()
     for _, _, path in children:
         try:
             with open(path, encoding="utf-8") as result:
@@ -596,7 +614,8 @@ def review_in_parallel(work, stages, root, workers, max_requests, deadline_secon
         findings.extend(piece["findings"])
         answered = answered or piece["answered"]
         read += piece["read"]
-    return findings, answered, read
+        reviewed_by.update(piece.get("answered_by", []))
+    return findings, answered, read, reviewed_by
 
 
 def read_trigger():
@@ -821,15 +840,23 @@ def run(args):
         )
     if parallel is None:
         findings, answered, read = review_slice(work, stages, args.root, budget, total_chunks)
+        reviewed_by = budget.answered_by
     else:
-        findings, answered, read = parallel
+        findings, answered, read, reviewed_by = parallel
     log(f"{len(findings)} candidate findings")
 
     verified = False
     if findings and "verify" in stages:
         payload = json.dumps([{k: f.get(k) for k in ("path", "line", "severity", "title", "body")} for f in findings])
         verdicts = parse_json_object(
-            complete("verify", stages["verify"], SYSTEM_VERIFY, f"Candidates:\n{payload}", budget)
+            complete(
+                "verify",
+                stages["verify"],
+                SYSTEM_VERIFY,
+                f"Candidates:\n{payload}",
+                budget,
+                avoid=reviewed_by,
+            )
         )
         if verdicts is None:
             # A verifier that answered nothing must not read as one that refuted everything: dropping

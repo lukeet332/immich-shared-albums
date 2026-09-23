@@ -1,15 +1,31 @@
 {
-  "$comment": "Stage → model, rotated per pull request. Both stages name the same providers in the same order with verify one entry behind, so review and verify never open on the same provider. See .github/scripts/review.md.",
+  "$comment": "Stage \u2192 model, rotated per pull request. Both stages name the same providers in the same order with verify one entry behind, so review and verify never open on the same provider. See .github/scripts/review.md.",
   "review": [
-    { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
-    { "provider": "groq", "model": "openai/gpt-oss-120b" },
-    { "provider": "gemini", "model": "gemma-3-27b-it" },
-    { "provider": "openrouter", "model": "openrouter/free" }
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite"
+    },
+    {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b"
+    },
+    {
+      "provider": "openrouter",
+      "model": "openrouter/free"
+    }
   ],
   "verify": [
-    { "provider": "groq", "model": "openai/gpt-oss-120b" },
-    { "provider": "gemini", "model": "gemma-3-27b-it" },
-    { "provider": "openrouter", "model": "openrouter/free" },
-    { "provider": "gemini", "model": "gemini-3.1-flash-lite" }
+    {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b"
+    },
+    {
+      "provider": "openrouter",
+      "model": "openrouter/free"
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite"
+    }
   ]
 }

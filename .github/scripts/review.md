@@ -183,6 +183,20 @@ A whole Rust port — 182 chunks of `rust/src` — is 8 workers reading ~23 chun
 gh workflow run review.yml -f pr=131 -f max_chunks=182 -f max_requests=200 -f parallel=8 -f deadline_seconds=2400
 ```
 
+## Comparing models on one pull request
+
+`workflow_dispatch` takes `models` — a JSON chain that replaces the repository's own for that run —
+and `dry_run`, which prints the findings instead of posting them. Together they compare two models on
+the *same* chunks with the same prompt and no comment left behind:
+
+```
+gh workflow run review.yml --ref main -f pr=130 -f dry_run=true -f max_chunks=10 -f parallel=1 \
+  -f models='{"review":[{"provider":"groq","model":"openai/gpt-oss-120b"}],"verify":[{"provider":"gemini","model":"gemini-3.1-flash-lite"}]}'
+```
+
+A comparison is only worth reading if its findings are checked against the code afterwards; counted
+findings measure how much a model says, not how much of it is true.
+
 ## Model choice
 
 Review opens on `gemini-3.1-flash-lite` — a code model on a 500-requests-a-day free allowance — then
