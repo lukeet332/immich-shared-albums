@@ -574,6 +574,11 @@ async fn my_albums(headers: &HeaderMap) -> Response {
             });
             if m.reunified == Some(true) {
                 entry["reunified"] = json!(true);
+                // WHO did the adopting. The Un-reunite route undoes an ADOPTION, so a share the
+                // PEER reunited (this household only invited) must not offer the button: it would
+                // answer 404 on a click, and the undo for an invitation is Immich's own
+                // album-sharing settings, not this route.
+                entry["adoptedByUs"] = json!(m.adopted == Some(true));
             }
             entry
         })

@@ -192,23 +192,35 @@ export const App = () => {
                 <div style={s.item} key={a.mappingId}>
                   <div style={s.grow}>
                     <div style={s.title}>{a.name}</div>
-                    <div style={s.sub}>reunited with {a.peer}</div>
+                    <div style={s.sub}>
+                      {a.adoptedByUs === false ? `reunited by ${a.peer}` : 'yours, reunited'}
+                    </div>
                   </div>
-                  <button
-                    style={s.button}
-                    disabled={!!detaching}
-                    onClick={() =>
-                      setAsking({
-                        title: 'Un-reunite?',
-                        body: 'Your album keeps your photos. Only theirs are removed.',
-                        confirm: 'Un-reunite',
-                        danger: true,
-                        onConfirm: () => onUnreunite(a),
-                      })
-                    }
-                  >
-                    {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite'}
-                  </button>
+                  {a.adoptedByUs === false ? (
+                    // They adopted the share this household gave them, so there is no adoption of
+                    // ours to undo — an Un-reunite click here would answer 404. Undoing an
+                    // invitation is withdrawing the share, which is Immich's own album settings.
+                    <div style={s.muted}>
+                      Merged into their album. To undo, remove their access to this album in Immich's sharing
+                      settings.
+                    </div>
+                  ) : (
+                    <button
+                      style={s.button}
+                      disabled={!!detaching}
+                      onClick={() =>
+                        setAsking({
+                          title: 'Un-reunite?',
+                          body: 'Your album keeps your photos. Only theirs are removed.',
+                          confirm: 'Un-reunite',
+                          danger: true,
+                          onConfirm: () => onUnreunite(a),
+                        })
+                      }
+                    >
+                      {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite'}
+                    </button>
+                  )}
                 </div>
               ))}
           </div>
@@ -295,8 +307,15 @@ export const App = () => {
                 <div style={s.sub}>
                   {/* A reunion adopts the person's OWN album, so the mapping's role says how the
                       share arrived, not whose album this is — "shared with you" for an album you
-                      own is the one thing the row must not say. */}
-                  {a.reunified ? 'yours, reunited' : a.role === 'owner' ? 'shared by you' : 'shared with you'}{' '}
+                      own is the one thing the row must not say. A share the PEER adopted was
+                      reunited by them, not by this household. */}
+                  {a.reunified
+                    ? a.adoptedByUs === false
+                      ? 'reunited by them'
+                      : 'yours, reunited'
+                    : a.role === 'owner'
+                      ? 'shared by you'
+                      : 'shared with you'}{' '}
                   · with {a.peer}
                 </div>
               </div>

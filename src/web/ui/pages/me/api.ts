@@ -16,6 +16,9 @@ export type MyAlbum = {
   peer: string;
   mappingId: string;
   reunified?: boolean;
+  /** This household did the adopting, so Un-reunite here will work. A reunified share the PEER
+   *  adopted reports false: the undo for an invitation is Immich's own album-sharing settings. */
+  adoptedByUs?: boolean;
 };
 
 export type MyPage = { albums: MyAlbum[]; household: string; isAdmin: boolean };
