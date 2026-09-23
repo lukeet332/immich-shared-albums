@@ -34,6 +34,13 @@ on:
       parallel:
         description: Worker processes (blank = 1); max_requests is split between them
         required: false
+      # For comparing models on one pull request: the same chunks, the same prompt, one chain each.
+      models:
+        description: 'JSON replacing the chain for this run, e.g. {"review":[{"provider":"groq","model":"openai/gpt-oss-120b"}]}'
+        required: false
+      dry_run:
+        description: 'Print the findings instead of posting them, so a comparison leaves no comments'
+        required: false
 
 permissions:
   contents: read
@@ -118,6 +125,7 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_ID: ${{ github.event.comment.id }}
           COMMENT_KIND: ${{ steps.pr.outputs.kind }}
+          MODELS: ${{ inputs.models }}
           # Only the keys that exist are used: a stage skips providers without one and falls through
           # its candidate list. With no key at all the pipeline prints a notice and does nothing.
           # Which provider serves which stage is .github/review_models.json, not this file.
@@ -151,6 +159,14 @@ jobs:
           if [ -f .review-tool/review.py ]; then
             script=.review-tool/review.py
             config=.review-tool/review_models.json
+          fi
+          if [ -n "${{ inputs.dry_run }}" ]; then
+            extra+=(--dry-run)
+          fi
+          # Last, so a per-run chain wins over the repository's own.
+          if [ -n "$MODELS" ]; then
+            printf '%s' "$MODELS" > "$RUNNER_TEMP/models.json"
+            config="$RUNNER_TEMP/models.json"
           fi
           python "$script" \
             --repo "$GITHUB_REPOSITORY" \
