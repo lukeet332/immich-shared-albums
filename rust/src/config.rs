@@ -63,6 +63,18 @@ fn env_int(name: &str, dflt: u64, min: u64) -> Result<u64, ConfigError> {
     }
 }
 
+/// A port, in range. `env_int` alone is not enough: `ISA_PORT=70000` would wrap to 4464 on the cast
+/// to `u16` and bind a port nobody asked for, so the bound is checked while the error can still name
+/// the variable. `0` stays legal for `ISA_P2P_PORT`, where it means "pick a random one".
+fn env_port(name: &str, dflt: u16, min: u16) -> Result<u16, ConfigError> {
+    parse_port(name, env_int(name, dflt as u64, min as u64)?)
+}
+
+fn parse_port(name: &str, raw: u64) -> Result<u16, ConfigError> {
+    u16::try_from(raw)
+        .map_err(|_| ConfigError(format!("{name}={raw} is not a port (highest is 65535)")))
+}
+
 fn env_str(name: &str, dflt: &str) -> String {
     match std::env::var(name) {
         Ok(raw) if !raw.is_empty() => raw,
@@ -83,10 +95,10 @@ impl Config {
             immich_url: env_str("ISA_IMMICH_URL", "http://immich-server:2283"),
             api_key,
             name: env_str("ISA_HOUSEHOLD_NAME", "Unnamed household"),
-            port: env_int("ISA_PORT", 8300, 1)? as u16,
+            port: env_port("ISA_PORT", 8300, 1)?,
             // STABLE by default rather than random: a peer remembers where it last reached us, so a
             // random port makes that memory wrong across a restart. 0 restores a random port.
-            p2p_port: env_int("ISA_P2P_PORT", 8300, 0)? as u16,
+            p2p_port: env_port("ISA_P2P_PORT", 8300, 0)?,
             data_dir: env_str("ISA_DATA_DIR", "/data"),
             sync_poll_ms: env_int("ISA_SYNC_POLL_MS", 20000, 1000)?,
             comment_poll_ms: env_int("ISA_COMMENT_POLL_MS", 5000, 500)?,
@@ -282,6 +294,15 @@ mod tests {
         assert_eq!(one_line(forged), "album \"x\" forged: identity rotated");
         assert_eq!(one_line("two\r\n\r\nbreaks"), "two breaks");
         assert_eq!(one_line("nothing to collapse"), "nothing to collapse");
+    }
+
+    #[test]
+    fn a_port_out_of_range_is_refused_rather_than_wrapped() {
+        assert_eq!(parse_port("ISA_PORT", 8300).unwrap(), 8300);
+        assert_eq!(parse_port("ISA_PORT", 65535).unwrap(), 65535);
+        assert_eq!(parse_port("ISA_P2P_PORT", 0).unwrap(), 0, "0 means a random port");
+        let over = parse_port("ISA_PORT", 70000).unwrap_err();
+        assert_eq!(over.0, "ISA_PORT=70000 is not a port (highest is 65535)");
     }
 
     #[test]
