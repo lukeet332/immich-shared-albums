@@ -199,6 +199,31 @@ findings measure how much a model says, not how much of it is true.
 
 ## Model choice
 
+**Groq `openai/gpt-oss-120b` reviews everything.** It is the only entry in `review`, so the rotation
+is a no-op there and every review comes from the same model. What settles it is the prompt size
+against Groq's 8,000-tokens-per-minute free tier, measured on real pull requests:
+
+| Pull request | Prompt per chunk |
+| --- | --- |
+| #125 (6 chunks) | 1,885 – 5,354 tokens |
+| #130 (10 chunks) | 1,601 – 7,802 tokens |
+
+Every chunk of a normal pull request fits, so nothing is rejected, and 1,000 requests a day is far
+more than ~200 needed. The cost is pacing: roughly a request every 40–60 seconds, so a median
+four-chunk review takes about three minutes and a thirteen-chunk one around eight. Bursts queue,
+because tokens-per-minute is per organization and extra workers only queue behind each other — which
+is why `PARALLEL` is 1.
+
+The wall is real, though, and the Rust port is where it shows: four of sixteen chunks there carried
+prompts of 8,900–10,700 tokens and Groq rejected them outright (HTTP 413) rather than waiting. A
+chunk over the limit is reported as unreviewed, not as clean. If that starts happening on ordinary
+pull requests, add a candidate with more room rather than shrinking the file excerpt.
+
+`verify` is the exception: it names Gemini first and Groq last, because a model that has just written
+a finding is the worst available judge of it. With only the Groq key present it falls back to Groq and
+the run says so.
+
+
 Review opens on `gemini-3.1-flash-lite` — a code model on a 500-requests-a-day free allowance — then
 `openai/gpt-oss-120b` through Groq (1,000 a day), then `gemma-3-27b-it` (14,400 a day), then
 OpenRouter's own `openrouter/free` router, whose 50 a day is the smallest allowance in the chain.
