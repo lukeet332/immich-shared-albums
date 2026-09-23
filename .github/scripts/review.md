@@ -39,7 +39,7 @@ it. The slash commands are the interface to use; the mention stays because it re
 question and `parse_command` treats it as `/ask`.
 
 For a comment event the pull request is not in the payload, so the workflow resolves its number and
-head SHA from the API in a step before `actions/checkout`. That SHA is what `file_excerpt` and
+head SHA from the API in a step before `actions/checkout`. That SHA is what `code_context` and
 `rules_for` read, so a command reviews the tree it was issued against.
 
 `review.py` and `review_models.json` are the exception, and they come from the **default branch**: a
@@ -302,9 +302,35 @@ model for the whole run. One chunk in twelve is not a rate limit, it is a silent
 ## Context given to the review stage
 
 - every `AGENTS.md` from the repository root down to the changed file's directory (`rules_for`)
-- the changed file at head, truncated to `MAX_FILE_CHARS`
-- the chunk's diff, with the new file's line number in the left column (`render_chunk_lines`) so no
-  model has to compute an anchor
+- the diff, with the new file's line number in the left column (`render_chunk_lines`) so no model has
+  to compute an anchor
+- **the code the change sits in** (`code_context`: whole file under `MAX_WHOLE_FILE_CHARS`, otherwise
+  the declaration behind each hunk; nothing when the chunk is mostly additions, because a slice of a
+  new file already is the code)
+- **the doc the file's header points at** (`doc_for`), windowed to where that doc describes this file
+
+The old version was `file_excerpt`: the first 12,000 characters of the file. A changed line 900 lines
+in never saw its own function, so models reported *missing* definitions and *unclosed* blocks that
+were merely absent from what they were shown — six verified false positives on the Rust port came
+from exactly that. `MAX_PROMPT_CHARS` keeps the added context from pushing a prompt past a free
+tier's per-minute allowance: context is added only while it fits, in priority order, and the diff is
+never trimmed because it is the thing under review.
+
+Following the header pointer is what refutes the port's worst finding: `local-immich-api.md` says
+plainly that a photo Immich has not measured is held back from every offer set on purpose, which is
+the behaviour the reviewer had reported as a bug. AGENTS.md states that the header exists to be
+machine-followable; `doc_for` is that reader, with a folder's single markdown file as the fallback
+when a header names no doc at all.
+
+`SYSTEM_REVIEW` used to forbid reporting "what CI already catches: formatting, lint, types". Nothing
+lints Rust — no clippy runs anywhere in this repository — so that rule suppressed a class of defect
+no linter reports. It now names what CI actually enforces (Prettier, ESLint, `tsc`, the cycle check,
+the unit tests, both e2e lanes) and says that a Rust defect CI cannot see is the reviewer's to report
+when it can name the failure. It also states what the code block is — one declaration, sometimes a
+window — so an absence is never read as evidence.
+
+`verify` receives the same code per candidate (`MAX_VERIFY_CHARS`, first `MAX_VERIFY_WITH_CODE`), so it
+judges against the code rather than the reviewer's description of it.
 
 `SYSTEM_REVIEW` forbids reporting what CI already catches, matching `.coderabbit.yaml`'s
 `path_instructions`, and keeps only `high` and `medium` severities (`SEVERITIES`).
