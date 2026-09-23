@@ -1,7 +1,7 @@
 /** sync/mirror.rs — creating the local mirror of a remote album. See PORT.md. */
 use crate::config::{bot_prefix, cfg, is_utility_email, UTILITY_EMAIL_DOMAIN};
-use crate::immich::client::{Auth, Client};
 use crate::immich::access::Creds;
+use crate::immich::client::{Auth, Client};
 use crate::immich::contributors::{ensure_utility_user, ContributorSpec};
 use crate::state::State;
 use crate::store::{Mapping, Peer, Role};
@@ -96,9 +96,7 @@ async fn add_local_members(
     let listed = users.as_array().cloned().unwrap_or_default();
     let mut wanted: Vec<String> = listed
         .iter()
-        .filter(|u| {
-            !is_utility_email(u.get("email").and_then(|e| e.as_str()))
-        })
+        .filter(|u| !is_utility_email(u.get("email").and_then(|e| e.as_str())))
         .filter_map(|u| u.get("id").and_then(|v| v.as_str()).map(str::to_string))
         .collect();
     if let Some(only) = for_user_ids {
@@ -118,7 +116,11 @@ async fn add_local_members(
         .map(|users| {
             users
                 .iter()
-                .filter_map(|u| u.get("user").and_then(|x| x.get("id")).and_then(|v| v.as_str()))
+                .filter_map(|u| {
+                    u.get("user")
+                        .and_then(|x| x.get("id"))
+                        .and_then(|v| v.as_str())
+                })
                 .map(str::to_string)
                 .collect()
         })
@@ -127,8 +129,10 @@ async fn add_local_members(
     if wanted.is_empty() {
         return Ok(0);
     }
-    let members: Vec<Value> =
-        wanted.iter().map(|id| json!({ "userId": id, "role": role })).collect();
+    let members: Vec<Value> = wanted
+        .iter()
+        .map(|id| json!({ "userId": id, "role": role }))
+        .collect();
     client
         .json(
             reqwest::Method::PUT,
@@ -192,7 +196,11 @@ async fn retire_mirror(state: &State, client: &Client, mirror: &Mapping) -> usiz
         if entry.origin_asset.is_none() {
             continue;
         }
-        let owner = state.store.ledger_by_asset(&entry.local_asset).ok().flatten();
+        let owner = state
+            .store
+            .ledger_by_asset(&entry.local_asset)
+            .ok()
+            .flatten();
         if owner.map(|o| o.mapping != mirror.id).unwrap_or(true) {
             continue;
         }
@@ -203,31 +211,42 @@ async fn retire_mirror(state: &State, client: &Client, mirror: &Mapping) -> usiz
         // reconcile put the photo where the mapping now looks.
         let _ = state.store.seen_remove_entry(&mirror.id, &entry.checksum);
         use crate::immich::materialise::PurgeOutcome;
-        match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset).await {
+        match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset)
+            .await
+        {
             // Gone already is the outcome the caller wanted: absent to every credential we hold.
             Ok(PurgeOutcome::Purged) | Ok(PurgeOutcome::AlreadyGone) => removed += 1,
             Ok(PurgeOutcome::NotOurs) | Err(_) => {
-                crate::log!("could not remove the replaced copy of one photo — the loops will retry");
+                crate::log!(
+                    "could not remove the replaced copy of one photo — the loops will retry"
+                );
             }
         }
     }
     // `adopted` is None, which is what the TypeScript passes: the album being retired is the share's
     // mirror, so it is deleted when we still hold the key that owns it.
-    let plan = crate::sync::album_teardown::album_teardown(
-        crate::sync::album_teardown::TeardownMapping {
+    let plan =
+        crate::sync::album_teardown::album_teardown(crate::sync::album_teardown::TeardownMapping {
             role: Role::Member,
             adopted: None,
             album_name: &mirror.album_name,
-        },
-    );
-    let host_key = mirror
-        .host_slug
-        .as_ref()
-        .and_then(|slug| state.collections().contributors.get(slug).and_then(|c| c.api_key.clone()));
+        });
+    let host_key = mirror.host_slug.as_ref().and_then(|slug| {
+        state
+            .collections()
+            .contributors
+            .get(slug)
+            .and_then(|c| c.api_key.clone())
+    });
     if plan.delete_album {
         if let Some(key) = host_key {
             if let Err(e) = client
-                .json(reqwest::Method::DELETE, &format!("/albums/{}", mirror.album_id), &Auth::Key(&key), None)
+                .json(
+                    reqwest::Method::DELETE,
+                    &format!("/albums/{}", mirror.album_id),
+                    &Auth::Key(&key),
+                    None,
+                )
                 .await
             {
                 crate::log!("could not remove the replaced mirror: {e}");
@@ -254,7 +273,9 @@ pub async fn tell_origin_reunited(mapping: &Mapping, peer: &Peer) {
     else {
         return;
     };
-    let Some(transport) = crate::p2p::transport::transport() else { return };
+    let Some(transport) = crate::p2p::transport::transport() else {
+        return;
+    };
     let header = crate::p2p::frame::RequestHeader {
         path: format!("/albums/{remote_id}/reunified"),
         ..Default::default()
@@ -303,7 +324,10 @@ pub async fn unify_own_album(
         .ok_or("the share names a server that is not linked")?;
     let held = peer_held_checksums(
         &peer,
-        mapping.remote_mapping_id.as_deref().or(mapping.remote_album_id.as_deref()),
+        mapping
+            .remote_mapping_id
+            .as_deref()
+            .or(mapping.remote_album_id.as_deref()),
     )
     .await;
 
@@ -317,11 +341,17 @@ pub async fn unify_own_album(
         &caller_albums,
         owner_user_id,
     )
-    .ok_or_else(|| format!("\"{}\" cannot be reunited with that album", mapping.album_name))?;
+    .ok_or_else(|| {
+        format!(
+            "\"{}\" cannot be reunited with that album",
+            mapping.album_name
+        )
+    })?;
 
     // 2. The sidecar reads the album as the house bot, so the bot must be a member first — added on
     //    the owner's own credential, from their own request: the membership is their act.
-    crate::sync::house_bot::add_house_bot_to_album(state, client, &own.album_id, owner_creds).await?;
+    crate::sync::house_bot::add_house_bot_to_album(state, client, &own.album_id, owner_creds)
+        .await?;
     let house_bot_key = state
         .collections()
         .contributors
@@ -405,7 +435,10 @@ pub async fn unify_own_album(
         // not fail the reunion — `peer_contributors` returns empty instead.
         let contributors = crate::sync::album_grant::peer_contributors(
             &peer,
-            mapping.remote_mapping_id.as_deref().or(mapping.remote_album_id.as_deref()),
+            mapping
+                .remote_mapping_id
+                .as_deref()
+                .or(mapping.remote_album_id.as_deref()),
         )
         .await;
         crate::sync::album_grant::grant_album_writers(
@@ -422,7 +455,11 @@ pub async fn unify_own_album(
             &own.album_id,
             owner_creds,
             &mapping.for_peer_user_ids.clone().unwrap_or_default(),
-            if mapping.permissions == "contribute" { "editor" } else { "viewer" },
+            if mapping.permissions == "contribute" {
+                "editor"
+            } else {
+                "viewer"
+            },
         )
         .await;
         {
@@ -436,7 +473,12 @@ pub async fn unify_own_album(
         let _ = state.save();
         // BOUND FIRST, in its own statement: an `if let` scrutinee temporary lives for the whole
         // body, so the `collections()` guard would be held across the `.await` below.
-        let live = state.collections().mappings.iter().find(|m| m.id == mapping.id).cloned();
+        let live = state
+            .collections()
+            .mappings
+            .iter()
+            .find(|m| m.id == mapping.id)
+            .cloned();
         if let Some(live) = live {
             tell_origin_reunited(&live, &peer).await;
             // Deliberately not awaited: a reconcile and a push can both be slow, and the person is
@@ -450,6 +492,7 @@ pub async fn unify_own_album(
                     crate::immich::client::shared(),
                     &mapping_for_tasks,
                     &peer_for_tasks,
+                    false,
                 )
                 .await
                 {
@@ -497,7 +540,9 @@ fn seed_adopted_album(
 ) -> usize {
     let rows = crate::sync::matches::seed_rows_for_adoption(assets, peer_holds);
     for row in &rows {
-        let _ = state.store.seen_add(mapping_id, &row.checksum, &row.local_asset, None, false);
+        let _ = state
+            .store
+            .seen_add(mapping_id, &row.checksum, &row.local_asset, None, false);
     }
     rows.len()
 }
@@ -537,7 +582,10 @@ pub async fn ensure_mirror(
         permissions: None,
     };
     let host = ensure_utility_user(state, client, &spec).await?;
-    let host_key = host.api_key.clone().ok_or("the stand-in has no key after provisioning")?;
+    let host_key = host
+        .api_key
+        .clone()
+        .ok_or("the stand-in has no key after provisioning")?;
     // Their own face, if their server offers one — best effort, and it stops retrying once it lands.
     crate::immich::contributors::sync_avatar(
         state,
@@ -561,9 +609,15 @@ pub async fn ensure_mirror(
         .await
         .unwrap_or(0);
         if added > 0 {
-            crate::log!("added {added} member(s) to existing mirror \"{}\"", existing.album_name);
+            crate::log!(
+                "added {added} member(s) to existing mirror \"{}\"",
+                existing.album_name
+            );
         }
-        return Ok(Mirrored { mapping: existing, created: false });
+        return Ok(Mirrored {
+            mapping: existing,
+            created: false,
+        });
     }
 
     // Created BY THE STAND-IN, so the stand-in owns what is filed into it — creating it as the
@@ -583,8 +637,8 @@ pub async fn ensure_mirror(
             .await
         {
             Ok(album) => {
-                created = album
-                    .and_then(|a| a.get("id").and_then(|v| v.as_str()).map(str::to_string));
+                created =
+                    album.and_then(|a| a.get("id").and_then(|v| v.as_str()).map(str::to_string));
                 if created.is_some() {
                     break;
                 }
@@ -603,7 +657,15 @@ pub async fn ensure_mirror(
 
     // A failure to add members is NOT fatal: the mirror exists and the reconciler will fill it, and
     // the person can be added again on the next join. Failing here would throw away a created album.
-    match add_local_members(client, &album_id, &host_key, role, req.for_user_ids.as_ref()).await {
+    match add_local_members(
+        client,
+        &album_id,
+        &host_key,
+        role,
+        req.for_user_ids.as_ref(),
+    )
+    .await
+    {
         Ok(n) => {
             let scope = match &req.for_user_ids {
                 Some(ids) => format!("{} named user(s)", ids.len()),
@@ -640,8 +702,13 @@ pub async fn ensure_mirror(
         remote_comment_count: None,
     };
     state.collections().mappings.push(mapping.clone());
-    state.save().map_err(|e| format!("could not record the mirror: {e}"))?;
-    Ok(Mirrored { mapping, created: true })
+    state
+        .save()
+        .map_err(|e| format!("could not record the mirror: {e}"))?;
+    Ok(Mirrored {
+        mapping,
+        created: true,
+    })
 }
 
 /// A v4-shaped random id, matching what the TypeScript's `crypto.randomUUID()` writes — the schema
@@ -652,7 +719,14 @@ pub fn new_uuid() -> String {
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
 }
 
 #[cfg(test)]
@@ -665,7 +739,11 @@ mod tests {
         // Immich and then never pushed, so a person believes they contributed and they did not.
         assert_eq!(member_role("view"), "viewer");
         assert_eq!(member_role("contribute"), "editor");
-        assert_eq!(member_role(""), "viewer", "anything unrecognised is the safe role");
+        assert_eq!(
+            member_role(""),
+            "viewer",
+            "anything unrecognised is the safe role"
+        );
         assert_eq!(member_role("admin"), "viewer");
     }
 
@@ -675,7 +753,10 @@ mod tests {
         assert_eq!(id.len(), 36);
         assert_eq!(id.matches('-').count(), 4);
         assert_eq!(id.as_bytes()[14], b'4', "version 4");
-        assert!(matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'), "variant bits");
+        assert!(
+            matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'),
+            "variant bits"
+        );
         assert_ne!(id, new_uuid());
     }
 }

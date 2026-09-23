@@ -34,7 +34,6 @@ fn push_failures() -> &'static Mutex<HashMap<String, u32>> {
 /// is the correct one there. Returning `None` for a member mapping with no host key is deliberate:
 /// falling back to the admin key would reproduce the exact refusal this exists to avoid.
 
-
 /// What a push achieved. `in_sync` is true when every ref landed, which is the WATCHER's cue to
 /// store the version it read — not this function's, because a caller that has not read a version
 /// must not record one.
@@ -43,15 +42,28 @@ pub struct PushOutcome {
 }
 
 /// Offer this mapping's album to its peer, and record what landed.
-pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, peer: &Peer) -> Result<PushOutcome, String> {
+pub async fn push_album_refs(
+    state: &State,
+    client: &Client,
+    mapping: &Mapping,
+    peer: &Peer,
+) -> Result<PushOutcome, String> {
     // OWNED first, then borrowed: `Auth::Key` borrows, and the old helper leaked a key per call to
     // hand out a `'static` one.
     let creds = crate::immich::access::MappingAuth::for_mapping(state, mapping)?;
     let auth = creds.auth();
     let Some(assets) = read_album_assets_as(client, &mapping.album_id, &auth).await else {
-        return Err(format!("no album.read access to \"{}\"", mapping.album_name));
+        return Err(format!(
+            "no album.read access to \"{}\"",
+            mapping.album_name
+        ));
     };
-    if let Some(live) = state.collections().mappings.iter_mut().find(|m| m.id == mapping.id) {
+    if let Some(live) = state
+        .collections()
+        .mappings
+        .iter_mut()
+        .find(|m| m.id == mapping.id)
+    {
         live.fail_count = Some(0);
     }
 
@@ -63,26 +75,39 @@ pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, 
         .iter()
         .filter_map(|a| a.get("id").and_then(|v| v.as_str()).map(str::to_string))
         .collect();
-    let revoked = state.store.offered_reconcile(&mapping.id, &current).unwrap_or_default();
+    let revoked = state
+        .store
+        .offered_reconcile(&mapping.id, &current)
+        .unwrap_or_default();
     if !revoked.is_empty() {
-        crate::log!("revoked {} byte entitlement(s) on \"{}\"", revoked.len(), mapping.album_name);
+        crate::log!(
+            "revoked {} byte entitlement(s) on \"{}\"",
+            revoked.len(),
+            mapping.album_name
+        );
     }
 
     let users = crate::immich::client::users_by_id(client, 60_000).await;
     let ledger = crate::p2p::protocol::ledger_of_state();
-    let (fresh, awaiting_shape) = refs::shareable_assets(state, &assets, &users, ledger, &mapping.id);
+    let (fresh, awaiting_shape) =
+        refs::shareable_assets(state, &assets, &users, ledger, &mapping.id);
 
     // A photo held back for Immich's measurement is NOT "in sync": the watcher stores the album's
     // version cursor on an in-sync answer, and a stored cursor would skip this album until something
     // else changed it — which is how a held-back photo would never be offered again. A PENDING
     // REMOVAL is equally not in sync: the push below must still go out, with an empty `add`.
     if fresh.is_empty() && revoked.is_empty() {
-        return Ok(PushOutcome { in_sync: awaiting_shape == 0 });
+        return Ok(PushOutcome {
+            in_sync: awaiting_shape == 0,
+        });
     }
 
     let target = peer_album_mapping_id(mapping);
     if target.is_empty() {
-        crate::log!("no remote album id for \"{}\" — nothing to push to", mapping.album_name);
+        crate::log!(
+            "no remote album id for \"{}\" — nothing to push to",
+            mapping.album_name
+        );
         return Ok(PushOutcome { in_sync: false });
     }
 
@@ -127,7 +152,10 @@ pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, 
             remove = Vec::new();
         }
         let body = body.to_string();
-        let (head, response) = match transport.round_trip(peer, &header, Some(body.as_bytes())).await {
+        let (head, response) = match transport
+            .round_trip(peer, &header, Some(body.as_bytes()))
+            .await
+        {
             Ok(v) => v,
             Err(e) => {
                 crate::log!("ref push to \"{}\" failed: {e}", peer.name);
@@ -155,7 +183,11 @@ pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, 
                     "ref push to \"{}\" failed: {}{}",
                     peer.name,
                     head.status,
-                    if *n > 1 { format!(" (x{n})") } else { String::new() }
+                    if *n > 1 {
+                        format!(" (x{n})")
+                    } else {
+                        String::new()
+                    }
                 );
             }
             break;
@@ -171,13 +203,22 @@ pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, 
     }
 
     if let Some(reason) = retire {
-        if let Some(live) = state.collections().mappings.iter_mut().find(|m| m.id == mapping.id) {
+        if let Some(live) = state
+            .collections()
+            .mappings
+            .iter_mut()
+            .find(|m| m.id == mapping.id)
+        {
             live.dead = true;
             live.dead_at = Some(crate::config::iso_now());
             live.dead_reason = Some(reason.clone());
         }
         let _ = state.save();
-        crate::log!("\"{}\" no longer has \"{}\" ({reason}) — no longer pushing it", peer.name, mapping.album_name);
+        crate::log!(
+            "\"{}\" no longer has \"{}\" ({reason}) — no longer pushing it",
+            peer.name,
+            mapping.album_name
+        );
     }
     if push_failed {
         return Ok(PushOutcome { in_sync: false });
@@ -187,13 +228,22 @@ pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, 
     let mut landed = 0usize;
     for reference in &fresh {
         let checksum = state.wire_checksum(
-            reference.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
-            reference.get("checksum").and_then(|v| v.as_str()).unwrap_or_default(),
+            reference
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default(),
+            reference
+                .get("checksum")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default(),
         );
         if failed.contains(&checksum) {
             continue;
         }
-        let asset_id = reference.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+        let asset_id = reference
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
         if state
             .store
             .seen_add(&mapping.id, &checksum, asset_id, None, false)
@@ -206,11 +256,17 @@ pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, 
         "pushed {}/{}{} to \"{}\"",
         landed,
         fresh.len(),
-        if failed.is_empty() { String::new() } else { format!(" ({} deferred)", failed.len()) },
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!(" ({} deferred)", failed.len())
+        },
         peer.name
     );
 
-    Ok(PushOutcome { in_sync: failed.is_empty() && awaiting_shape == 0 })
+    Ok(PushOutcome {
+        in_sync: failed.is_empty() && awaiting_shape == 0,
+    })
 }
 
 /// Record a manifest's worth of refs as offered, for callers that advertise without pushing.
@@ -227,7 +283,10 @@ mod tests {
         // 400 refs at ~1.5KB each is well under the default 1 MiB frame, and protocol 2 has no way
         // to signal "split and resend" — so the split has to happen here.
         assert_eq!(PUSH_BATCH, 400);
-        assert!(PUSH_BATCH * 2048 < 1024 * 1024, "a full batch must fit an ISA_MAX_BODY_KB frame");
+        assert!(
+            PUSH_BATCH * 2048 < 1024 * 1024,
+            "a full batch must fit an ISA_MAX_BODY_KB frame"
+        );
     }
 
     #[test]
@@ -235,7 +294,10 @@ mod tests {
         // A 404 is transient by protocol — the member's mirror may not exist yet. Twenty in a row
         // is not transient.
         assert_eq!(PUSH_404_DEAD_AFTER, 20);
-        assert!(PUSH_404_DEAD_AFTER > 1, "one 404 must not retire a live share");
+        assert!(
+            PUSH_404_DEAD_AFTER > 1,
+            "one 404 must not retire a live share"
+        );
     }
 }
 
@@ -269,7 +331,7 @@ pub async fn reconcile_once(state: &State, client: &Client) {
         else {
             continue;
         };
-        if let Err(e) = reconcile_mapping(state, client, &mapping, &peer).await {
+        if let Err(e) = reconcile_mapping(state, client, &mapping, &peer, false).await {
             crate::log!("reconcile error on \"{}\": {e}", mapping.album_name);
         }
     }
@@ -282,6 +344,7 @@ pub async fn reconcile_mapping(
     client: &Client,
     mapping: &Mapping,
     peer: &Peer,
+    force: bool,
 ) -> Result<(), String> {
     {
         let mut set = reconciling().lock().unwrap();
@@ -290,7 +353,7 @@ pub async fn reconcile_mapping(
         }
         set.insert(mapping.id.clone());
     }
-    let result = reconcile_inner(state, client, mapping, peer).await;
+    let result = reconcile_inner(state, client, mapping, peer, force).await;
     reconciling().lock().unwrap().remove(&mapping.id);
     result
 }
@@ -300,6 +363,7 @@ async fn reconcile_inner(
     client: &Client,
     mapping: &Mapping,
     peer: &Peer,
+    force: bool,
 ) -> Result<(), String> {
     let target = mapping
         .remote_mapping_id
@@ -316,7 +380,10 @@ async fn reconcile_inner(
     // The handshake: ONE cheap read instead of a full manifest scan.
     let mut version: Option<String> = None;
     let mut expected_count: Option<usize> = None;
-    let header = RequestHeader { path: format!("/albums/{target}/version"), ..Default::default() };
+    let header = RequestHeader {
+        path: format!("/albums/{target}/version"),
+        ..Default::default()
+    };
     match transport.round_trip(peer, &header, None).await {
         Ok((head, _)) if head.status == 410 => {
             // The origin says this relationship is over: tear our side down rather than retrying a
@@ -338,7 +405,10 @@ async fn reconcile_inner(
         }
         Ok((head, body)) if head.status < 400 => {
             if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&body) {
-                version = parsed.get("version").and_then(|v| v.as_str()).map(str::to_string);
+                version = parsed
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 // The STRUCTURED field is preferred; the packed-string parse remains only for
                 // protocol-2 peers that predate it.
                 expected_count = parsed
@@ -376,13 +446,18 @@ async fn reconcile_inner(
     // An unchanged version normally means nothing to do. With store-shared-locally on and stubs
     // still un-upgraded, the manifest is pulled anyway so the backfill can keep draining — switching
     // the setting on changes nothing at the origin, so the version would never move on its own.
-    let backfill_pending =
-        state.store_shared_assets_locally() && crate::sync::backfill::has_stub_rows(state, &mapping.id);
-    if version.is_some() && version == mapping.remote_version && !backfill_pending {
+    let backfill_pending = state.store_shared_assets_locally()
+        && crate::sync::backfill::has_stub_rows(state, &mapping.id);
+    // A FORCED pass (a nudge: "look again now") ignores an unchanged version — the thing that
+    // changed may be invisible to the version token, a caption edit above all.
+    if !force && version.is_some() && version == mapping.remote_version && !backfill_pending {
         return Ok(());
     }
 
-    let header = RequestHeader { path: format!("/albums/{target}/manifest"), ..Default::default() };
+    let header = RequestHeader {
+        path: format!("/albums/{target}/manifest"),
+        ..Default::default()
+    };
     let Ok((head, body)) = transport.round_trip(peer, &header, None).await else {
         return Ok(());
     };
@@ -405,31 +480,49 @@ async fn reconcile_inner(
     let mut propagated = true;
     if version.is_some() && consistent {
         let offered: HashSet<&str> = manifest.iter().map(|r| r.checksum.as_str()).collect();
-        for entry in state.store.seen_for_mapping(&mapping.id).unwrap_or_default() {
+        for entry in state
+            .store
+            .seen_for_mapping(&mapping.id)
+            .unwrap_or_default()
+        {
             if entry.origin_asset.is_none() || offered.contains(entry.checksum.as_str()) {
                 continue;
             }
-            match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset).await {
+            match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset)
+                .await
+            {
                 Ok(crate::immich::materialise::PurgeOutcome::Purged)
                 | Ok(crate::immich::materialise::PurgeOutcome::AlreadyGone) => {
                     let _ = state.store.seen_remove_entry(&mapping.id, &entry.checksum);
-                    crate::log!("removed stub for a photo its owner deleted (\"{}\")", mapping.album_name);
+                    crate::log!(
+                        "removed stub for a photo its owner deleted (\"{}\")",
+                        mapping.album_name
+                    );
                 }
                 // Not ours, or we could not tell: keep the cursor back so the removal retries next
                 // cycle rather than being forgotten.
-                Ok(crate::immich::materialise::PurgeOutcome::NotOurs) | Err(_) => propagated = false,
+                Ok(crate::immich::materialise::PurgeOutcome::NotOurs) | Err(_) => {
+                    propagated = false
+                }
             }
         }
     }
 
     let missing: Vec<AssetRef> = manifest
         .iter()
-        .filter(|r| !state.store.seen_has(&mapping.id, &r.checksum).unwrap_or(false))
+        .filter(|r| {
+            !state
+                .store
+                .seen_has(&mapping.id, &r.checksum)
+                .unwrap_or(false)
+        })
         .cloned()
         .collect();
     let mut all_ok = true;
     for reference in &missing {
-        match crate::immich::materialise::materialise_ref(state, client, mapping, peer, reference).await {
+        match crate::immich::materialise::materialise_ref(state, client, mapping, peer, reference)
+            .await
+        {
             Ok(true) => crate::log!("reconciled missed ref into \"{}\"", mapping.album_name),
             Ok(false) => all_ok = false,
             Err(e) => {
@@ -442,13 +535,84 @@ async fn reconcile_inner(
         }
     }
 
+    // DESCRIPTION REFRESH: an origin edit to a caption must reach the stubs that already exist —
+    // materialise wrote the description once, and nothing else would ever tell a stub its source's
+    // text changed. The version moved, so this pass is the moment to notice. The composition is
+    // the one materialise wrote (the origin's text plus the credit line); the ORIGIN's text wins,
+    // because a stub is a proxy for their photo, not a fork of it. Only stubs, never full copies:
+    // a stored-FULL copy may hold the household's own edits and holds real bytes besides.
+    if version.is_some() && consistent {
+        let creds = crate::immich::access::MappingAuth::for_mapping(state, mapping)?;
+        let stub_auth = creds.auth();
+        for reference in &manifest {
+            if missing.iter().any(|m| m.checksum == reference.checksum) {
+                continue; // materialised this pass with the fresh description already
+            }
+            let Some(entry) = state
+                .store
+                .seen_for_checksum(&reference.checksum)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|e| e.mapping == mapping.id && !e.stored_full)
+            else {
+                continue;
+            };
+            let current = client
+                .json(
+                    reqwest::Method::GET,
+                    &format!("/assets/{}", entry.local_asset),
+                    &stub_auth,
+                    None,
+                )
+                .await
+                .ok()
+                .flatten()
+                .and_then(|a| {
+                    a.pointer("/exifInfo/description")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            let wanted = crate::immich::client::composed_description(reference);
+            if wanted == current {
+                continue;
+            }
+            match client
+                .json(
+                    reqwest::Method::PUT,
+                    &format!("/assets/{}", entry.local_asset),
+                    &stub_auth,
+                    Some(&serde_json::json!({ "description": wanted })),
+                )
+                .await
+            {
+                Ok(_) => crate::log!(
+                    "refreshed a stub's description in \"{}\"",
+                    mapping.album_name
+                ),
+                Err(e) => {
+                    crate::log!(
+                        "description refresh failed for {}: {e}",
+                        &entry.local_asset[..8.min(entry.local_asset.len())]
+                    );
+                    all_ok = false; // the cursor must not advance past a refresh that did not land
+                }
+            }
+        }
+    }
+
     // Store-shared-locally: upgrade any stubs we still hold to full local copies, bounded per cycle.
     if state.store_shared_assets_locally() {
         crate::sync::backfill::backfill_full_copies(state, client, mapping, peer, &manifest).await;
     }
 
     if all_ok && propagated && version.is_some() && consistent {
-        if let Some(live) = state.collections().mappings.iter_mut().find(|m| m.id == mapping.id) {
+        if let Some(live) = state
+            .collections()
+            .mappings
+            .iter_mut()
+            .find(|m| m.id == mapping.id)
+        {
             live.remote_version = version;
         }
         let _ = state.save();
@@ -467,9 +631,20 @@ pub async fn watch_once(state: &State, client: &Client) {
     // `leaveAlbum` inside the loop splices it — so JS index-based iteration SKIPS the mapping after
     // a removal. Re-looking-up is strictly more correct: every live mapping is processed each cycle,
     // and a mapping retired mid-pass is skipped because it is looked up as dead.
-    let ids: Vec<String> = state.collections().mappings.iter().map(|m| m.id.clone()).collect();
+    let ids: Vec<String> = state
+        .collections()
+        .mappings
+        .iter()
+        .map(|m| m.id.clone())
+        .collect();
     for id in ids {
-        let Some(mapping) = state.collections().mappings.iter().find(|m| m.id == id).cloned() else {
+        let Some(mapping) = state
+            .collections()
+            .mappings
+            .iter()
+            .find(|m| m.id == id)
+            .cloned()
+        else {
             continue;
         };
         if mapping.dead {
@@ -479,12 +654,20 @@ pub async fn watch_once(state: &State, client: &Client) {
             let failures = mapping.fail_count.unwrap_or(0) + 1;
             let access_error = e.contains("album.read access") || e.contains("Not found");
             let mut retired = false;
-            if let Some(live) = state.collections().mappings.iter_mut().find(|m| m.id == mapping.id) {
+            if let Some(live) = state
+                .collections()
+                .mappings
+                .iter_mut()
+                .find(|m| m.id == mapping.id)
+            {
                 live.fail_count = Some(failures);
                 if access_error && failures >= 5 {
                     live.dead = true;
                     live.dead_at = Some(crate::config::iso_now());
-                    live.dead_reason = Some(format!("watcher: {}", e.chars().take(120).collect::<String>()));
+                    live.dead_reason = Some(format!(
+                        "watcher: {}",
+                        e.chars().take(120).collect::<String>()
+                    ));
                     retired = true;
                 }
             }
@@ -507,10 +690,17 @@ async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Res
     // by the ORIGIN owner's stand-in, not by this household's admin.
     let creds = crate::immich::access::MappingAuth::for_mapping(state, mapping)?;
     let auth = creds.auth();
-    let Some(album) = crate::immich::access::read_album_as(client, &mapping.album_id, &auth).await else {
-        return Err(format!("no album.read access to \"{}\"", mapping.album_name));
+    let Some(album) = crate::immich::access::read_album_as(client, &mapping.album_id, &auth).await
+    else {
+        return Err(format!(
+            "no album.read access to \"{}\"",
+            mapping.album_name
+        ));
     };
-    let updated_at = album.get("updatedAt").and_then(|v| v.as_str()).map(str::to_string);
+    let updated_at = album
+        .get("updatedAt")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
 
     // HANDSHAKE: skip an untouched album entirely. `local_version` is stored only after a CLEAN
     // cycle, so deferred refs keep re-offering rather than being silently written off. One blind
@@ -520,9 +710,16 @@ async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Res
     // origin stubs (ledger rows) plus this household's contributions (offered rows), so a count
     // that shrank below what we still account for means something left, and the push below
     // computes the real diff.
-    let expected_assets = state.store.seen_for_mapping(&mapping.id).map(|r| r.len()).unwrap_or(0)
+    let expected_assets = state
+        .store
+        .seen_for_mapping(&mapping.id)
+        .map(|r| r.len())
+        .unwrap_or(0)
         + state.store.offered_count(&mapping.id).unwrap_or(0);
-    let album_count = album.get("assetCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let album_count = album
+        .get("assetCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
     if let Some(updated_at) = updated_at.as_deref() {
         if mapping.local_version.as_deref() == Some(updated_at) && album_count >= expected_assets {
             return Ok(());
@@ -553,13 +750,21 @@ async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Res
                     "\"{}\" has no human member left — leaving the mirror natively",
                     mapping.album_name
                 );
-                return match crate::sync::leave::leave_album(state, client, &mapping.id, true).await {
+                return match crate::sync::leave::leave_album(state, client, &mapping.id, true).await
+                {
                     Ok(outcome) => {
-                        crate::log!("left \"{}\" natively — {} stub(s) purged", mapping.album_name, outcome.purged);
+                        crate::log!(
+                            "left \"{}\" natively — {} stub(s) purged",
+                            mapping.album_name,
+                            outcome.purged
+                        );
                         Ok(())
                     }
                     Err(e) => {
-                        crate::log!("native leave of \"{}\" failed: {e} — the loops will retry", mapping.album_name);
+                        crate::log!(
+                            "native leave of \"{}\" failed: {e} — the loops will retry",
+                            mapping.album_name
+                        );
                         Ok(())
                     }
                 };
@@ -585,7 +790,12 @@ async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Res
     // The cursor is the WATCHER's handshake, so only the watcher moves it: a reunion pushes the same
     // way and has no business claiming the album was checked at a version it never read.
     if outcome.in_sync {
-        if let Some(live) = state.collections().mappings.iter_mut().find(|m| m.id == mapping.id) {
+        if let Some(live) = state
+            .collections()
+            .mappings
+            .iter_mut()
+            .find(|m| m.id == mapping.id)
+        {
             live.local_version = updated_at;
         }
         crate::sync::status::record_watcher_cycle(&mapping.id);

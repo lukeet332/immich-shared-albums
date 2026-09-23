@@ -1,18 +1,18 @@
 /** web/server.rs — the router: a thin dispatch table mapping each path to a handler. See PORT.md. */
 use crate::config::{cfg, ROUTE_PREFIX};
-use crate::p2p::unlink::{linked_peers, local_household, shared_albums};
-use crate::settings::{Settings, TTL_MAX_MINUTES, TTL_MINUTES_MIN};
 use crate::p2p::pair::{pending_pairings, revoke_pairing};
 use crate::p2p::transport::transport;
+use crate::p2p::unlink::{linked_peers, local_household, shared_albums};
+use crate::settings::{Settings, TTL_MAX_MINUTES, TTL_MINUTES_MIN};
 use crate::state::state;
 use crate::web::auth::{caller_identity, sign_in_required};
 use crate::web::frontend::{surface_for, Access, Body};
-use base64::Engine as _;
 use crate::web::{assets, frontend, interceptor, passthrough, query};
 use axum::body::Body as HttpBody;
 use axum::extract::Request;
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
+use base64::Engine as _;
 use futures_lite::StreamExt;
 use serde_json::{json, Value};
 
@@ -42,8 +42,15 @@ pub async fn serve(req: Request) -> Response {
         };
         match surface.access {
             Access::Admin if caller.as_ref().map(|c| c.is_admin) != Some(true) => {
-                let status = if caller.is_some() { StatusCode::FORBIDDEN } else { StatusCode::UNAUTHORIZED };
-                return html(status, assets::sign_in_page(action_or_default(surface.action)));
+                let status = if caller.is_some() {
+                    StatusCode::FORBIDDEN
+                } else {
+                    StatusCode::UNAUTHORIZED
+                };
+                return html(
+                    status,
+                    assets::sign_in_page(action_or_default(surface.action)),
+                );
             }
             Access::SignedIn if caller.is_none() => {
                 return html(
@@ -78,9 +85,19 @@ pub async fn serve(req: Request) -> Response {
                 // link a recipient then copies previews as nothing. Only OUR marker is removed;
                 // any other parameter is not ours to drop.
                 let rest = stripped_query(&uri, "native");
-                let target = if rest.is_empty() { path.clone() } else { format!("{path}?{rest}") };
+                let target = if rest.is_empty() {
+                    path.clone()
+                } else {
+                    format!("{path}?{rest}")
+                };
                 if let Ok(parsed) = target.parse::<Uri>() {
-                    return passthrough::proxy_to_immich(method, &parsed, &headers, req.into_body()).await;
+                    return passthrough::proxy_to_immich(
+                        method,
+                        &parsed,
+                        &headers,
+                        req.into_body(),
+                    )
+                    .await;
                 }
             } else if Settings::read(&state().store).share_link_join {
                 return share_document(&key).await;
@@ -114,7 +131,8 @@ pub async fn serve(req: Request) -> Response {
     //    ways: a photo upload must never be buffered here. This comes BEFORE the body cap, because
     //    passthrough traffic is not ours to size.
     if !path.starts_with(ROUTE_PREFIX) {
-        let response = passthrough::proxy_to_immich(method.clone(), &uri, &headers, req.into_body()).await;
+        let response =
+            passthrough::proxy_to_immich(method.clone(), &uri, &headers, req.into_body()).await;
         // AFTER the response, not before: an album mutation is only a change once Immich has made
         // it, and reading on the way in races the very write that prompted the read. Fire-and-forget
         // and fail-open — nothing about a proxied request may depend on this.
@@ -282,7 +300,10 @@ pub async fn serve(req: Request) -> Response {
 /// are admin-owned objects, not something a per-user surface scopes to the caller.
 async fn peers(headers: &HeaderMap) -> Response {
     let Some(caller) = caller_identity(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("see connected servers"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("see connected servers"),
+        );
     };
     if !caller.is_admin {
         return json_response(
@@ -303,7 +324,10 @@ async fn peers(headers: &HeaderMap) -> Response {
 
 async fn settings_get(headers: &HeaderMap) -> Response {
     let Some(caller) = caller_identity(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("change settings"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("change settings"),
+        );
     };
     if !caller.is_admin {
         return json_response(
@@ -316,7 +340,10 @@ async fn settings_get(headers: &HeaderMap) -> Response {
 
 async fn settings_post(headers: &HeaderMap, req: Request) -> Response {
     let Some(caller) = caller_identity(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("change settings"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("change settings"),
+        );
     };
     if !caller.is_admin {
         return json_response(
@@ -358,7 +385,10 @@ async fn settings_post(headers: &HeaderMap, req: Request) -> Response {
     }
     let wanted = Settings {
         // `!== false`: an absent field means ON, not off.
-        share_link_join: asked.get("shareLinkJoin").and_then(|v| v.as_bool()).unwrap_or(true),
+        share_link_join: asked
+            .get("shareLinkJoin")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
         pairing_ttl_minutes: ttl,
         store_shared_assets_locally: asked
             .get("storeSharedAssetsLocally")
@@ -366,7 +396,10 @@ async fn settings_post(headers: &HeaderMap, req: Request) -> Response {
             .unwrap_or(false),
     };
     if let Err(e) = wanted.write(&state().store) {
-        return json_response(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e.to_string() }));
+        return json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": e.to_string() }),
+        );
     }
     json_response(StatusCode::OK, settings_json())
 }
@@ -374,12 +407,14 @@ async fn settings_post(headers: &HeaderMap, req: Request) -> Response {
 /// Read a JSON body under `ISA_MAX_BODY_KB`, answering the same 413 the TypeScript does.
 async fn read_json_body(req: Request) -> Result<Value, Response> {
     let limit = (cfg().max_body_kb * 1024) as usize;
-    let bytes = axum::body::to_bytes(req.into_body(), limit).await.map_err(|_| {
-        json_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            json!({ "error": format!("request body exceeds {}KB", cfg().max_body_kb) }),
-        )
-    })?;
+    let bytes = axum::body::to_bytes(req.into_body(), limit)
+        .await
+        .map_err(|_| {
+            json_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                json!({ "error": format!("request body exceeds {}KB", cfg().max_body_kb) }),
+            )
+        })?;
     serde_json::from_slice(&bytes)
         .map_err(|e| json_response(StatusCode::BAD_REQUEST, json!({ "error": e.to_string() })))
 }
@@ -402,7 +437,10 @@ async fn pairings_list(headers: &HeaderMap) -> Response {
     if let Some(response) = require_admin(headers, "manage server links").await {
         return response;
     }
-    json_response(StatusCode::OK, json!({ "pairings": pending_pairings(&state().store) }))
+    json_response(
+        StatusCode::OK,
+        json!({ "pairings": pending_pairings(&state().store) }),
+    )
 }
 
 /// `POST /pairings` — mint a one-use link. It carries this server's endpoint, so it can only be
@@ -418,7 +456,10 @@ async fn pairing_mint(headers: &HeaderMap) -> Response {
         );
     };
     match crate::p2p::pair::mint_pairing(transport, &state().store) {
-        Ok((link, expires_at)) => json_response(StatusCode::OK, json!({ "link": link, "expiresAt": expires_at })),
+        Ok((link, expires_at)) => json_response(
+            StatusCode::OK,
+            json!({ "link": link, "expiresAt": expires_at }),
+        ),
         Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
     }
 }
@@ -439,7 +480,10 @@ async fn pairing_revoke(headers: &HeaderMap, req: Request) -> Response {
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     if id.is_empty() {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "id is required" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "id is required" }),
+        );
     }
     revoke_pairing(&state().store, id);
     json_response(StatusCode::OK, json!({ "ok": true }))
@@ -455,9 +499,15 @@ async fn pairing_redeem(headers: &HeaderMap, req: Request) -> Response {
         Ok(body) => body,
         Err(response) => return response,
     };
-    let link = body.get("link").and_then(|v| v.as_str()).unwrap_or_default();
+    let link = body
+        .get("link")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     if link.is_empty() {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "link is required" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "link is required" }),
+        );
     }
     let Some(transport) = transport() else {
         return json_response(
@@ -493,14 +543,25 @@ async fn leave(headers: &HeaderMap, req: Request) -> Response {
         Ok(body) => body,
         Err(response) => return response,
     };
-    let mapping_id = body.get("mappingId").and_then(|v| v.as_str()).unwrap_or_default();
+    let mapping_id = body
+        .get("mappingId")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     if mapping_id.is_empty() {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "mappingId is required" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "mappingId is required" }),
+        );
     }
     // `notify_origin: true` — this is a person LEAVING, so the origin retires its owner mapping and
     // stops offering. Un-reunifying is the case that passes false, and it is not this route.
-    match crate::sync::leave::leave_album(state(), crate::immich::client::shared(), mapping_id, true)
-        .await
+    match crate::sync::leave::leave_album(
+        state(),
+        crate::immich::client::shared(),
+        mapping_id,
+        true,
+    )
+    .await
     {
         Ok(outcome) => json_response(
             StatusCode::OK,
@@ -522,7 +583,10 @@ async fn leave(headers: &HeaderMap, req: Request) -> Response {
 /// than 401: they are not going to fix it by signing in again.
 async fn require_admin(headers: &HeaderMap, what: &str) -> Option<Response> {
     let Some(caller) = caller_identity(headers).await else {
-        return Some(json_response(StatusCode::UNAUTHORIZED, sign_in_required(what)));
+        return Some(json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required(what),
+        ));
     };
     if !caller.is_admin {
         return Some(json_response(
@@ -536,7 +600,10 @@ async fn require_admin(headers: &HeaderMap, what: &str) -> Option<Response> {
 /// `GET /me/albums` — the caller's shared albums, as IMMICH says they may see them.
 async fn my_albums(headers: &HeaderMap) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("see your albums"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("see your albums"),
+        );
     };
     let client = crate::immich::client::shared();
     let Some(visible) = crate::immich::access::visible_album_ids(client, &signed_in.creds).await
@@ -604,7 +671,10 @@ async fn unlink(headers: &HeaderMap, req: Request) -> Response {
     };
     let pub_key = body.get("pub").and_then(|v| v.as_str()).unwrap_or_default();
     if pub_key.is_empty() {
-        return json_response(StatusCode::BAD_REQUEST, json!({ "error": "name the server to unlink" }));
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "name the server to unlink" }),
+        );
     }
     match crate::p2p::unlink::unlink_peer(state(), crate::immich::client::shared(), pub_key).await {
         Ok(outcome) => json_response(
@@ -627,7 +697,10 @@ async fn unlink(headers: &HeaderMap, req: Request) -> Response {
 /// own invite poll turns it back into a mirror.
 async fn unreunite(headers: &HeaderMap, req: Request) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("un-reunite an album"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("un-reunite an album"),
+        );
     };
     let body = match read_json_body(req).await {
         Ok(body) => body,
@@ -655,8 +728,7 @@ async fn unreunite(headers: &HeaderMap, req: Request) -> Response {
         );
     };
     let client = crate::immich::client::shared();
-    let Some(visible) =
-        crate::immich::access::visible_album_ids(client, &signed_in.creds).await
+    let Some(visible) = crate::immich::access::visible_album_ids(client, &signed_in.creds).await
     else {
         return json_response(
             StatusCode::BAD_GATEWAY,
@@ -664,21 +736,31 @@ async fn unreunite(headers: &HeaderMap, req: Request) -> Response {
         );
     };
     if !visible.contains(&mapping.album_id) {
-        return json_response(StatusCode::FORBIDDEN, json!({ "error": "that share is not yours" }));
+        return json_response(
+            StatusCode::FORBIDDEN,
+            json!({ "error": "that share is not yours" }),
+        );
     }
     // Ownership is the fact that matters, and it comes from Immich rather than from a claim.
     let caller_owns_it = client
-        .get_album(&mapping.album_id, &crate::immich::client::Auth::Creds(&signed_in.creds))
+        .get_album(
+            &mapping.album_id,
+            &crate::immich::client::Auth::Creds(&signed_in.creds),
+        )
         .await
         .ok()
         .flatten()
         .and_then(|album| {
-            album.get("albumUsers").and_then(|v| v.as_array()).map(|users| {
-                users.iter().any(|au| {
-                    au.pointer("/user/id").and_then(|v| v.as_str()) == Some(signed_in.caller.id.as_str())
-                        && au.get("role").and_then(|v| v.as_str()) == Some("owner")
+            album
+                .get("albumUsers")
+                .and_then(|v| v.as_array())
+                .map(|users| {
+                    users.iter().any(|au| {
+                        au.pointer("/user/id").and_then(|v| v.as_str())
+                            == Some(signed_in.caller.id.as_str())
+                            && au.get("role").and_then(|v| v.as_str()) == Some("owner")
+                    })
                 })
-            })
         })
         .unwrap_or(false);
     if !caller_owns_it {
@@ -692,11 +774,10 @@ async fn unreunite(headers: &HeaderMap, req: Request) -> Response {
     let album_name = mapping.album_name.clone();
     // Purge the peer's stubs FIRST, while our accounts still hold the memberships they were granted,
     // then take those accounts off — only the owner can, and the caller IS the owner here.
-    let outcome =
-        match crate::sync::leave::leave_album(state(), client, mapping_id, false).await {
-            Ok(outcome) => outcome,
-            Err(e) => return json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
-        };
+    let outcome = match crate::sync::leave::leave_album(state(), client, mapping_id, false).await {
+        Ok(outcome) => outcome,
+        Err(e) => return json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
+    };
     // The trail's withdrawal line, written HERE: `leave_album` has already purged the peer's stubs, so
     // the line describes the finished state, and `strip_album_bots` is about to take our accounts off
     // the album — after which the bot could not comment on it at all.
@@ -722,7 +803,8 @@ async fn unreunite(headers: &HeaderMap, req: Request) -> Response {
     // account we failed to remove keeps reading a private album and NOTHING can retry it.
     crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Shares);
     let (stripped, strip_failed) =
-        crate::sync::album_grant::strip_album_bots(state(), client, &album_id, &signed_in.creds).await;
+        crate::sync::album_grant::strip_album_bots(state(), client, &album_id, &signed_in.creds)
+            .await;
     if !strip_failed.is_empty() {
         crate::log!(
             "un-reunify left {} of our account(s) on \"{album_name}\" — they still read it; remove them in Immich",
@@ -745,7 +827,10 @@ async fn unreunite(headers: &HeaderMap, req: Request) -> Response {
 /// `POST /me/reunite` — put the caller's own album in place of a share's mirror.
 async fn reunite(headers: &HeaderMap, req: Request) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("reunite an album"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("reunite an album"),
+        );
     };
     let body = match read_json_body(req).await {
         Ok(body) => body,
@@ -784,7 +869,10 @@ async fn reunite(headers: &HeaderMap, req: Request) -> Response {
         );
     };
     if !visible.contains(&mapping.album_id) {
-        return json_response(StatusCode::FORBIDDEN, json!({ "error": "that share is not yours" }));
+        return json_response(
+            StatusCode::FORBIDDEN,
+            json!({ "error": "that share is not yours" }),
+        );
     }
     // The panel names the ALBUM by name; which local album that is gets resolved from the caller's
     // own list inside the operation, so no id crosses the wire or is taken on trust.
@@ -798,7 +886,9 @@ async fn reunite(headers: &HeaderMap, req: Request) -> Response {
     )
     .await
     {
-        Ok((album, seeded)) => json_response(StatusCode::OK, json!({ "album": album, "seeded": seeded })),
+        Ok((album, seeded)) => {
+            json_response(StatusCode::OK, json!({ "album": album, "seeded": seeded }))
+        }
         Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
     }
 }
@@ -852,8 +942,14 @@ async fn invite_to_reunite(headers: &HeaderMap, req: Request) -> Response {
     .await
     {
         Ok((album, invited)) => {
-            crate::log!("{} invited \"{invited}\" to reunite \"{album}\"", signed_in.caller.name);
-            json_response(StatusCode::OK, json!({ "album": album, "invited": invited }))
+            crate::log!(
+                "{} invited \"{invited}\" to reunite \"{album}\"",
+                signed_in.caller.name
+            );
+            json_response(
+                StatusCode::OK,
+                json!({ "album": album, "invited": invited }),
+            )
         }
         Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
     }
@@ -862,7 +958,10 @@ async fn invite_to_reunite(headers: &HeaderMap, req: Request) -> Response {
 /// `GET /me/matches` — the pairings this person could reunite.
 async fn my_matches(headers: &HeaderMap) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("see possible reunions"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("see possible reunions"),
+        );
     };
     match crate::sync::album_index::my_matches(
         state(),
@@ -960,9 +1059,11 @@ async fn join_preview(headers: &HeaderMap, req: Request) -> Response {
     // The SAME function the join itself re-derives with, so a preview can never offer a marriage the
     // adoption would refuse. The caller's own album list is read on THEIR credential, because only
     // Immich can say which albums are theirs.
-    let Some(caller_albums) =
-        crate::immich::access::read_caller_albums(crate::immich::client::shared(), &signed_in.creds)
-            .await
+    let Some(caller_albums) = crate::immich::access::read_caller_albums(
+        crate::immich::client::shared(),
+        &signed_in.creds,
+    )
+    .await
     else {
         return json_response(
             StatusCode::BAD_GATEWAY,
@@ -984,7 +1085,10 @@ async fn join_preview(headers: &HeaderMap, req: Request) -> Response {
 /// `POST /join` — redeem a share invite and mirror the album it names.
 async fn join(headers: &HeaderMap, req: Request) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("join a shared album"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("join a shared album"),
+        );
     };
     let caller = signed_in.caller;
     let body = match read_json_body(req).await {
@@ -994,8 +1098,15 @@ async fn join(headers: &HeaderMap, req: Request) -> Response {
 
     // The account being joined is the signed-in one. Naming someone else is an admin acting on
     // their behalf, and is refused otherwise rather than silently ignored.
-    let named = body.get("forUserId").and_then(|v| v.as_str()).unwrap_or_default();
-    let for_user_id = if named.is_empty() { caller.id.clone() } else { named.to_string() };
+    let named = body
+        .get("forUserId")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let for_user_id = if named.is_empty() {
+        caller.id.clone()
+    } else {
+        named.to_string()
+    };
     if for_user_id != caller.id && !caller.is_admin {
         return json_response(
             StatusCode::FORBIDDEN,
@@ -1004,8 +1115,14 @@ async fn join(headers: &HeaderMap, req: Request) -> Response {
     }
 
     let invite_json = body.get("invite").cloned().unwrap_or(Value::Null);
-    let key = invite_json.get("key").and_then(|v| v.as_str()).unwrap_or_default();
-    let token = invite_json.get("endpointToken").and_then(|v| v.as_str()).unwrap_or_default();
+    let key = invite_json
+        .get("key")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let token = invite_json
+        .get("endpointToken")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     let Some(endpoint) = decode_endpoint_token(token) else {
         return json_response(
             StatusCode::BAD_REQUEST,
@@ -1020,27 +1137,30 @@ async fn join(headers: &HeaderMap, req: Request) -> Response {
     };
     let password = body.get("password").and_then(|v| v.as_str());
 
-    let redeemed =
-        match crate::p2p::join::redeem_invite(state(), &invite, password).await {
-            Ok(redeemed) => redeemed,
-            Err(refused) => {
-                // A password prompt is a 401 the panel turns into a FIELD; everything else is a 400
-                // it turns into an error. Collapsing them would show a message where a field belongs.
-                let status = if refused.password_required {
-                    StatusCode::UNAUTHORIZED
-                } else {
-                    StatusCode::BAD_REQUEST
-                };
-                let mut body = json!({ "error": refused.message });
-                if refused.password_required {
-                    body["passwordRequired"] = json!(true);
-                }
-                return json_response(status, body);
+    let redeemed = match crate::p2p::join::redeem_invite(state(), &invite, password).await {
+        Ok(redeemed) => redeemed,
+        Err(refused) => {
+            // A password prompt is a 401 the panel turns into a FIELD; everything else is a 400
+            // it turns into an error. Collapsing them would show a message where a field belongs.
+            let status = if refused.password_required {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            let mut body = json!({ "error": refused.message });
+            if refused.password_required {
+                body["passwordRequired"] = json!(true);
             }
-        };
+            return json_response(status, body);
+        }
+    };
 
-    let Some(peer) =
-        state().collections().peers.iter().find(|p| p.pub_key == redeemed.household_public_key).cloned()
+    let Some(peer) = state()
+        .collections()
+        .peers
+        .iter()
+        .find(|p| p.pub_key == redeemed.household_public_key)
+        .cloned()
     else {
         // `redeem_invite` pins the peer before returning, so this is unreachable rather than a
         // runtime possibility — and saying so beats a silent None two calls later.
@@ -1062,7 +1182,8 @@ async fn join(headers: &HeaderMap, req: Request) -> Response {
         reunified: redeemed.reunified,
         via: "link",
     };
-    match crate::sync::mirror::ensure_mirror(state(), crate::immich::client::shared(), &request).await
+    match crate::sync::mirror::ensure_mirror(state(), crate::immich::client::shared(), &request)
+        .await
     {
         Ok(mirrored) => {
             let photos = redeemed.manifest_len;
@@ -1095,6 +1216,7 @@ async fn join(headers: &HeaderMap, req: Request) -> Response {
                         crate::immich::client::shared(),
                         &mapping,
                         &joined_peer,
+                        false,
                     )
                     .await
                     {
@@ -1121,17 +1243,28 @@ async fn join(headers: &HeaderMap, req: Request) -> Response {
 
 /// `{pub, relay?, addrs?}` from the invite's base64url token. `None` when it is not one.
 fn decode_endpoint_token(token: &str) -> Option<(String, Option<String>, Option<Vec<String>>)> {
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token.as_bytes()).ok()?;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(token.as_bytes())
+        .ok()?;
     let value: Value = serde_json::from_slice(&decoded).ok()?;
-    let public_key = value.get("pub").and_then(|v| v.as_str()).unwrap_or_default();
+    let public_key = value
+        .get("pub")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     if public_key.is_empty() {
         return None;
     }
     Some((
         public_key.to_string(),
-        value.get("relay").and_then(|v| v.as_str()).map(str::to_string),
+        value
+            .get("relay")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         value.get("addrs").and_then(|v| v.as_array()).map(|addrs| {
-            addrs.iter().filter_map(|a| a.as_str().map(str::to_string)).collect()
+            addrs
+                .iter()
+                .filter_map(|a| a.as_str().map(str::to_string))
+                .collect()
         }),
     ))
 }
@@ -1167,7 +1300,10 @@ async fn hide_dimensions(headers: &HeaderMap, req: Request) -> Response {
         &asset_id[..asset_id.len().min(8)],
         if hidden { "hidden" } else { "visible again" }
     );
-    json_response(StatusCode::OK, json!({ "assetId": asset_id, "hidden": hidden }))
+    json_response(
+        StatusCode::OK,
+        json!({ "assetId": asset_id, "hidden": hidden }),
+    )
 }
 
 /// `GET /sync/status` — how far a mapping has got, plus the loop counters.
@@ -1180,7 +1316,10 @@ async fn sync_status_route(headers: &HeaderMap, uri: &Uri) -> Response {
         return json_response(StatusCode::NOT_FOUND, json!({ "error": "not found" }));
     }
     let Some(caller) = caller_identity(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("read sync status"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("read sync status"),
+        );
     };
     if !caller.is_admin {
         return json_response(
@@ -1211,7 +1350,10 @@ async fn sync_status_route(headers: &HeaderMap, uri: &Uri) -> Response {
         .find(|m| m.album_id == album_id)
         .cloned();
     let Some(mapping) = mapping else {
-        return json_response(StatusCode::NOT_FOUND, json!({ "error": "no mapping for that album" }));
+        return json_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no mapping for that album" }),
+        );
     };
     let cycles = crate::sync::status::watcher_cycles(&mapping.id);
     // No album argument, exactly as the TypeScript route calls it: without `updatedAt` the settled
@@ -1256,7 +1398,8 @@ async fn events(headers: &HeaderMap) -> Response {
     let stream = futures_lite::stream::unfold(subscription, |mut subscription| async move {
         let event = subscription.next().await?;
         let data = json!({ "type": event.as_str() }).to_string();
-        let item = Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(data));
+        let item =
+            Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(data));
         Some((item, subscription))
     });
     let response = axum::response::sse::Sse::new(stream)
@@ -1339,7 +1482,11 @@ async fn pause_sweeps(headers: &HeaderMap, req: Request) -> Response {
     crate::log!(
         "rig: background sweeps {}{}",
         if paused { "held" } else { "released" },
-        if idle { "" } else { " (a cycle is still running)" }
+        if idle {
+            ""
+        } else {
+            " (a cycle is still running)"
+        }
     );
     json_response(
         StatusCode::OK,
@@ -1360,12 +1507,66 @@ fn note_traffic(path: &str, method: &Method, headers: &HeaderMap) {
     if trigger == crate::sync::traffic_triggers::TrafficTrigger::Comment {
         let owned_state = state().clone();
         tokio::spawn(async move {
-            crate::sync::comments::sync_comments_once(&owned_state, crate::immich::client::shared())
-                .await;
+            crate::sync::comments::sync_comments_once(
+                &owned_state,
+                crate::immich::client::shared(),
+            )
+            .await;
         });
         return;
     }
-    let Some(creds) = crate::immich::access::creds_from_headers(headers) else { return };
+    // An asset metadata edit: tell every album the photo is offered to, so a caption the origin
+    // just fixed reaches its joiners in seconds instead of never (no album row moves on such an
+    // edit, so the version handshake cannot see it). The asset id is the path's last segment.
+    if trigger == crate::sync::traffic_triggers::TrafficTrigger::AssetMeta {
+        let asset_id = path.rsplit('/').next().unwrap_or_default().to_string();
+        let targets: Vec<(crate::p2p::frame::RequestHeader, crate::store::Peer)> = {
+            let collections = state().collections();
+            state()
+                .store
+                .offered_mappings_for(&asset_id)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|mid| {
+                    collections
+                        .mappings
+                        .iter()
+                        .find(|m| m.id == *mid && m.role == crate::store::Role::Owner && !m.dead)
+                })
+                .filter_map(|m| {
+                    collections
+                        .peers
+                        .iter()
+                        .find(|p| p.pub_key == m.peer)
+                        .cloned()
+                        .map(|peer| {
+                            (
+                                crate::p2p::frame::RequestHeader {
+                                    path: format!("/albums/{}/nudge", m.album_id),
+                                    ..Default::default()
+                                },
+                                peer,
+                            )
+                        })
+                })
+                .collect()
+        };
+        if !targets.is_empty() {
+            let transport = crate::p2p::transport::transport();
+            if let Some(transport) = transport {
+                for (header, peer) in targets {
+                    let transport = transport.clone();
+                    tokio::spawn(async move {
+                        let _ = transport.round_trip(&peer, &header, None).await;
+                    });
+                }
+            }
+        }
+        return;
+    }
+    let Some(creds) = crate::immich::access::creds_from_headers(headers) else {
+        return;
+    };
     crate::sync::index_freshness::note_index_traffic(state(), trigger, creds);
 }
 
@@ -1381,7 +1582,10 @@ fn share_key_from_path(path: &str) -> Option<String> {
 
 fn query_has(uri: &Uri, name: &str) -> bool {
     uri.query()
-        .map(|q| q.split('&').any(|pair| pair.split('=').next() == Some(name)))
+        .map(|q| {
+            q.split('&')
+                .any(|pair| pair.split('=').next() == Some(name))
+        })
         .unwrap_or(false)
 }
 
@@ -1412,9 +1616,10 @@ async fn share_document(key: &str) -> Response {
     };
     let meta = crate::immich::client::public_share_link_meta(key).await;
     let token = endpoint_token(transport);
-    let cover = meta.as_ref().and_then(|m| m.cover_asset_id.as_ref()).map(|id| {
-        format!("/api/assets/{id}/thumbnail?key={}", query::urlencode(key))
-    });
+    let cover = meta
+        .as_ref()
+        .and_then(|m| m.cover_asset_id.as_ref())
+        .map(|id| format!("/api/assets/{id}/thumbnail?key={}", query::urlencode(key)));
     let page = assets::share_page(
         &token,
         meta.as_ref().and_then(|m| m.album_name.as_deref()),
@@ -1493,6 +1698,9 @@ mod tests {
     #[test]
     fn action_defaults_only_when_empty() {
         assert_eq!(action_or_default(""), "use this page");
-        assert_eq!(action_or_default("join a shared album"), "join a shared album");
+        assert_eq!(
+            action_or_default("join a shared album"),
+            "join a shared album"
+        );
     }
 }

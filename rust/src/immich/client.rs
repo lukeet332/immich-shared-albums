@@ -84,7 +84,9 @@ fn refuse_doubled_api_prefix(path: &str) -> Result<(), ImmichError> {
         return Err(ImmichError {
             path: path.to_string(),
             status: 0,
-            body: format!("path \"{path}\" already starts with /api — it is relative to {{url}}/api"),
+            body: format!(
+                "path \"{path}\" already starts with /api — it is relative to {{url}}/api"
+            ),
         });
     }
     Ok(())
@@ -106,7 +108,11 @@ impl Client {
         match auth {
             Auth::Admin => vec![("x-api-key".into(), self.admin_key.clone())],
             Auth::Key(key) => vec![("x-api-key".into(), (*key).to_string())],
-            Auth::Creds(creds) => creds.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            Auth::Creds(creds) => creds
+                .headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         }
     }
 
@@ -122,7 +128,10 @@ impl Client {
         let url = format!("{}{}", self.base, path);
         crate::trace!("immich {} {}: sending", method, path);
         let started = std::time::Instant::now();
-        let mut req = self.http.request(method.clone(), &url).header("Accept", "application/json");
+        let mut req = self
+            .http
+            .request(method.clone(), &url)
+            .header("Accept", "application/json");
         for (name, value) in self.identity(auth) {
             req = req.header(name, value);
         }
@@ -134,11 +143,21 @@ impl Client {
             status: 0,
             body: e.to_string(),
         })?;
-        crate::trace!("immich {} {}: {} ({}ms)", method, path, response.status().as_u16(), started.elapsed().as_millis());
+        crate::trace!(
+            "immich {} {}: {} ({}ms)",
+            method,
+            path,
+            response.status().as_u16(),
+            started.elapsed().as_millis()
+        );
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            return Err(ImmichError { path: path.to_string(), status, body });
+            return Err(ImmichError {
+                path: path.to_string(),
+                status,
+                body,
+            });
         }
         Ok(response)
     }
@@ -157,7 +176,10 @@ impl Client {
             None => vec![],
         };
         let url = format!("{}{}", self.base, path);
-        let mut req = self.http.request(method, &url).header("Accept", "application/json");
+        let mut req = self
+            .http
+            .request(method, &url)
+            .header("Accept", "application/json");
         for (name, value) in self.identity(auth) {
             req = req.header(name, value);
         }
@@ -175,7 +197,11 @@ impl Client {
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
-            return Err(ImmichError { path: path.to_string(), status, body: text });
+            return Err(ImmichError {
+                path: path.to_string(),
+                status,
+                body: text,
+            });
         }
         if response.status().as_u16() == 204 {
             return Ok(None);
@@ -186,7 +212,11 @@ impl Client {
         }
         serde_json::from_str(&text)
             .map(Some)
-            .map_err(|e| ImmichError { path: path.to_string(), status: 200, body: e.to_string() })
+            .map_err(|e| ImmichError {
+                path: path.to_string(),
+                status: 200,
+                body: e.to_string(),
+            })
     }
 
     /// A call made with an OAuth bearer token rather than a key — how a bot mints its OWN API key,
@@ -206,11 +236,19 @@ impl Client {
             .json(body)
             .send()
             .await
-            .map_err(|e| ImmichError { path: path.to_string(), status: 0, body: e.to_string() })?;
+            .map_err(|e| ImmichError {
+                path: path.to_string(),
+                status: 0,
+                body: e.to_string(),
+            })?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            return Err(ImmichError { path: path.to_string(), status, body });
+            return Err(ImmichError {
+                path: path.to_string(),
+                status,
+                body,
+            });
         }
         let text = response.text().await.unwrap_or_default();
         if text.is_empty() {
@@ -218,7 +256,11 @@ impl Client {
         }
         serde_json::from_str(&text)
             .map(Some)
-            .map_err(|e| ImmichError { path: path.to_string(), status: 200, body: e.to_string() })
+            .map_err(|e| ImmichError {
+                path: path.to_string(),
+                status: 200,
+                body: e.to_string(),
+            })
     }
 
     /// A multipart upload, with a longer budget than a JSON call: a photo takes time to send.
@@ -238,16 +280,25 @@ impl Client {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| ImmichError { path: path.to_string(), status: 0, body: e.to_string() })?;
+            .map_err(|e| ImmichError {
+                path: path.to_string(),
+                status: 0,
+                body: e.to_string(),
+            })?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            return Err(ImmichError { path: path.to_string(), status, body });
+            return Err(ImmichError {
+                path: path.to_string(),
+                status,
+                body,
+            });
         }
-        response
-            .json()
-            .await
-            .map_err(|e| ImmichError { path: path.to_string(), status: 200, body: e.to_string() })
+        response.json().await.map_err(|e| ImmichError {
+            path: path.to_string(),
+            status: 200,
+            body: e.to_string(),
+        })
     }
 
     pub async fn get(&self, path: &str, auth: &Auth<'_>) -> Result<Option<Value>, ImmichError> {
@@ -274,14 +325,19 @@ impl Client {
         for (name, value) in self.identity(auth) {
             request = request.header(name, value);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| ImmichError { path: path.to_string(), status: 0, body: e.to_string() })?;
+        let response = request.send().await.map_err(|e| ImmichError {
+            path: path.to_string(),
+            status: 0,
+            body: e.to_string(),
+        })?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            return Err(ImmichError { path: path.to_string(), status, body });
+            return Err(ImmichError {
+                path: path.to_string(),
+                status,
+                body,
+            });
         }
         Ok(())
     }
@@ -292,13 +348,19 @@ impl Client {
         auth: &Auth<'_>,
         body: &Value,
     ) -> Result<Option<Value>, ImmichError> {
-        self.json(reqwest::Method::POST, path, auth, Some(body)).await
+        self.json(reqwest::Method::POST, path, auth, Some(body))
+            .await
     }
 
     /// The admins' own view of an album. Used by the boot probe rather than by the read paths,
     /// which choose a credential through `access`.
-    pub async fn get_album(&self, album_id: &str, auth: &Auth<'_>) -> Result<Option<Value>, ImmichError> {
-        self.get(&format!("/albums/{album_id}?withoutAssets=true"), auth).await
+    pub async fn get_album(
+        &self,
+        album_id: &str,
+        auth: &Auth<'_>,
+    ) -> Result<Option<Value>, ImmichError> {
+        self.get(&format!("/albums/{album_id}?withoutAssets=true"), auth)
+            .await
     }
 }
 
@@ -317,8 +379,14 @@ mod tests {
         assert!(refuse_doubled_api_prefix("/users/profile-image").is_ok());
         assert!(refuse_doubled_api_prefix("/assets/a1/original").is_ok());
         let doubled = refuse_doubled_api_prefix("/api/users/profile-image").unwrap_err();
-        assert_eq!(doubled.status, 0, "not an Immich answer — a mistake in this crate");
-        assert!(doubled.body.contains("/api"), "the message names the path it refused");
+        assert_eq!(
+            doubled.status, 0,
+            "not an Immich answer — a mistake in this crate"
+        );
+        assert!(
+            doubled.body.contains("/api"),
+            "the message names the path it refused"
+        );
         assert!(refuse_doubled_api_prefix("/api").is_err());
     }
 
@@ -327,12 +395,25 @@ mod tests {
     /// Reading just 404 as "cannot see" makes every stand-in's asset look like a hard failure.
     #[test]
     fn a_read_this_credential_may_not_make_counts_as_not_visible() {
-        let invisible = |status| ImmichError { path: "/assets/x".into(), status, body: String::new() };
-        assert!(invisible(400).is_not_visible(), "the no-asset.read-access answer");
+        let invisible = |status| ImmichError {
+            path: "/assets/x".into(),
+            status,
+            body: String::new(),
+        };
+        assert!(
+            invisible(400).is_not_visible(),
+            "the no-asset.read-access answer"
+        );
         assert!(invisible(403).is_not_visible());
         assert!(invisible(404).is_not_visible(), "a genuinely absent asset");
-        assert!(!invisible(500).is_not_visible(), "a server fault is not a visibility answer");
-        assert!(!invisible(0).is_not_visible(), "a transport failure is not a visibility answer");
+        assert!(
+            !invisible(500).is_not_visible(),
+            "a server fault is not a visibility answer"
+        );
+        assert!(
+            !invisible(0).is_not_visible(),
+            "a transport failure is not a visibility answer"
+        );
     }
 
     use super::*;
@@ -340,17 +421,29 @@ mod tests {
     #[test]
     fn a_cache_miss_style_failure_is_classified_by_status_not_by_text() {
         // The whole point of the typed error: `/-> 404/` becomes a field comparison.
-        let not_found = ImmichError { path: "/assets/x".into(), status: 404, body: String::new() };
+        let not_found = ImmichError {
+            path: "/assets/x".into(),
+            status: 404,
+            body: String::new(),
+        };
         assert!(not_found.is_not_found());
         assert!(!not_found.is_forbidden());
         // A body that happens to contain the word must not change the answer.
-        let strange = ImmichError { path: "/assets/x".into(), status: 500, body: "404 Not found".into() };
+        let strange = ImmichError {
+            path: "/assets/x".into(),
+            status: 500,
+            body: "404 Not found".into(),
+        };
         assert!(!strange.is_not_found());
     }
 
     #[test]
     fn the_message_keeps_the_shape_the_typescript_logs() {
-        let e = ImmichError { path: "/albums/a1".into(), status: 400, body: "{\"error\":\"x\"}".into() };
+        let e = ImmichError {
+            path: "/albums/a1".into(),
+            status: 400,
+            body: "{\"error\":\"x\"}".into(),
+        };
         assert_eq!(e.message(), "immich /albums/a1 -> 400 {\"error\":\"x\"}");
     }
 }
@@ -382,7 +475,10 @@ pub async fn public_share_link_meta(key: &str) -> Option<ShareMeta> {
     }
     let link: Value = response.json().await.ok()?;
     Some(ShareMeta {
-        album_name: link.pointer("/album/albumName").and_then(|v| v.as_str()).map(str::to_string),
+        album_name: link
+            .pointer("/album/albumName")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         cover_asset_id: link
             .pointer("/album/albumThumbnailAssetId")
             .and_then(|v| v.as_str())
@@ -433,11 +529,17 @@ pub async fn users_by_id(client: &Client, max_age_ms: i64) -> USERS {
         Ok(Some(Value::Array(rows))) => {
             let mut users = USERS::new();
             for row in rows {
-                let Some(id) = row.get("id").and_then(|v| v.as_str()) else { continue };
+                let Some(id) = row.get("id").and_then(|v| v.as_str()) else {
+                    continue;
+                };
                 users.insert(
                     id.to_string(),
                     UserInfo {
-                        name: row.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        name: row
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
                         utility: crate::config::is_utility_email(
                             row.get("email").and_then(|v| v.as_str()),
                         ),
@@ -476,13 +578,24 @@ pub fn note_user_renamed(user_id: &str, name: &str) {
 /// The name of a HUMAN owner, or `None` for a bot or an unknown id.
 pub async fn owner_name(client: &Client, owner_id: &str) -> Option<String> {
     let users = users_by_id(client, 60_000).await;
-    users.get(owner_id).filter(|u| !u.utility).map(|u| u.name.clone())
+    users
+        .get(owner_id)
+        .filter(|u| !u.utility)
+        .map(|u| u.name.clone())
 }
 
 /// A share link by its key, or `None` when there is no such link.
 pub async fn get_shared_link_by_key(client: &Client, key: &str) -> Option<Value> {
-    let links = client.get("/shared-links", &Auth::Admin).await.ok().flatten()?;
-    links.as_array()?.iter().find(|l| l.get("key").and_then(|k| k.as_str()) == Some(key)).cloned()
+    let links = client
+        .get("/shared-links", &Auth::Admin)
+        .await
+        .ok()
+        .flatten()?;
+    links
+        .as_array()?
+        .iter()
+        .find(|l| l.get("key").and_then(|k| k.as_str()) == Some(key))
+        .cloned()
 }
 
 fn now_ms() -> i64 {
@@ -502,7 +615,9 @@ pub const STUB_JPEG_B64: &str = concat!(
 
 pub fn stub_jpeg() -> Vec<u8> {
     use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.decode(STUB_JPEG_B64).unwrap_or_default()
+    base64::engine::general_purpose::STANDARD
+        .decode(STUB_JPEG_B64)
+        .unwrap_or_default()
 }
 
 /// The upload path. Multipart, with the filename driving Immich's type detection — so `ext` is not
@@ -515,12 +630,21 @@ pub async fn upload_asset(
     taken_at: Option<&str>,
 ) -> Result<Value, ImmichError> {
     use sha1::{Digest, Sha1};
-    let stamp = taken_at.map(str::to_string).unwrap_or_else(crate::config::iso_now);
-    let digest: String = Sha1::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let stamp = taken_at
+        .map(str::to_string)
+        .unwrap_or_else(crate::config::iso_now);
+    let digest: String = Sha1::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let part = reqwest::multipart::Part::bytes(bytes.to_vec())
         .file_name(filename.to_string())
         .mime_str("application/octet-stream")
-        .map_err(|e| ImmichError { path: "/assets".into(), status: 0, body: e.to_string() })?;
+        .map_err(|e| ImmichError {
+            path: "/assets".into(),
+            status: 0,
+            body: e.to_string(),
+        })?;
     let form = reqwest::multipart::Form::new()
         .text("deviceAssetId", format!("isa-{digest}"))
         .text("deviceId", "immich-shared-albums")
@@ -550,6 +674,31 @@ pub async fn add_to_album(
 /// Apply what a ref knows onto the local asset. Every field is optional and the whole call is
 /// best-effort: metadata is decoration on a photo whose pixels are already correct, so a failure is
 /// logged rather than failing the materialisation.
+/// What a stub's description reads: the origin's own text, then the credit line — the one
+/// composition everywhere a description is written, so a refresh rebuilds exactly what
+/// materialise first wrote.
+pub fn composed_description(reference: &crate::immich::refs::AssetRef) -> String {
+    let credit = reference
+        .contributor
+        .display_name
+        .is_empty()
+        .then(String::new)
+        .unwrap_or_else(|| format!("Shared by {}", reference.contributor.display_name));
+    [
+        reference
+            .exif
+            .as_ref()
+            .and_then(|e| e.description.clone())
+            .unwrap_or_default(),
+        credit,
+    ]
+    .iter()
+    .filter(|part| !part.is_empty())
+    .cloned()
+    .collect::<Vec<_>>()
+    .join("\n\n")
+}
+
 pub async fn apply_ref_metadata(
     client: &Client,
     asset_id: &str,
@@ -570,18 +719,7 @@ pub async fn apply_ref_metadata(
     }
     // The credit names the person, so a viewer sees who a photo came from rather than an anonymous
     // stub. A previous hop's credit line was already stripped when the ref was built.
-    let credit = reference
-        .contributor
-        .display_name
-        .is_empty()
-        .then(String::new)
-        .unwrap_or_else(|| format!("Shared by {}", reference.contributor.display_name));
-    let description = [reference.exif.as_ref().and_then(|e| e.description.clone()).unwrap_or_default(), credit]
-        .iter()
-        .filter(|part| !part.is_empty())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let description = composed_description(reference);
     if !description.is_empty() {
         meta.insert("description".into(), serde_json::json!(description));
     }

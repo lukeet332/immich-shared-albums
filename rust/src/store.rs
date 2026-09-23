@@ -201,7 +201,10 @@ impl Store {
         }
         let conn = Connection::open(Path::new(data_dir).join("state.db"))
             .map_err(|e| StoreError::Sqlite(e.to_string()))?;
-        let mut store = Store { conn: Mutex::new(conn), state: Mutex::new(Collections::default()) };
+        let mut store = Store {
+            conn: Mutex::new(conn),
+            state: Mutex::new(Collections::default()),
+        };
         store.init()?;
         Ok(store)
     }
@@ -209,7 +212,10 @@ impl Store {
     /// An in-memory store, for tests. Same schema and migration chain as a real one.
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory().map_err(|e| StoreError::Sqlite(e.to_string()))?;
-        let mut store = Store { conn: Mutex::new(conn), state: Mutex::new(Collections::default()) };
+        let mut store = Store {
+            conn: Mutex::new(conn),
+            state: Mutex::new(Collections::default()),
+        };
         store.init()?;
         Ok(store)
     }
@@ -219,7 +225,9 @@ impl Store {
         // Locking per helper instead deadlocks: `std::sync::Mutex` is not reentrant.
         let conn = self.conn.lock().unwrap();
         conn.execute_batch("PRAGMA journal_mode = WAL;")?;
-        conn.execute_batch("CREATE TABLE IF NOT EXISTS kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);")?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )?;
         refuse_pre_v1(&conn)?;
         let mut current = user_version(&conn)?;
         create_schema(&conn)?;
@@ -247,13 +255,21 @@ impl Store {
         // A row cannot be assigned a direction after the fact and both halves rebuild from living
         // sources, so the migration clears rather than guesses.
         if current == 3 {
-            add_column_if_missing(&conn, "published_albums", "direction", "TEXT NOT NULL DEFAULT 'to-them'")?;
+            add_column_if_missing(
+                &conn,
+                "published_albums",
+                "direction",
+                "TEXT NOT NULL DEFAULT 'to-them'",
+            )?;
             conn.execute_batch("DELETE FROM published_albums;")?;
             set_user_version(&conn, 4)?;
             current = 4;
         }
         if current != SCHEMA_VERSION {
-            return Err(StoreError::SchemaVersion { found: current, expected: SCHEMA_VERSION });
+            return Err(StoreError::SchemaVersion {
+                found: current,
+                expected: SCHEMA_VERSION,
+            });
         }
         // Indexes naming a MIGRATED column belong after the chain: a fresh table has the column,
         // a migrated one gains it in the branch above, and IF NOT EXISTS runs either way.
@@ -318,7 +334,13 @@ impl Store {
         conn.execute(
             "INSERT OR IGNORE INTO seen (mapping, checksum, localAsset, originAsset, storedFull)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![mapping, checksum, local_asset, origin_asset, stored_full as i64],
+            rusqlite::params![
+                mapping,
+                checksum,
+                local_asset,
+                origin_asset,
+                stored_full as i64
+            ],
         )?;
         Ok(())
     }
@@ -425,9 +447,8 @@ impl Store {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         {
-            let mut stmt = tx.prepare(
-                "INSERT OR IGNORE INTO offered (mapping, asset) VALUES (?1, ?2)",
-            )?;
+            let mut stmt =
+                tx.prepare("INSERT OR IGNORE INTO offered (mapping, asset) VALUES (?1, ?2)")?;
             for asset in asset_ids {
                 stmt.execute(rusqlite::params![mapping, asset])?;
             }
@@ -452,6 +473,15 @@ impl Store {
             }
         }
         Ok(false)
+    }
+
+    /// The mappings this asset was OFFERED to — the albums to tell "look again" when the asset's
+    /// own metadata is edited, since no album row moves and the version handshake cannot see it.
+    pub fn offered_mappings_for(&self, asset_id: &str) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT mapping FROM offered WHERE asset = ?1")?;
+        let rows = stmt.query_map([asset_id], |r| r.get::<_, String>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     /// Real revocation: an asset that left the album loses its row. Returns the revoked ASSET ids,
@@ -756,7 +786,12 @@ impl Store {
             .and_then(|raw| serde_json::from_str(&raw).ok());
 
         let mut state = self.state.lock().unwrap();
-        *state = Collections { peers, mappings, contributors, identity };
+        *state = Collections {
+            peers,
+            mappings,
+            contributors,
+            identity,
+        };
         Ok(())
     }
 
@@ -903,7 +938,9 @@ fn add_column_if_missing(
         .collect();
     drop(stmt);
     if !existing.iter().any(|c| c == column) {
-        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition};"))?;
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition};"
+        ))?;
     }
     Ok(())
 }
@@ -1118,8 +1155,10 @@ mod tests {
     #[test]
     fn a_pre_v1_store_is_refused_with_an_actionable_message() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);").unwrap();
-        conn.execute("INSERT INTO kv (name, value) VALUES ('keys', '{}')", []).unwrap();
+        conn.execute_batch("CREATE TABLE kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
+        conn.execute("INSERT INTO kv (name, value) VALUES ('keys', '{}')", [])
+            .unwrap();
         drop(conn);
         // Build the store over the same file-backed path to exercise init().
         let dir = std::env::temp_dir().join(format!("isa-prev1-{}", std::process::id()));
@@ -1127,8 +1166,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         {
             let c = Connection::open(dir.join("state.db")).unwrap();
-            c.execute_batch("CREATE TABLE kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);").unwrap();
-            c.execute("INSERT INTO kv (name, value) VALUES ('keys', '{}')", []).unwrap();
+            c.execute_batch("CREATE TABLE kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);")
+                .unwrap();
+            c.execute("INSERT INTO kv (name, value) VALUES ('keys', '{}')", [])
+                .unwrap();
         }
         match Store::open(dir.to_str().unwrap()).err() {
             Some(StoreError::PreV1) => {}
@@ -1147,7 +1188,10 @@ mod tests {
             c.execute_batch("PRAGMA user_version = 99;").unwrap();
         }
         match Store::open(dir.to_str().unwrap()).err() {
-            Some(StoreError::SchemaVersion { found: 99, expected: 4 }) => {}
+            Some(StoreError::SchemaVersion {
+                found: 99,
+                expected: 4,
+            }) => {}
             other => panic!("expected a v99 refusal, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -1162,21 +1206,32 @@ mod tests {
         s.seen_add("m1", "sum-a", "asset-1", None, false).unwrap();
         assert!(s.ledger_with_origin("asset-1").unwrap().is_none());
         // The materialiser's row, under its own mapping, is the one that can be resolved to a source.
-        s.seen_add("m2", "sum-b", "asset-1", Some("origin-1"), false).unwrap();
+        s.seen_add("m2", "sum-b", "asset-1", Some("origin-1"), false)
+            .unwrap();
         let best = s.ledger_by_asset("asset-1").unwrap().unwrap();
         assert_eq!(best.origin_asset.as_deref(), Some("origin-1"));
-        assert_eq!(s.ledger_with_origin("asset-1").unwrap().unwrap().origin_asset.as_deref(), Some("origin-1"));
+        assert_eq!(
+            s.ledger_with_origin("asset-1")
+                .unwrap()
+                .unwrap()
+                .origin_asset
+                .as_deref(),
+            Some("origin-1")
+        );
     }
 
     #[test]
     fn seen_add_never_upgrades_stored_full() {
         let s = store();
-        s.seen_add("m1", "sum", "asset", Some("origin"), false).unwrap();
-        s.seen_add("m1", "sum", "asset", Some("origin"), true).unwrap();
+        s.seen_add("m1", "sum", "asset", Some("origin"), false)
+            .unwrap();
+        s.seen_add("m1", "sum", "asset", Some("origin"), true)
+            .unwrap();
         // INSERT OR IGNORE: the existing row stands. Upgrade is remove-then-add.
         assert!(!s.ledger_by_asset("asset").unwrap().unwrap().stored_full);
         s.seen_remove_entry("m1", "sum").unwrap();
-        s.seen_add("m1", "sum", "asset", Some("origin"), true).unwrap();
+        s.seen_add("m1", "sum", "asset", Some("origin"), true)
+            .unwrap();
         assert!(s.ledger_by_asset("asset").unwrap().unwrap().stored_full);
     }
 
@@ -1184,19 +1239,37 @@ mod tests {
     fn adopted_round_trips_as_null_never_zero() {
         let s = store();
         let m = |adopted: Option<bool>| Mapping {
-            id: "m1".into(), role: Role::Member, album_id: "a1".into(), album_name: "A".into(),
-            peer: "p1".into(), remote_album_id: None, remote_mapping_id: None,
-            permissions: "contribute".into(), host_slug: None, via: "link".into(),
-            for_peer_user_ids: None, album_owner_name: None, album_owner_id: None,
-            adopted, reunified: None, dead: false, dead_at: None, dead_reason: None,
-            fail_count: None, local_version: None, remote_version: None,
-            comment_count: None, remote_comment_count: None,
+            id: "m1".into(),
+            role: Role::Member,
+            album_id: "a1".into(),
+            album_name: "A".into(),
+            peer: "p1".into(),
+            remote_album_id: None,
+            remote_mapping_id: None,
+            permissions: "contribute".into(),
+            host_slug: None,
+            via: "link".into(),
+            for_peer_user_ids: None,
+            album_owner_name: None,
+            album_owner_id: None,
+            adopted,
+            reunified: None,
+            dead: false,
+            dead_at: None,
+            dead_reason: None,
+            fail_count: None,
+            local_version: None,
+            remote_version: None,
+            comment_count: None,
+            remote_comment_count: None,
         };
         s.state.lock().unwrap().mappings = vec![m(None)];
         s.save().unwrap();
         let conn = s.conn.lock().unwrap();
         let stored: Option<i64> = conn
-            .query_row("SELECT adopted FROM mappings WHERE id = 'm1'", [], |r| r.get(0))
+            .query_row("SELECT adopted FROM mappings WHERE id = 'm1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(stored, None, "unset must be SQL NULL, never 0");
         drop(conn);
@@ -1205,7 +1278,9 @@ mod tests {
         s.save().unwrap();
         let conn = s.conn.lock().unwrap();
         let stored: Option<i64> = conn
-            .query_row("SELECT adopted FROM mappings WHERE id = 'm1'", [], |r| r.get(0))
+            .query_row("SELECT adopted FROM mappings WHERE id = 'm1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(stored, Some(1));
     }
@@ -1219,7 +1294,10 @@ mod tests {
         // No mappings -> never allowed, not "allowed by default".
         assert!(!s.offered_allows(&[], "a1").unwrap());
         // Removal is real revocation.
-        assert_eq!(s.offered_reconcile("m1", &["a2".into()]).unwrap(), vec!["a1".to_string()]);
+        assert_eq!(
+            s.offered_reconcile("m1", &["a2".into()]).unwrap(),
+            vec!["a1".to_string()]
+        );
         assert!(!s.offered_allows(&["m1".into()], "a1").unwrap());
     }
 
@@ -1227,37 +1305,76 @@ mod tests {
     fn published_albums_keep_directions_and_peers_apart() {
         let s = store();
         let album = |name: &str, owner: &str| OwnedAlbum {
-            name: name.into(), asset_count: 3, start_date: Some("2026-01-01".into()),
-            end_date: None, owner_name: "Nan".into(), owner_user_id: Some(owner.into()),
+            name: name.into(),
+            asset_count: 3,
+            start_date: Some("2026-01-01".into()),
+            end_date: None,
+            owner_name: "Nan".into(),
+            owner_user_id: Some(owner.into()),
         };
-        s.published_albums_set("peer-1", Direction::ToThem, "u1", &[album("Zed", "u1"), album("Ann", "u1")]).unwrap();
-        s.published_albums_set("peer-1", Direction::FromThem, "u1", &[album("Other", "u1")]).unwrap();
-        s.published_albums_set("peer-2", Direction::ToThem, "u1", &[album("Third", "u1")]).unwrap();
+        s.published_albums_set(
+            "peer-1",
+            Direction::ToThem,
+            "u1",
+            &[album("Zed", "u1"), album("Ann", "u1")],
+        )
+        .unwrap();
+        s.published_albums_set("peer-1", Direction::FromThem, "u1", &[album("Other", "u1")])
+            .unwrap();
+        s.published_albums_set("peer-2", Direction::ToThem, "u1", &[album("Third", "u1")])
+            .unwrap();
 
         let to_them = s.published_albums_for("peer-1", Direction::ToThem).unwrap();
         assert_eq!(to_them.len(), 2);
         assert_eq!(to_them[0].name, "Ann", "ordered by name");
         assert_eq!(to_them[1].name, "Zed");
-        assert_eq!(s.published_albums_for("peer-1", Direction::FromThem).unwrap().len(), 1);
-        assert_eq!(s.published_albums_for("peer-2", Direction::ToThem).unwrap()[0].name, "Third");
+        assert_eq!(
+            s.published_albums_for("peer-1", Direction::FromThem)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            s.published_albums_for("peer-2", Direction::ToThem).unwrap()[0].name,
+            "Third"
+        );
     }
 
     #[test]
     fn replacing_a_peers_whole_index_clears_an_owner_who_went_silent() {
         let s = store();
         let album = |name: &str, owner: &str| OwnedAlbum {
-            name: name.into(), asset_count: 1, start_date: None, end_date: None,
-            owner_name: "Nan".into(), owner_user_id: Some(owner.into()),
+            name: name.into(),
+            asset_count: 1,
+            start_date: None,
+            end_date: None,
+            owner_name: "Nan".into(),
+            owner_user_id: Some(owner.into()),
         };
-        s.published_albums_replace_peer("p", Direction::ToThem, &[album("A", "u1"), album("B", "u2")]).unwrap();
-        assert_eq!(s.published_albums_for("p", Direction::ToThem).unwrap().len(), 2);
+        s.published_albums_replace_peer(
+            "p",
+            Direction::ToThem,
+            &[album("A", "u1"), album("B", "u2")],
+        )
+        .unwrap();
+        assert_eq!(
+            s.published_albums_for("p", Direction::ToThem)
+                .unwrap()
+                .len(),
+            2
+        );
         // Silence about u2 clears it; an empty index is an answer, not a no-op.
-        s.published_albums_replace_peer("p", Direction::ToThem, &[album("A", "u1")]).unwrap();
+        s.published_albums_replace_peer("p", Direction::ToThem, &[album("A", "u1")])
+            .unwrap();
         let left = s.published_albums_for("p", Direction::ToThem).unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].name, "A");
-        s.published_albums_replace_peer("p", Direction::ToThem, &[]).unwrap();
-        assert!(s.published_albums_for("p", Direction::ToThem).unwrap().is_empty());
+        s.published_albums_replace_peer("p", Direction::ToThem, &[])
+            .unwrap();
+        assert!(s
+            .published_albums_for("p", Direction::ToThem)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1300,9 +1417,14 @@ mod tests {
     #[test]
     #[ignore]
     fn reads_a_real_node_written_state_db() {
-        let path = std::env::var("ISA_COMPAT_DB").expect("ISA_COMPAT_DB must name a state.db directory");
+        let path =
+            std::env::var("ISA_COMPAT_DB").expect("ISA_COMPAT_DB must name a state.db directory");
         let s = Store::open(&path).expect("open a Node-written store");
-        assert_eq!(s.user_version().unwrap(), 4, "the real database is at schema v4");
+        assert_eq!(
+            s.user_version().unwrap(),
+            4,
+            "the real database is at schema v4"
+        );
 
         let state = s.state.lock().unwrap();
         let identity = state.identity.as_ref().expect("identity row");
@@ -1322,7 +1444,10 @@ mod tests {
         let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
         let derived = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(signing.verifying_key().to_bytes());
-        assert_eq!(derived, identity.public, "the seed derives the stored public key");
+        assert_eq!(
+            derived, identity.public,
+            "the seed derives the stored public key"
+        );
 
         for p in &state.peers {
             // NULL is a legitimate value here and the real database has one: the TypeScript writes
@@ -1335,7 +1460,11 @@ mod tests {
                 "a peer's protocol is unrecorded or 2, never something else: {:?}",
                 p.protocol
             );
-            assert_eq!(p.pub_key, p.pub_key.trim(), "pub key is a clean base64url string");
+            assert_eq!(
+                p.pub_key,
+                p.pub_key.trim(),
+                "pub key is a clean base64url string"
+            );
             assert!(!p.name.is_empty());
         }
         for m in &state.mappings {
@@ -1394,20 +1523,35 @@ mod contributor_persistence_tests {
 
         {
             let s = Store::open(&path).unwrap();
-            s.state.lock().unwrap().contributors.insert("person-a".into(), contributor("a"));
+            s.state
+                .lock()
+                .unwrap()
+                .contributors
+                .insert("person-a".into(), contributor("a"));
             s.save().unwrap();
             // A SECOND save with another contributor added — the shape the materialiser creates:
             // a host stand-in first, then one per remote person.
-            s.state.lock().unwrap().contributors.insert("person-b".into(), contributor("b"));
+            s.state
+                .lock()
+                .unwrap()
+                .contributors
+                .insert("person-b".into(), contributor("b"));
             s.save().unwrap();
         }
 
         let reloaded = Store::open(&path).unwrap();
         let collections = reloaded.state.lock().unwrap();
-        assert_eq!(collections.contributors.len(), 2, "both contributors must persist");
+        assert_eq!(
+            collections.contributors.len(),
+            2,
+            "both contributors must persist"
+        );
         assert!(collections.contributors.contains_key("person-a"));
         assert!(collections.contributors.contains_key("person-b"));
-        assert_eq!(collections.contributors["person-b"].api_key.as_deref(), Some("key-b"));
+        assert_eq!(
+            collections.contributors["person-b"].api_key.as_deref(),
+            Some("key-b")
+        );
         drop(collections);
         let _ = std::fs::remove_dir_all(&dir);
     }

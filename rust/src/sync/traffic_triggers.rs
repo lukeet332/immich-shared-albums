@@ -9,10 +9,25 @@ pub enum TrafficTrigger {
     Session,
     /// A comment was written — push it now rather than at the next comment tick.
     Comment,
+    /// A photo's own metadata was edited (a caption, a date, a place). None of that moves an
+    /// album's `updatedAt`, so the version handshake cannot see it — the albums the photo is
+    /// offered to must be told to look again, or a joiner keeps a caption its origin just fixed.
+    AssetMeta,
 }
 
 fn is_write(method: &str) -> bool {
     matches!(method, "POST" | "PUT" | "PATCH" | "DELETE")
+}
+
+/// An asset metadata edit: `PUT /api/assets/:id` and nothing else. The upload (`POST /api/assets`)
+/// reaches mirrors through the album writes that follow it, and every byte or search path is a
+/// GET — the deliberate no-trigger majority the tests pin.
+fn is_asset_meta_edit(verb: &str, path: &str) -> bool {
+    matches!(verb, "PUT" | "PATCH")
+        && path
+            .strip_prefix("/api/assets/")
+            .map(|rest| !rest.is_empty() && !rest.contains('/'))
+            .unwrap_or(false)
 }
 
 /// Which requests are worth acting on — measured, not guessed.
@@ -28,6 +43,9 @@ pub fn traffic_trigger_for(method: &str, path: &str) -> Option<TrafficTrigger> {
     // index.
     if is_write(&verb) && (path == "/api/albums" || path.starts_with("/api/albums/")) {
         return Some(TrafficTrigger::Index);
+    }
+    if is_asset_meta_edit(&verb, path) {
+        return Some(TrafficTrigger::AssetMeta);
     }
     if verb == "POST" && path == "/api/activities" {
         return Some(TrafficTrigger::Comment);
@@ -47,9 +65,18 @@ mod tests {
 
     #[test]
     fn an_album_write_is_the_index_changing() {
-        assert_eq!(traffic_trigger_for("POST", "/api/albums"), Some(TrafficTrigger::Index));
-        assert_eq!(traffic_trigger_for("PUT", "/api/albums/abc/assets"), Some(TrafficTrigger::Index));
-        assert_eq!(traffic_trigger_for("DELETE", "/api/albums/abc"), Some(TrafficTrigger::Index));
+        assert_eq!(
+            traffic_trigger_for("POST", "/api/albums"),
+            Some(TrafficTrigger::Index)
+        );
+        assert_eq!(
+            traffic_trigger_for("PUT", "/api/albums/abc/assets"),
+            Some(TrafficTrigger::Index)
+        );
+        assert_eq!(
+            traffic_trigger_for("DELETE", "/api/albums/abc"),
+            Some(TrafficTrigger::Index)
+        );
         // A READ of the same path changes nothing.
         assert_eq!(traffic_trigger_for("GET", "/api/albums/abc"), None);
     }
@@ -58,14 +85,46 @@ mod tests {
     fn the_byte_path_is_deliberately_not_a_trigger() {
         // Every thumbnail on screen goes through here; a credential fingerprint in front of it is the
         // cost this rule exists to avoid.
-        assert_eq!(traffic_trigger_for("GET", "/api/assets/abc/thumbnail"), None);
+        assert_eq!(
+            traffic_trigger_for("GET", "/api/assets/abc/thumbnail"),
+            None
+        );
         assert_eq!(traffic_trigger_for("GET", "/api/search/metadata"), None);
     }
 
     #[test]
+    fn a_caption_edit_is_the_asset_telling_its_albums_to_look_again() {
+        assert_eq!(
+            traffic_trigger_for("PUT", "/api/assets/abc123"),
+            Some(TrafficTrigger::AssetMeta)
+        );
+        assert_eq!(
+            traffic_trigger_for("PATCH", "/api/assets/abc123"),
+            Some(TrafficTrigger::AssetMeta)
+        );
+        // The upload, byte paths and deeper routes under one asset are not metadata edits.
+        assert_eq!(traffic_trigger_for("POST", "/api/assets"), None);
+        assert_eq!(
+            traffic_trigger_for("PUT", "/api/assets/abc/thumbnail"),
+            None
+        );
+        assert_eq!(traffic_trigger_for("GET", "/api/assets/abc"), None);
+        assert_eq!(traffic_trigger_for("PUT", "/api/assets/"), None);
+    }
+
+    #[test]
     fn a_comment_and_a_sign_in_are_the_other_two() {
-        assert_eq!(traffic_trigger_for("POST", "/api/activities"), Some(TrafficTrigger::Comment));
-        assert_eq!(traffic_trigger_for("POST", "/api/auth/login"), Some(TrafficTrigger::Session));
-        assert_eq!(traffic_trigger_for("GET", "/api/users/me"), Some(TrafficTrigger::Session));
+        assert_eq!(
+            traffic_trigger_for("POST", "/api/activities"),
+            Some(TrafficTrigger::Comment)
+        );
+        assert_eq!(
+            traffic_trigger_for("POST", "/api/auth/login"),
+            Some(TrafficTrigger::Session)
+        );
+        assert_eq!(
+            traffic_trigger_for("GET", "/api/users/me"),
+            Some(TrafficTrigger::Session)
+        );
     }
 }
