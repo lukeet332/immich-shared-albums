@@ -56,14 +56,16 @@ pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, 
     }
 
     // REVOCATION, per photo: an asset removed from the album must stop being SERVED to this
-    // mapping's peer, not merely stop being advertised.
+    // mapping's peer, not merely stop being advertised. The revoked ids are ALSO the push's
+    // removals: the origin's stub for a deleted contribution has no other way to learn its source
+    // is gone (a push carries only adds unless we say otherwise).
     let current: Vec<String> = assets
         .iter()
         .filter_map(|a| a.get("id").and_then(|v| v.as_str()).map(str::to_string))
         .collect();
-    match state.store.offered_reconcile(&mapping.id, &current) {
-        Ok(n) if n > 0 => crate::log!("revoked {n} byte entitlement(s) on \"{}\"", mapping.album_name),
-        _ => {}
+    let revoked = state.store.offered_reconcile(&mapping.id, &current).unwrap_or_default();
+    if !revoked.is_empty() {
+        crate::log!("revoked {} byte entitlement(s) on \"{}\"", revoked.len(), mapping.album_name);
     }
 
     let users = crate::immich::client::users_by_id(client, 60_000).await;
@@ -72,8 +74,9 @@ pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, 
 
     // A photo held back for Immich's measurement is NOT "in sync": the watcher stores the album's
     // version cursor on an in-sync answer, and a stored cursor would skip this album until something
-    // else changed it — which is how a held-back photo would never be offered again.
-    if fresh.is_empty() {
+    // else changed it — which is how a held-back photo would never be offered again. A PENDING
+    // REMOVAL is equally not in sync: the push below must still go out, with an empty `add`.
+    if fresh.is_empty() && revoked.is_empty() {
         return Ok(PushOutcome { in_sync: awaiting_shape == 0 });
     }
 
@@ -87,6 +90,7 @@ pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, 
         .iter()
         .filter_map(|asset| refs::asset_to_ref(asset, &users, ledger))
         .collect();
+    let mut remove = revoked;
 
     // OFFERING IS THE GRANT: the peer materialises DURING the push, fetching stub bytes back from
     // us before any response lands — so entitlement must be recorded FIRST.
@@ -104,12 +108,25 @@ pub async fn push_album_refs(state: &State, client: &Client, mapping: &Mapping, 
     let mut push_failed = false;
     let mut retire: Option<String> = None;
 
-    for batch in add.chunks(PUSH_BATCH) {
+    // The removals ride the FIRST batch (an empty `add` is fine): the origin's stubs for them are
+    // purged there, and every later batch is adds only. Idempotent — a removal for a row already
+    // gone is a no-op, so a retry after a failed push cannot double-delete.
+    const EMPTY_BATCH: [AssetRef; 0] = [];
+    let mut batches: Vec<&[AssetRef]> = add.chunks(PUSH_BATCH).collect();
+    if batches.is_empty() && !remove.is_empty() {
+        batches.push(&EMPTY_BATCH);
+    }
+    for batch in &batches {
         let header = RequestHeader {
             path: format!("/albums/{target}/refs"),
             ..Default::default()
         };
-        let body = serde_json::json!({ "add": batch }).to_string();
+        let mut body = serde_json::json!({ "add": batch });
+        if !remove.is_empty() {
+            body["remove"] = serde_json::json!(remove);
+            remove = Vec::new();
+        }
+        let body = body.to_string();
         let (head, response) = match transport.round_trip(peer, &header, Some(body.as_bytes())).await {
             Ok(v) => v,
             Err(e) => {
@@ -496,42 +513,57 @@ async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Res
     let updated_at = album.get("updatedAt").and_then(|v| v.as_str()).map(str::to_string);
 
     // HANDSHAKE: skip an untouched album entirely. `local_version` is stored only after a CLEAN
-    // cycle, so deferred refs keep re-offering rather than being silently written off.
+    // cycle, so deferred refs keep re-offering rather than being silently written off. One blind
+    // spot: a member deleting their own CONTRIBUTION from their library removes it from the album
+    // WITHOUT bumping `updatedAt` (Immich bumps on album edits, not on library deletes), so the
+    // version alone never re-offers. The album's own asset count is the cheap tell — a mirror holds
+    // origin stubs (ledger rows) plus this household's contributions (offered rows), so a count
+    // that shrank below what we still account for means something left, and the push below
+    // computes the real diff.
+    let expected_assets = state.store.seen_for_mapping(&mapping.id).map(|r| r.len()).unwrap_or(0)
+        + state.store.offered_count(&mapping.id).unwrap_or(0);
+    let album_count = album.get("assetCount").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     if let Some(updated_at) = updated_at.as_deref() {
-        if mapping.local_version.as_deref() == Some(updated_at) {
+        if mapping.local_version.as_deref() == Some(updated_at) && album_count >= expected_assets {
             return Ok(());
         }
     }
 
     if mapping.role == Role::Member {
         // NATIVE LEAVE: when the last human member leaves the mirror in the STOCK app (album
-        // settings -> Leave album), the sidecar cleans up everything the join created. No custom UI
-        // involved. The stand-ins are OURS, so their membership does not count as a human's.
+        // settings -> Leave album), the sidecar cleans up everything the join created — stubs,
+        // mirror, mapping. No custom UI involved. The stand-ins are OURS, so their membership does
+        // not count as a human's. An album read that omits the member list is treated as UNKNOWN
+        // rather than empty: a partial read must not read as "everyone left".
         let users = crate::immich::client::users_by_id(client, 60_000).await;
-        let humans = album
-            .get("albumUsers")
-            .and_then(|u| u.as_array())
-            .map(|list| {
-                list.iter()
-                    .filter(|entry| {
-                        entry
-                            .pointer("/user/id")
-                            .and_then(|v| v.as_str())
-                            .and_then(|id| users.get(id))
-                            .map(|u| !u.utility)
-                            .unwrap_or(false)
-                    })
-                    .count()
-            })
-            .unwrap_or(0);
-        if humans == 0 {
-            // Not ported yet (leave_album needs album-teardown). Logged rather than silently
-            // skipped, because a mirror with no human on it should not linger.
-            crate::log!(
-                "note: \"{}\" has no human member left, but leave_album is not ported yet",
-                mapping.album_name
-            );
-            return Ok(());
+        if let Some(list) = album.get("albumUsers").and_then(|u| u.as_array()) {
+            let humans = list
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .pointer("/user/id")
+                        .and_then(|v| v.as_str())
+                        .and_then(|id| users.get(id))
+                        .map(|u| !u.utility)
+                        .unwrap_or(false)
+                })
+                .count();
+            if humans == 0 {
+                crate::log!(
+                    "\"{}\" has no human member left — leaving the mirror natively",
+                    mapping.album_name
+                );
+                return match crate::sync::leave::leave_album(state, client, &mapping.id, true).await {
+                    Ok(outcome) => {
+                        crate::log!("left \"{}\" natively — {} stub(s) purged", mapping.album_name, outcome.purged);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        crate::log!("native leave of \"{}\" failed: {e} — the loops will retry", mapping.album_name);
+                        Ok(())
+                    }
+                };
+            }
         }
         // View-only: nothing to push.
         if mapping.permissions == "view" {

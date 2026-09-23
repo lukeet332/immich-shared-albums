@@ -144,7 +144,13 @@ tightening it later would be a visible cross-server behaviour change.
 
 ## Pushed refs report partial success
 
-The sender re-offers only the failed refs next cycle. Pushes are **chunked** (400 refs per
+The sender re-offers only the failed refs next cycle. A push body carries `add` (refs the peer
+should hold) and, additively, `remove` (origin asset ids the sender no longer holds): the receiver
+purges its own stubs for them, so a joiner deleting their contribution reclaims the origin's tile
+instead of leaving a stub whose source is gone. Both fields are optional — a peer that sends no
+`remove` behaves as before, and a receiver that does not read it ignores it — and a removal is
+idempotent by ledger row, so a retry after a failed push cannot double-delete. Purges stay guarded
+by the receiver's own rules (only utility-owned assets go). Pushes are **chunked** (400 refs per
 frame): the receiver's `ISA_MAX_BODY_KB` caps any one frame, an over-limit frame is answered
 with `413`/`body_too_large` rather than abandoned, and every client read carries a deadline —
 a hung peer costs one timeout, never a wedged loop. Reaching a peer has its own, shorter budget

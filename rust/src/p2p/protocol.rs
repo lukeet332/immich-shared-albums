@@ -371,6 +371,31 @@ mod tests {
         assert_eq!(majority_owner(&[]).as_deref(), None);
         assert_eq!(majority_owner(&[json!({})]).as_deref(), None);
     }
+
+    #[test]
+    fn removal_targets_name_only_rows_the_sender_actually_sourced() {
+        // Only rows that name a source matching the sender's list may be purged. The caller
+        // scopes the rows to the push's mapping, so a peer can only ever withdraw stubs its own
+        // share created; a row without a known source names nothing removable.
+        let row = |checksum: &str, local: &str, origin: Option<&str>| crate::store::SeenEntry {
+            mapping: "m1".into(),
+            checksum: checksum.into(),
+            local_asset: local.into(),
+            origin_asset: origin.map(str::to_string),
+            stored_full: false,
+        };
+        let rows = vec![
+            row("c1", "local-1", Some("asset-1")),
+            row("c2", "local-2", None),
+            row("c3", "local-3", Some("asset-3")),
+        ];
+        assert_eq!(
+            removal_targets(&rows, &["asset-1".into(), "asset-9".into()]),
+            vec![("c1".to_string(), "local-1".to_string())]
+        );
+        assert!(removal_targets(&rows, &[]).is_empty());
+        assert!(removal_targets(&[], &["asset-1".into()]).is_empty());
+    }
 }
 
 /// Find one of THIS peer's mappings by id, album id or remote album id.
@@ -413,6 +438,25 @@ pub fn gone_or_404(state: &crate::state::State, peer_pub: &str, album_mapping_id
     } else {
         (404, json!({ "error": "unknown album mapping", "code": "unknown_mapping" }))
     }
+}
+
+/// The local stubs a sender's `remove` list names: ledger rows of THIS mapping whose
+/// `originAsset` is an id the sender says it no longer holds. The caller scopes the rows to the
+/// push's mapping (the store filters on mapping), so a peer can only withdraw stubs its own share
+/// created; rows without a known source name nothing the sender could have offered.
+pub fn removal_targets(
+    rows: &[crate::store::SeenEntry],
+    removed_origin_assets: &[String],
+) -> Vec<(String, String)> {
+    rows.iter()
+        .filter_map(|row| {
+            let origin = row.origin_asset.as_deref()?;
+            removed_origin_assets
+                .iter()
+                .find(|id| *id == origin)
+                .map(|_| (row.checksum.clone(), row.local_asset.clone()))
+        })
+        .collect()
 }
 
 /// The version handshake: one cheap album read instead of a full manifest scan. Members compare
@@ -738,6 +782,15 @@ pub async fn handle_refs(caller_pub: &str, album_mapping_id: &str, body: &[u8]) 
         .get("add")
         .and_then(|a| serde_json::from_value(a.clone()).ok())
         .unwrap_or_default();
+    // The push may also carry what the sender no longer holds: origin asset ids whose stubs here
+    // must go (a joiner deleted their own contribution — nothing else tells this side). ADDITIVE
+    // and optional: a peer that never sends it behaves exactly as before, and a receiver that
+    // ignores it just keeps today's behaviour. Scoped to THIS mapping's ledger, so a peer can
+    // only ever withdraw stubs its own share created.
+    let remove: Vec<String> = parsed
+        .get("remove")
+        .and_then(|r| serde_json::from_value(r.clone()).ok())
+        .unwrap_or_default();
     let Some(peer) = state
         .collections()
         .peers
@@ -749,6 +802,28 @@ pub async fn handle_refs(caller_pub: &str, album_mapping_id: &str, body: &[u8]) 
     };
 
     let client = Client::new();
+    // REMOVE FIRST, before any await: the rows are looked up and bound here, the purges run
+    // after. Each purge is guarded by `delete_proxy_asset` (only utility-owned assets go), so a
+    // hostile or confused `remove` cannot reach a household's own photos.
+    let targets = removal_targets(
+        &state.store.seen_for_mapping(&mapping.id).unwrap_or_default(),
+        &remove,
+    );
+    let mut removed = 0usize;
+    for (checksum, local_asset) in &targets {
+        match crate::immich::materialise::delete_proxy_asset(state, &client, local_asset).await {
+            Ok(crate::immich::materialise::PurgeOutcome::Purged)
+            | Ok(crate::immich::materialise::PurgeOutcome::AlreadyGone) => {
+                let _ = state.store.seen_remove_entry(&mapping.id, checksum);
+                removed += 1;
+                crate::log!("removed a stub the sender no longer holds (\"{}\")", mapping.album_name);
+            }
+            Ok(crate::immich::materialise::PurgeOutcome::NotOurs) | Err(_) => {
+                crate::log!("stub removal refused, keeping it (\"{}\")", mapping.album_name);
+            }
+        }
+    }
+
     let mut failed: Vec<String> = Vec::new();
     for reference in &refs {
         match crate::immich::materialise::materialise_ref(state, &client, &mapping, &peer, reference).await
@@ -765,6 +840,7 @@ pub async fn handle_refs(caller_pub: &str, album_mapping_id: &str, body: &[u8]) 
         }
     }
     // PARTIAL SUCCESS is the contract: the sender re-offers only the failed refs next cycle, so one
-    // bad photo cannot wedge an album.
-    (200, json!({ "ok": failed.is_empty(), "failed": failed }))
+    // bad photo cannot wedge an album. Removals are NOT retried by the sender — a purge that was
+    // refused stays and is logged, because retrying a refusal would only refuse again.
+    (200, json!({ "ok": failed.is_empty(), "failed": failed, "removed": removed }))
 }

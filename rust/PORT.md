@@ -123,7 +123,7 @@ valid connection can never address someone else's album.
 | `/hello` | protocol, version, feature list |
 | `/pair` | redeem a pairing code |
 | `/invites/redeem` | redeem a share link (403 when link joining is off) |
-| `/albums/:id/refs` | a push |
+| `/albums/:id/refs` | a push (`add` refs, and additively `remove`: origin asset ids the sender no longer holds, whose stubs here are purged — the joiner-deletes-their-contribution path) |
 | `/albums/:id/activity`, `/comments` | the conversation, both directions |
 | `/albums/:id/invitations`, `/invitations/nudge` | what this household is invited to, and "look again" |
 | `/directory` | the people this household offers (names only) |

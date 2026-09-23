@@ -454,12 +454,14 @@ impl Store {
         Ok(false)
     }
 
-    /// Real revocation: an asset that left the album loses its row. Returns how many were removed.
+    /// Real revocation: an asset that left the album loses its row. Returns the revoked ASSET ids,
+    /// because they are exactly the push's removals: the origin's stub for a deleted contribution
+    /// has no other way to learn its source is gone (a push carries only adds unless we say so).
     pub fn offered_reconcile(
         &self,
         mapping: &str,
         current_asset_ids: &[String],
-    ) -> Result<usize, StoreError> {
+    ) -> Result<Vec<String>, StoreError> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let existing: Vec<String> = {
@@ -467,18 +469,31 @@ impl Store {
             let rows = stmt.query_map([mapping], |r| r.get::<_, String>(0))?;
             rows.filter_map(|r| r.ok()).collect()
         };
-        let mut removed = 0;
+        let mut revoked = Vec::new();
         for asset in existing {
             if !current_asset_ids.iter().any(|a| a == &asset) {
                 tx.execute(
                     "DELETE FROM offered WHERE mapping = ?1 AND asset = ?2",
                     rusqlite::params![mapping, asset],
                 )?;
-                removed += 1;
+                revoked.push(asset);
             }
         }
         tx.commit()?;
-        Ok(removed)
+        Ok(revoked)
+    }
+
+    /// How many assets this mapping still offers its peer — the contribution half of what a mirror
+    /// album should hold (the stub half is the ledger), and the cheap tell that a member deleted
+    /// their own contribution: the album's count shrank but nothing bumped `updatedAt`.
+    pub fn offered_count(&self, mapping: &str) -> Result<usize, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM offered WHERE mapping = ?1",
+            [mapping],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
     }
 
     pub fn offered_remove_mapping(&self, mapping: &str) -> Result<(), StoreError> {
@@ -1204,7 +1219,7 @@ mod tests {
         // No mappings -> never allowed, not "allowed by default".
         assert!(!s.offered_allows(&[], "a1").unwrap());
         // Removal is real revocation.
-        assert_eq!(s.offered_reconcile("m1", &["a2".into()]).unwrap(), 1);
+        assert_eq!(s.offered_reconcile("m1", &["a2".into()]).unwrap(), vec!["a1".to_string()]);
         assert!(!s.offered_allows(&["m1".into()], "a1").unwrap());
     }
 
