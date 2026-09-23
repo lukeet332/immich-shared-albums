@@ -206,9 +206,8 @@ export async function ensureUtilityUser(
         const sysCfg = await immichJson('/system-config');
         sysCfg.passwordLogin.enabled = false;
         await immichJson('/system-config', { ...jsonBody(sysCfg), method: 'PUT' });
-      } catch {
-        // The config on this path carries passwordLogin, so the error text is not logged back.
-        log('WARNING: could not restore passwordLogin=disabled');
+      } catch (e) {
+        log(`WARNING: could not restore passwordLogin=disabled: ${e.message}`);
       }
     }
   }
@@ -238,9 +237,8 @@ export async function ensureUtilityUser(
       method: 'PUT',
     });
     passwordRetired = true;
-  } catch {
-    // The request on this path carried the account's password, so its error body is not logged back.
-    log(`WARNING: could not retire the login password for ${email}`);
+  } catch (e) {
+    log(`WARNING: could not retire the login password for ${email}: ${e.message}`);
   }
   if (CFG.botQuotaMb > 0) {
     try {
