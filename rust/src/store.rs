@@ -396,7 +396,23 @@ impl Store {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
-    pub fn seen_remove_mapping(&self, mapping: &str) -> Result<(), StoreError> {
+    /// Forget the proxies a mapping materialised. A stored-FULL copy KEEPS its row: the row is what
+    /// still marks those bytes as a copy taken from a share rather than a household photo, so the
+    /// interceptor serves them from the local file instead of chaining to a peer that no longer
+    /// shares them. See `sync/leave.rs`.
+    pub fn seen_forget_proxies(&self, mapping: &str) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM seen WHERE mapping = ?1 AND storedFull = 0",
+            [mapping],
+        )?;
+        Ok(())
+    }
+
+    /// Forget EVERY row a mapping owns, stored-FULL copies included. For when the assets themselves
+    /// are gone — unlinking deletes the peer's accounts, and `force: true` takes their assets with
+    /// them, so a row left behind would claim bytes this household no longer holds.
+    pub fn seen_forget_mapping(&self, mapping: &str) -> Result<(), StoreError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM seen WHERE mapping = ?1", [mapping])?;
         Ok(())
@@ -1233,6 +1249,30 @@ mod tests {
         s.seen_add("m1", "sum", "asset", Some("origin"), true)
             .unwrap();
         assert!(s.ledger_by_asset("asset").unwrap().unwrap().stored_full);
+    }
+
+    #[test]
+    fn leaving_forgets_proxies_but_keeps_stored_copies() {
+        let s = store();
+        s.seen_add("m1", "stub-sum", "stub-asset", Some("origin-a"), false)
+            .unwrap();
+        s.seen_add("m1", "full-sum", "full-asset", Some("origin-b"), true)
+            .unwrap();
+        s.seen_forget_proxies("m1").unwrap();
+        assert!(
+            s.ledger_by_asset("stub-asset").unwrap().is_none(),
+            "the proxy's row goes with the share"
+        );
+        let kept = s.ledger_by_asset("full-asset").unwrap();
+        assert!(
+            kept.as_ref().map(|r| r.stored_full).unwrap_or(false),
+            "the stored copy keeps its row (and its origin) after a leave"
+        );
+        assert_eq!(kept.unwrap().origin_asset.as_deref(), Some("origin-b"));
+        // An unlink deletes the accounts their assets belong to, so NOTHING may be left claiming
+        // them.
+        s.seen_forget_mapping("m1").unwrap();
+        assert!(s.ledger_by_asset("full-asset").unwrap().is_none());
     }
 
     #[test]

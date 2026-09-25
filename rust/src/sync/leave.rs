@@ -61,7 +61,7 @@ pub async fn leave_album(
         if entry.origin_asset.is_none() {
             continue;
         }
-        // A STORED-FULL copy is the household\’s own real bytes, paid for when store-shared-locally
+        // A STORED-FULL copy is the household's own real bytes, paid for when store-shared-locally
         // was switched on. Leaving the album withdraws the SHARE, not the library — the copy stays.
         if entry.stored_full {
             kept += 1;
@@ -116,7 +116,7 @@ pub async fn leave_album(
     }
 
     crate::sync::status::forget_watcher_cycles(&mapping.id);
-    let _ = state.store.seen_remove_mapping(&mapping.id);
+    let _ = state.store.seen_forget_proxies(&mapping.id);
     let _ = state.store.seen_act_remove_mapping(&mapping.id);
     forget_offered(state, &mapping.id);
     // SPLICE, never reassign. Loops run concurrently (watch, comments, invites), and replacing the
@@ -156,8 +156,10 @@ pub async fn leave_album(
         mapping.album_name
     );
     if kept > 0 {
-        crate::log!("kept {} stored local cop(ies) in \"{}\" - the leave withdraws the share, not the library",
-            kept, mapping.album_name);
+        crate::log!(
+            "kept {kept} stored local cop(ies) in \"{}\" — the leave withdraws the share, not the library",
+            mapping.album_name
+        );
     }
     Ok(LeaveOutcome {
         left: mapping.album_name,

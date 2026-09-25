@@ -57,6 +57,9 @@ async fn unlink_peer_now(
         .filter(|m| m.peer == pub_key)
         .map(|m| (m.id.clone(), m.role))
         .collect();
+    // Kept for the ledger cleanup below: the loop consumes `ids`, and `leave_album` splices the
+    // mapping out of the live array on the way through.
+    let mapping_ids: Vec<String> = ids.iter().map(|(id, _)| id.clone()).collect();
     for (id, role) in ids {
         if role == Role::Member {
             // `notify_origin: false` — the link is being severed, so telling the origin we left
@@ -95,6 +98,7 @@ async fn unlink_peer_now(
         })
         .map(|(slug, _)| slug.clone())
         .collect();
+    let mut left_behind = Vec::new();
     for slug in doomed {
         let user_id = state
             .collections()
@@ -115,11 +119,37 @@ async fn unlink_peer_now(
                 // LEFT BEHIND, and the state entry with it: keeping the record means a re-link
                 // reuses this account rather than minting a twin beside it.
                 crate::log!("unlink: could not delete {slug}: {e} — leaving it in place");
+                left_behind.push(slug);
                 continue;
             }
             markers_removed += 1;
         }
         state.collections().contributors.remove(&slug);
+    }
+
+    // The accounts are gone, and `force: true` took every asset they owned with them — including the
+    // stored-FULL copies `leave_album` spares for a LEAVE, which is why this cleanup has to reach
+    // past it. A row that outlives its asset claims bytes this household no longer holds. Only when
+    // EVERY account came down — a failed delete leaves its assets alive, and their rows are true.
+    if left_behind.is_empty() {
+        // Only mappings that are actually GONE: a leave that failed leaves a live mirror behind, and
+        // those rows are still its own.
+        let live: std::collections::HashSet<String> = state
+            .collections()
+            .mappings
+            .iter()
+            .map(|m| m.id.clone())
+            .collect();
+        for id in &mapping_ids {
+            if !live.contains(id) {
+                let _ = state.store.seen_forget_mapping(id);
+            }
+        }
+    } else {
+        crate::log!(
+            "unlink: kept the ledger rows for {household} — {} still holds assets here",
+            left_behind.join(", ")
+        );
     }
 
     state.collections().peers.retain(|p| p.pub_key != pub_key);

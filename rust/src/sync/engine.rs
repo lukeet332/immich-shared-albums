@@ -8,6 +8,7 @@ use crate::p2p::transport::transport;
 use crate::state::State;
 use crate::store::{Mapping, Peer, Role};
 use crate::sync::peer_mapping_id::peer_album_mapping_id;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -298,6 +299,53 @@ mod tests {
             PUSH_404_DEAD_AFTER > 1,
             "one 404 must not retire a live share"
         );
+    }
+
+    fn users_of(rows: &[(&str, bool)]) -> crate::immich::client::USERS {
+        rows.iter()
+            .map(|(id, utility)| {
+                (
+                    id.to_string(),
+                    crate::immich::client::UserInfo {
+                        name: id.to_string(),
+                        utility: *utility,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn album_with_members(ids: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "albumUsers": ids.iter().map(|id| serde_json::json!({ "user": { "id": id } })).collect::<Vec<_>>()
+        })
+    }
+
+    #[test]
+    fn a_stand_in_left_alone_is_not_a_native_leave() {
+        // The stand-in IS the membership the sidecar created; counting it as a person would make
+        // every mirror look occupied for ever, or (worse) freed the moment a human left and took the
+        // stand-in's row with it.
+        let album = album_with_members(&["stand-in"]);
+        let users = users_of(&[("stand-in", true)]);
+        assert_eq!(human_members(&album, &users), 0);
+    }
+
+    #[test]
+    fn one_real_person_still_there_is_not_a_leave() {
+        let album = album_with_members(&["stand-in", "human"]);
+        let users = users_of(&[("stand-in", true), ("human", false)]);
+        assert_eq!(human_members(&album, &users), 1);
+    }
+
+    #[test]
+    fn an_unknown_member_id_never_makes_the_album_look_empty() {
+        // The user map is a minute stale at worst, and a brand-new account is the one thing it can
+        // miss. Acting on that would delete a mirror someone is still looking at — so only a KNOWN
+        // member list may be read as "0 humans", which is what `member_list_is_known` gates.
+        assert!(!member_list_is_known(&serde_json::json!({ "assetCount": 2 })));
+        assert!(!member_list_is_known(&serde_json::json!({ "albumUsers": null })));
+        assert!(member_list_is_known(&album_with_members(&[])));
     }
 }
 
@@ -685,6 +733,49 @@ pub async fn watch_once(state: &State, client: &Client) {
     reconcile_once(state, client).await;
 }
 
+/// Has the last human member left this mirror? A NATIVE leave — album settings -> Leave album in the
+/// stock app — which is what the sidecar cleans up after: stubs, mirror, mapping. No custom UI.
+///
+/// MUST run before `watch_mapping`'s unchanged-album handshake. Immich bumps `album.updatedAt` on
+/// album EDITS but NOT when a member leaves, so a pass that skips an "unchanged" album never sees the
+/// last person walk out and the mirror, its stubs and the mapping stay for ever.
+async fn last_human_left(client: &Client, album: &Value) -> bool {
+    if !member_list_is_known(album) {
+        return false;
+    }
+    let users = crate::immich::client::users_by_id(client, 60_000).await;
+    human_members(album, &users) == 0
+}
+
+/// An album read that omits the member list is UNKNOWN, not empty: a partial read must never read as
+/// "everyone left" and purge a mirror someone is still using.
+fn member_list_is_known(album: &Value) -> bool {
+    album.get("albumUsers").and_then(|u| u.as_array()).is_some()
+}
+
+/// How many of an album's members are PEOPLE. The stand-ins are OURS — an account this household
+/// minted stands in for a remote person, so its membership says nothing about who is still here. An
+/// id the user map does not know is not a person either: the map is a minute stale at worst, and
+/// counting it as absent is only ever safe paired with a KNOWN member list.
+fn human_members(album: &Value, users: &crate::immich::client::USERS) -> usize {
+    album
+        .get("albumUsers")
+        .and_then(|u| u.as_array())
+        .map(|list| {
+            list.iter()
+                .filter(|entry| {
+                    entry
+                        .pointer("/user/id")
+                        .and_then(|v| v.as_str())
+                        .and_then(|id| users.get(id))
+                        .map(|u| !u.utility)
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Result<(), String> {
     // The local side is read with the credential that can actually see it: a member mirror is owned
     // by the ORIGIN owner's stand-in, not by this household's admin.
@@ -701,6 +792,31 @@ async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Res
         .get("updatedAt")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+
+    // BEFORE the handshake below, deliberately: see `last_human_left`.
+    if mapping.role == Role::Member && last_human_left(client, &album).await {
+        crate::log!(
+            "\"{}\" has no human member left — leaving the mirror natively",
+            mapping.album_name
+        );
+        return match crate::sync::leave::leave_album(state, client, &mapping.id, true).await {
+            Ok(outcome) => {
+                crate::log!(
+                    "left \"{}\" natively — {} stub(s) purged",
+                    mapping.album_name,
+                    outcome.purged
+                );
+                Ok(())
+            }
+            Err(e) => {
+                crate::log!(
+                    "native leave of \"{}\" failed: {e} — the loops will retry",
+                    mapping.album_name
+                );
+                Ok(())
+            }
+        };
+    }
 
     // HANDSHAKE: skip an untouched album entirely. `local_version` is stored only after a CLEAN
     // cycle, so deferred refs keep re-offering rather than being silently written off. One blind
@@ -727,49 +843,6 @@ async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Res
     }
 
     if mapping.role == Role::Member {
-        // NATIVE LEAVE: when the last human member leaves the mirror in the STOCK app (album
-        // settings -> Leave album), the sidecar cleans up everything the join created — stubs,
-        // mirror, mapping. No custom UI involved. The stand-ins are OURS, so their membership does
-        // not count as a human's. An album read that omits the member list is treated as UNKNOWN
-        // rather than empty: a partial read must not read as "everyone left".
-        let users = crate::immich::client::users_by_id(client, 60_000).await;
-        if let Some(list) = album.get("albumUsers").and_then(|u| u.as_array()) {
-            let humans = list
-                .iter()
-                .filter(|entry| {
-                    entry
-                        .pointer("/user/id")
-                        .and_then(|v| v.as_str())
-                        .and_then(|id| users.get(id))
-                        .map(|u| !u.utility)
-                        .unwrap_or(false)
-                })
-                .count();
-            if humans == 0 {
-                crate::log!(
-                    "\"{}\" has no human member left — leaving the mirror natively",
-                    mapping.album_name
-                );
-                return match crate::sync::leave::leave_album(state, client, &mapping.id, true).await
-                {
-                    Ok(outcome) => {
-                        crate::log!(
-                            "left \"{}\" natively — {} stub(s) purged",
-                            mapping.album_name,
-                            outcome.purged
-                        );
-                        Ok(())
-                    }
-                    Err(e) => {
-                        crate::log!(
-                            "native leave of \"{}\" failed: {e} — the loops will retry",
-                            mapping.album_name
-                        );
-                        Ok(())
-                    }
-                };
-            }
-        }
         // View-only: nothing to push.
         if mapping.permissions == "view" {
             return Ok(());

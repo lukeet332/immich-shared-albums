@@ -4,7 +4,8 @@
 replacement** for it: the wire protocol, `state.db`, HTTP surface and env vars are unchanged, so
 either build can sit on either end of a link and a Rust sidecar reads a `state.db` a Node one wrote.
 `src/` remains the source of truth for behaviour; where this document and the TypeScript disagree,
-the TypeScript is right and this document is a bug.
+the TypeScript is right and this document is a bug — except for the deliberate divergences listed
+under _Differences from the TypeScript_ below.
 
 Layout: `src/lib.rs` is the crate root, `src/main.rs` is the composition root (the `isa` binary), and
 `src/config.rs` holds every setting. `examples/` holds the probes used against the rig.
@@ -229,6 +230,22 @@ neither is reachable from the wire:
 Two of the TypeScript's documented drifts are deliberate and must NOT be "fixed" in the port — see
 `src/p2p/wire-protocol.md`: the ALPN string (rule 3), and `/albums/:id/status`, which is answered
 over iroh but never dialled.
+
+Two more are deliberate and go the other way: the port fixes a behaviour the TypeScript gets wrong.
+
+- **A leave keeps the stored copies the household paid for.** With `storeSharedAssetsLocally` on, a
+  mirror row carries `storedFull` and its bytes are a real local asset. `leave_album` skips those
+  rows and `seen_forget_proxies` keeps exactly them, so the copy and its ledger row outlive the
+  share. The TypeScript reads `storedFull` nowhere in `leave.ts` or `unlink.ts`, so it purges a
+  stored copy with everything else. UNLINKING still takes them in both builds, because `force: true`
+  deletes the peer's accounts with their assets — the port drops the ledger rows with them
+  (`seen_forget_mapping`), the TypeScript leaves the rows behind.
+- **A native leave is noticed without the album's `updatedAt` moving.** `last_human_left` runs BEFORE
+  `watch_mapping`'s unchanged-album handshake, because Immich bumps `album.updatedAt` on album edits
+  and NOT when a member leaves. The TypeScript's native-leave check sits after its
+  `album.updatedAt === mapping.localVersion` guard, so a person who leaves an album in Immich's own
+  UI is never noticed: the mirror, its stubs and the mapping stay for ever. That is why the rig's
+  `native leave` checks are scoped to the Rust lane.
 
 ## Performance, Rust against the TypeScript it replaces
 

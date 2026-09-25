@@ -189,6 +189,50 @@ check('the admin stays at the root rather than being sent to a panel',
     JSON.stringify(rows));
 }
 
+// 6b. THE SERVER PANEL'S SETTINGS CARD saves the whole object at once, so writing one field can
+//     silently reset the others — and "Store shared photos on this server" is the toggle that
+//     decides whether a mirror is a hotlink stub or a real local copy. The API suite proves the
+//     sidecar honours the setting once it is set; only a loaded page proves the checkbox reaches
+//     the server, and only a reload proves the SAVED row (not the component's own state) is what
+//     the person sees next.
+{
+  await page.goto(`${B_PANEL_WEB}/immich-shared-albums/admin`, { waitUntil: 'networkidle' });
+  const storeLabel = 'Store shared photos on this server';
+  const storeBox = () => page.locator(`label:has-text("${storeLabel}") input[type=checkbox]`);
+  const settingsReady = await storeBox().waitFor({ state: 'visible', timeout: 30000 })
+    .then(() => true).catch(() => false);
+  check('the server panel renders its settings card', settingsReady);
+  if (settingsReady) {
+    const joinBox = page.locator('label:has-text("Allow other Immich users to join albums") input[type=checkbox]');
+    const ttlSelect = page.locator('label:has-text("Pairing links stay valid for") select');
+    const before = { store: await storeBox().isChecked(), join: await joinBox.isChecked(), ttl: await ttlSelect.inputValue() };
+    const savedSettings = () => page.waitForResponse(
+      (r) => r.url().includes('/immich-shared-albums/settings') && r.request().method() === 'POST',
+      { timeout: 30000 }).catch(() => null);
+    const wrote = savedSettings();
+    await storeBox().click();
+    await wrote;
+    const after = await page.evaluate(async () => (await fetch('/immich-shared-albums/settings')).json());
+    check('toggling store-locally reaches the server', after.storeSharedAssetsLocally === !before.store,
+      `clicked to ${!before.store}, server says ${after.storeSharedAssetsLocally}`);
+    check('saving one setting leaves the other two alone',
+      after.shareLinkJoin === before.join && String(after.pairingTtlMinutes) === before.ttl,
+      `before join=${before.join} ttl=${before.ttl}; after join=${after.shareLinkJoin} ttl=${after.pairingTtlMinutes}`);
+    await page.reload({ waitUntil: 'networkidle' });
+    const persisted = await storeBox().waitFor({ state: 'visible', timeout: 20000 })
+      .then(() => storeBox().isChecked()).catch(() => null);
+    check('the toggle survives a reload', persisted === !before.store, `checked=${persisted}`);
+    // Put the household back: every later stage shares it, and a household that stores copies is a
+    // different shape from the one the rest of the lane asserts on.
+    const restored = savedSettings();
+    await storeBox().click();
+    await restored;
+    const ended = await page.evaluate(async () => (await fetch('/immich-shared-albums/settings')).json());
+    check('the lane restores the setting it changed', ended.storeSharedAssetsLocally === before.store,
+      `ended at ${ended.storeSharedAssetsLocally}, started at ${before.store}`);
+  }
+}
+
 // The signed-out pages are the only ones whose stylesheet is built on its own, so they are where an
 // un-inlined token import would show up: the accent button renders as plain black text. Assert the
 // computed colour rather than the markup, because that is what a person sees.

@@ -860,6 +860,10 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
   // leave & purge via the NATIVE gesture: the user leaves the album in the stock app
   // (album settings -> Leave album); the sidecar notices and cleans up everything.
   const stubIds = (await albumAssets(B, BKEY, mirrorD.id)).map(a => a.id);
+  // Captured BEFORE the leave: afterwards the mapping row is gone, so nothing can be found through
+  // `mappings` any more, and a subquery through it reads "0 rows" whatever the sidecar did.
+  const mDId = JSON.parse(sidecarSql('b-sidecar',
+    `SELECT id FROM mappings WHERE albumId='${mirrorD.id}'`) || '[]')[0]?.id;
   await api(B, BKEY, `/albums/${mirrorD.id}/user/me`, { method: 'DELETE' });
   const albumGone = await until(async () =>
     !(await api(B, BKEY, '/albums')).some(a => a.id === mirrorD.id) ? true : null, 90000);
@@ -871,32 +875,33 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
   }
   check('native leave: stubs deleted (space reclaimed)', stubsGone);
   // The two checks above pass on LOST VISIBILITY alone: once the admin leaves, the mirror is
-  // invisible to them whether or not the sidecar purged anything. The ledger is the honest
-  // answer - read through the sidecar's container, the same rule as every state read here.
-  // The two checks above pass on LOST VISIBILITY alone: once the admin leaves, the mirror is
-  // invisible to them whether or not the sidecar purged anything. The sidecar's own /peers view
-  // is the honest answer - it reads what the sidecar still holds, not what the admin sees.
-  const peersGone = await until(async () => {
-    const peers = await (await fetch(`${BS}/immich-shared-albums/peers`, { headers: { 'x-api-key': BKEY } })).json();
-    return !(peers.albums || []).some(a => a.name === 'delete test') ? true : null;
-  }, 900000);
-  check('native leave: the mapping is gone from the sidecar\u2019s own peer view', !!peersGone, peersGone ? '' : 'still in /peers after 15 min');
-  // The ledger read through the sidecar's container confirms the DB rows went too.
-  const lcLedger = await until(async () => {
-    const state = sidecarSql('b-sidecar',
-      `SELECT (SELECT COUNT(*) FROM mappings WHERE albumId='${mirrorD.id}') AS mappings,
-              (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorD.id}')) AS seen`);
-    const parsed = state ? JSON.parse(state)[0] : { mappings: -1, seen: -1 };
-    return parsed.mappings === 0 && parsed.seen === 0 ? parsed : null;
-  }, 900000);
-  const last = (() => {
-    const state = sidecarSql('b-sidecar',
-      `SELECT (SELECT COUNT(*) FROM mappings WHERE albumId='${mirrorD.id}') AS mappings,
-              (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorD.id}')) AS seen`);
-    return state ? JSON.parse(state)[0] : { mappings: -1, seen: -1 };
-  })();
-  check('native leave: the ledger rows are gone (verified through the sidecar\u2019s container)',
-        !!lcLedger, lcLedger ? 'mapping rows=0, ledger rows=0' : `still ${last.mappings} mapping(s), ${last.seen} ledger row(s)`);
+  // invisible to them whether or not the sidecar purged anything. The sidecar's own view and its
+  // ledger are the honest answer. RUST-ONLY: the TypeScript's native-leave check sits behind its
+  // `updatedAt` handshake, which Immich does not move when a member leaves, so it never notices this
+  // at all (see rust/PORT.md). The port runs the check before the handshake.
+  if (!sidecarHasNode('b-sidecar')) {
+    const peersGone = await until(async () => {
+      const peers = await (await fetch(`${BS}/immich-shared-albums/peers`, { headers: { 'x-api-key': BKEY } })).json();
+      return !(peers.albums || []).some(a => a.name === 'delete test') ? true : null;
+    }, 900000);
+    check('native leave: the mapping is gone from the sidecar\u2019s own peer view', !!peersGone,
+          peersGone ? '' : 'still in /peers after 15 min');
+    // The ledger read through the sidecar's container confirms the DB rows went too.
+    const readLedger = () => {
+      const state = sidecarSql('b-sidecar',
+        `SELECT (SELECT COUNT(*) FROM mappings WHERE id='${mDId}') AS mappings,
+                (SELECT COUNT(*) FROM seen WHERE mapping='${mDId}') AS seen`);
+      return state ? JSON.parse(state)[0] : { mappings: -1, seen: -1 };
+    };
+    const lcLedger = await until(async () => {
+      const parsed = readLedger();
+      return parsed.mappings === 0 && parsed.seen === 0 ? parsed : null;
+    }, 900000);
+    const last = readLedger();
+    check('native leave: the ledger rows are gone (verified through the sidecar\u2019s container)',
+          !!lcLedger && !!mDId, lcLedger ? 'mapping rows=0, ledger rows=0'
+                                         : `still ${last.mappings} mapping(s), ${last.seen} ledger row(s)`);
+  }
 }
 
 stage('kill test — uncached photos fail closed; cached ones survive from cache');
@@ -2262,6 +2267,9 @@ stage('panel manages server links (unlink)');
   if (target) {
     const beforeUsers = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('person-'));
     const before = beforeUsers.length;
+    // Rust-only: the ledger cleanup the unlink performs is the port's (see `unlink.rs`).
+    const peerMappingIds = sidecarHasNode('b-sidecar') ? [] : JSON.parse(sidecarSql('b-sidecar',
+      `SELECT id FROM mappings WHERE peer='${target.pub}'`) || '[]').map(r => r.id);
     const res = await fetch(`${BS}/immich-shared-albums/unlink`,
       { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
         body: JSON.stringify({ pub: target.pub }) });
@@ -2275,6 +2283,19 @@ stage('panel manages server links (unlink)');
       return (peers.peers || []).some(p => p.pub === target.pub) ? null : true;
     }, 30000);
     check('the server is gone from the panel after unlinking', !!gone, gone ? '' : 'still listed');
+
+    // The ledger rows go with the assets. `force: true` deleted the accounts that owned them, so a
+    // row left behind claims bytes this household no longer holds — and a stored-FULL copy is one of
+    // those assets, which is why the cleanup has to reach past the leave it just performed.
+    if (!sidecarHasNode('b-sidecar')) {
+      const ids = peerMappingIds.map(id => `'${id}'`).join(',') || "''";
+      const left = sidecarSql('b-sidecar',
+        `SELECT COUNT(*) AS n FROM seen WHERE mapping IN (${ids})`);
+      const leftRows = left ? Number(JSON.parse(left)[0].n) : -1;
+      check('unlink leaves no ledger row claiming bytes it just deleted',
+            peerMappingIds.length > 0 && leftRows === 0,
+            `${peerMappingIds.length} mapping(s) had ${leftRows} row(s) left`);
+    }
 
     // Its people must leave Immich's picker — that is the visible half of unlinking.
     const afterUsers = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('person-'));
@@ -2481,42 +2502,99 @@ if (!sidecarHasNode('b-sidecar')) {
       const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinSt.album && a.assetCount > 0);
       return found || null;
     }, 90000);
-    const stubSt = (await albumAssets(B, BKEY, mirrorSt.id)).find(a => true);
-    check('stored: the stub exists', !!stubSt, stubSt ? '' : 'timed out');
+    // The ledger row BEFORE the toggle is the precondition everything below moves from: one proxy
+    // row keyed by (mapping, checksum), and the mapping id that will be gone after the leave.
+    const rowsSt = sidecarSql('b-sidecar',
+      `SELECT id FROM mappings WHERE albumId='${mirrorSt?.id}'`);
+    const mappingIdSt = JSON.parse(rowsSt || '[]')[0]?.id;
+    const ledgerSt = () => JSON.parse(sidecarSql('b-sidecar',
+      `SELECT localAsset, originAsset, storedFull FROM seen WHERE mapping='${mappingIdSt}' AND originAsset IS NOT NULL`) || '[]');
+    const stubRow = mappingIdSt ? ledgerSt()[0] : null;
+    // The credential the household holds for the copy's OWNER — the stand-in standing in for the
+    // origin's album owner, which is the account `uploadAsContributor` uploads as. It is needed
+    // below because Immich scopes `GET /api/assets/:id` by ownership AND album membership: an admin
+    // cannot read a stand-in's asset once the leave has taken it out of every album, while its owner
+    // always can.
+    const copyKey = JSON.parse(sidecarSql('b-sidecar',
+      `SELECT c.apiKey AS k FROM contributors c
+        WHERE c.slug = (SELECT hostSlug FROM mappings WHERE id='${mappingIdSt}')`) || '[]')[0]?.k;
+    // Guarded, not thrown: `requireState` records the missing precondition as a failed check so the
+    // run still reports the stages after this one (README rule 9).
+    if (!mirrorSt || !stubRow) {
+      requireState('the store-locally mirror and its ledger row are readable');
+    } else {
 
-    // flip the toggle ON, then wait for the backfill (the reconcile drains it when the setting is on)
-    await fetch(`${BS}/immich-shared-albums/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY }, body: JSON.stringify({ storeSharedAssetsLocally: true }) });
-    const backfilled = await until(async () => {
-      const rows = sidecarSql('b-sidecar',
-        `SELECT storedFull FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorSt.id}')`);
-      const parsed = rows ? JSON.parse(rows) : [];
-      return parsed.length > 0 && parsed.every(r => r.storedFull === 1) ? parsed : null;
-    }, 240000);
-    check('stored: the backfill upgraded the stub to a full local copy', !!backfilled,
-          backfilled ? 'storedFull=1' : 'still a stub');
-    const copyBytes = await (await fetch(`${B}/api/assets/${stubSt.id}/original`, { headers: { 'x-api-key': BKEY } })).arrayBuffer();
-    check('stored: the local copy holds the OWNER\u2019s real bytes', copyBytes.byteLength > 500, `${copyBytes.byteLength}B`);
+      check('stored: the mirror arrives as a hotlink stub, not a copy',
+            stubRow.storedFull === 0, JSON.stringify(stubRow));
 
-    // the joiner LEAVES natively - the share is withdrawn, the STORED COPY stays
-    await api(B, BKEY, `/albums/${mirrorSt.id}/user/me`, { method: 'DELETE' });
-    const mappingGone = await until(async () => {
-      const rows = sidecarSql('b-sidecar',
-        `SELECT (SELECT COUNT(*) FROM mappings WHERE albumId='${mirrorSt.id}') AS m,
-                (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorSt.id}') AND storedFull=1) AS kept,
-                (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorSt.id}') AND storedFull=0) AS purged`);
-      const parsed = rows ? JSON.parse(rows)[0] : { m: -1, kept: -1, purged: -1 };
-      return parsed.m === 0 && parsed.kept >= 1 ? parsed : null;
-    }, 480000);
-    check('stored: the leave removes the mapping and its proxy rows but KEEPS the stored copy\u2019s ledger row',
-          !!mappingGone, mappingGone ? `kept=${mappingGone.kept}` : 'timed out');
-    const copySurvives = await fetch(`${B}/api/assets/${stubSt.id}/original`, { headers: { 'x-api-key': BKEY } });
-    const survivedBytes = await copySurvives.arrayBuffer();
-    check('stored: THE STORED COPY SURVIVES THE LEAVE (the user\u2019s actual requirement)',
-          copySurvives.ok && survivedBytes.byteLength === copyBytes.byteLength,
-          `${survivedBytes.byteLength}B status=${copySurvives.status}`);
-    // tidy: the toggle back off, the stored copy\u2019s asset deleted (it is a utility-owned test asset)
-    await fetch(`${BS}/immich-shared-albums/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY }, body: JSON.stringify({ storeSharedAssetsLocally: false }) });
-    await api(B, BKEY, '/assets', { ...j({ ids: [stubSt.id], force: true }), method: 'DELETE' });
+      // Bytes are read through the SIDECAR (`BS`), which is the path a client takes: Immich's own port
+      // (`B`) answers with the local placeholder, so reading there would compare a stub to itself.
+      const originBytes = Buffer.from(await fetchBytes(`${A}/api/assets/${originPhoto}/original`, AKEY));
+      const stubBytes = Buffer.from(await fetchBytes(`${BS}/api/assets/${stubRow.localAsset}/original`, BKEY));
+      check('stored: while it is a stub, the bytes still stream from the owner',
+            sha1(stubBytes) === sha1(originBytes), `${stubBytes.length}B via proxy vs ${originBytes.length}B at origin`);
+
+      // Flip the toggle ON. The route is POST-only: a PUT answers 405 and leaves the mirror a stub for
+      // ever, so the ANSWER is asserted rather than assumed. A setting that silently does not apply is
+      // exactly what this stage exists to catch.
+      const flippedSt = await (await fetch(`${BS}/immich-shared-albums/settings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+        body: JSON.stringify({ storeSharedAssetsLocally: true }),
+      })).json();
+      check('stored: the toggle is ON and the sidecar says so', flippedSt.storeSharedAssetsLocally === true,
+            JSON.stringify(flippedSt).slice(0, 90));
+
+      // The upgrade REPLACES the stub - a fresh upload takes the ledger row and the stub is deleted -
+      // so follow the ORIGIN asset to the new local id rather than the stub's own id.
+      const backfilled = await until(async () => {
+        const row = ledgerSt().find(r => r.originAsset === stubRow.originAsset && r.storedFull === 1);
+        return row || null;
+      }, 600000);
+      check('stored: the backfill upgraded the stub to a full local copy', !!backfilled,
+            backfilled ? `localAsset=${backfilled.localAsset}` : 'still a stub');
+      const copyRes = await fetch(`${BS}/api/assets/${backfilled?.localAsset}/original`, { headers: { 'x-api-key': BKEY } });
+      const copyBytes = Buffer.from(await copyRes.arrayBuffer());
+      check('stored: the copy is a NEW asset holding the owner\u2019s original byte for byte (the stub was replaced)',
+            !!backfilled && backfilled.localAsset !== stubRow.localAsset && sha1(copyBytes) === sha1(originBytes),
+            `${copyBytes.length}B copy vs ${originBytes.length}B origin, replaced=${backfilled?.localAsset !== stubRow.localAsset}`);
+      // The point of the setting: no chain to the owner. A stub answers through the proxy and carries
+      // the interceptor's `x-cache`; a stored copy stands the interceptor down and Immich answers.
+      check('stored: and it is served from THIS server, not chained to the owner',
+            copyRes.ok && copyRes.headers.get('x-cache') === null, `x-cache=${copyRes.headers.get('x-cache')}`);
+
+      // the joiner LEAVES natively - the share is withdrawn, the STORED COPY stays
+      await api(B, BKEY, `/albums/${mirrorSt.id}/user/me`, { method: 'DELETE' });
+      const afterLeave = await until(async () => {
+        // Keyed on the mapping id captured above: after the leave the mapping row is gone, so a
+        // subquery through `mappings` would find nothing and read "nothing was kept" either way.
+        const rows = sidecarSql('b-sidecar',
+          `SELECT (SELECT COUNT(*) FROM mappings WHERE id='${mappingIdSt}') AS mappings,
+                  (SELECT COUNT(*) FROM seen WHERE mapping='${mappingIdSt}' AND storedFull=1) AS kept,
+                  (SELECT COUNT(*) FROM seen WHERE mapping='${mappingIdSt}' AND storedFull=0) AS proxies`);
+        const parsed = rows ? JSON.parse(rows)[0] : { mappings: -1, kept: -1, proxies: -1 };
+        return parsed.mappings === 0 ? parsed : null;
+      }, 480000);
+      check('stored: the leave drops the mapping and every proxy row but KEEPS the stored copy\u2019s ledger row',
+            !!afterLeave && afterLeave.kept >= 1 && afterLeave.proxies === 0,
+            afterLeave ? `mappings=${afterLeave.mappings} kept=${afterLeave.kept} proxies=${afterLeave.proxies}` : 'timed out');
+      check('stored: the mirror album is gone, so the share really was withdrawn',
+            !(await api(B, BKEY, '/albums')).some(a => a.id === mirrorSt.id));
+      // Read as the account that OWNS the copy, straight from Immich: after the leave the asset is
+      // in no album, so Immich answers an admin's read with `400 Not found or no asset.read access`
+      // however healthy the asset is - which is why this is not read with BKEY.
+      const survives = await fetch(`${B}/api/assets/${backfilled?.localAsset}/original`, { headers: { 'x-api-key': copyKey } });
+      const survivedBytes = Buffer.from(await survives.arrayBuffer());
+      check('stored: THE STORED COPY SURVIVES THE LEAVE, byte for byte (the user\u2019s actual requirement)',
+            survives.ok && sha1(survivedBytes) === sha1(originBytes),
+            `${survivedBytes.length}B status=${survives.status} key=${copyKey ? 'stand-in' : 'MISSING'}`);
+
+      // Tidy: the toggle back off. The copy's asset is left to the rig's own purge - it is owned by the
+      // stand-in account, and no credential this lane holds may delete it.
+      await fetch(`${BS}/immich-shared-albums/settings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+        body: JSON.stringify({ storeSharedAssetsLocally: false }),
+      });
+    }
   }
 }
 

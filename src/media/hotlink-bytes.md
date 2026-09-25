@@ -4,14 +4,38 @@ Where the actual pixels come from. Mirrors store only kilobyte stubs; when a dev
 asks for a thumbnail, preview, original or video, these modules fetch the **real bytes
 live from the owner's server** (chained through the origin for relayed photos).
 
+With **"store shared assets locally"** on, a mirror instead holds the owner's original as a real
+local asset and the ledger row carries `storedFull` — see _Stored copies_ below.
+
 | File             | What it does                                                                                                                                                                                                                                                                                                                               |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `proxy.ts`       | `fetchTrueBytes` resolves an asset's true pixels: a local file for our own photos, or a chained iroh request to the owner's server for a proxy (how a relayed photo streams `D <- origin <- contributor`). `Range` rides the request frame for seekable video. `servePeerBytes` is the peer-facing side, served from the iroh route table. |
+| `proxy.ts`       | `fetchTrueBytes` resolves an asset's true pixels: a local file for our own photos, or a chained iroh request to the owner's server for a proxy (how a relayed photo streams `D <- origin <- contributor`). A `storedFull` row is served from the local file — only genuine stubs chain. `Range` rides the request frame for seekable video. `servePeerBytes` is the peer-facing side, served from the iroh route table. |
 | `interceptor.ts` | The **app-facing** side: intercepts the stock app's own asset URLs (`/api/assets/:id/{thumbnail,original,video/playback}`) and, for a proxy asset, serves true bytes (previews via the LRU cache) — falling through to Immich's stub on any failure. Called by the web router.                                                             |
 | `cache.ts`       | A bounded **LRU byte-cache** for streamed previews. Files live under `<dataDir>/cache` with accounting in SQLite. It is a _cache, not storage_ — capped (`ISA_CACHE_MAX_MB`, default 512), reclaimable, and safe to delete any time. Repeat views skip the cross-server fetch; recently-viewed photos survive owner downtime.              |
 
 **Fail-open:** if the owner's server is unreachable and nothing is cached, the interceptor
 falls back to the local stub (a placeholder tile) rather than erroring — the app keeps working.
+
+## Stored copies
+
+The admin setting `storeSharedAssetsLocally` (kv row `settings`, default OFF) makes a join store
+the owner's **original** instead of a stub: `upgrade_stub_to_full` fetches it over the byte path,
+uploads it as an asset of the local account standing in for the contributor, and rewrites the
+ledger row with `storedFull`. A bounded number of stubs upgrade per reconcile pass
+(`MAX_PER_CYCLE`), which is why the manifest is pulled even while the album's version is unchanged.
+
+A stored copy is the household's own bytes, so it outlives the share:
+
+- Switching the setting back OFF does not revert anything: the backfill only ever upgrades, so
+  copies already here keep their disk and are served from it.
+- `leaveAlbum` and the origin's `handleLeave` purge only `originAsset`-bearing rows that are NOT
+  `storedFull`; the copy's asset and its ledger row survive (`seenForgetProxies` keeps exactly those
+  rows), so the disk the household paid for stays paid for. They are NOT re-attached by a later
+  re-join: reuse is looked up per LIVE mapping of the same album (`existingCopyInAlbum`), and the
+  leave is what removed that mapping, so joining again materialises a copy of its own.
+- Unlinking the whole server still takes them: the copy belongs to that peer's account, and
+  `force: true` deletes the account with its assets. The ledger rows follow
+  (`seenForgetMapping`) — see [`../p2p/wire-protocol.md`](../p2p/wire-protocol.md).
 
 ## Two different callers, two different gates
 

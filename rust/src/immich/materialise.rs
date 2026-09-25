@@ -445,15 +445,6 @@ pub async fn delete_proxy_asset(
     Ok(PurgeOutcome::Purged)
 }
 
-/// Does this mapping have any stub rows at all? Used to gate the full-copy backfill.
-pub fn has_stub_rows(state: &State, mapping_id: &str) -> bool {
-    state
-        .store
-        .seen_for_mapping(mapping_id)
-        .map(|rows| rows.iter().any(|r| !r.stored_full))
-        .unwrap_or(false)
-}
-
 /// The role a mirror's OWNING account plays. Kept here so the two places that reason about
 /// ownership agree.
 pub fn is_owner_mapping(mapping: &Mapping) -> bool {
