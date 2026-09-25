@@ -21,6 +21,13 @@ DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # the rig depends on host ports — containers reach each other by name on the shared isa-demo
 # network, and joins carry an iroh endpoint token — so the map is free to move.
 RIG_BIND=${RIG_BIND:-127.0.0.1}
+# RIG_UP_ONLY=1 stops after the rig is brought up, purged and seeded, and prints what to click. For
+# a HAND test: the same guarded bring-up as a run, but no suite, and C keeps password login so a
+# person can actually sign in. A later run of this script purges whatever the hand test left.
+RIG_UP_ONLY=${RIG_UP_ONLY:-}
+# RIG_MOCKS_ONLY=1 brings the mock Immichs up and STOPS the rig's own sidecars, for a sidecar that
+# `deploy/install.sh` is about to install instead. It implies up-only: the suite needs the rig's own.
+RIG_MOCKS_ONLY=${RIG_MOCKS_ONLY:-}
 PORT_IMMICH_B=${PORT_IMMICH_B:-2284}
 PORT_IMMICH_C=${PORT_IMMICH_C:-2285}
 PORT_IMMICH_D=${PORT_IMMICH_D:-2286}
@@ -235,6 +242,16 @@ redeploy() { # redeploy <compose-dir> <letter> <immich-port> <admin-key>
     # rig) means a fresh Immich with no admin, and every later failure would read as a product bug.
     code=$(curl -s -o /dev/null -w '%{http_code}' -H "x-api-key: $4" "http://localhost:$3/api/users/me")
     [ "$code" = "200" ] || { echo "  !! the admin key for immich-$2 (:$3) is not valid there (HTTP $code) — re-provision it: demo/ci/provision-mock.sh http://localhost:$3 <name> [--scoped]" >&2; exit 1; }
+    if [ -n "$RIG_MOCKS_ONLY" ]; then
+      # The sidecars are about to be INSTALLED instead (`deploy/install.sh`), and two sidecars on one
+      # Immich fight over the same bot account. Stopped, not removed: the hooks that own them stay.
+      docker compose stop "sidecar-$2" >/dev/null 2>&1 || true
+      # No sidecar means no contributor keys to enumerate, but the bot accounts go by email domain
+      # and `force: true` takes their albums and their assets with them.
+      purge "http://localhost:$3" "$4" ""
+      echo "  [sidecar-$2] stopped — the mock is the rig's, the sidecar is installed separately"
+      return 0
+    fi
     docker compose up -d --force-recreate "sidecar-$2" 2>&1 | sed "s/^/  [sidecar-$2] /"
     purge "http://localhost:$3" "$4" "sidecar-$2"
     reset_state "$1" "sidecar-$2"
@@ -251,6 +268,8 @@ wait
 # sidecar may not have created yet. The sidecar opens its store at import, before it listens, so
 # "health answers" is also "that file exists" — wait on that, bounded, rather than on a sleep.
 # On failure, say what the containers were actually doing instead of guessing later.
+# MOCKS_ONLY deliberately leaves them down, so neither this nor the preflight applies.
+if [ -z "$RIG_MOCKS_ONLY" ]; then
 for pair in "$PORT_SIDECAR_B:$DIR/demo:sidecar-b" "$PORT_SIDECAR_C:$DIR/demo/household-c:sidecar-c" "$PORT_SIDECAR_D:$DIR/demo/household-d:sidecar-d"; do
   port=${pair%%:*}; rest=${pair#*:}; cdir=${rest%:*}; svc=${rest##*:}
   for i in $(seq 1 60); do curl -sf "http://localhost:$port/immich-shared-albums/health" >/dev/null && break; sleep 1; done
@@ -275,6 +294,60 @@ for triple in "$DIR/demo:sidecar-b:B" "$DIR/demo/household-c:sidecar-c:C" "$DIR/
   fi
   echo "  $label starts clean"
 done
+fi
+
+# Password login is a HAND-test concern: the suite turns it off on C to stand in for a production
+# host, which would lock a person out of the very server they came to click through. The browser lane
+# re-enables it for its own case for the same reason.
+password_login() { # password_login <immich port> <admin key> <True|False>
+  local cfg
+  cfg=$(curl -s "http://localhost:$1/api/system-config" -H "x-api-key: $2" | python3 -c "import json,sys; c=json.load(sys.stdin); c['passwordLogin']['enabled']=$3; print(json.dumps(c))")
+  curl -s -X PUT "http://localhost:$1/api/system-config" -H "x-api-key: $2" -H 'Content-Type: application/json' -d "$cfg" -o /dev/null -w "  passwordLogin enabled=$3: %{http_code}\n"
+}
+
+if [ -n "$RIG_MOCKS_ONLY" ]; then
+  echo "== hand test: mocks only, the rig's own sidecars stopped (RIG_MOCKS_ONLY) =="
+  password_login "$PORT_IMMICH_C" "$CKEY" True
+  cat <<EOF
+
+  Two mock Immichs are up and purged. The rig's own sidecars are STOPPED, so the sidecar you
+  install with deploy/install.sh is the only one managing each library. Feed the installer:
+
+    B: network household-b_default   URL http://immich-b:2283   key \$(grep -m1 '^B_API_KEY=' demo/.env | cut -d= -f2-)
+    C: network household-c_default   URL http://immich-c:2283   key \$(grep -m1 '^C_API_KEY=' demo/household-c/.env | cut -d= -f2-)
+
+  Immich itself stays on the loopback map: B http://localhost:$PORT_IMMICH_B, C http://localhost:$PORT_IMMICH_C.
+  A later run of this script purges both and puts the rig's own sidecars back.
+EOF
+  exit 0
+fi
+
+# Up-only wants it the other way round, below — a tester has to be able to sign in.
+if [ -z "$RIG_UP_ONLY" ]; then
+  echo "== harden C like production (passwordLogin off) =="
+  password_login "$PORT_IMMICH_C" "$CKEY" False
+fi
+
+if [ -n "$RIG_UP_ONLY" ]; then
+  echo "== hand test: password login ON on C (RIG_UP_ONLY) =="
+  password_login "$PORT_IMMICH_C" "$CKEY" True
+  # Bound beyond loopback means the tester is on another device: hand out an address it can reach.
+  HAND_HOST=${ISA_HAND_TEST_HOST:-}
+  if [ -z "$HAND_HOST" ] && [ "$RIG_BIND" != "127.0.0.1" ]; then
+    HAND_HOST=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+  fi
+  echo "== hand test: seeding two linked households =="
+  # Addresses the SEEDER uses follow the port map. The seeder makes no destructive call beyond
+  # replacing the albums it seeds by name: the guarded purge above is the reset.
+  ISA_HAND_TEST_HOST=${HAND_HOST:-localhost} \
+  PORT_IMMICH_B=$PORT_IMMICH_B PORT_IMMICH_C=$PORT_IMMICH_C \
+  PORT_SIDECAR_B=$PORT_SIDECAR_B PORT_SIDECAR_C=$PORT_SIDECAR_C \
+  BKEY=$BKEY CKEY=$CKEY \
+  ISA_HAND_TEST_EMAIL=${ISA_HAND_TEST_EMAIL:-admin@e2e.local} \
+  ISA_HAND_TEST_PASSWORD=${ISA_HAND_TEST_PASSWORD:-e2e-admin-pass-1} \
+  node "$DIR/demo/hand-test-seed.mjs"
+  exit $?
+fi
 
 echo "== harden C like production (passwordLogin off) =="
 CFGJSON=$(curl -s "http://localhost:$PORT_IMMICH_C/api/system-config" -H "x-api-key: $CKEY" | python3 -c "import json,sys; c=json.load(sys.stdin); c['passwordLogin']['enabled']=False; print(json.dumps(c))")
