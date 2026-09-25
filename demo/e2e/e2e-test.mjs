@@ -2723,7 +2723,10 @@ if (!sidecarHasNode('b-sidecar')) {
 
     // And a LEAVE waits the same way, including the case where the mapping is already dead by then.
     const mirrorT = (await api(B, BKEY, '/albums')).find(a => a.albumName === t);
-    await api(B, BKEY, `/albums/${mirrorT.id}/user/me`, { method: 'DELETE' });
+    // Guarded, not thrown: a stage that cannot find its own mirror must report a failed check and let
+    // the run continue (README rule 9). Throwing here took the whole lane down on CI.
+    if (!mirrorT) requireState('the mirror the leave is performed on');
+    if (mirrorT) await api(B, BKEY, `/albums/${mirrorT.id}/user/me`, { method: 'DELETE' });
     const waitedLeft = await until(async () => (await queued('left')) > 0 ? true : null, 120000);
     check('a leave waits in the queue too', !!waitedLeft, `${await queued('left')} queued`);
     await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/albums`, { headers: { 'x-api-key': AKEY } });
@@ -2751,11 +2754,14 @@ if (!sidecarHasNode('b-sidecar')) {
       const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinedK.album && a.assetCount > 0);
       return found || null;
     }, 90000);
+    if (!mirrorK) requireState('the mirror the removal stage contributes through');
     // A contribution, because that is what puts an account for the contributor ON the owner's album —
     // and a person who is not a member cannot be removed.
     const photoK = await upload(B, BKEY, 'rust-removal.jpg', `rk${Date.now() % 10000}`, '2026-08-28T10:00:00.000Z');
     await ensurePreviews(B, BKEY, [photoK]);
-    await api(B, BKEY, `/albums/${mirrorK.id}/assets`, { ...j({ ids: [photoK] }), method: 'PUT' });
+    if (mirrorK) {
+      await api(B, BKEY, `/albums/${mirrorK.id}/assets`, { ...j({ ids: [photoK] }), method: 'PUT' });
+    }
     const standIn = await until(async () => {
       const album = await api(A, AKEY, `/albums/${albK.id}?withoutAssets=true`);
       return (album.albumUsers || []).find(u =>
@@ -2764,7 +2770,8 @@ if (!sidecarHasNode('b-sidecar')) {
     check('the contributor has an account on the owner\'s album', !!standIn,
           standIn ? `${standIn.user.name} (${standIn.role})` : 'no contributor membership within 4 min');
 
-    const removed = await fetch(`${ORIGIN_DIRECT}/api/albums/${albK.id}/user/${standIn.user.id}`,
+    if (!standIn) requireState('a contributor membership on the owner\'s album to remove');
+    const removed = await fetch(`${ORIGIN_DIRECT}/api/albums/${albK.id}/user/${standIn ? standIn.user.id : ''}`,
       { method: 'DELETE', headers: { 'x-api-key': AKEY } });
     check('the owner removes them, through the sidecar', removed.status < 300, `status ${removed.status}`);
     const lineK = await until(async () => {

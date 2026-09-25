@@ -93,17 +93,14 @@ pub fn has_pending(state: &State) -> bool {
     state.store.trail_pending_count().unwrap_or(0) > 0
 }
 
-/// The two peer-initiated events, so the wording lives in one place.
+/// The two peer-initiated events, so the wording lives in one place. One sentence each: this is a
+/// notification in someone's album, not an explanation — the reasoning belongs in the docs.
 pub fn joined_text(household: &str) -> String {
-    format!(
-        "\"{household}\" joined this album through a share link — their photos appear here as they add them, and removing them later takes their photos back out."
-    )
+    format!("\"{household}\" joined this album.")
 }
 
 pub fn left_text(household: &str) -> String {
-    format!(
-        "\"{household}\" left this album — the photos they added have been taken back out, and this album is no longer shared with them."
-    )
+    format!("\"{household}\" left this album.")
 }
 
 #[cfg(test)]

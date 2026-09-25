@@ -829,7 +829,7 @@ async fn unreunite(headers: &HeaderMap, req: Request) -> Response {
         &album_id,
         "unreunited",
         &format!(
-            "Un-reunited with \"{}\" — their photos are out of this album. It is still shared: reunite the two again any time from your shared-albums page.",
+            "Un-reunited with \"{}\". ",
             peer_name.as_deref().unwrap_or("a linked server")
         ),
     )

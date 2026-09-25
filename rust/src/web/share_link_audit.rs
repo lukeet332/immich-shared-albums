@@ -56,7 +56,7 @@ pub fn post_withdrawal(state: std::sync::Arc<crate::state::State>, headers: Head
             &format!("link:{album_id}"),
             &album_id,
             "link_withdrawn",
-            "Share link deleted — households that joined through it no longer see this album, and the photos they added come back out with them.",
+            "Share link deleted.",
         )
         .await;
     });

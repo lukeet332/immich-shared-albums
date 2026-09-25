@@ -63,10 +63,11 @@ Rust-only modules, and what earns them a file:
 - `p2p/upgrade.rs` → `web/upgrade.rs` — protocol upgrades (websockets) piped at the socket level.
   `passthrough` speaks request/response through a pooled client, and an upgrade is neither.
 - `web/query.rs` — query-string helpers used by several routes.
-- `web/album_member_audit.rs` — the album's own record of somebody being taken off it, worded by WHAT
-  KIND of share the album is: on an invitation the marker's membership IS the share, so its removal
-  ends it; on a link the grant is the link, so removing a person revokes nothing and the line says so
-  (and says what would). Nothing in the TypeScript does this.
+- `web/album_member_audit.rs` — the album's own record of somebody being taken off it: one short
+  sentence naming the person, like every other line the port writes. Whether that removal revoked
+  anything depends on the kind of share — an invitation's membership IS the share, a link's is not —
+  and that reasoning stays in the docs rather than being posted into somebody's album. Nothing in the
+  TypeScript does this. Every audit line follows one formula: who, what happened, full stop.
 - `sync/trail.rs` — audit lines that WAIT for the album's owner. Our bot can only be put on an album by
   someone who can already change it (Immich refuses the admin key), so a peer's join or leave — an
   event that happens while the owner is elsewhere — is queued in `trail_pending` and written on their
@@ -192,7 +193,7 @@ valid connection can never address someone else's album.
 
 | Lane | What it proves | Command | Expected |
 | --- | --- | --- | --- |
-| Unit | pure logic, exactly | `cd rust && cargo test --lib` | `256 passed; 0 failed; 1 ignored` (the ignored one reads a Node-written `state.db`: `ISA_COMPAT_DB=… cargo test -- --ignored`) |
+| Unit | pure logic, exactly | `cd rust && cargo test --lib` | `255 passed; 0 failed; 1 ignored` (the ignored one reads a Node-written `state.db`: `ISA_COMPAT_DB=… cargo test -- --ignored`) |
 | Lint | the guard rules above | `cd rust && cargo clippy --all-targets` | no errors |
 | Image | the container contract: uid 1000, `/data` writable and owned by it, `HEALTHCHECK` healthy, the identity survives a restart | `bash rust/verify-image.sh` | `PASS — image contract holds` |
 | Panel | the Rust sidecar's own panel signs in and renders, with the sidecar fronting Immich on one origin | `bash rust/verify-panel.sh` | `5/5 checks passed` (incl. the "Create a link" button the install docs name) |

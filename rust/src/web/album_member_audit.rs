@@ -3,15 +3,12 @@ use axum::http::HeaderMap;
 
 use crate::immich::client::Client;
 
-/// Write what "the owner removed a person" actually MEANS for this album.
+/// Record that the owner took a person off their album.
 ///
-/// Two different things, and saying the wrong one would be worse than saying nothing:
-///
-///   * an INVITATION album — the membership our marker holds IS the share, so its removal ends the
-///     share: the household's mirror tears itself down and this album is no longer shared with them.
-///   * a LINK album — the grant is the link, and nobody was named by it, so removing a person does
-///     NOT end the share: anyone still holding the link can walk back in. An owner who thinks they
-///     have revoked access here has done nothing of the sort, and the album should say so.
+/// One short sentence, like every other line of ours. The kind of share it was does NOT change the
+/// sentence: an invitation's removal really does revoke, a link's does not, and saying so in the
+/// album every time was an explanation nobody asked to read. That distinction lives in the docs
+/// (`p2p/wire-protocol.md`, "bearer grant") and in the line a withdrawn link posts for itself.
 ///
 /// Fire and forget: the removal has already been answered, and the bot is added on the caller's own
 /// credential because on their album that membership is their act.
@@ -31,15 +28,6 @@ pub fn post_removal(
             .get(&removed_user_id)
             .map(|u| u.name.clone())
             .unwrap_or_else(|| "A person".to_string());
-        // Which KIND of share this album is, from OUR mapping: the path only names the album.
-        let via = state
-            .collections()
-            .mappings
-            .iter()
-            .find(|m| m.album_id == album_id && m.role == crate::store::Role::Owner)
-            .map(|m| m.via.clone())
-            .unwrap_or_default();
-        let text = removal_text(&via, &name);
         if let Err(e) =
             crate::sync::house_bot::add_house_bot_to_album(&state, client, &album_id, &creds).await
         {
@@ -54,24 +42,15 @@ pub fn post_removal(
             &format!("member:{album_id}"),
             &album_id,
             &format!("member_removed:{removed_user_id}"),
-            &text,
+            &removal_text(&name),
         )
         .await;
     });
 }
 
-/// What the album says. The LINK case exists because removing a person there revokes nothing, and an
-/// owner who believes otherwise has been misled by the silence.
-fn removal_text(via: &str, name: &str) -> String {
-    if via == "link" {
-        format!(
-            "{name} was removed from this album. The share LINK is still live, so anyone holding it can join again — delete the link to end the share."
-        )
-    } else {
-        format!(
-            "{name} was removed from this album — their invitation is withdrawn, so it is no longer shared with them."
-        )
-    }
+/// What the album says. Short by design — see `post_removal`.
+fn removal_text(name: &str) -> String {
+    format!("{name} was removed from this album.")
 }
 
 #[cfg(test)]
@@ -80,30 +59,14 @@ mod tests {
     use crate::sync::traffic_triggers::removed_person;
 
     #[test]
-    fn a_removal_says_which_kind_of_share_this_album_is() {
-        // An invitation: the marker's membership IS the share, so this really did revoke it.
-        let invited = removal_text("invite", "Demo Nan");
-        assert!(invited.contains("Demo Nan"), "it names the person: {invited}");
-        assert!(invited.contains("no longer shared"), "it claims the revocation: {invited}");
-
-        // A link: it did NOT revoke anything, and the line has to say so rather than imply safety.
-        let linked = removal_text("link", "Demo Nan");
-        assert!(linked.contains("LINK is still live"), "it warns: {linked}");
-        assert!(
-            linked.contains("delete the link"),
-            "and says what actually ends the share: {linked}"
+    fn a_removal_is_one_short_sentence_naming_the_person() {
+        // The formula every line of ours uses now: who, what happened, full stop. The kind of share
+        // it was does NOT change the sentence — that reasoning lives in the docs, not in somebody's
+        // album, where it was an explanation nobody asked to read.
+        assert_eq!(
+            removal_text("Demo Nan (via Demo household (B) server)"),
+            "Demo Nan (via Demo household (B) server) was removed from this album."
         );
-        assert!(
-            !linked.contains("no longer shared"),
-            "it must not claim a revocation that did not happen: {linked}"
-        );
-    }
-
-    #[test]
-    fn an_album_with_no_mapping_of_ours_gets_the_invitation_wording() {
-        // "invite" describes OUR marker, which is the one thing we can be sure of; the link wording
-        // asserts something about a grant we would have no record of.
-        assert!(removal_text("", "X").contains("invitation"));
     }
 
     #[test]

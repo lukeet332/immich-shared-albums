@@ -357,9 +357,7 @@ export const App = () => {
           Show what immich-shared-albums did to this album
         </label>
         <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>
-          Joins, leaves, invitations and reunions are posted in the album as comments, so the album keeps its
-          own history. Turning this off hides them from YOU only — everyone else in the album still sees them,
-          and the record itself is untouched.
+          Posted in the album as comments. Off hides them from you only — everyone else still sees them.
         </p>
       </div>
       <Confirm ask={asking} onClose={() => setAsking(null)} />

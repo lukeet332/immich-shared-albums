@@ -265,7 +265,7 @@ pub async fn invite_peer_to_reunite(
         &mine.album_id,
         "invited",
         &format!(
-            "Invited {} to reunite this album — the two merge into this one when they accept.",
+            "Invited {} to reunite this album.",
             theirs.owner_name
         ),
     )

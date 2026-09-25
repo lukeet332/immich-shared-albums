@@ -55,9 +55,13 @@ the personal panel directly (anyone) or offers the two panels (an admin). The ad
 `/admin` because a choice has to point somewhere; `/me` is the personal panel.
 
 **And one is acted on after.** `DELETE /api/albums/:id/user/:userId` is the owner taking a person off
-their album: recorded as a comment, worded by which kind of share the album is — an invitation's
-membership IS the share, a link's is not (`web/album_member_audit.rs`). `me` is excluded, because that
-is a person LEAVING, which is a different event with its own line.
+their album, recorded as one short comment naming them (`web/album_member_audit.rs`). `me` is
+excluded, because that is a person LEAVING, which is a different event with its own line.
+
+**Every audit line is one sentence: who, what happened, full stop.** The consequence is not posted —
+whether removing a person revoked anything depends on the kind of share (an invitation's membership
+IS the share; a link's is not — see "bearer grant" above), and that reasoning belongs here rather than
+in somebody's album.
 
 **One proxied request is acted on before it is forwarded.** `DELETE /api/shared-links/:id` is the
 only write whose trail needs the state it is about to destroy: the album it granted is read first, as

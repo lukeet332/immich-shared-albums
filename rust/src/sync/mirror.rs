@@ -416,7 +416,7 @@ pub async fn unify_own_album(
         &own.album_id,
         "reunited",
         &format!(
-            "Reunited with \"{}\" — photos both sides hold now show once. Undo any time from your shared-albums page.",
+            "Reunited with \"{}\".",
             peer_name.as_deref().unwrap_or("a linked server")
         ),
     )
