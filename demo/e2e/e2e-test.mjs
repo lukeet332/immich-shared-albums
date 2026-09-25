@@ -2785,9 +2785,10 @@ if (!sidecarHasNode('b-sidecar')) {
     }, 60000);
     check('the album records the removal, naming the person', !!lineK,
           lineK ? `"${lineK.comment.slice(0, 50)}…"` : 'no line within 60s');
-    check('and says the share LINK is still live, because removing a person revoked nothing',
-          !!lineK && /LINK is still live/.test(lineK.comment || '') && /delete the link/.test(lineK.comment || ''),
-          lineK ? lineK.comment.slice(0, 90) : 'no line');
+    // And it is ONE short sentence — the kind-of-share reasoning moved to the docs, where it belongs.
+    check('and it is one short sentence, the person, the act',
+          !!lineK && lineK.comment === `${standIn.user.name} was removed from this album.`,
+          lineK ? `"${lineK.comment}" (${lineK.comment.length} chars)` : 'no line');
   }
 }
 
