@@ -319,14 +319,27 @@ const toggleProblem = cWasHardened ? await setPasswordLogin(true) : '';
 // crash on the missing token — so wait for the sign-in the lane needs rather than for the PUT. The
 // ceiling is generous because a stale config read can outlive a 20s budget on a loaded runner, and the
 // detail names the last answer, because "C failed" with no status is a failure nobody can act on.
+//
+// A SECOND actor can also switch the setting off under us: minting a key for a newly arrived
+// contributor borrows password login, and a build that decides that borrow from a CACHED read
+// restores `disabled` over an enable it never made. The Rust build no longer can (it borrows only on
+// a refused login — see rust/PORT.md), but the TypeScript build still does, and it is kept as the
+// deprecated baseline rather than fixed. The lane's precondition here is "C has password login on",
+// so it RE-ASSERTS that instead of flaking — bounded, because looping would hide a real regression.
 const signIn = async (base) => {
   let last = 'no attempt completed';
+  let reEnabled = 0;
   for (let attempt = 0; attempt < 60; attempt++) {
     const answer = await fetch(`${base}/api/auth/login`, { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) });
     const body = await answer.json().catch(() => ({}));
     if (body?.accessToken) return body;
     last = `${answer.status} ${JSON.stringify(body).slice(0, 50)}`;
+    if (reEnabled < 3 && /password login has been disabled/i.test(last)) {
+      reEnabled += 1;
+      await setPasswordLogin(true);
+      last += ` (re-enabled #${reEnabled})`;
+    }
     await new Promise((res) => setTimeout(res, 1000));
   }
   return { failed: last };
