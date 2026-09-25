@@ -2659,6 +2659,30 @@ if (!sidecarHasNode('b-sidecar')) {
   }
 }
 
+// An owner's OWN act, recorded in the album that carries it. A share link's delete passes through
+// the sidecar with their credentials, and that is the one moment our bot can be put on THEIR album to
+// write the line — an admin key cannot touch an album it does not own. This is where a withdrawal's
+// trail comes from, and it is the same request Immich's own UI makes.
+// RUST-ONLY: the TypeScript has no traffic triggers for it.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: deleting a share link is recorded in the album');
+  {
+    const albW = await api(B, BKEY, '/albums', j({ albumName: `rust withdraw ${Date.now()}` }));
+    const linkW = await api(B, BKEY, '/shared-links', j({ type: 'ALBUM', albumId: albW.id, allowUpload: true }));
+    check('rig: the album is shared by a link', !!linkW.key, (linkW.key || '').slice(0, 8));
+    const deleted = await fetch(`${BS}/api/shared-links/${linkW.id}`, {
+      method: 'DELETE', headers: { 'x-api-key': BKEY },
+    });
+    check('rig: the owner deletes it through the sidecar', deleted.ok, `status ${deleted.status}`);
+    const line = await until(async () => {
+      const rows = await api(B, BKEY, `/activities?albumId=${albW.id}`);
+      return (rows || []).find(a => /share link deleted/i.test(a.comment || '')) || null;
+    }, 60000);
+    check('the album records the withdrawal, as a comment from the addon', !!line,
+          line ? `"${line.comment.slice(0, 50)}…" by ${line.user?.name}` : 'no line within 60s');
+  }
+}
+
 if (process.env.E2E_PROFILE) {
   const total = WAITS.reduce((s, w) => s + w.ms, 0);
   const polls = WAITS.reduce((s, w) => s + w.polls, 0);

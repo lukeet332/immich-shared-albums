@@ -54,6 +54,12 @@ session rather than on admin: it asks Immich who is calling (`pages/root/App.tsx
 the personal panel directly (anyone) or offers the two panels (an admin). The admin panel lives at
 `/admin` because a choice has to point somewhere; `/me` is the personal panel.
 
+**One proxied request is acted on before it is forwarded.** `DELETE /api/shared-links/:id` is the
+only write whose trail needs the state it is about to destroy: the album it granted is read first, as
+the caller, and the withdrawal is written into that album afterwards by the house bot — added on the
+caller's own credential, because the household admin key cannot touch an album it does not own
+(`web/share_link_audit.rs`).
+
 **One proxied answer is rewritten, for one reader.** `GET /api/activities` is the album's comment
 history, and it is the only route where the passthrough looks at the body: a caller who has turned
 `auditVisibleInComments` off (their own row, `/me/preferences`) gets the addon's own lines dropped

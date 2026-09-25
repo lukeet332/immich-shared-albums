@@ -7,5 +7,6 @@ pub mod interceptor;
 pub mod panel_events;
 pub mod passthrough;
 pub mod query;
+pub mod share_link_audit;
 pub mod server;
 pub mod upgrade;

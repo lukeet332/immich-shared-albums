@@ -44,6 +44,12 @@ fn upstream() -> Result<&'static reqwest::Client, String> {
 /// reason, never a dropped connection.
 pub async fn proxy_to_immich(method: Method, uri: &Uri, headers: &HeaderMap, body: Body) -> Response {
     let path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    // A share link being deleted takes its own history with it, so its album is resolved NOW, while
+    // the link still answers — as the caller, whose act this is and whose credential is the only one
+    // that can later record it on their album.
+    let withdrawn_album =
+        crate::web::share_link_audit::album_of_deleted_link(method.as_str(), uri.path(), headers)
+            .await;
     let url = format!("{}{}", cfg().immich_url.trim_end_matches('/'), path_and_query);
 
     let client = match upstream() {
@@ -84,6 +90,11 @@ pub async fn proxy_to_immich(method: Method, uri: &Uri, headers: &HeaderMap, bod
         }
         // A set-cookie carries one cookie per header; appending keeps them all.
         response = response.header(name, value);
+    }
+    // The withdrawal has happened: put it in the album, as the person who did it. Fire and forget,
+    // so their click is never held up by a trail line.
+    if let Some(album_id) = withdrawn_album {
+        crate::web::share_link_audit::post_withdrawal(crate::state::state().clone(), headers.clone(), album_id);
     }
     // The one route whose ANSWER is rewritten, and only for a reader who asked. Everything else
     // streams, and so does this when the preference is the default: see `filter_activities`.

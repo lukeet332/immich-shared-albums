@@ -30,6 +30,22 @@ fn is_asset_meta_edit(verb: &str, path: &str) -> bool {
             .unwrap_or(false)
 }
 
+/// The id of a share link being deleted: `DELETE /api/shared-links/:id` and nothing else.
+///
+/// This is the one write whose trail needs the state it is about to destroy — the album it granted —
+/// so the caller resolves that BEFORE the request is forwarded, while the link still exists. Pure, so
+/// the shape is pinned: a delete of anything else, or the collection route, must not match.
+pub fn deleted_share_link_id(method: &str, path: &str) -> Option<String> {
+    if !method.eq_ignore_ascii_case("DELETE") {
+        return None;
+    }
+    let rest = path.strip_prefix("/api/shared-links/")?;
+    if rest.is_empty() || rest.contains('/') {
+        return None;
+    }
+    Some(rest.to_string())
+}
+
 /// Which requests are worth acting on — measured, not guessed.
 ///
 /// A session on Immich is dozens of `/api` calls and the overwhelming majority are the byte path

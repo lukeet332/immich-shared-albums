@@ -63,6 +63,10 @@ Rust-only modules, and what earns them a file:
 - `p2p/upgrade.rs` → `web/upgrade.rs` — protocol upgrades (websockets) piped at the socket level.
   `passthrough` speaks request/response through a pooled client, and an upgrade is neither.
 - `web/query.rs` — query-string helpers used by several routes.
+- `web/share_link_audit.rs` — the album's own record of a share link being withdrawn. The delete
+  passes through the proxy, so the album it granted is resolved BEFORE the request is forwarded (while
+  the link still answers) and the line is posted afterwards with the OWNER's credentials — the only
+  ones that can put our bot on their album. Nothing in the TypeScript does this.
 - `web/activity_filter.rs` — hiding our own audit lines from ONE reader, in the answer they were
   served. Immich's comment history reaches the browser as `GET /api/activities` through our
   passthrough, so a per-person visibility preference can be honoured without touching Immich: the rows
@@ -178,11 +182,11 @@ valid connection can never address someone else's album.
 
 | Lane | What it proves | Command | Expected |
 | --- | --- | --- | --- |
-| Unit | pure logic, exactly | `cd rust && cargo test --lib` | `248 passed; 0 failed; 1 ignored` (the ignored one reads a Node-written `state.db`: `ISA_COMPAT_DB=… cargo test -- --ignored`) |
+| Unit | pure logic, exactly | `cd rust && cargo test --lib` | `250 passed; 0 failed; 1 ignored` (the ignored one reads a Node-written `state.db`: `ISA_COMPAT_DB=… cargo test -- --ignored`) |
 | Lint | the guard rules above | `cd rust && cargo clippy --all-targets` | no errors |
 | Image | the container contract: uid 1000, `/data` writable and owned by it, `HEALTHCHECK` healthy, the identity survives a restart | `bash rust/verify-image.sh` | `PASS — image contract holds` |
 | Panel | the Rust sidecar's own panel signs in and renders, with the sidecar fronting Immich on one origin | `bash rust/verify-panel.sh` | `5/5 checks passed` (incl. the "Create a link" button the install docs name) |
-| Rig | cross-household behaviour against live mock Immich stacks, with the Rust image as all three sidecars | `ISA_DOCKERFILE=rust/Dockerfile bash demo/run-mock-e2e.sh` | `ALL PASS (256 checks)` — 28 more than the TypeScript lane runs, the Rust-only gates (`native leave`, `unlink`'s ledger cleanup, `store-shared-locally`) among them |
+| Rig | cross-household behaviour against live mock Immich stacks, with the Rust image as all three sidecars | `ISA_DOCKERFILE=rust/Dockerfile bash demo/run-mock-e2e.sh` | `ALL PASS (258 checks)` — 28 more than the TypeScript lane runs, the Rust-only gates (`native leave`, `unlink`'s ledger cleanup, `store-shared-locally`) among them |
 | Browser | the banner, the accept page, the chooser, the settings card and the panel's live flows in Chromium | `cd demo/e2e && CKEY=… B_EMAIL=admin@e2e.local B_PASS=… node browser-test.mjs` | `BROWSER PASS (61 checks)` (the lane skips one check when C is not password-hardened) |
 | Install | `deploy/install.sh` runs end to end and produces a working install | `bash rust/verify-install.sh` | `PASS — install.sh installed rust/Dockerfile end to end` |
 | Node lane | the TypeScript baseline still passes, i.e. the rig itself is sound | `bash demo/run-mock-e2e.sh` | `ALL PASS (228 checks)` |
