@@ -68,6 +68,13 @@ Rust-only modules, and what earns them a file:
   anything depends on the kind of share — an invitation's membership IS the share, a link's is not —
   and that reasoning stays in the docs rather than being posted into somebody's album. Nothing in the
   TypeScript does this. Every audit line follows one formula: who, what happened, full stop.
+- `sync/comments.rs`, like half — Immich's activities are comments AND likes, and both belong to the
+  conversation: the like rides the activity payload with a `type` (the way `remove` rides the refs
+  payload), both gates count likes, and a like is materialised on the other side AS THE PERSON who
+  made it. The canonical list and the materialiser also refuse our own machinery's lines: the relay
+  used to provision an account for the PEER's bot on this server, which is what put a second
+  "immich-shared-albums (bot)" in the user picker. A like that is UN-liked is not propagated — that
+  matches comments, whose deletions do not propagate either.
 - `sync/trail.rs` — audit lines that WAIT for the album's owner. Our bot can only be put on an album by
   someone who can already change it (Immich refuses the admin key), so a peer's join or leave — an
   event that happens while the owner is elsewhere — is queued in `trail_pending` and written on their
@@ -197,7 +204,7 @@ valid connection can never address someone else's album.
 | Lint | the guard rules above | `cd rust && cargo clippy --all-targets` | no errors |
 | Image | the container contract: uid 1000, `/data` writable and owned by it, `HEALTHCHECK` healthy, the identity survives a restart | `bash rust/verify-image.sh` | `PASS — image contract holds` |
 | Panel | the Rust sidecar's own panel signs in and renders, with the sidecar fronting Immich on one origin | `bash rust/verify-panel.sh` | `5/5 checks passed` (incl. the "Create a link" button the install docs name) |
-| Rig | cross-household behaviour against live mock Immich stacks, with the Rust image as all three sidecars | `ISA_DOCKERFILE=rust/Dockerfile bash demo/run-mock-e2e.sh` | `ALL PASS (270 checks)` — 28 more than the TypeScript lane runs, the Rust-only gates (`native leave`, `unlink`'s ledger cleanup, `store-shared-locally`) among them |
+| Rig | cross-household behaviour against live mock Immich stacks, with the Rust image as all three sidecars | `ISA_DOCKERFILE=rust/Dockerfile bash demo/run-mock-e2e.sh` | `ALL PASS (275 checks)` — 28 more than the TypeScript lane runs, the Rust-only gates (`native leave`, `unlink`'s ledger cleanup, `store-shared-locally`) among them |
 | Browser | the banner, the accept page, the chooser, the settings card and the panel's live flows in Chromium | `cd demo/e2e && CKEY=… B_EMAIL=admin@e2e.local B_PASS=… node browser-test.mjs` | `BROWSER PASS (61 checks)` (the lane skips one check when C is not password-hardened) |
 | Install | `deploy/install.sh` runs end to end and produces a working install | `bash rust/verify-install.sh` | `PASS — install.sh installed rust/Dockerfile end to end` |
 | Node lane | the TypeScript baseline still passes, i.e. the rig itself is sound | `bash demo/run-mock-e2e.sh` | `ALL PASS (228 checks)` |

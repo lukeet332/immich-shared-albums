@@ -2792,6 +2792,43 @@ if (!sidecarHasNode('b-sidecar')) {
   }
 }
 
+// A LIKE on one server is a like on the other, attributed to the person who made it — the way a
+// local member's like looks. Likes ride the activity payload with a `type`, and both gates (the
+// statistics and the version handshake) count them, or a like that moved would never be pulled.
+// RUST-ONLY: the TypeScript filters activities to comments.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: a like crosses servers and is attributed to the person who made it');
+  {
+    const albL = await api(A, AKEY, '/albums', j({ albumName: `rust like ${Date.now()}` }));
+    const linkL = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albL.id, allowUpload: true }))).key;
+    const joinedL = await joinWithRetry(() => api(A, AKEY, '/shared-links',
+      j({ type: 'ALBUM', albumId: albL.id, allowUpload: true })));
+    const mirrorL = await until(async () => {
+      const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinedL.album && a.assetCount > 0);
+      return found || null;
+    }, 120000);
+    check('the joiner holds the mirror', !!mirrorL, mirrorL ? `${mirrorL.assetCount} asset(s)` : 'missing');
+
+    // The OWNER of the album likes it, on the ORIGIN: the like must cross to the joiner.
+    await api(A, AKEY, '/activities', j({ albumId: albL.id, type: 'like' }));
+    const onMirror = await until(async () => {
+      const rows = await api(B, BKEY, `/activities?albumId=${mirrorL.id}`);
+      return (rows || []).find(a => a.type === 'like') || null;
+    }, 120000);
+    check('a like by the origin\'s owner appears on the joiner\'s mirror', !!onMirror,
+          onMirror ? `${onMirror.user?.name} liked it` : 'no like within 2 min');
+
+    // And the reverse: the joiner likes their mirror, and the ORIGIN records it.
+    await api(B, BKEY, '/activities', j({ albumId: mirrorL.id, type: 'like' }));
+    const onOrigin = await until(async () => {
+      const rows = await api(A, AKEY, `/activities?albumId=${albL.id}`);
+      return (rows || []).find(a => a.type === 'like' && (a.user?.name || '').includes('Demo household')) || null;
+    }, 120000);
+    check('and a like by the joiner reaches the origin, as them', !!onOrigin,
+          onOrigin ? `${onOrigin.user?.name} liked it` : 'no like within 2 min');
+  }
+}
+
 if (process.env.E2E_PROFILE) {
   const total = WAITS.reduce((s, w) => s + w.ms, 0);
   const polls = WAITS.reduce((s, w) => s + w.polls, 0);

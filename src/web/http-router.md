@@ -82,6 +82,13 @@ of us with the credential that can authorise a membership on their OWN albums �
 lines queued while they were away (a peer's join, a peer's leave) are finally written
 (`sync/trail.rs`). Detached from the answer, so a panel never waits on the trail.
 
+**The conversation carries likes as well as comments.** `/albums/:id/activity` (the push) and
+`/albums/:id/comments` (the canonical read) both carry a `type` on every row — additive, so an older
+peer that never reads it gets comments exactly as before. Both the statistics gate and the version
+handshake count comments + likes, or a like that moved would never be pulled. Utility accounts'
+activity is excluded at the ORIGIN: our bot's lines are this household's trail, not a person for the
+peer to mirror.
+
 **The per-user routes answer as the caller.** `/me/albums` and `/me/matches` read Immich with the
 caller's own forwarded credential (`immich/access.ts` decides that once), so membership and
 ownership are Immich's answers rather than a filtered admin read — and `/me/albums/publish` reads

@@ -22,12 +22,38 @@ fn album_reader_auth(state: &State, mapping: &Mapping) -> Result<crate::immich::
 }
 
 async fn get_comments(client: &Client, album_id: &str, auth: &Auth<'_>) -> Result<Vec<Value>, String> {
-    let path = format!("/activities?albumId={album_id}&type=comment");
+    // NO type filter: Immich's activities are comments AND likes, and both belong to the
+    // conversation a joiner is looking at. Callers branch on the row's own `type`.
+    let path = format!("/activities?albumId={album_id}");
     client
         .get(&path, auth)
         .await
         .map_err(|e| e.message())
         .map(|v| v.and_then(|v| v.as_array().cloned()).unwrap_or_default())
+}
+
+/// Post one activity of ANY kind. A like carries no text, which is Immich's own shape for it.
+pub(crate) fn post_activity<'a>(
+    client: &'a Client,
+    album_id: &str,
+    kind: &str,
+    comment: &str,
+    auth: &'a Auth<'a>,
+) -> impl std::future::Future<Output = Result<Value, String>> + 'a {
+    // Owned before the async block: the error message below would otherwise borrow `kind` across
+    // the await, which is the one borrow this future cannot carry.
+    let kind = kind.to_string();
+    let mut body = json!({ "albumId": album_id, "type": kind });
+    if kind == "comment" {
+        body["comment"] = json!(comment);
+    }
+    async move {
+        client
+            .json(reqwest::Method::POST, "/activities", auth, Some(&body))
+            .await
+            .map_err(|e| e.message())?
+            .ok_or_else(|| format!("Immich answered without a {kind}"))
+    }
 }
 
 pub(crate) fn post_comment<'a>(
@@ -70,6 +96,13 @@ pub async fn materialise_comments(
             continue;
         }
         let author = comment.get("author").and_then(|v| v.as_str()).unwrap_or(&peer.name);
+        // The peer's own BOT is machinery, not a person: its audit lines are that household's record,
+        // and materialising them here provisioned an account for it on THIS server — which is what
+        // put a second "immich-shared-albums (bot)" in the user picker. Every build names its bot
+        // identically, so the display name is the reliable signal.
+        if author == crate::sync::house_bot::HOUSE_BOT_DISPLAY_NAME {
+            continue;
+        }
         let author_user_id = comment.get("authorUserId").and_then(|v| v.as_str());
         let text = comment.get("comment").and_then(|v| v.as_str()).unwrap_or_default();
 
@@ -79,6 +112,14 @@ pub async fn materialise_comments(
             .as_ref()
             .and_then(|slug| state.collections().contributors.get(slug).and_then(|c| c.api_key.clone()));
 
+        // A LIKE is posted as a like: it renders as "X liked it" here, exactly as it did at home.
+        // Owned, because the poster borrows it for the whole round trip.
+        let kind = comment
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("comment")
+            .to_string();
+        let text = if kind == "comment" { text } else { "" };
         let posted = match ensure_contributor(
             state,
             client,
@@ -94,12 +135,12 @@ pub async fn materialise_comments(
         {
             Ok(contributor) => {
                 let key = contributor.api_key.clone().unwrap_or_default();
-                match post_comment(client, &mapping.album_id, text, &Auth::Key(&key)).await {
+                match post_activity(client, &mapping.album_id, &kind, text, &Auth::Key(&key)).await {
                     Ok(posted) => posted,
                     Err(e) if cannot_succeed(&e) => {
                         let bot = ensure_house_bot(state, client).await?;
                         let bot_key = bot.api_key.clone().unwrap_or_default();
-                        post_comment(client, &mapping.album_id, text, &Auth::Key(&bot_key))
+                        post_activity(client, &mapping.album_id, &kind, text, &Auth::Key(&bot_key))
                             .await
                             .map_err(|e| e.to_string())?
                     }
@@ -111,7 +152,7 @@ pub async fn materialise_comments(
             Err(e) if cannot_succeed(&e) => {
                 let bot = ensure_house_bot(state, client).await?;
                 let bot_key = bot.api_key.clone().unwrap_or_default();
-                post_comment(client, &mapping.album_id, text, &Auth::Key(&bot_key))
+                post_activity(client, &mapping.album_id, &kind, text, &Auth::Key(&bot_key))
                     .await
                     .map_err(|e| e.to_string())?
             }
@@ -239,7 +280,24 @@ pub async fn handle_comments(
     };
     let comments: Vec<Value> = activities
         .iter()
-        .filter(|a| a.get("comment").and_then(|c| c.as_str()).map(|c| !c.is_empty()).unwrap_or(false))
+        .filter(|a| {
+            // Comments with text, and likes. A LIKE carries no text, so a text-only filter is what
+            // kept them from ever leaving this server.
+            let is_comment = a.get("comment").and_then(|c| c.as_str()).map(|c| !c.is_empty()).unwrap_or(false);
+            let is_like = a.get("type").and_then(|t| t.as_str()) == Some("like");
+            if !(is_comment || is_like) {
+                return false;
+            }
+            // And OUR OWN machinery's lines stay here: the trail is this household's record, and
+            // mirroring it elsewhere provisioned an account for OUR bot on THEIR server — which is
+            // what put a second "immich-shared-albums (bot)" in their user picker.
+            let is_utility = a
+                .pointer("/user/id")
+                .and_then(|v| v.as_str())
+                .map(|id| users.get(id).map(|u| u.utility).unwrap_or(false))
+                .unwrap_or(false);
+            !is_utility
+        })
         .map(|a| {
             let user = a.get("user").cloned().unwrap_or(Value::Null);
             let id = user.get("id").and_then(|v| v.as_str()).unwrap_or_default();
@@ -256,6 +314,8 @@ pub async fn handle_comments(
             };
             json!({
                 "id": a.get("id").cloned().unwrap_or(Value::Null),
+                // The kind rides the canonical list: a joiner must know a like is a like.
+                "type": a.get("type").cloned().unwrap_or(json!("comment")),
                 "comment": a.get("comment").cloned().unwrap_or(Value::Null),
                 "createdAt": a.get("createdAt").cloned().unwrap_or(Value::Null),
                 "author": if author.is_empty() { cfg().name.clone() } else { author },
@@ -311,7 +371,13 @@ async fn sync_one_album(
         .await
         .ok()
         .flatten();
-    let count = stats.as_ref().and_then(|s| s.get("comments")).and_then(|v| v.as_i64());
+    // Comments AND likes: a like that moved must pass this gate or it is never pushed.
+    let count = stats.as_ref().and_then(|s| {
+        Some(
+            s.get("comments").and_then(|v| v.as_i64()).unwrap_or(0)
+                + s.get("likes").and_then(|v| v.as_i64()).unwrap_or(0),
+        )
+    });
     if let Some(count) = count {
         if Some(count) == mapping.comment_count {
             return Ok(());
@@ -330,7 +396,10 @@ async fn sync_one_album(
         .filter(|a| {
             let id = a.get("id").and_then(|v| v.as_str()).unwrap_or_default();
             let author_id = a.pointer("/user/id").and_then(|v| v.as_str()).unwrap_or_default();
-            a.get("comment").and_then(|c| c.as_str()).map(|c| !c.is_empty()).unwrap_or(false)
+            // Comments travel as text; likes travel as themselves. Both are conversation.
+            let is_comment = a.get("comment").and_then(|c| c.as_str()).map(|c| !c.is_empty()).unwrap_or(false);
+            let is_like = a.get("type").and_then(|t| t.as_str()) == Some("like");
+            (is_comment || is_like)
                 && !state.store.seen_act_has(&format!("local:{id}")).unwrap_or(false)
                 && !state.store.seen_act_has(&format!("remote:{id}")).unwrap_or(false)
                 && !utility_ids.iter().any(|u| u == author_id)
@@ -364,6 +433,9 @@ async fn sync_one_album(
         .map(|a| {
             json!({
                 "id": a.get("id").cloned().unwrap_or(Value::Null),
+                // The kind rides the payload, the way `remove` rides the refs payload: an older peer
+                // that never reads it gets comments exactly as before.
+                "type": a.get("type").cloned().unwrap_or(json!("comment")),
                 "comment": a.get("comment").cloned().unwrap_or(Value::Null),
                 "author": a.pointer("/user/name").and_then(|v| v.as_str()).unwrap_or(&cfg().name),
                 "authorUserId": a.pointer("/user/id").cloned().unwrap_or(Value::Null),

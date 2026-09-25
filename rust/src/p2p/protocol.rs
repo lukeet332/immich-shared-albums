@@ -577,7 +577,14 @@ pub async fn handle_version(caller_pub: &str, album_mapping_id: &str) -> (u16, V
         .await
         .ok()
         .flatten()
-        .and_then(|v| v.get("comments").and_then(|c| c.as_i64()));
+        .and_then(|v| {
+            // Comments AND likes: a like must move the version, or the canonical pull that would
+            // carry it to the joiner never fires.
+            Some(
+                v.get("comments").and_then(|c| c.as_i64()).unwrap_or(0)
+                    + v.get("likes").and_then(|c| c.as_i64()).unwrap_or(0),
+            )
+        });
     // `version` is an OPAQUE equality token. The packed shape is kept for protocol-2 compatibility
     // (updatedAt alone misses cascade deletions), but receivers read the structured fields and
     // never parse the string.
