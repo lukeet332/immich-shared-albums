@@ -2485,7 +2485,7 @@ if (!sidecarHasNode('b-sidecar')) {
     check('stored: the stub exists', !!stubSt, stubSt ? '' : 'timed out');
 
     // flip the toggle ON, then wait for the backfill (the reconcile drains it when the setting is on)
-    await api(B, BKEY, '/settings', { ...j({ storeSharedAssetsLocally: true }), method: 'PUT' });
+    await fetch(`${BS}/immich-shared-albums/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY }, body: JSON.stringify({ storeSharedAssetsLocally: true }) });
     const backfilled = await until(async () => {
       const rows = sidecarSql('b-sidecar',
         `SELECT storedFull FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorSt.id}')`);
@@ -2515,7 +2515,7 @@ if (!sidecarHasNode('b-sidecar')) {
           copySurvives.ok && survivedBytes.byteLength === copyBytes.byteLength,
           `${survivedBytes.byteLength}B status=${copySurvives.status}`);
     // tidy: the toggle back off, the stored copy\u2019s asset deleted (it is a utility-owned test asset)
-    await api(B, BKEY, '/settings', { ...j({ storeSharedAssetsLocally: false }), method: 'PUT' });
+    await fetch(`${BS}/immich-shared-albums/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY }, body: JSON.stringify({ storeSharedAssetsLocally: false }) });
     await api(B, BKEY, '/assets', { ...j({ ids: [stubSt.id], force: true }), method: 'DELETE' });
   }
 }
