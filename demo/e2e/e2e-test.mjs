@@ -873,21 +873,30 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
   // The two checks above pass on LOST VISIBILITY alone: once the admin leaves, the mirror is
   // invisible to them whether or not the sidecar purged anything. The ledger is the honest
   // answer - read through the sidecar's container, the same rule as every state read here.
-  const ledgerGone = await until(async () => {
+  // The two checks above pass on LOST VISIBILITY alone: once the admin leaves, the mirror is
+  // invisible to them whether or not the sidecar purged anything. The sidecar's own /peers view
+  // is the honest answer - it reads what the sidecar still holds, not what the admin sees.
+  const peersGone = await until(async () => {
+    const peers = await api(B, BKEY, '/peers');
+    return !(peers.albums || []).some(a => a.name === 'delete test') ? true : null;
+  }, 900000);
+  check('native leave: the mapping is gone from the sidecar\u2019s own peer view', !!peersGone, peersGone ? '' : 'still in /peers after 15 min');
+  // The ledger read through the sidecar's container confirms the DB rows went too.
+  const lcLedger = await until(async () => {
     const state = sidecarSql('b-sidecar',
       `SELECT (SELECT COUNT(*) FROM mappings WHERE albumId='${mirrorD.id}') AS mappings,
               (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorD.id}')) AS seen`);
     const parsed = state ? JSON.parse(state)[0] : { mappings: -1, seen: -1 };
-    // The watcher pass is serialised behind every mapping\u2019s dial - a restarting peer in the
-    // same pass costs its dial timeout per mapping, so detection latency is minutes, not seconds.
     return parsed.mappings === 0 && parsed.seen === 0 ? parsed : null;
-  }, 1500000);
-  const lastCounts = sidecarSql('b-sidecar',
-    `SELECT (SELECT COUNT(*) FROM mappings WHERE albumId='${mirrorD.id}') AS mappings,
-            (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorD.id}')) AS seen`);
-  const last = lastCounts ? JSON.parse(lastCounts)[0] : { mappings: -1, seen: -1 };
-  check('native leave: the mapping and its ledger rows are gone (verified through the sidecar, not the admin visibility)',
-        !!ledgerGone, ledgerGone ? 'mapping rows=0, ledger rows=0' : `still ${last.mappings} mapping(s), ${last.seen} ledger row(s) after 25 min`);
+  }, 900000);
+  const last = (() => {
+    const state = sidecarSql('b-sidecar',
+      `SELECT (SELECT COUNT(*) FROM mappings WHERE albumId='${mirrorD.id}') AS mappings,
+              (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorD.id}')) AS seen`);
+    return state ? JSON.parse(state)[0] : { mappings: -1, seen: -1 };
+  })();
+  check('native leave: the ledger rows are gone (verified through the sidecar\u2019s container)',
+        !!lcLedger, lcLedger ? 'mapping rows=0, ledger rows=0' : `still ${last.mappings} mapping(s), ${last.seen} ledger row(s)`);
 }
 
 stage('kill test — uncached photos fail closed; cached ones survive from cache');
