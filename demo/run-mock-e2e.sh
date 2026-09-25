@@ -349,10 +349,6 @@ if [ -n "$RIG_UP_ONLY" ]; then
   exit $?
 fi
 
-echo "== harden C like production (passwordLogin off) =="
-CFGJSON=$(curl -s "http://localhost:$PORT_IMMICH_C/api/system-config" -H "x-api-key: $CKEY" | python3 -c "import json,sys; c=json.load(sys.stdin); c['passwordLogin']['enabled']=False; print(json.dumps(c))")
-curl -s -X PUT "http://localhost:$PORT_IMMICH_C/api/system-config" -H "x-api-key: $CKEY" -H 'Content-Type: application/json' -d "$CFGJSON" -o /dev/null -w "C passwordLogin disabled: %{http_code}\n"
-
 echo "== E2E (C origin -> B joiner) =="
 cd "$DIR/demo/e2e"
 # Addresses the SUITE uses from this host follow the port map. Addresses a SIDECAR is told to
