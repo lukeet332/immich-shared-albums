@@ -269,6 +269,13 @@ pub async fn handle_comments(
         return (404, json!({ "error": "unknown album mapping", "code": "unknown_mapping" }));
     };
     let users = users_by_id(client, 10_000).await;
+    // Our own bot's id, bound before anything else: the canonical list keeps OUR trail here, but a
+    // person stand-in is also a utility account and its rows are a human's relayed words.
+    let house_bot_id = state
+        .collections()
+        .contributors
+        .get(&crate::sync::house_bot::house_bot_slug())
+        .and_then(|c| c.user_id.clone());
     // An owner mapping reads as the household; a member mapping reads as the stand-in that owns the
     // mirror, and is refused when this household holds no key for it.
     let Ok(creds) = album_reader_auth(state, &mapping) else {
@@ -288,15 +295,18 @@ pub async fn handle_comments(
             if !(is_comment || is_like) {
                 return false;
             }
-            // And OUR OWN machinery's lines stay here: the trail is this household's record, and
-            // mirroring it elsewhere provisioned an account for OUR bot on THEIR server — which is
-            // what put a second "immich-shared-albums (bot)" in their user picker.
-            let is_utility = a
-                .pointer("/user/id")
-                .and_then(|v| v.as_str())
-                .map(|id| users.get(id).map(|u| u.utility).unwrap_or(false))
+            // And OUR OWN BOT's lines stay here: the trail is this household's record, and mirroring
+            // it elsewhere provisioned an account for OUR bot on THEIR server — which is what put a
+            // second "immich-shared-albums (bot)" in their user picker.
+            //
+            // THE HOUSE BOT ONLY. A person stand-in is ALSO a utility account, but its activity is a
+            // human's relayed words: excluding every utility account here is what stopped one
+            // household's comments from ever reaching a third household that joined later.
+            let author_is_our_bot = house_bot_id
+                .as_ref()
+                .map(|bot_id| a.pointer("/user/id").and_then(|v| v.as_str()) == Some(bot_id.as_str()))
                 .unwrap_or(false);
-            !is_utility
+            !author_is_our_bot
         })
         .map(|a| {
             let user = a.get("user").cloned().unwrap_or(Value::Null);
