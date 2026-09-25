@@ -2747,6 +2747,11 @@ if (!sidecarHasNode('b-sidecar')) {
   stage('rust: removing a person from a link album is recorded, and says the link still stands');
   {
     const albK = await api(A, AKEY, '/albums', j({ albumName: `rust removal ${Date.now()}` }));
+    // The album needs a photo BEFORE it is shared, or the mirror has nothing to materialise and the
+    // wait below never sees an asset count. (The contribution that matters comes later.)
+    const seededK = await upload(A, AKEY, 'rust-removal-seed.jpg', `rs${Date.now() % 10000}`, '2026-08-27T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [seededK]);
+    await api(A, AKEY, `/albums/${albK.id}/assets`, { ...j({ ids: [seededK] }), method: 'PUT' });
     const joinedK = await joinWithRetry(() => api(A, AKEY, '/shared-links',
       j({ type: 'ALBUM', albumId: albK.id, allowUpload: true })));
     check('rig: B joined the album the removal is about', !!joinedK.album, JSON.stringify(joinedK).slice(0, 60));
