@@ -11,16 +11,23 @@
 //     and one photo with IDENTICAL bytes on both — the reunion pair and its dedupe case;
 //   * "Iceland 2026" on C with a share link, for the join -> store-locally -> native-leave path.
 //
-// Env: PORT_IMMICH_B/C, PORT_SIDECAR_B/C, BKEY, CKEY, ISA_HAND_TEST_EMAIL/PASSWORD.
+// Env: PORT_IMMICH_B/C, PORT_SIDECAR_B/C, BKEY, CKEY, ISA_HAND_TEST_EMAIL/PASSWORD,
+//      ISA_HAND_TEST_HOST (the address a PERSON opens, printed in the handover) and
+//      ISA_HAND_DRIVE_HOST (the address THIS script talks to, default: the same).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 
 const PORT = (name, dflt) => process.env[name] || dflt;
+// Two addresses on purpose. The tester's device reaches the sidecar on the host's tailnet address
+// while this script runs on the host itself, and a port bound to that address is not on loopback —
+// so the URL that is PRINTED and the URL that is FETCHED are different things.
+const URL_HOST = process.env.ISA_HAND_TEST_HOST || 'localhost';
+const DRIVE_HOST = process.env.ISA_HAND_DRIVE_HOST || URL_HOST;
 const B_IMMICH = `http://localhost:${PORT('PORT_IMMICH_B', 2384)}`;
 const C_IMMICH = `http://localhost:${PORT('PORT_IMMICH_C', 2385)}`;
-const B_SIDECAR = `http://localhost:${PORT('PORT_SIDECAR_B', 9381)}`;
-const C_SIDECAR = `http://localhost:${PORT('PORT_SIDECAR_C', 9382)}`;
+const B_SIDECAR = `http://${DRIVE_HOST}:${PORT('PORT_SIDECAR_B', 9381)}`;
+const C_SIDECAR = `http://${DRIVE_HOST}:${PORT('PORT_SIDECAR_C', 9382)}`;
 const BKEY = process.env.BKEY;
 const CKEY = process.env.CKEY;
 const DEFAULT_EMAIL = 'admin@e2e.local';
@@ -41,10 +48,18 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? '  ✅' : '  ❌'} ${name}${detail ? ` — ${detail}` : ''}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** `fetch`, with the URL in the error: undici's bare "fetch failed" names neither the host nor why. */
+const get = async (url, init) => {
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    throw new Error(`${url} — ${e?.cause?.message || e?.message || 'unreachable'}`);
+  }
+};
 const j = (body) => ({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
 const api = async (base, key, path, init = {}) => {
-  const r = await fetch(`${base}/api${path}`, {
+  const r = await get(`${base}/api${path}`, {
     ...init,
     headers: { 'x-api-key': key, ...(init.headers || {}) },
   });
@@ -55,7 +70,7 @@ const api = async (base, key, path, init = {}) => {
 
 /** Every sidecar call rides the caller's OWN Immich session, exactly as the panel does. */
 const sidecar = async (base, token, path, init = {}) => {
-  const r = await fetch(`${base}/immich-shared-albums${path}`, {
+  const r = await get(`${base}/immich-shared-albums${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,
@@ -177,7 +192,7 @@ const photo = (label, [r, g, b]) => {
 // ---- seeding --------------------------------------------------------------------------------
 
 async function login(base, email, password) {
-  const r = await fetch(`${base}/api/auth/login`, {
+  const r = await get(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -193,7 +208,7 @@ async function upload(base, key, filename, bytes, takenAt) {
   fd.set('fileCreatedAt', takenAt);
   fd.set('fileModifiedAt', takenAt);
   fd.set('assetData', new Blob([bytes], { type: filename.endsWith('.mp4') ? 'video/mp4' : 'image/png' }), filename);
-  const r = await fetch(`${base}/api/assets`, { method: 'POST', headers: { 'x-api-key': key }, body: fd });
+  const r = await get(`${base}/api/assets`, { method: 'POST', headers: { 'x-api-key': key }, body: fd });
   const out = await r.json();
   if (!out.id) throw new Error(`upload of ${filename} failed: ${JSON.stringify(out).slice(0, 120)}`);
   return out.id;
@@ -203,7 +218,7 @@ async function upload(base, key, filename, bytes, takenAt) {
  *  be the one waiting for it. */
 async function untilRendered(base, key, id, what) {
   for (let i = 0; i < 60; i++) {
-    const r = await fetch(`${base}/api/assets/${id}/thumbnail?size=preview`, { headers: { 'x-api-key': key } });
+    const r = await get(`${base}/api/assets/${id}/thumbnail?size=preview`, { headers: { 'x-api-key': key } });
     if (r.ok) return true;
     await sleep(500);
   }
@@ -239,7 +254,7 @@ const main = async () => {
   //    the rig's production hardening deliberately breaks on C (passwordLogin off).
   const tokens = {};
   for (const [label, base] of [['B', B_IMMICH], ['C', C_IMMICH]]) {
-    const ping = await fetch(`${base}/api/server/ping`).then((r) => r.ok).catch(() => false);
+    const ping = await get(`${base}/api/server/ping`).then((r) => r.ok).catch(() => false);
     check(`immich ${label} answers`, ping, base);
     tokens[label] = await login(base, EMAIL, PASSWORD);
     check(`${label}: ${EMAIL} can sign in with a password`, !!tokens[label],
@@ -356,7 +371,7 @@ const main = async () => {
     ...j({ type: 'ALBUM', albumId: joinAlbum.id, allowUpload: true }),
   });
 
-  const host = process.env.ISA_HAND_TEST_HOST || 'localhost';
+  const host = URL_HOST;
   const bOrigin = `http://${host}:${PORT('PORT_SIDECAR_B', 9381)}`;
   const cOrigin = `http://${host}:${PORT('PORT_SIDECAR_C', 9382)}`;
   console.log(`

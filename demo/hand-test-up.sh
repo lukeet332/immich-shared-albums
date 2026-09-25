@@ -17,6 +17,10 @@ cd "$(dirname "$0")/.."
 
 PORT_B=${HAND_PORT_B:-9301}
 PORT_C=${HAND_PORT_C:-9302}
+# Where the two servers are published. Loopback by default, because the mocks carry a known admin
+# password; `HAND_BIND=100.x.y.z` — this host's Tailscale address — is what you use to click them from
+# another device, and it is deliberately narrower than 0.0.0.0 so the LAN never sees them.
+BIND=${HAND_BIND:-127.0.0.1}
 DIR_B=${HAND_DIR_B:-/tmp/isa-hand-b}
 DIR_C=${HAND_DIR_C:-/tmp/isa-hand-c}
 PROJECT_B=${HAND_PROJECT_B:-isa-hand-b}
@@ -59,10 +63,18 @@ install_one() { # install_one <label> <network> <immich url> <household> <port> 
   # install.sh writes the whole project name into the compose file, so a SECOND install on one host
   # would take over the first project's containers. COMPOSE_PROJECT_NAME above is what separates
   # them, and it is passed again here so the reconcile below lands on the same project.
-  # The published port is re-bound to loopback because this host also runs a real Immich: the mocks
-  # carry a known admin password and install.sh correctly assumes a host of its own.
-  sed -i "s|^\( *\)- ${port}:8300$|\1- 127.0.0.1:${port}:8300|" "$dir/docker-compose.yml"
+  # The published port is re-bound to $BIND because this host also runs a real Immich: the mocks carry
+  # a known admin password and install.sh correctly assumes a host of its own. `up -d` keeps the
+  # identity volume, so re-running this against a live rig re-binds it without breaking a pairing.
+  # Both mappings when the bind is not loopback: this script drives the sidecar on 127.0.0.1 (a port
+  # bound to one host address is NOT on loopback), while the tester's device uses $BIND.
+  if [ "$BIND" = "127.0.0.1" ]; then
+    sed -i "s|^\( *\)- ${port}:8300$|\1- 127.0.0.1:${port}:8300|" "$dir/docker-compose.yml"
+  else
+    sed -i "s|^\( *\)- ${port}:8300$|\1- 127.0.0.1:${port}:8300\n\1- ${BIND}:${port}:8300|" "$dir/docker-compose.yml"
+  fi
   grep -q "127.0.0.1:${port}:8300" "$dir/docker-compose.yml" || fail "could not bind $label to loopback"
+  grep -q "${BIND}:${port}:8300" "$dir/docker-compose.yml" || fail "could not bind $label to $BIND"
   ( cd "$dir" && docker compose -p "$project" up -d >/dev/null )
   local cid
   cid=$(cd "$dir" && docker compose -p "$project" ps -q immich-shared-albums)
@@ -79,7 +91,16 @@ install_one C household-c_default "http://immich-c:2283" "Mock household (C)" "$
 
 say "4/4 seeding the two linked households"
 source /home/luke/rig.env 2>/dev/null || true
-ISA_HAND_TEST_HOST=localhost \
+# The address a PERSON types, which is not the same as the address the seed talks to: the seed drives
+# the mocks on loopback, but the URLs it prints have to be openable from the tester's device. With
+# `HAND_BIND=0.0.0.0` the bind itself names nothing, so ask the host's tailnet for its address.
+HAND_HOST=$BIND
+if [ "$BIND" = "0.0.0.0" ]; then
+  HAND_HOST=$(docker run --rm --network host alpine:3.22 sh -c \
+    "ip -4 -o addr show tailscale0 2>/dev/null | awk '{print \$4}'" 2>/dev/null | cut -d/ -f1 | head -1)
+  [ -n "$HAND_HOST" ] || HAND_HOST=localhost
+fi
+ISA_HAND_TEST_HOST="$HAND_HOST" ISA_HAND_DRIVE_HOST=localhost \
 PORT_IMMICH_B=${PORT_IMMICH_B:-2384} PORT_IMMICH_C=${PORT_IMMICH_C:-2385} \
 PORT_SIDECAR_B="$PORT_B" PORT_SIDECAR_C="$PORT_C" \
 BKEY="$BKEY" CKEY="$CKEY" \
@@ -88,8 +109,8 @@ node demo/hand-test-seed.mjs
 say "installed servers"
 for pair in "B:$PORT_B:$DIR_B:$PROJECT_B" "C:$PORT_C:$DIR_C:$PROJECT_C"; do
   label=${pair%%:*}; rest=${pair#*:}; port=${rest%%:*}; rest=${rest#*:}; dir=${rest%%:*}; project=${rest##*:}
-  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/immich-shared-albums/admin")
-  echo "  $label  http://localhost:$port/immich-shared-albums/   (admin panel when signed out: $code)"
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://$HAND_HOST:$port/immich-shared-albums/admin")
+  echo "  $label  http://$HAND_HOST:$port/immich-shared-albums/   (admin panel when signed out: $code)"
 done
 echo
 echo "To remove them: docker compose -p $PROJECT_B down -v && docker compose -p $PROJECT_C down -v"
