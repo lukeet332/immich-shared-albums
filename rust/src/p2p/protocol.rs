@@ -853,7 +853,7 @@ pub fn handle_index_nudge(caller_pub: &str) -> (u16, Value) {
 
 /// A peer telling us it has left, or that it is withdrawing. The courtesy signal: the mapping dies
 /// here without waiting for a 404 to be discovered by a push.
-pub fn handle_leave(caller_pub: &str, album_mapping_id: &str) -> (u16, Value) {
+pub async fn handle_leave(caller_pub: &str, album_mapping_id: &str) -> (u16, Value) {
     let state = crate::state::state();
     if !crate::p2p::entitlement::is_enrolled(state, caller_pub) {
         return (
@@ -891,7 +891,56 @@ pub fn handle_leave(caller_pub: &str, album_mapping_id: &str) -> (u16, Value) {
     crate::p2p::entitlement::forget_offered(state, &mapping_id);
     crate::sync::status::forget_watcher_cycles(&mapping_id);
     let _ = state.save();
-    (200, json!({ "ok": true }))
+    // A DEPARTED CONTRIBUTOR's photos leave the album with them, the way Google Photos treats a
+    // shared-album exit: this side's ledger rows under the dead mapping are exactly the stubs the
+    // member's pushes created, and their source just walked out. The purge is the same guarded one
+    // `leave_album` runs locally — only utility-owned assets go. Awaiting it inside the request
+    // keeps the answer honest (the sender reports the leave to its own household once we say ok).
+    let client = Client::new();
+    let mut purged = 0usize;
+    for entry in state
+        .store
+        .seen_for_mapping(&mapping_id)
+        .unwrap_or_default()
+    {
+        // A STORED-FULL copy is this household’s own real bytes (store-shared-locally paid for
+        // them) - a departure withdraws the share, not the library. Same rule as `leave_album`.
+        if entry.stored_full {
+            continue;
+        }
+        // A deduped proxy can carry rows from several mappings; the AUTHORITATIVE row decides, as
+        // in `leave_album` — a stale row must never delete what another share still claims.
+        let owner = state
+            .store
+            .ledger_by_asset(&entry.local_asset)
+            .ok()
+            .flatten();
+        if owner.map(|o| o.mapping != mapping_id).unwrap_or(false) {
+            continue;
+        }
+        match crate::immich::materialise::delete_proxy_asset(state, &client, &entry.local_asset)
+            .await
+        {
+            Ok(crate::immich::materialise::PurgeOutcome::Purged) => {
+                purged += 1;
+                let _ = state.store.seen_remove_entry(&mapping_id, &entry.checksum);
+            }
+            _ => {
+                crate::log!(
+                    "leave reclaim could not purge {} — it stays until the album owner removes it",
+                    entry.local_asset
+                );
+            }
+        }
+    }
+    if purged > 0 {
+        crate::log!(
+            "a member left \"{}\": purged {} contributed photo(s) with them",
+            mapping_id,
+            purged
+        );
+    }
+    (200, json!({ "ok": true, "purged": purged }))
 }
 
 fn admin_auth() -> crate::immich::client::Auth<'static> {

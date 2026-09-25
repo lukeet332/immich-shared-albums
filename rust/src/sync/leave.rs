@@ -35,7 +35,12 @@ pub async fn leave_album(
     mapping_id: &str,
     notify_origin: bool,
 ) -> Result<LeaveOutcome, String> {
-    let Some(mapping) = state.collections().mappings.iter().find(|m| m.id == mapping_id).cloned()
+    let Some(mapping) = state
+        .collections()
+        .mappings
+        .iter()
+        .find(|m| m.id == mapping_id)
+        .cloned()
     else {
         return Err("unknown mapping (only joined albums can be left)".to_string());
     };
@@ -47,19 +52,36 @@ pub async fn leave_album(
     let mut purged = 0usize;
     let mut refused = 0usize;
     let mut failed = 0usize;
-    for entry in state.store.seen_for_mapping(&mapping.id).unwrap_or_default() {
+    let mut kept = 0usize;
+    for entry in state
+        .store
+        .seen_for_mapping(&mapping.id)
+        .unwrap_or_default()
+    {
         if entry.origin_asset.is_none() {
+            continue;
+        }
+        // A STORED-FULL copy is the household\’s own real bytes, paid for when store-shared-locally
+        // was switched on. Leaving the album withdraws the SHARE, not the library — the copy stays.
+        if entry.stored_full {
+            kept += 1;
             continue;
         }
         // A deduped proxy can carry ledger rows from several mappings, so another mapping may still
         // be serving this very asset. Ask the AUTHORITATIVE row (the one holding the true wire
         // identity) rather than whether any row mentions the id — a stale row must never pin a
         // stored copy that nothing else claims.
-        let owner = state.store.ledger_by_asset(&entry.local_asset).ok().flatten();
+        let owner = state
+            .store
+            .ledger_by_asset(&entry.local_asset)
+            .ok()
+            .flatten();
         if owner.map(|o| o.mapping != mapping.id).unwrap_or(false) {
             continue;
         }
-        match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset).await {
+        match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset)
+            .await
+        {
             Ok(crate::immich::materialise::PurgeOutcome::Purged) => purged += 1,
             // Absent to every credential we hold is the outcome the caller wanted, but it is not
             // evidence of a deletion and must not be counted as one.
@@ -119,7 +141,10 @@ pub async fn leave_album(
     if notify_origin {
         if let (Some(origin), Some(target), Some(transport)) = (origin, target, transport()) {
             let transport = transport.clone();
-            let header = RequestHeader { path: format!("/albums/{target}/leave"), ..Default::default() };
+            let header = RequestHeader {
+                path: format!("/albums/{target}/leave"),
+                ..Default::default()
+            };
             // Fire-and-forget, on purpose: the leaving side owes the origin a courtesy, not a wait.
             tokio::spawn(async move {
                 let _ = transport.round_trip(&origin, &header, None).await;
@@ -130,6 +155,14 @@ pub async fn leave_album(
         "left \"{}\" — {purged} stub(s) purged, {refused} refused, {failed} failed",
         mapping.album_name
     );
-    Ok(LeaveOutcome { left: mapping.album_name, purged, refused, failed })
+    if kept > 0 {
+        crate::log!("kept {} stored local cop(ies) in \"{}\" - the leave withdraws the share, not the library",
+            kept, mapping.album_name);
+    }
+    Ok(LeaveOutcome {
+        left: mapping.album_name,
+        purged,
+        refused,
+        failed,
+    })
 }
-

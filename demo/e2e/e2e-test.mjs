@@ -73,6 +73,19 @@ const isBot = (e) => !!e && BOT_DOMAINS.some(d => e.endsWith('@' + d));
 // /immich-shared-albums/join authenticates the caller against that household's own Immich, so the
 // suite has to present a real credential exactly like a signed-in browser would.
 const jAuth = (o, key) => ({ method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key }, body: JSON.stringify(o) });
+// Mint a link on the origin and redeem it on B. The join can 401 needsAuth while Immich is
+// still churning a prior stage's work (a whoami that times out reads as needsAuth), so this
+// retries: the 401 is transient; a real refusal says so in its error text.
+const joinWithRetry = async (mintLink) => {
+  let out = null;
+  for (let attempt = 0; attempt < 4 && !(out && out.album); attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, 10000));
+    const link = await mintLink();
+    const tok = (((await (await fetch(`${CS}/share/${link.key}`)).text()).match(/data-origin-endpoint="([^"]+)"/) || [])[1]);
+    out = await (await fetch(`${BS}/immich-shared-albums/join`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY }, body: JSON.stringify({ invite: { endpointToken: tok, key: link.key } }) })).json();
+  }
+  return out;
+};
 const albumAssets = async (base, key, albumId) =>
   (await api(base, key, '/search/metadata', j({ albumIds: [albumId], size: 100, withExif: true }))).assets.items;
 import crypto from 'node:crypto';
@@ -857,6 +870,20 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
     if (r.ok) { const a = await r.json(); if (!a.isTrashed && !a.deletedAt) stubsGone = false; }
   }
   check('native leave: stubs deleted (space reclaimed)', stubsGone);
+  // The two checks above pass on LOST VISIBILITY alone: once the admin leaves, the mirror is
+  // invisible to them whether or not the sidecar purged anything. The ledger is the honest
+  // answer - read through the sidecar's container, the same rule as every state read here.
+  const ledgerGone = await until(async () => {
+    const state = sidecarSql('b-sidecar',
+      `SELECT (SELECT COUNT(*) FROM mappings WHERE albumId='${mirrorD.id}') AS mappings,
+              (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorD.id}')) AS seen`);
+    const parsed = state ? JSON.parse(state)[0] : { mappings: -1, seen: -1 };
+    // The watcher pass is serialised behind every mapping\u2019s dial - a restarting peer in the
+    // same pass costs its dial timeout per mapping, so detection latency is minutes, not seconds.
+    return parsed.mappings === 0 && parsed.seen === 0 ? parsed : null;
+  }, 900000);
+  check('native leave: the mapping and its ledger rows are gone (verified through the sidecar, not the admin visibility)',
+        !!ledgerGone, ledgerGone ? 'mapping rows=0, ledger rows=0' : 'the sidecar still holds them');
 }
 
 stage('kill test — uncached photos fail closed; cached ones survive from cache');
@@ -2334,6 +2361,149 @@ if (DKEY) {
     const retired = await until(async () => liveMappingsForD() === 0 ? true : null, 120000);
     check('the origin retires a mapping its peer keeps answering 404 to, instead of retrying forever',
           !!retired, retired ? `${liveBefore} -> 0 live` : `still ${liveMappingsForD()} live after 120s`);
+  }
+}
+
+// The Rust build only: the removal channel, caption propagation and the origin-side leave
+// reclaim are Rust features the TypeScript never had. The runtime probe is the same one the
+// state reader uses - a Rust sidecar's image has no node in it.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: deleted contributions, caption edits and leaves reclaim what they should');
+  {
+    const t = `rust lifecycle ${Date.now()}`;
+    console.log(`  (rust lc env: BKEY=${typeof BKEY}/${(BKEY || '').length} AKEY=${typeof AKEY}/${(AKEY || '').length})`);
+    const originAlbum = await api(A, AKEY, '/albums', j({ albumName: t }));
+    const originPhoto = await upload(A, AKEY, 'rust-lc.jpg', `rl${Date.now() % 10000}`, '2026-08-15T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [originPhoto]);
+    // the caption exists BEFORE the join, so the stub materialises with it (plus the credit line)
+    await api(A, AKEY, `/assets/${originPhoto}`, { ...j({ description: 'caption v1' }), method: 'PUT' });
+    await api(A, AKEY, `/albums/${originAlbum.id}/assets`, { ...j({ ids: [originPhoto] }), method: 'PUT' });
+    // The stage runs at the lane\u2019s tail, where Immich may still be churning the bulk album\u2019s
+    // metadata jobs - a whoami that times out reads as needsAuth. Retry: the 401 is transient.
+    let joinLc = null;
+    for (let attempt = 0; attempt < 4 && !(joinLc && joinLc.album); attempt++) {
+      if (attempt) await new Promise(r => setTimeout(r, 10000));
+      const linkKey = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: originAlbum.id, allowUpload: true }))).key;
+      const init = jAuth(await inviteFor(ORIGIN_DIRECT, linkKey), BKEY);
+      joinLc = await (await fetch(`${BS}/immich-shared-albums/join`, init)).json();
+    }
+    check('rust lc: joined', !!joinLc.album, JSON.stringify(joinLc).slice(0, 90));
+    const mirrorLc = await until(async () => {
+      const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinLc.album && a.assetCount > 0);
+      return found || null;
+    }, 90000);
+    check('rust lc: the mirror holds the stub', !!mirrorLc, mirrorLc ? '' : 'timed out');
+    const meIdLc = (await api(B, BKEY, '/users/me')).id;
+    const stubLc = (await albumAssets(B, BKEY, mirrorLc.id)).find(a => a.ownerId !== meIdLc);
+    const stubDesc = (await api(B, BKEY, `/assets/${stubLc.id}`)).exifInfo?.description || '';
+    check('rust lc: the stub materialised with the origin caption plus the credit line',
+          stubDesc.includes('caption v1') && stubDesc.includes('Shared by'), stubDesc.slice(0, 70));
+
+    // 1. the joiner CONTRIBUTES: their own photo, added to the mirror (the picker\u2019s gesture)
+    const contribution = await upload(B, BKEY, 'rust-contrib.jpg', `rc${Date.now() % 10000}`, '2026-08-16T10:00:00.000Z');
+    await api(B, BKEY, `/albums/${mirrorLc.id}/assets`, { ...j({ ids: [contribution] }), method: 'PUT' });
+    const originGrew = await until(async () =>
+      (await albumAssets(A, AKEY, originAlbum.id)).length >= 2 ? true : null, 120000);
+    check('rust lc: the contribution reached the ORIGIN (as a stub of the joiner\u2019s asset)', !!originGrew,
+          originGrew ? '' : `origin still ${(await albumAssets(A, AKEY, originAlbum.id)).length}`);
+    const meIdA = (await api(A, AKEY, '/users/me')).id;
+    const originAll = await albumAssets(A, AKEY, originAlbum.id);
+    const originStub = originAll.find(a => a.ownerId !== meIdA);
+    check('rust lc: the origin holds the contribution as a stub', !!originStub, originStub ? '' : 'not found');
+
+    // 2. the joiner DELETES their contribution - the removal channel reclaims the origin\u2019s stub
+    await api(B, BKEY, '/assets', { ...j({ ids: [contribution], force: true }), method: 'DELETE' });
+    const originShrunk = await until(async () =>
+      (await albumAssets(A, AKEY, originAlbum.id)).length === 1 ? true : null, 120000);
+    check('rust lc: deleting the contribution reclaims the ORIGIN\u2019s stub (remove channel)', !!originShrunk,
+          originShrunk ? '' : `origin still ${(await albumAssets(A, AKEY, originAlbum.id)).length}`);
+
+    // 3. the origin EDITS THE CAPTION through its own sidecar (the proxy path the trigger fires on)
+    await api(A, AKEY, `/assets/${originPhoto}`, { ...j({ description: 'caption v2' }), method: 'PUT' });
+    const csPing = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`).then(r => r.ok).catch(() => false);
+    check('rust lc: the origin sidecar fronts Immich (the trigger needs the write to pass through it)', csPing, '');
+    if (csPing) {
+      await fetch(`${ORIGIN_DIRECT}/api/assets/${originPhoto}`, { method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': AKEY }, body: JSON.stringify({ description: 'caption v2' }) });
+      const stubFollowed = await until(async () => {
+        const desc = (await api(B, BKEY, `/assets/${stubLc.id}`)).exifInfo?.description || '';
+        return desc.includes('caption v2') ? true : null;
+      }, 120000);
+      const descNow = (await api(B, BKEY, `/assets/${stubLc.id}`)).exifInfo?.description || '';
+      check('rust lc: the caption EDIT reaches the stub through trigger + nudge + forced reconcile',
+            !!stubFollowed, descNow.slice(0, 70));
+    }
+
+    // 4. the joiner LEAVES: the origin reclaims the departed contributor\u2019s remaining stubs
+    await api(B, BKEY, `/albums/${mirrorLc.id}/user/me`, { method: 'DELETE' });
+    const originReclaimed = await until(async () => {
+      const items = await albumAssets(A, AKEY, originAlbum.id);
+      return items.length === 1 && items[0].ownerId === meIdA ? true : null;
+    }, 120000);
+    check('rust lc: the leave reclaims the departed contributor\u2019s stub on the ORIGIN (google-photos semantics)',
+          !!originReclaimed, originReclaimed ? '' : `origin still ${(await albumAssets(A, AKEY, originAlbum.id)).length}`);
+    // The row that MAY remain is one that names no proxy (an empty originAsset — bookkeeping for
+    // the owner\u2019s own photo); what must be gone is any PROXY of the departed member\u2019s content.
+    const lcLedger = sidecarSql('c-sidecar',
+      `SELECT COUNT(*) AS n FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumName=${JSON.stringify(t)}) AND originAsset != ''`);
+    const lcRows = lcLedger ? JSON.parse(lcLedger)[0].n : -1;
+    check('rust lc: no proxy of the departed member\u2019s content survives on the origin', lcRows === 0, `proxy rows=${lcRows}`);
+    await api(B, BKEY, `/albums/${mirrorLc.id}`, { method: 'DELETE' }).catch(() => {});
+  }
+}
+
+// Store-shared-locally: the backfill turns stubs into real local copies, and a LEAVE must
+// withdraw the share WITHOUT deleting those copies - the household paid real disk for them.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: store-shared-locally survives a leave');
+  {
+    const t = `rust stored ${Date.now()}`;
+    const originAlbum = await api(A, AKEY, '/albums', j({ albumName: t }));
+    const originPhoto = await upload(A, AKEY, 'rust-stored.jpg', `rs${Date.now() % 10000}`, '2026-08-15T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [originPhoto]);
+    await api(A, AKEY, `/albums/${originAlbum.id}/assets`, { ...j({ ids: [originPhoto] }), method: 'PUT' });
+    const joinSt = await joinWithRetry(() => api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: originAlbum.id, allowUpload: true })));
+    check('stored: joined', !!joinSt.album, JSON.stringify(joinSt).slice(0, 80));
+    const mirrorSt = await until(async () => {
+      const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinSt.album && a.assetCount > 0);
+      return found || null;
+    }, 90000);
+    const stubSt = (await albumAssets(B, BKEY, mirrorSt.id)).find(a => true);
+    check('stored: the stub exists', !!stubSt, stubSt ? '' : 'timed out');
+
+    // flip the toggle ON, then wait for the backfill (the reconcile drains it when the setting is on)
+    await api(B, BKEY, '/settings', { ...j({ storeSharedAssetsLocally: true }), method: 'PUT' });
+    const backfilled = await until(async () => {
+      const rows = sidecarSql('b-sidecar',
+        `SELECT storedFull FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorSt.id}')`);
+      const parsed = rows ? JSON.parse(rows) : [];
+      return parsed.length > 0 && parsed.every(r => r.storedFull === 1) ? parsed : null;
+    }, 240000);
+    check('stored: the backfill upgraded the stub to a full local copy', !!backfilled,
+          backfilled ? 'storedFull=1' : 'still a stub');
+    const copyBytes = await (await fetch(`${B}/api/assets/${stubSt.id}/original`, { headers: { 'x-api-key': BKEY } })).arrayBuffer();
+    check('stored: the local copy holds the OWNER\u2019s real bytes', copyBytes.byteLength > 500, `${copyBytes.byteLength}B`);
+
+    // the joiner LEAVES natively - the share is withdrawn, the STORED COPY stays
+    await api(B, BKEY, `/albums/${mirrorSt.id}/user/me`, { method: 'DELETE' });
+    const mappingGone = await until(async () => {
+      const rows = sidecarSql('b-sidecar',
+        `SELECT (SELECT COUNT(*) FROM mappings WHERE albumId='${mirrorSt.id}') AS m,
+                (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorSt.id}') AND storedFull=1) AS kept,
+                (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorSt.id}') AND storedFull=0) AS purged`);
+      const parsed = rows ? JSON.parse(rows)[0] : { m: -1, kept: -1, purged: -1 };
+      return parsed.m === 0 && parsed.kept >= 1 ? parsed : null;
+    }, 480000);
+    check('stored: the leave removes the mapping and its proxy rows but KEEPS the stored copy\u2019s ledger row',
+          !!mappingGone, mappingGone ? `kept=${mappingGone.kept}` : 'timed out');
+    const copySurvives = await fetch(`${B}/api/assets/${stubSt.id}/original`, { headers: { 'x-api-key': BKEY } });
+    const survivedBytes = await copySurvives.arrayBuffer();
+    check('stored: THE STORED COPY SURVIVES THE LEAVE (the user\u2019s actual requirement)',
+          copySurvives.ok && survivedBytes.byteLength === copyBytes.byteLength,
+          `${survivedBytes.byteLength}B status=${copySurvives.status}`);
+    // tidy: the toggle back off, the stored copy\u2019s asset deleted (it is a utility-owned test asset)
+    await api(B, BKEY, '/settings', { ...j({ storeSharedAssetsLocally: false }), method: 'PUT' });
+    await api(B, BKEY, '/assets', { ...j({ ids: [stubSt.id], force: true }), method: 'DELETE' });
   }
 }
 

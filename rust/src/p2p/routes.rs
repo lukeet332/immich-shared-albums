@@ -41,17 +41,26 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
         p if p.ends_with("/activity") => {
             let id = album_mapping_id(p, "/activity");
             let state = crate::state::state();
-            let (status, value) =
-                crate::sync::comments::handle_activity(state, crate::immich::client::shared(), caller, &id, body)
-                    .await;
+            let (status, value) = crate::sync::comments::handle_activity(
+                state,
+                crate::immich::client::shared(),
+                caller,
+                &id,
+                body,
+            )
+            .await;
             json_answer(status, value)
         }
         p if p.ends_with("/comments") => {
             let id = album_mapping_id(p, "/comments");
             let state = crate::state::state();
-            let (status, value) =
-                crate::sync::comments::handle_comments(state, crate::immich::client::shared(), caller, &id)
-                    .await;
+            let (status, value) = crate::sync::comments::handle_comments(
+                state,
+                crate::immich::client::shared(),
+                caller,
+                &id,
+            )
+            .await;
             json_answer(status, value)
         }
         // What the caller has been INVITED to, by people here. Members poll this; the origin never
@@ -73,7 +82,8 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
         // Immich picker as invite targets. NAMES ONLY, and empty when ISA_PUBLISH_USER_DIRECTORY is
         // off — sharing is per person, so with no directory there is nobody to name.
         "/directory" => {
-            let users = crate::sync::directory::local_directory(crate::immich::client::shared()).await;
+            let users =
+                crate::sync::directory::local_directory(crate::immich::client::shared()).await;
             json_answer(200, serde_json::json!({ "users": users }))
         }
         // What this household OFFERS the caller, for matching. Pull-only, and it answers for the
@@ -109,7 +119,7 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
         }
         p if p.ends_with("/leave") => {
             let id = album_mapping_id(p, "/leave");
-            let (status, value) = crate::p2p::protocol::handle_leave(caller, &id);
+            let (status, value) = crate::p2p::protocol::handle_leave(caller, &id).await;
             json_answer(status, value)
         }
         // "Look at this album again." Says nothing about what changed and carries no address, so a
@@ -137,7 +147,8 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
             let state = crate::state::state();
             let client = crate::immich::client::Client::new();
             let range = header.range.as_deref();
-            crate::media::proxy::serve_peer_bytes(state, &client, caller, &asset_id, &kind, range).await
+            crate::media::proxy::serve_peer_bytes(state, &client, caller, &asset_id, &kind, range)
+                .await
         }
         // The share-link enrolment. The SETTING is honoured here, not only on the share page: a
         // card that is hidden while the join still succeeds is a setting that lies.
@@ -204,7 +215,10 @@ async fn serve_peer_avatar(caller: &str, path: &str) -> PeerAnswer {
     let related = {
         let collections = state.collections();
         collections.peers.iter().any(|p| p.pub_key == caller)
-            && collections.mappings.iter().any(|m| m.peer == caller && !m.dead)
+            && collections
+                .mappings
+                .iter()
+                .any(|m| m.peer == caller && !m.dead)
     };
     if !related {
         return json_answer(403, json!({ "error": "unknown peer" }));
@@ -234,7 +248,11 @@ async fn serve_peer_avatar(caller: &str, path: &str) -> PeerAnswer {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("image/jpeg")
         .to_string();
-    let bytes = response.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+    let bytes = response
+        .bytes()
+        .await
+        .map(|b| b.to_vec())
+        .unwrap_or_default();
     let mut headers = HashMap::new();
     headers.insert("content-type".to_string(), content_type);
     PeerAnswer {
@@ -251,7 +269,10 @@ mod tests {
     fn ask(path: &str) -> (u16, serde_json::Value) {
         let answer = futures_lite::future::block_on(route(
             "some-peer",
-            &RequestHeader { path: path.to_string(), ..Default::default() },
+            &RequestHeader {
+                path: path.to_string(),
+                ..Default::default()
+            },
             &[],
         ));
         let bytes = match answer.body {
@@ -284,7 +305,10 @@ mod tests {
     fn json_routes_carry_a_lowercase_content_type_and_no_others() {
         let answer = futures_lite::future::block_on(route(
             "p",
-            &RequestHeader { path: "/hello".into(), ..Default::default() },
+            &RequestHeader {
+                path: "/hello".into(),
+                ..Default::default()
+            },
             &[],
         ));
         let headers = answer.headers.unwrap();
