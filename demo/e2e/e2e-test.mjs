@@ -2736,6 +2736,49 @@ if (!sidecarHasNode('b-sidecar')) {
   }
 }
 
+// The gesture people actually reach for: taking someone off the album. On an INVITATION album that
+// is a revocation; on a LINK album it revokes nothing, because the link is the grant — and an owner
+// who believes otherwise has been misled by the silence. The album says which.
+// RUST-ONLY: the TypeScript has no traffic triggers for it.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: removing a person from a link album is recorded, and says the link still stands');
+  {
+    const albK = await api(A, AKEY, '/albums', j({ albumName: `rust removal ${Date.now()}` }));
+    const linkK = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albK.id, allowUpload: true }))).key;
+    const joinedK = await (await fetch(`${BS}/immich-shared-albums/join`,
+      jAuth(await inviteFor(ORIGIN_DIRECT, linkK), BKEY))).json();
+    const mirrorK = await until(async () => {
+      const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinedK.album && a.assetCount > 0);
+      return found || null;
+    }, 90000);
+    // A contribution, because that is what puts an account for the contributor ON the owner's album —
+    // and a person who is not a member cannot be removed.
+    const photoK = await upload(B, BKEY, 'rust-removal.jpg', `rk${Date.now() % 10000}`, '2026-08-28T10:00:00.000Z');
+    await ensurePreviews(B, BKEY, [photoK]);
+    await api(B, BKEY, `/albums/${mirrorK.id}/assets`, { ...j({ ids: [photoK] }), method: 'PUT' });
+    const standIn = await until(async () => {
+      const album = await api(A, AKEY, `/albums/${albK.id}?withoutAssets=true`);
+      return (album.albumUsers || []).find(u =>
+        (u.user?.email || '').startsWith('person-') && /Demo household/.test(u.user?.name || '')) || null;
+    }, 240000);
+    check('the contributor has an account on the owner\'s album', !!standIn,
+          standIn ? `${standIn.user.name} (${standIn.role})` : 'no contributor membership within 4 min');
+
+    const removed = await fetch(`${ORIGIN_DIRECT}/api/albums/${albK.id}/user/${standIn.user.id}`,
+      { method: 'DELETE', headers: { 'x-api-key': AKEY } });
+    check('the owner removes them, through the sidecar', removed.status < 300, `status ${removed.status}`);
+    const lineK = await until(async () => {
+      const rows = await api(A, AKEY, `/activities?albumId=${albK.id}`);
+      return (rows || []).find(a => /was removed from this album/i.test(a.comment || '')) || null;
+    }, 60000);
+    check('the album records the removal, naming the person', !!lineK,
+          lineK ? `"${lineK.comment.slice(0, 50)}…"` : 'no line within 60s');
+    check('and says the share LINK is still live, because removing a person revoked nothing',
+          !!lineK && /LINK is still live/.test(lineK.comment || '') && /delete the link/.test(lineK.comment || ''),
+          lineK ? lineK.comment.slice(0, 90) : 'no line');
+  }
+}
+
 if (process.env.E2E_PROFILE) {
   const total = WAITS.reduce((s, w) => s + w.ms, 0);
   const polls = WAITS.reduce((s, w) => s + w.polls, 0);

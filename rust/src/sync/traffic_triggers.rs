@@ -46,6 +46,23 @@ pub fn deleted_share_link_id(method: &str, path: &str) -> Option<String> {
     Some(rest.to_string())
 }
 
+/// `DELETE /api/albums/:albumId/user/:userId` — the owner taking a person off their album.
+///
+/// `me` is excluded on purpose: that is a person LEAVING, which the sync already notices and records
+/// as a leave. Recording it as a removal would put the wrong sentence in the album, and the two are
+/// not the same event — one is the household's own act, the other the owner's.
+pub fn removed_person(method: &str, path: &str) -> Option<(String, String)> {
+    if !method.eq_ignore_ascii_case("DELETE") {
+        return None;
+    }
+    let rest = path.strip_prefix("/api/albums/")?;
+    let (album_id, user) = rest.split_once("/user/")?;
+    if album_id.is_empty() || user.is_empty() || user.contains('/') || user == "me" {
+        return None;
+    }
+    Some((album_id.to_string(), user.to_string()))
+}
+
 /// Which requests are worth acting on — measured, not guessed.
 ///
 /// A session on Immich is dozens of `/api` calls and the overwhelming majority are the byte path
@@ -78,6 +95,21 @@ pub fn traffic_trigger_for(method: &str, path: &str) -> Option<TrafficTrigger> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_removing_somebody_else_is_a_removal() {
+        assert_eq!(
+            removed_person("DELETE", "/api/albums/alb-1/user/person-9"),
+            Some(("alb-1".to_string(), "person-9".to_string()))
+        );
+        // Leaving is not being removed: the sync records that as a leave.
+        assert_eq!(removed_person("DELETE", "/api/albums/alb-1/user/me"), None);
+        // Adding is not removing, and neither is a route that only looks like this one.
+        assert_eq!(removed_person("PUT", "/api/albums/alb-1/user/person-9"), None);
+        assert_eq!(removed_person("DELETE", "/api/albums/alb-1/users"), None);
+        assert_eq!(removed_person("DELETE", "/api/albums//user/person-9"), None);
+        assert_eq!(removed_person("DELETE", "/api/albums/alb-1/user/"), None);
+    }
 
     #[test]
     fn an_album_write_is_the_index_changing() {

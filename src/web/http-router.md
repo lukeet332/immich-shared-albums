@@ -54,6 +54,11 @@ session rather than on admin: it asks Immich who is calling (`pages/root/App.tsx
 the personal panel directly (anyone) or offers the two panels (an admin). The admin panel lives at
 `/admin` because a choice has to point somewhere; `/me` is the personal panel.
 
+**And one is acted on after.** `DELETE /api/albums/:id/user/:userId` is the owner taking a person off
+their album: recorded as a comment, worded by which kind of share the album is — an invitation's
+membership IS the share, a link's is not (`web/album_member_audit.rs`). `me` is excluded, because that
+is a person LEAVING, which is a different event with its own line.
+
 **One proxied request is acted on before it is forwarded.** `DELETE /api/shared-links/:id` is the
 only write whose trail needs the state it is about to destroy: the album it granted is read first, as
 the caller, and the withdrawal is written into that album afterwards by the house bot — added on the

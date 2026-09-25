@@ -91,6 +91,19 @@ pub async fn proxy_to_immich(method: Method, uri: &Uri, headers: &HeaderMap, bod
         // A set-cookie carries one cookie per header; appending keeps them all.
         response = response.header(name, value);
     }
+    // Somebody was taken off an album. Both ids are in the path, so this needs no pre-read — and it
+    // is recorded after the fact, as the person who did it.
+    if let Some((album_id, user_id)) = crate::sync::traffic_triggers::removed_person(
+        method.as_str(),
+        uri.path(),
+    ) {
+        crate::web::album_member_audit::post_removal(
+            crate::state::state().clone(),
+            headers.clone(),
+            album_id,
+            user_id,
+        );
+    }
     // The withdrawal has happened: put it in the album, as the person who did it. Fire and forget,
     // so their click is never held up by a trail line.
     if let Some(album_id) = withdrawn_album {
