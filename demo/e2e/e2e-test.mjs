@@ -81,7 +81,7 @@ const joinWithRetry = async (mintLink) => {
   for (let attempt = 0; attempt < 4 && !(out && out.album); attempt++) {
     if (attempt) await new Promise(r => setTimeout(r, 10000));
     const link = await mintLink();
-    const tok = (((await (await fetch(`${CS}/share/${link.key}`)).text()).match(/data-origin-endpoint="([^"]+)"/) || [])[1]);
+    const tok = (((await (await fetch(`${ORIGIN_DIRECT}/share/${link.key}`)).text()).match(/data-origin-endpoint="([^"]+)"/) || [])[1]);
     out = await (await fetch(`${BS}/immich-shared-albums/join`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY }, body: JSON.stringify({ invite: { endpointToken: tok, key: link.key } }) })).json();
   }
   return out;
