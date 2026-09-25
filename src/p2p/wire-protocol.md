@@ -100,7 +100,11 @@ inbound handler keeps them:
   valid grant is not an unbounded state-growth lever.
 
 A share link stays a **bearer** grant for its one album — anyone holding it (and its password) can
-join. Pairing is the non-bearer path, and the panel's `shareLinkJoin` setting can close the
+join, and nobody is named, so there is no membership to remove on the origin. Deleting the link is
+therefore the withdrawal, and `sync/link_grants.rs` (Rust) is what notices: it re-reads the origin's
+own links and retires every grant whose album is no longer shared that way, which answers the member's
+next handshake 410 and reclaims the contributed photos. Until that existed the only lever was
+unlinking the whole household. An EXPIRED link is not treated as a withdrawal. Pairing is the non-bearer path, and the panel's `shareLinkJoin` setting can close the
 share-link door entirely (redeem answers 403).
 
 ## The version handshake

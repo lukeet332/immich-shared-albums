@@ -166,6 +166,10 @@ pub fn start_directory_loop(state: std::sync::Arc<State>) {
                 0 => {}
                 n => crate::log!("{n} new invitation(s) detected"),
             }
+            // And the other half of membership: a link join ends when its LINK does. On this loop
+            // because it is the one that already asks "who is still allowed in" — and because a
+            // withdrawal has to be noticed before anything can be said about it in the album.
+            crate::sync::link_grants::retire_withdrawn_link_grants(&state, client).await;
             // Fire-and-forget, with one refresh in flight: the tick must not wait on a peer's dial,
             // and an unguarded spawn per tick is more parallelism than the behaviour it replaces had.
             refresh_peer_indexes_once(&state);

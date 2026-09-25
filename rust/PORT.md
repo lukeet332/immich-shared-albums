@@ -65,6 +65,12 @@ Rust-only modules, and what earns them a file:
 - `web/query.rs` — query-string helpers used by several routes.
 - `sync/directory.rs` — the directory lane (`start_directory_loop`), which in the TypeScript is wired
   in `index.ts` beside the other two lanes.
+- `sync/link_grants.rs` — a link join lasts exactly as long as its link: the origin re-reads its own
+  `/shared-links` and retires any grant whose album is no longer shared that way. Nothing in the
+  TypeScript ever re-reads a link after redeem, so a link share could only be ended by unlinking the
+  whole household. Runs inside the invite sweep, which is the lane that already asks who is still
+  allowed in. `expiresAt` is NOT treated as a withdrawal: a link row this code cannot fully read must
+  not revoke somebody's share, and ending joins that already happened on expiry is its own decision.
 - `examples/*.rs` — the probes: `frame_server`, `peer_server`, `seed_proxy`, `seed_member`,
   `leave_probe`, `redeem_probe`, `house_bot_probe`, `caller_albums_probe`, `materialise_probe`,
   `provision_probe`, `reconcile_probe`, `origin_push`, `jpeg_dump`.
@@ -165,7 +171,7 @@ valid connection can never address someone else's album.
 
 | Lane | What it proves | Command | Expected |
 | --- | --- | --- | --- |
-| Unit | pure logic, exactly | `cd rust && cargo test --lib` | `239 passed; 0 failed; 1 ignored` (the ignored one reads a Node-written `state.db`: `ISA_COMPAT_DB=… cargo test -- --ignored`) |
+| Unit | pure logic, exactly | `cd rust && cargo test --lib` | `242 passed; 0 failed; 1 ignored` (the ignored one reads a Node-written `state.db`: `ISA_COMPAT_DB=… cargo test -- --ignored`) |
 | Lint | the guard rules above | `cd rust && cargo clippy --all-targets` | no errors |
 | Image | the container contract: uid 1000, `/data` writable and owned by it, `HEALTHCHECK` healthy, the identity survives a restart | `bash rust/verify-image.sh` | `PASS — image contract holds` |
 | Panel | the Rust sidecar's own panel signs in and renders, with the sidecar fronting Immich on one origin | `bash rust/verify-panel.sh` | `5/5 checks passed` (incl. the "Create a link" button the install docs name) |
@@ -247,6 +253,12 @@ Three, counting the provisioning lock below.
   `album.updatedAt === mapping.localVersion` guard, so a person who leaves an album in Immich's own
   UI is never noticed: the mirror, its stubs and the mapping stay for ever. That is why the rig's
   `native leave` checks are scoped to the Rust lane.
+- **A link join ends when its link does.** `retire_withdrawn_link_grants` re-reads the origin's own
+  share links and retires a `role: owner, via: link` mapping whose album is no longer shared by link:
+  the member's next `/version` gets 410, which is the teardown it already performs, and the origin
+  reclaims the contributed photos on the way out (stored-FULL copies kept, as a leave does). The
+  TypeScript never re-reads a link after redeem, so a link share there can only be ended by unlinking
+  the household.
 - **Placing a person is serialised per email.** `provision_lock` gives `ensure_utility_user` one
   provision per email, because two loops reaching the same person at once both `POST /admin/users`
   and Immich answers the loser `duplicate key value violates unique constraint "user_email_uq"`; the

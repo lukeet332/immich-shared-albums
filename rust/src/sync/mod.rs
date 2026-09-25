@@ -15,6 +15,7 @@ pub mod index_offer;
 pub mod invitees;
 pub mod invites;
 pub mod leave;
+pub mod link_grants;
 pub mod matches;
 pub mod mirror;
 pub mod peer_mapping_id;
