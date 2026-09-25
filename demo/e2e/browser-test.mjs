@@ -716,61 +716,70 @@ if (cWasHardened) {
     restored.passwordLogin.enabled === false ? '' : 'the rig was left with C\'s password login open');
 }
 
-// THE ALBUM'S OWN TRAIL, and who gets to see it. The invitation just posted a line as our bot, so
-// this is the moment to test the per-reader control: the checkbox in /me, and the fact that hiding it
-// is a VIEW, not a deletion — another person in the album keeps seeing everything, and a real
-// person's comment is never swallowed (the relay posts those as stand-ins, and falls back to our bot).
-{
-  const auditCtx = await browser.newContext();
-  await auditCtx.addCookies(['immich_access_token', 'immich_auth_type', 'immich_is_authenticated'].map((name) => ({
-    name, url: B_PANEL_WEB,
-    value: name === 'immich_access_token' ? bLogin.accessToken : (name === 'immich_auth_type' ? 'password' : 'true'),
-  })));
-  const auditPage = await auditCtx.newPage();
-  const botLines = (rows) => rows.filter((a) => (a.user?.email || '').includes('bot')).length;
-  const humanLines = (rows) =>
-    rows.filter((a) => a.type === 'comment' && !(a.user?.email || '').includes('bot')).length;
-  const readAs = async (headers) =>
-    (await fetch(`${B_PANEL_WEB}/api/activities?albumId=${bInviteAlbum.id}`, { headers })).json();
+// RUST-ONLY. The tag that makes hiding exact (`audit-activity:<id>`), the `/me/preferences` route
+// and the passthrough filter are all the port's — the TypeScript build records nothing about which
+// activities are its own, so turning the toggle off there changes nothing. The rig knows which image
+// it is driving (`ISA_DOCKERFILE` is the CI matrix's own answer per lane), so the deprecated build
+// skips this case rather than failing it, and the port keeps the coverage.
+const isRustSidecar = (process.env.ISA_DOCKERFILE || 'rust/Dockerfile').includes('rust');
+if (isRustSidecar) {
+  // THE ALBUM'S OWN TRAIL, and who gets to see it. The invitation just posted a line as our bot, so
+  // this is the moment to test the per-reader control: the checkbox in /me, and the fact that hiding it
+  // is a VIEW, not a deletion — another person in the album keeps seeing everything, and a real
+  // person's comment is never swallowed (the relay posts those as stand-ins, and falls back to our bot).
+  {
+    const auditCtx = await browser.newContext();
+    await auditCtx.addCookies(['immich_access_token', 'immich_auth_type', 'immich_is_authenticated'].map((name) => ({
+      name, url: B_PANEL_WEB,
+      value: name === 'immich_access_token' ? bLogin.accessToken : (name === 'immich_auth_type' ? 'password' : 'true'),
+    })));
+    const auditPage = await auditCtx.newPage();
+    const botLines = (rows) => rows.filter((a) => (a.user?.email || '').includes('bot')).length;
+    const humanLines = (rows) =>
+      rows.filter((a) => a.type === 'comment' && !(a.user?.email || '').includes('bot')).length;
+    const readAs = async (headers) =>
+      (await fetch(`${B_PANEL_WEB}/api/activities?albumId=${bInviteAlbum.id}`, { headers })).json();
 
-  await auditPage.goto(`${B_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'networkidle' });
-  check('the album-activity toggle is ON by default', (await auditPage.locator('#audit-visible').isChecked()) === true);
+    await auditPage.goto(`${B_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'networkidle' });
+    check('the album-activity toggle is ON by default', (await auditPage.locator('#audit-visible').isChecked()) === true);
 
-  // A person's own comment beside the addon's line, so "the filter keeps what is not ours" is a real
-  // assertion rather than a hypothetical.
-  await fetch(`${B_PANEL_WEB}/api/activities`, { method: 'POST', headers: { ...bAuthForHooks, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ albumId: bInviteAlbum.id, type: 'comment', comment: `lane note ${Date.now()}` }) });
-  const shown = await readAs(bAuthForHooks);
-  check('the album carries the addon\'s own line', botLines(shown) > 0, `${botLines(shown)} bot line(s)`);
+    // A person's own comment beside the addon's line, so "the filter keeps what is not ours" is a real
+    // assertion rather than a hypothetical.
+    await fetch(`${B_PANEL_WEB}/api/activities`, { method: 'POST', headers: { ...bAuthForHooks, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ albumId: bInviteAlbum.id, type: 'comment', comment: `lane note ${Date.now()}` }) });
+    const shown = await readAs(bAuthForHooks);
+    check('the album carries the addon\'s own line', botLines(shown) > 0, `${botLines(shown)} bot line(s)`);
 
-  await auditPage.locator('#audit-visible').click();
-  await new Promise((r) => setTimeout(r, 1500));
-  const hidden = await readAs(bAuthForHooks);
-  check('turning it off hides the addon\'s lines from that reader', botLines(hidden) === 0,
-    `${botLines(hidden)} bot line(s) left`);
-  check('and never swallows a real person\'s comment', humanLines(hidden) > 0, `${humanLines(hidden)} human comment(s)`);
+    await auditPage.locator('#audit-visible').click();
+    await new Promise((r) => setTimeout(r, 1500));
+    const hidden = await readAs(bAuthForHooks);
+    check('turning it off hides the addon\'s lines from that reader', botLines(hidden) === 0,
+      `${botLines(hidden)} bot line(s) left`);
+    check('and never swallows a real person\'s comment', humanLines(hidden) > 0, `${humanLines(hidden)} human comment(s)`);
 
-  // "Everyone else" has to be a DIFFERENT reader: the household key resolves to this same person.
-  const otherMe = await (await fetch(`${B_PANEL_WEB}/api/users/me`, {
-    headers: { Authorization: `Bearer ${nonAdminLogin.accessToken}` },
-  })).json();
-  await fetch(`${B_PANEL_WEB}/api/albums/${bInviteAlbum.id}/users`, {
-    method: 'PUT', headers: { ...bAuthForHooks, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ albumUsers: [{ userId: otherMe.id, role: 'editor' }] }),
-  });
-  const other = await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: nonAdminEmail, password: nonAdminPass }) })).json();
-  const asOther = other.accessToken
-    ? await readAs({ Cookie: `immich_access_token=${other.accessToken}` })
-    : [];
-  check('ANOTHER reader still sees the record (it is hidden, not deleted)', botLines(asOther) > 0,
-    `${botLines(asOther)} bot line(s) for the second reader`);
+    // "Everyone else" has to be a DIFFERENT reader: the household key resolves to this same person.
+    const otherMe = await (await fetch(`${B_PANEL_WEB}/api/users/me`, {
+      headers: { Authorization: `Bearer ${nonAdminLogin.accessToken}` },
+    })).json();
+    await fetch(`${B_PANEL_WEB}/api/albums/${bInviteAlbum.id}/users`, {
+      method: 'PUT', headers: { ...bAuthForHooks, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ albumUsers: [{ userId: otherMe.id, role: 'editor' }] }),
+    });
+    const other = await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: nonAdminEmail, password: nonAdminPass }) })).json();
+    const asOther = other.accessToken
+      ? await readAs({ Cookie: `immich_access_token=${other.accessToken}` })
+      : [];
+    check('ANOTHER reader still sees the record (it is hidden, not deleted)', botLines(asOther) > 0,
+      `${botLines(asOther)} bot line(s) for the second reader`);
 
-  await auditPage.locator('#audit-visible').click();
-  await new Promise((r) => setTimeout(r, 1500));
-  check('turning it back on restores them', botLines(await readAs(bAuthForHooks)) > 0);
-  await auditCtx.close();
+    await auditPage.locator('#audit-visible').click();
+    await new Promise((r) => setTimeout(r, 1500));
+    check('turning it back on restores them', botLines(await readAs(bAuthForHooks)) > 0);
+    await auditCtx.close();
+  }
+
 }
 
 await browser.close();
