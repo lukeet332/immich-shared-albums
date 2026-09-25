@@ -316,20 +316,26 @@ const toggleProblem = cWasHardened ? await setPasswordLogin(true) : '';
 // BOUNDED RETRY, because the toggle above is applied asynchronously: Immich caches its system config,
 // so a login issued the instant the PUT returns can still be refused with password login off. That is
 // a race in the lane's own setup, not a product failure, and it reads as one failed check plus a
-// crash on the missing token — so wait for the sign-in the lane needs rather than for the PUT.
+// crash on the missing token — so wait for the sign-in the lane needs rather than for the PUT. The
+// ceiling is generous because a stale config read can outlive a 20s budget on a loaded runner, and the
+// detail names the last answer, because "C failed" with no status is a failure nobody can act on.
 const signIn = async (base) => {
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const r = await (await fetch(`${base}/api/auth/login`, { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json();
-    if (r?.accessToken) return r;
+  let last = 'no attempt completed';
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const answer = await fetch(`${base}/api/auth/login`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) });
+    const body = await answer.json().catch(() => ({}));
+    if (body?.accessToken) return body;
+    last = `${answer.status} ${JSON.stringify(body).slice(0, 50)}`;
     await new Promise((res) => setTimeout(res, 1000));
   }
-  return {};
+  return { failed: last };
 };
 const bLogin = await signIn(B_PANEL_WEB);
 const cLogin = await signIn(C_PANEL_WEB);
 check('the lane can sign in on both households\' panels', !!bLogin.accessToken && !!cLogin.accessToken,
-  `${bLogin.accessToken ? 'B ok' : 'B failed'}, ${cLogin.accessToken ? 'C ok' : 'C failed'}` +
+  `${bLogin.accessToken ? 'B ok' : `B failed (${bLogin.failed})`}, ` +
+  `${cLogin.accessToken ? 'C ok' : `C failed (${cLogin.failed})`}` +
   (toggleProblem ? ` (C's password login: ${toggleProblem})` : ''));
 // STOP CLEANLY. The rest of this lane drives C's panel, and a missing token used to crash the run on
 // `addCookies` — one bad line, then no output at all for the thirty checks after it. A lane that

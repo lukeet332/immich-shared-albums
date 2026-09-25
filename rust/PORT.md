@@ -165,7 +165,7 @@ valid connection can never address someone else's album.
 
 | Lane | What it proves | Command | Expected |
 | --- | --- | --- | --- |
-| Unit | pure logic, exactly | `cd rust && cargo test --lib` | `238 passed; 0 failed; 1 ignored` (the ignored one reads a Node-written `state.db`: `ISA_COMPAT_DB=… cargo test -- --ignored`) |
+| Unit | pure logic, exactly | `cd rust && cargo test --lib` | `239 passed; 0 failed; 1 ignored` (the ignored one reads a Node-written `state.db`: `ISA_COMPAT_DB=… cargo test -- --ignored`) |
 | Lint | the guard rules above | `cd rust && cargo clippy --all-targets` | no errors |
 | Image | the container contract: uid 1000, `/data` writable and owned by it, `HEALTHCHECK` healthy, the identity survives a restart | `bash rust/verify-image.sh` | `PASS — image contract holds` |
 | Panel | the Rust sidecar's own panel signs in and renders, with the sidecar fronting Immich on one origin | `bash rust/verify-panel.sh` | `5/5 checks passed` (incl. the "Create a link" button the install docs name) |
@@ -232,6 +232,7 @@ Two of the TypeScript's documented drifts are deliberate and must NOT be "fixed"
 over iroh but never dialled.
 
 Two more are deliberate and go the other way: the port fixes a behaviour the TypeScript gets wrong.
+Three, counting the provisioning lock below.
 
 - **A leave keeps the stored copies the household paid for.** With `storeSharedAssetsLocally` on, a
   mirror row carries `storedFull` and its bytes are a real local asset. `leave_album` skips those
@@ -246,6 +247,14 @@ Two more are deliberate and go the other way: the port fixes a behaviour the Typ
   `album.updatedAt === mapping.localVersion` guard, so a person who leaves an album in Immich's own
   UI is never noticed: the mirror, its stubs and the mapping stay for ever. That is why the rig's
   `native leave` checks are scoped to the Rust lane.
+- **Placing a person is serialised per email.** `provision_lock` gives `ensure_utility_user` one
+  provision per email, because two loops reaching the same person at once both `POST /admin/users`
+  and Immich answers the loser `duplicate key value violates unique constraint "user_email_uq"`; the
+  loser's recovery resets the password the winner is still logging in with, and the winner reports
+  `login failed for … — will retry` on a join, an invite or a comment. Observed on the rig in both
+  builds — `sidecar-b` "could not create an invite target", `sidecar-d` "comment sync error", with the
+  Postgres error in `immich-b` — and intermittent, because it needs two loops to arrive together. The
+  TypeScript has no such lock.
 
 ## Performance, Rust against the TypeScript it replaces
 

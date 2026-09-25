@@ -120,12 +120,35 @@ pub fn host_auth(host_key: Option<&str>) -> Auth<'_> {
     }
 }
 
+/// One provision per EMAIL at a time.
+///
+/// Two loops race to place the same person the first time they are seen — the watcher materialising a
+/// ref while the invite loop creates an invite target, or a comment arriving for the same album. Both
+/// find no account, both `POST /admin/users`, and Immich answers the loser `duplicate key value
+/// violates unique constraint "user_email_uq"`. The loser's recovery path then RESETS that account's
+/// password, which is the password the winner is still logging in with, so the winner fails with
+/// "login failed for … — will retry" on a join, an invite or a comment someone just triggered.
+/// Serialising on the email makes the second caller find a usable account instead of clobbering it.
+///
+/// Keyed on the EMAIL, not the state key: the email is what Immich enforces uniqueness on.
+fn provision_lock(email: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    let locks = LOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut locks = locks.lock().unwrap();
+    locks.entry(email.to_string()).or_default().clone()
+}
+
 /// Provision or heal one stand-in account, and return it holding a usable key.
 pub async fn ensure_utility_user(
     state: &State,
     client: &Client,
     spec: &ContributorSpec,
 ) -> Result<Contributor, String> {
+    // Held for the whole provision and released when this returns. A `tokio` mutex on purpose: the
+    // guard lives across Immich calls, and a `std` one would block a runtime worker.
+    let _provision = provision_lock(&spec.email).lock_owned().await;
     let wanted_name = spec
         .full_name
         .clone()
@@ -619,6 +642,19 @@ pub fn is_bot_email(email: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provisioning_is_serialised_per_person_email() {
+        // The lock exists so two loops cannot create one account at the same time, so it must be the
+        // SAME lock for one email and DIFFERENT locks for two. Keying it on anything else — the state
+        // key, the display name — either fails to serialise the race or makes unrelated people wait
+        // on each other's Immich calls.
+        let first = provision_lock("person-1@immich-shared-albums.internal");
+        let again = provision_lock("person-1@immich-shared-albums.internal");
+        let other = provision_lock("person-2@immich-shared-albums.internal");
+        assert!(std::sync::Arc::ptr_eq(&first, &again), "one person's email shares one lock");
+        assert!(!std::sync::Arc::ptr_eq(&first, &other), "different people must not serialise each other");
+    }
 
     #[test]
     fn an_unreadable_album_means_do_not_add() {

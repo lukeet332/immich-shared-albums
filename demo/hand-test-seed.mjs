@@ -23,8 +23,14 @@ const B_SIDECAR = `http://localhost:${PORT('PORT_SIDECAR_B', 9381)}`;
 const C_SIDECAR = `http://localhost:${PORT('PORT_SIDECAR_C', 9382)}`;
 const BKEY = process.env.BKEY;
 const CKEY = process.env.CKEY;
-const EMAIL = process.env.ISA_HAND_TEST_EMAIL || 'admin@e2e.local';
-const PASSWORD = process.env.ISA_HAND_TEST_PASSWORD || 'e2e-admin-pass-1';
+const DEFAULT_EMAIL = 'admin@e2e.local';
+const DEFAULT_PASSWORD = 'e2e-admin-pass-1';
+const EMAIL = process.env.ISA_HAND_TEST_EMAIL || DEFAULT_EMAIL;
+const PASSWORD = process.env.ISA_HAND_TEST_PASSWORD || DEFAULT_PASSWORD;
+// Whether the caller overrode the credential, never the credential itself: the handover prints the
+// DOCUMENTED rig password, and echoing one that came from the environment would put a secret this
+// repo does not own into a log. CodeQL flags exactly that, and it is right to.
+const passwordWasOverridden = !!process.env.ISA_HAND_TEST_PASSWORD;
 
 const REUNION_ALBUM = 'Portugal 2026';
 const JOIN_ALBUM = 'Iceland 2026';
@@ -359,7 +365,7 @@ const main = async () => {
 ──────────────────────────────────────────────────────────────────────────────
  Sign in on BOTH (same account; the name differs per household):
    email     ${EMAIL}
-   password  ${PASSWORD}
+   password  ${passwordWasOverridden ? '(the ISA_HAND_TEST_PASSWORD you set)' : DEFAULT_PASSWORD}
 
    B — "Demo Nan"        ${bOrigin}/immich-shared-albums/
    C — "Grandpa Joe"     ${cOrigin}/immich-shared-albums/
