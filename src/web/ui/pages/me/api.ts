@@ -72,3 +72,16 @@ export const reunite = (mappingId: string, albumName: string) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mappingId, albumName }),
   }) as Promise<{ album: string; seeded: number }>;
+
+/** This person's own settings. One field today: whether the addon's activity is shown to THEM in
+ *  the album's comment history. The route is scoped to the caller server-side, like every other. */
+export type Preferences = { auditVisibleInComments: boolean };
+
+export const myPreferences = () => json('/me/preferences') as Promise<Preferences>;
+
+export const savePreferences = (next: Preferences) =>
+  json('/me/preferences', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(next),
+  }) as Promise<Preferences>;

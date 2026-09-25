@@ -85,9 +85,46 @@ pub async fn proxy_to_immich(method: Method, uri: &Uri, headers: &HeaderMap, bod
         // A set-cookie carries one cookie per header; appending keeps them all.
         response = response.header(name, value);
     }
+    // The one route whose ANSWER is rewritten, and only for a reader who asked. Everything else
+    // streams, and so does this when the preference is the default: see `filter_activities`.
+    if method == Method::GET && uri.path() == "/api/activities" && status.is_success() {
+        return filter_activities(headers, upstream).await;
+    }
     let stream = upstream.bytes_stream();
     response
         .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+}
+
+/// `GET /api/activities` — the album's comment history, and the ONE answer this proxy rewrites.
+///
+/// Immich has no per-reader view of an album's comments, and we never touch Immich: the history
+/// merely passes through here on its way to the browser. So a person who has asked not to see the
+/// addon's own trail gets it dropped from THEIR answer — the rows stay in Immich, stay in the trail,
+/// and stay visible to everyone else.
+///
+/// The caller is resolved only for this route: it costs one Immich read, and it is the only way to
+/// know whose preference applies. Default is visible, so the common case re-serves bytes that were
+/// already fetched and unchanged.
+async fn filter_activities(headers: &HeaderMap, upstream: reqwest::Response) -> Response {
+    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let bytes = match upstream.bytes().await {
+        Ok(bytes) => bytes,
+        Err(e) => return unreachable_immich(&e.to_string()),
+    };
+    let filtered = match crate::web::auth::caller_signed_in(headers).await {
+        Some(signed_in) => crate::web::activity_filter::filter_activities_body(
+            &crate::state::state(),
+            &signed_in.caller.id,
+            &bytes,
+        ),
+        None => None,
+    };
+    let body = filtered.unwrap_or_else(|| bytes.to_vec());
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
         .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
 }
 

@@ -3,18 +3,37 @@ use serde_json::Value;
 
 use crate::sync::audit::is_audit_activity;
 
-/// Whether this caller has asked to hide the addon's own trail.
+/// Whether this caller has asked to SEE the addon's own trail in album comments.
 ///
 /// Default is SHOW: a trail nobody sees is not a trail, and the interesting failure of a visibility
-/// preference is hiding the record by accident. `settings.rs` owns the row; this reads one key of it.
-pub fn audit_hidden_for(state: &crate::state::State, caller_id: &str) -> bool {
+/// preference is hiding the record by accident. The row is per CALLER, so one person's choice cannot
+/// change what another person sees.
+pub fn audit_visible_for(state: &crate::state::State, caller_id: &str) -> bool {
     state
         .store
-        .kv(&format!("hideAuditFor:{caller_id}"))
+        .kv(&visibility_key(caller_id))
         .ok()
         .flatten()
-        .and_then(|v| v.get("hidden").and_then(|b| b.as_bool()))
-        .unwrap_or(false)
+        .and_then(|v| v.get("visible").and_then(|b| b.as_bool()))
+        .unwrap_or(true)
+}
+
+/// Record it. Written as a whole row, like every other settings-shaped row here.
+pub fn set_audit_visible(
+    state: &crate::state::State,
+    caller_id: &str,
+    visible: bool,
+) -> Result<(), crate::store::StoreError> {
+    state.store.kv_set(
+        &visibility_key(caller_id),
+        &serde_json::json!({ "visible": visible }),
+    )
+}
+
+/// Namespaced by the caller's id on THIS server — the same id a session resolves to, so one person
+/// is one row however they sign in.
+fn visibility_key(caller_id: &str) -> String {
+    format!("auditVisibleFor:{caller_id}")
 }
 
 /// Drop the audit lines from an `activities` answer.
@@ -48,7 +67,7 @@ pub fn filter_activities_body(
     caller_id: &str,
     body: &[u8],
 ) -> Option<Vec<u8>> {
-    if !audit_hidden_for(state, caller_id) {
+    if audit_visible_for(state, caller_id) {
         return None;
     }
     let parsed: Value = serde_json::from_slice(body).ok()?;
@@ -86,7 +105,7 @@ mod tests {
         let s = state();
         let rows = vec![json!({ "id": "a1", "comment": "hello" })];
         tag_as_audit(&s, "a1");
-        assert!(!audit_hidden_for(&s, "user-1"));
+        assert!(audit_visible_for(&s, "user-1"));
         assert!(filter_activities_body(&s, "user-1", serde_json::to_vec(&rows).unwrap().as_slice()).is_none());
     }
 
@@ -143,10 +162,8 @@ mod tests {
     #[test]
     fn the_preference_is_read_per_caller() {
         let s = state();
-        s.store
-            .kv_set("hideAuditFor:user-1", &json!({ "hidden": true }))
-            .unwrap();
-        assert!(audit_hidden_for(&s, "user-1"));
-        assert!(!audit_hidden_for(&s, "user-2"), "another person is unaffected");
+        set_audit_visible(&s, "user-1", false).unwrap();
+        assert!(!audit_visible_for(&s, "user-1"));
+        assert!(audit_visible_for(&s, "user-2"), "another person is unaffected");
     }
 }

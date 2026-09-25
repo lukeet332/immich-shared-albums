@@ -238,6 +238,12 @@ pub async fn serve(req: Request) -> Response {
         (Method::GET, p) if p == format!("{ROUTE_PREFIX}/me/matches") => {
             return my_matches(&headers).await
         }
+        (Method::GET, p) if p == format!("{ROUTE_PREFIX}/me/preferences") => {
+            return my_preferences(&headers).await
+        }
+        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/me/preferences") => {
+            return set_my_preferences(&headers, req).await
+        }
         (Method::POST, p) if p == format!("{ROUTE_PREFIX}/me/albums/publish") => {
             return publish_my_albums(&headers, req).await
         }
@@ -953,6 +959,54 @@ async fn invite_to_reunite(headers: &HeaderMap, req: Request) -> Response {
         }
         Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
     }
+}
+
+/// `GET /me/preferences` — what this person has chosen for themselves.
+///
+/// One field today: whether the addon's own trail is shown to THEM in the album's comment history.
+/// Default true — the trail exists to be read, and hiding it must be a choice somebody made.
+async fn my_preferences(headers: &HeaderMap) -> Response {
+    let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
+        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("see your settings"));
+    };
+    json_response(
+        StatusCode::OK,
+        json!({
+            "auditVisibleInComments": crate::web::activity_filter::audit_visible_for(
+                state(),
+                &signed_in.caller.id,
+            ),
+        }),
+    )
+}
+
+/// `POST /me/preferences` — and it is the CALLER's own row: a body naming somebody else is ignored,
+/// because there is no reason to let one person hide the trail for another.
+async fn set_my_preferences(headers: &HeaderMap, req: Request) -> Response {
+    let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
+        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("change your settings"));
+    };
+    let body = match read_json_body(req).await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let Some(visible) = body.get("auditVisibleInComments").and_then(|v| v.as_bool()) else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "say whether the album activity should be visible" }),
+        );
+    };
+    if let Err(e) = crate::web::activity_filter::set_audit_visible(state(), &signed_in.caller.id, visible)
+    {
+        return json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": e.to_string() }),
+        );
+    }
+    json_response(
+        StatusCode::OK,
+        json!({ "auditVisibleInComments": visible }),
+    )
 }
 
 /// `GET /me/matches` — the pairings this person could reunite.
