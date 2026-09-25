@@ -68,6 +68,11 @@ view, and stay in the album. The tag written when a line was posted is what the 
 never the author, because the relay posts another household's comment as a stand-in and falls back to
 our own bot.
 
+**A panel visit also drains the waiting trail.** `GET /me/albums` is the moment a person is in front
+of us with the credential that can authorise a membership on their OWN albums — so it is where audit
+lines queued while they were away (a peer's join, a peer's leave) are finally written
+(`sync/trail.rs`). Detached from the answer, so a panel never waits on the trail.
+
 **The per-user routes answer as the caller.** `/me/albums` and `/me/matches` read Immich with the
 caller's own forwarded credential (`immich/access.ts` decides that once), so membership and
 ownership are Immich's answers rather than a filtered admin read — and `/me/albums/publish` reads

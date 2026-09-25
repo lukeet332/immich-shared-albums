@@ -2683,6 +2683,59 @@ if (!sidecarHasNode('b-sidecar')) {
   }
 }
 
+// A peer's join is the OWNER's history, and the owner is not there when it happens: our bot can only
+// be put on their album by them. So the event waits in a queue and lands on their next panel visit —
+// the only mechanism that can put "Demo Nan joined your album" on an album we do not own.
+// RUST-ONLY: the TypeScript has no trail queue.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: a peer\'s join and leave reach the owner\'s album on their next visit');
+  {
+    const t = `rust trail ${Date.now()}`;
+    const albT = await api(A, AKEY, '/albums', j({ albumName: t }));
+    const photoT = await upload(A, AKEY, 'rust-trail.jpg', `rt${Date.now() % 10000}`, '2026-08-25T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [photoT]);
+    await api(A, AKEY, `/albums/${albT.id}/assets`, { ...j({ ids: [photoT] }), method: 'PUT' });
+    const linkT = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albT.id, allowUpload: true }))).key;
+    const joinedT = await (await fetch(`${BS}/immich-shared-albums/join`,
+      jAuth(await inviteFor(ORIGIN_DIRECT, linkT), BKEY))).json();
+    check('rig: B joined the album the owner is about to hear about', !!joinedT.album,
+          JSON.stringify(joinedT).slice(0, 50));
+
+    // It WAITS: while the owner is away the queue is the only place it can be.
+    const queued = async (event) => {
+      const out = sidecarSql('c-sidecar',
+        `SELECT COUNT(*) AS n FROM trail_pending WHERE event='${event}'`);
+      return out ? Number(JSON.parse(out)[0].n) : -1;
+    };
+    const waited = await until(async () => (await queued('joined')) > 0 ? true : null, 120000);
+    check('the join waits in the owner\'s queue', !!waited, `${await queued('joined')} queued`);
+    check('and is NOT in the album yet',
+          !(await api(A, AKEY, `/activities?albumId=${albT.id}`)).some(a => /joined this album/i.test(a.comment || '')));
+
+    // The owner's own visit writes it — `/me/albums` is what the panel loads, as them.
+    await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/albums`, { headers: { 'x-api-key': AKEY } });
+    const lineT = await until(async () => {
+      const rows = await api(A, AKEY, `/activities?albumId=${albT.id}`);
+      return (rows || []).find(a => /joined this album/i.test(a.comment || '')) || null;
+    }, 60000);
+    check('the owner\'s visit writes the join into the album', !!lineT,
+          lineT ? `"${lineT.comment.slice(0, 50)}…" by ${lineT.user?.name}` : 'no line within 60s');
+
+    // And a LEAVE waits the same way, including the case where the mapping is already dead by then.
+    const mirrorT = (await api(B, BKEY, '/albums')).find(a => a.albumName === t);
+    await api(B, BKEY, `/albums/${mirrorT.id}/user/me`, { method: 'DELETE' });
+    const waitedLeft = await until(async () => (await queued('left')) > 0 ? true : null, 120000);
+    check('a leave waits in the queue too', !!waitedLeft, `${await queued('left')} queued`);
+    await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/albums`, { headers: { 'x-api-key': AKEY } });
+    const lineLeft = await until(async () => {
+      const rows = await api(A, AKEY, `/activities?albumId=${albT.id}`);
+      return (rows || []).find(a => /left this album/i.test(a.comment || '')) || null;
+    }, 60000);
+    check('and the owner\'s next visit writes the leave, even though the mapping is dead by then',
+          !!lineLeft, lineLeft ? `"${lineLeft.comment.slice(0, 50)}…"` : 'no line within 60s');
+  }
+}
+
 if (process.env.E2E_PROFILE) {
   const total = WAITS.reduce((s, w) => s + w.ms, 0);
   const polls = WAITS.reduce((s, w) => s + w.polls, 0);

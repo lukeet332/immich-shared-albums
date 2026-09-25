@@ -8,6 +8,10 @@ use std::sync::Mutex;
 /// chain below or refused — never guessed at.
 pub const SCHEMA_VERSION: i64 = 4;
 
+/// How many panel visits a queued audit line is worth before this build stops asking. Small on
+/// purpose: a line whose album cannot be written is almost always one whose album is gone.
+pub const TRAIL_MAX_ATTEMPTS: i64 = 5;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
     #[serde(rename = "to-them")]
@@ -77,6 +81,16 @@ pub struct SeenEntry {
     pub local_asset: String,
     pub origin_asset: Option<String>,
     pub stored_full: bool,
+}
+
+/// One audit line waiting for the album's owner to be present. See `sync/trail.rs`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrailRow {
+    pub id: i64,
+    pub album_id: String,
+    pub mapping_id: String,
+    pub event: String,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -452,6 +466,76 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM seen_activity WHERE mapping = ?1", [mapping])?;
         Ok(())
+    }
+
+    // ---- the trail that waits for its album's owner ----
+
+    /// Queue one line. Returns its row id, which is what makes the eventual line unique: the same
+    /// album can gain two joins, and `audit_line`'s tag is keyed by event AND album.
+    pub fn trail_pending_add(
+        &self,
+        album_id: &str,
+        mapping_id: &str,
+        event: &str,
+        text: &str,
+    ) -> Result<i64, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO trail_pending (albumId, mappingId, event, text, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![album_id, mapping_id, event, text, crate::config::iso_now()],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Everything waiting, oldest first. Read in full because it is bounded by human-scale events
+    /// (one row per join or leave) and drained on a person's visit.
+    pub fn trail_pending_all(&self) -> Result<Vec<TrailRow>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, albumId, mappingId, event, text FROM trail_pending ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(TrailRow {
+                id: r.get(0)?,
+                album_id: r.get(1)?,
+                mapping_id: r.get(2)?,
+                event: r.get(3)?,
+                text: r.get(4)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Count one failed attempt. Returns whether the line has now been given up on — an album that
+    /// is gone (deleted, or no longer visible to its owner) must not be asked about on every visit
+    /// for the rest of the install's life.
+    pub fn trail_pending_bump(&self, id: i64) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE trail_pending SET attempts = attempts + 1 WHERE id = ?1",
+            [id],
+        )?;
+        let attempts: i64 = conn.query_row(
+            "SELECT attempts FROM trail_pending WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )?;
+        if attempts >= TRAIL_MAX_ATTEMPTS {
+            conn.execute("DELETE FROM trail_pending WHERE id = ?1", [id])?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    pub fn trail_pending_remove(&self, id: i64) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM trail_pending WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn trail_pending_count(&self) -> Result<i64, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row("SELECT COUNT(*) FROM trail_pending", [], |r| r.get(0))?)
     }
 
     // ---- entitlement ----
@@ -976,6 +1060,19 @@ fn create_schema(conn: &Connection) -> Result<(), StoreError> {
         CREATE INDEX IF NOT EXISTS seen_localAsset ON seen (localAsset);
         CREATE TABLE IF NOT EXISTS seen_activity (tag TEXT PRIMARY KEY, mapping TEXT);
         CREATE INDEX IF NOT EXISTS seen_activity_mapping ON seen_activity (mapping);
+        -- An audit line we could not write yet: the event happened while the album's owner was not
+        -- here to authorise it (our bot can only be put on THEIR album by THEM), so it waits for
+        -- their next visit. Additive, so no schema bump: an older build ignores the table.
+        CREATE TABLE IF NOT EXISTS trail_pending (
+          id INTEGER PRIMARY KEY,
+          albumId TEXT NOT NULL,
+          mappingId TEXT NOT NULL,
+          event TEXT NOT NULL,
+          text TEXT NOT NULL,
+          at TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS trail_pending_album ON trail_pending (albumId);
         CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, size INTEGER NOT NULL, lastUsed INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS cache_lru ON cache (lastUsed);
         CREATE TABLE IF NOT EXISTS offered (

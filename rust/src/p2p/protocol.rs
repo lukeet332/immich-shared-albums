@@ -237,6 +237,16 @@ pub async fn handle_redeem(caller_pub: &str, body: &[u8]) -> (u16, Value) {
                 remote_comment_count: None,
             });
             crate::log!("peer joined: \"{household_name}\" -> album \"{album_name}\"");
+            // The album's own history, queued rather than written: this is the OWNER's album and
+            // their owner is not here — our bot can only be put on it by them — so the line waits for
+            // their next visit to the panel. See `sync/trail.rs`.
+            crate::sync::trail::enqueue(
+                state(),
+                album_id,
+                &id,
+                "joined",
+                &crate::sync::trail::joined_text(&household_name),
+            );
             id
         }
     };
@@ -932,6 +942,30 @@ pub async fn handle_leave(caller_pub: &str, album_mapping_id: &str) -> (u16, Val
                 );
             }
         }
+    }
+    // Their photos have been reclaimed (above) and they are gone: the album keeps the fact, queued
+    // for the owner's next visit for the same reason a join is.
+    {
+        let name = state
+            .collections()
+            .peers
+            .iter()
+            .find(|p| p.pub_key == caller_pub)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "a linked household".to_string());
+        crate::sync::trail::enqueue(
+            state,
+            &state
+                .collections()
+                .mappings
+                .iter()
+                .find(|m| m.id == mapping_id)
+                .map(|m| m.album_id.clone())
+                .unwrap_or_default(),
+            &mapping_id,
+            "left",
+            &crate::sync::trail::left_text(&name),
+        );
     }
     if purged > 0 {
         crate::log!(

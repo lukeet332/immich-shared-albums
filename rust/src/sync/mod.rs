@@ -22,3 +22,4 @@ pub mod peer_mapping_id;
 pub mod status;
 pub mod sweeps;
 pub mod traffic_triggers;
+pub mod trail;

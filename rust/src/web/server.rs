@@ -627,6 +627,20 @@ async fn my_albums(headers: &HeaderMap) -> Response {
     // touches state blocks behind it and the sidecar stops answering entirely. Both lookups want the
     // same snapshot anyway.
     let collections = state().collections();
+    // The albums this person can AUTHORISE a membership on: their own. That is also the whole set the
+    // waiting trail can be about, because our bot can only be put on an album by someone who can
+    // already change it — and this visit is when we hold their credential to do it.
+    //
+    // A DEAD mapping still counts. Leaving marks the origin's mapping dead while the album itself
+    // carries on existing, and a leave is exactly the event most likely to be waiting: requiring a
+    // live mapping here would strand it for ever. A genuinely deleted album fails the add, and the
+    // queue gives up on it after a few tries rather than retrying on every visit.
+    let writable_album_ids: Vec<String> = collections
+        .mappings
+        .iter()
+        .filter(|m| m.role == crate::store::Role::Owner && visible.contains(&m.album_id))
+        .map(|m| m.album_id.clone())
+        .collect();
     let albums: Vec<Value> = collections
         .mappings
         .iter()
@@ -656,6 +670,21 @@ async fn my_albums(headers: &HeaderMap) -> Response {
             entry
         })
         .collect();
+    // The trail that has been waiting for this person, detached so their panel never waits on it.
+    // The guard above is out of scope by here — an await with it alive would be a deadlock hazard.
+    if crate::sync::trail::has_pending(state()) {
+        let owned_state = state().clone();
+        let creds = signed_in.creds.clone();
+        tokio::spawn(async move {
+            crate::sync::trail::drain_for_caller(
+                &owned_state,
+                crate::immich::client::shared(),
+                &creds,
+                &writable_album_ids,
+            )
+            .await;
+        });
+    }
     json_response(
         StatusCode::OK,
         json!({
