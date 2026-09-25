@@ -2696,10 +2696,10 @@ if (!sidecarHasNode('b-sidecar')) {
     await ensurePreviews(A, AKEY, [photoT]);
     await api(A, AKEY, `/albums/${albT.id}/assets`, { ...j({ ids: [photoT] }), method: 'PUT' });
     const linkT = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albT.id, allowUpload: true }))).key;
-    const joinedT = await (await fetch(`${BS}/immich-shared-albums/join`,
-      jAuth(await inviteFor(ORIGIN_DIRECT, linkT), BKEY))).json();
+    const joinedT = await joinWithRetry(() => api(A, AKEY, '/shared-links',
+      j({ type: 'ALBUM', albumId: albT.id, allowUpload: true })));
     check('rig: B joined the album the owner is about to hear about', !!joinedT.album,
-          JSON.stringify(joinedT).slice(0, 50));
+          JSON.stringify(joinedT).slice(0, 60));
 
     // It WAITS: while the owner is away the queue is the only place it can be.
     const queued = async (event) => {
@@ -2747,9 +2747,9 @@ if (!sidecarHasNode('b-sidecar')) {
   stage('rust: removing a person from a link album is recorded, and says the link still stands');
   {
     const albK = await api(A, AKEY, '/albums', j({ albumName: `rust removal ${Date.now()}` }));
-    const linkK = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albK.id, allowUpload: true }))).key;
-    const joinedK = await (await fetch(`${BS}/immich-shared-albums/join`,
-      jAuth(await inviteFor(ORIGIN_DIRECT, linkK), BKEY))).json();
+    const joinedK = await joinWithRetry(() => api(A, AKEY, '/shared-links',
+      j({ type: 'ALBUM', albumId: albK.id, allowUpload: true })));
+    check('rig: B joined the album the removal is about', !!joinedK.album, JSON.stringify(joinedK).slice(0, 60));
     const mirrorK = await until(async () => {
       const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinedK.album && a.assetCount > 0);
       return found || null;
