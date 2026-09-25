@@ -17,14 +17,18 @@ cd "$(dirname "$0")/.."
 
 PORT_B=${HAND_PORT_B:-9301}
 PORT_C=${HAND_PORT_C:-9302}
+# The rig has three households and the mesh needs all of them linked, so D is installed too.
+PORT_D=${HAND_PORT_D:-9303}
 # Where the two servers are published. Loopback by default, because the mocks carry a known admin
 # password; `HAND_BIND=100.x.y.z` — this host's Tailscale address — is what you use to click them from
 # another device, and it is deliberately narrower than 0.0.0.0 so the LAN never sees them.
 BIND=${HAND_BIND:-127.0.0.1}
 DIR_B=${HAND_DIR_B:-/tmp/isa-hand-b}
 DIR_C=${HAND_DIR_C:-/tmp/isa-hand-c}
+DIR_D=${HAND_DIR_D:-/tmp/isa-hand-d}
 PROJECT_B=${HAND_PROJECT_B:-isa-hand-b}
 PROJECT_C=${HAND_PROJECT_C:-isa-hand-c}
+PROJECT_D=${HAND_PROJECT_D:-isa-hand-d}
 DOCKERFILE=${ISA_DOCKERFILE:-rust/Dockerfile}
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -88,6 +92,8 @@ install_one() { # install_one <label> <network> <immich url> <household> <port> 
 
 install_one B household-b_default "http://immich-b:2283" "Demo household (B)" "$PORT_B" "$BKEY" "$DIR_B" "$PROJECT_B"
 install_one C household-c_default "http://immich-c:2283" "Mock household (C)" "$PORT_C" "$CKEY" "$DIR_C" "$PROJECT_C"
+DKEY=$(grep -m1 '^D_API_KEY=' demo/household-d/.env | cut -d= -f2-)
+install_one D household-d_default "http://immich-d:2283" "Mock household (D)" "$PORT_D" "$DKEY" "$DIR_D" "$PROJECT_D"
 
 say "4/4 seeding the two linked households"
 source /home/luke/rig.env 2>/dev/null || true
@@ -102,13 +108,13 @@ if [ "$BIND" = "0.0.0.0" ]; then
 fi
 ISA_HAND_TEST_HOST="$HAND_HOST" ISA_HAND_DRIVE_HOST=localhost \
 PORT_IMMICH_B=${PORT_IMMICH_B:-2384} PORT_IMMICH_C=${PORT_IMMICH_C:-2385} \
-PORT_SIDECAR_B="$PORT_B" PORT_SIDECAR_C="$PORT_C" \
+PORT_SIDECAR_B="$PORT_B" PORT_SIDECAR_C="$PORT_C" PORT_SIDECAR_D="$PORT_D" \
 BKEY="$BKEY" CKEY="$CKEY" \
 node demo/hand-test-seed.mjs
 
 say "installed servers"
-for pair in "B:$PORT_B:$DIR_B:$PROJECT_B" "C:$PORT_C:$DIR_C:$PROJECT_C"; do
-  label=${pair%%:*}; rest=${pair#*:}; port=${rest%%:*}; rest=${rest#*:}; dir=${rest%%:*}; project=${rest##*:}
+for pair in "B:$PORT_B" "C:$PORT_C" "D:$PORT_D"; do
+  label=${pair%%:*}; port=${pair#*:}
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://$HAND_HOST:$port/immich-shared-albums/admin")
   echo "  $label  http://$HAND_HOST:$port/immich-shared-albums/   (admin panel when signed out: $code)"
 done

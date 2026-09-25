@@ -184,6 +184,11 @@ whatever they left.
 | `RIG_UP_ONLY=1 bash demo/run-mock-e2e.sh` | The rig's own sidecars on the port map, both households purged and seeded, **C's password login left ON** so you can actually sign in |
 | `bash demo/hand-test-up.sh` | The same mocks with the sidecars INSTALLED by `deploy/install.sh` (B on `:9301`, C on `:9302`) — this is the path an operator takes, so a rig built any other way tests everything except the way it ships |
 
+`hand-test-up.sh` installs all THREE households (B, C, D) and pairs every pair, so the rig is a
+closed mesh — which is what makes a behaviour difference *between* households observable at all. The
+matrix probe (`rust/target/probe-mesh-asymmetry.mjs`, run by hand) walks the same cycle on all six
+ordered pairs.
+
 `RIG_UP_ONLY` implies no suite; `RIG_MOCKS_ONLY=1` stops the rig's own sidecars and leaves just the
 purged Immichs, for a sidecar installed by hand. Neither touches the guards: the purge, the port map
 and `require_mock` are the same code the suite runs, and both exit before the lane.

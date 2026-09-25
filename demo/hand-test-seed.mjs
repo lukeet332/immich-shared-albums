@@ -28,6 +28,11 @@ const B_IMMICH = `http://localhost:${PORT('PORT_IMMICH_B', 2384)}`;
 const C_IMMICH = `http://localhost:${PORT('PORT_IMMICH_C', 2385)}`;
 const B_SIDECAR = `http://${DRIVE_HOST}:${PORT('PORT_SIDECAR_B', 9381)}`;
 const C_SIDECAR = `http://${DRIVE_HOST}:${PORT('PORT_SIDECAR_C', 9382)}`;
+// The third household, when the rig is a MESH (a DKEY means D is installed too). Pairing all three
+// is what makes an asymmetry between them observable at all.
+const HAS_D = !!process.env.PORT_SIDECAR_D;
+const D_SIDECAR = `http://${DRIVE_HOST}:${PORT('PORT_SIDECAR_D', 9383)}`;
+const ORIGIN = { B: B_SIDECAR, C: C_SIDECAR, D: D_SIDECAR };
 const BKEY = process.env.BKEY;
 const CKEY = process.env.CKEY;
 const DEFAULT_EMAIL = 'admin@e2e.local';
@@ -253,7 +258,8 @@ const main = async () => {
   // 1. Both Immichs answer, and the credential a person will type actually signs in — on BOTH, which
   //    the rig's production hardening deliberately breaks on C (passwordLogin off).
   const tokens = {};
-  for (const [label, base] of [['B', B_IMMICH], ['C', C_IMMICH]]) {
+  const immichOf = { B: B_IMMICH, C: C_IMMICH, ...(HAS_D ? { D: `http://localhost:${PORT('PORT_IMMICH_D', 2386)}` } : {}) };
+  for (const [label, base] of Object.entries(immichOf)) {
     const ping = await get(`${base}/api/server/ping`).then((r) => r.ok).catch(() => false);
     check(`immich ${label} answers`, ping, base);
     tokens[label] = await login(base, EMAIL, PASSWORD);
@@ -262,16 +268,22 @@ const main = async () => {
   }
   const bToken = tokens.B;
   const cToken = tokens.C;
+  const dToken = tokens.D;
   if (!bToken || !cToken) return;
 
   // 2. Pair the two households, the way the panel does it: mint on one, redeem on the other.
-  const minted = await sidecar(B_SIDECAR, bToken, '/pairings', { method: 'POST' });
-  check('B minted a pairing link', minted.status === 200 && !!minted.body.link, `status ${minted.status}`);
-  const redeemed = await sidecar(C_SIDECAR, cToken, '/pair', {
-    method: 'POST',
-    body: JSON.stringify({ link: minted.body.link }),
-  });
-  check('C redeemed it, so the two are linked', redeemed.status === 200, JSON.stringify(redeemed.body).slice(0, 80));
+  // Pair every pair ONCE: mint on the first household, redeem on the second. A mesh of three is
+  // three pairings, and it is the only way an asymmetry BETWEEN them can be seen at all.
+  const pairs = [['B', 'C'], ['B', 'D'], ['C', 'D']].filter(([a, b]) => HAS_D || b !== 'D');
+  for (const [a, b] of pairs) {
+    const minted = await sidecar(ORIGIN[a], tokens[a], '/pairings', { method: 'POST' });
+    const redeemed = await sidecar(ORIGIN[b], tokens[b], '/pair', {
+      method: 'POST',
+      body: JSON.stringify({ link: minted.body.link }),
+    });
+    check(`${a} and ${b} are linked`, redeemed.status === 200,
+      `${minted.status} mint -> ${redeemed.status} redeem`);
+  }
 
   const peersOn = async (base, token) => (await sidecar(base, token, '/peers')).body.peers || [];
   // By NAME, not by position: a rig that has been through the suite may still be linked to the
@@ -287,6 +299,17 @@ const main = async () => {
     !!cPeerOnB && cPeerOnB.people > 0, cPeerOnB ? `${cPeerOnB.name}: ${cPeerOnB.people} people` : 'not listed');
   const bPeerOnC = peerNamed(await peersOn(C_SIDECAR, cToken), '(B)');
   check('C lists B too (one round trip pairs both)', !!bPeerOnC, bPeerOnC?.name || 'not listed');
+  // The mesh: D is linked to BOTH of the others, which is what makes three-way behaviour visible.
+  if (HAS_D) {
+    const dPeers = await peersOn(D_SIDECAR, dToken);
+    check('D lists both of the others (the mesh is closed)',
+      peerNamed(dPeers, '(B)') && peerNamed(dPeers, '(C)'),
+      dPeers.map((p) => p.name).join(', ') || 'none');
+    const bHasD = peerNamed(await peersOn(B_SIDECAR, bToken), '(D)');
+    const cHasD = peerNamed(await peersOn(C_SIDECAR, cToken), '(D)');
+    check('and both of the others list D', !!bHasD && !!cHasD,
+      `B: ${bHasD?.name || 'none'}, C: ${cHasD?.name || 'none'}`);
+  }
   if (!cPeerOnB || !bPeerOnC) return;
   const peerPubOnB = cPeerOnB.pub;
   const peerPubOnC = bPeerOnC.pub;

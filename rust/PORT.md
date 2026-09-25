@@ -201,6 +201,7 @@ valid connection can never address someone else's album.
 | Browser | the banner, the accept page, the chooser, the settings card and the panel's live flows in Chromium | `cd demo/e2e && CKEY=… B_EMAIL=admin@e2e.local B_PASS=… node browser-test.mjs` | `BROWSER PASS (61 checks)` (the lane skips one check when C is not password-hardened) |
 | Install | `deploy/install.sh` runs end to end and produces a working install | `bash rust/verify-install.sh` | `PASS — install.sh installed rust/Dockerfile end to end` |
 | Node lane | the TypeScript baseline still passes, i.e. the rig itself is sound | `bash demo/run-mock-e2e.sh` | `ALL PASS (228 checks)` |
+| Mesh | SYMMETRY: the same join/contribute/comment/trail/leave cycle on every ordered pair of a three-household mesh, both directions, twice | `HAND_BIND=<host> bash demo/hand-test-up.sh`, then `node rust/target/probe-mesh-asymmetry.mjs` | `48/48` per pass, and no pair failing where its reverse passes |
 
 The drop-in proof, in full — a `state.db` written by the TypeScript sidecar, read by the Rust crate:
 
