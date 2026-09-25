@@ -120,8 +120,78 @@ pub fn host_auth(host_key: Option<&str>) -> Auth<'_> {
     }
 }
 
-/// One provision per EMAIL at a time.
-///
+/// Sign in as a utility account, for the one thing only a session can do: mint that account's key.
+async fn login_as(client: &Client, email: &str, password: &str) -> Option<Value> {
+    client
+        .json(
+            reqwest::Method::POST,
+            "/auth/login",
+            &Auth::Admin,
+            Some(&json!({ "email": email, "password": password })),
+        )
+        .await
+        .ok()
+        .flatten()
+}
+
+/// `Some(true|false)` when Immich answered, `None` when it did not: a setting this code cannot read
+/// must not make it borrow anything.
+async fn password_login_enabled(client: &Client) -> Option<bool> {
+    let config = client
+        .get("/system-config", &Auth::Admin)
+        .await
+        .ok()
+        .flatten()?;
+    config
+        .pointer("/passwordLogin/enabled")
+        .and_then(|v| v.as_bool())
+}
+
+/// Borrow the setting, so a key can be minted for an account that has only a password.
+async fn enable_password_login(client: &Client) -> bool {
+    let Ok(Some(config)) = client.get("/system-config", &Auth::Admin).await else {
+        return false;
+    };
+    let mut updated = config;
+    if let Some(flag) = updated.pointer_mut("/passwordLogin/enabled") {
+        *flag = json!(true);
+    }
+    client
+        .json(
+            reqwest::Method::PUT,
+            "/system-config",
+            &Auth::Admin,
+            Some(&updated),
+        )
+        .await
+        .is_ok()
+}
+
+/// Give it back. Only ever reached after `enable_password_login` succeeded AND a login was refused
+/// while the setting read disabled — never from a read on its own.
+async fn restore_password_login_off(client: &Client) {
+    let Ok(Some(config)) = client.get("/system-config", &Auth::Admin).await else {
+        return;
+    };
+    let mut updated = config;
+    if let Some(flag) = updated.pointer_mut("/passwordLogin/enabled") {
+        *flag = json!(false);
+    }
+    if client
+        .json(
+            reqwest::Method::PUT,
+            "/system-config",
+            &Auth::Admin,
+            Some(&updated),
+        )
+        .await
+        .is_err()
+    {
+        crate::log!("WARNING: could not restore passwordLogin=disabled");
+    }
+}
+
+/// One provision per EMAIL at a time.///
 /// Two loops race to place the same person the first time they are seen — the watcher materialising a
 /// ref while the invite loop creates an invite target, or a comment arriving for the same album. Both
 /// find no account, both `POST /admin/users`, and Immich answers the loser `duplicate key value
@@ -286,50 +356,33 @@ pub async fn ensure_utility_user(
         return Err(format!("cannot create or find contributor user {}", spec.email));
     };
 
-    // Instances with OAuth-only login need a brief toggle to mint the key, then a restore.
-    let mut restore_password_login_off = false;
-    if let Ok(Some(config)) = client.get("/system-config", &Auth::Admin).await {
-        if config.pointer("/passwordLogin/enabled").and_then(|v| v.as_bool()) == Some(false) {
-            let mut updated = config.clone();
-            if let Some(flag) = updated.pointer_mut("/passwordLogin/enabled") {
-                *flag = json!(true);
-            }
-            if client
-                .json(reqwest::Method::PUT, "/system-config", &Auth::Admin, Some(&updated))
-                .await
-                .is_ok()
+    // Mint the key by signing in as the account, and borrow a password-login window ONLY on
+    // EVIDENCE: the login is tried first, and the instance's setting is read only once that attempt
+    // has been refused.
+    //
+    // Reading the setting up front is what made this destructive. Immich caches `system-config`, so
+    // a read can say "disabled" for a while after an operator (or the panel) enabled it — the
+    // addon would then "borrow" it and its restore would write `disabled` back over a change it
+    // never made, leaving a human unable to sign in. The rig caught it: a contributor provisioned
+    // on C in the same second the browser lane switched password login on, and every sign-in for
+    // the next minute answered `Password login has been disabled`.
+    let login = login_as(client, &spec.email, &password).await;
+    let login = match login {
+        Some(login) => Some(login),
+        None => {
+            // Refused. Now the setting is worth reading, and a genuine OAuth-only instance is the
+            // only case that reaches the borrow.
+            if password_login_enabled(client).await == Some(false)
+                && enable_password_login(client).await
             {
-                restore_password_login_off = true;
+                let retried = login_as(client, &spec.email, &password).await;
+                restore_password_login_off(client).await;
+                retried
+            } else {
+                None
             }
         }
-    }
-
-    let login = client
-        .json(
-            reqwest::Method::POST,
-            "/auth/login",
-            &Auth::Admin,
-            Some(&json!({ "email": spec.email, "password": password })),
-        )
-        .await
-        .ok()
-        .flatten();
-
-    if restore_password_login_off {
-        if let Ok(Some(config)) = client.get("/system-config", &Auth::Admin).await {
-            let mut updated = config.clone();
-            if let Some(flag) = updated.pointer_mut("/passwordLogin/enabled") {
-                *flag = json!(false);
-            }
-            if client
-                .json(reqwest::Method::PUT, "/system-config", &Auth::Admin, Some(&updated))
-                .await
-                .is_err()
-            {
-                crate::log!("WARNING: could not restore passwordLogin=disabled");
-            }
-        }
-    }
+    };
 
     let Some(token) = login.as_ref().and_then(|l| l.get("accessToken")).and_then(|v| v.as_str()) else {
         return Err(format!("login failed for {} — will retry", spec.email));

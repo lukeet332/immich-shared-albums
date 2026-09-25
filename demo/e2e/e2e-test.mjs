@@ -2598,6 +2598,67 @@ if (!sidecarHasNode('b-sidecar')) {
   }
 }
 
+// An operator's password-login setting must SURVIVE the addon minting a key. Minting needs a session,
+// and on an OAuth-only instance the addon borrows a password-login window to get one. That borrow used
+// to be decided by a CACHED read of `system-config`, so a stale "disabled" arriving right after an
+// operator (or this lane) enabled it made the addon write "disabled" back over a change it never
+// made — and every sign-in for the next minute answered `Password login has been disabled`. Found by
+// CI on BOTH lanes, which is why the borrow now waits for a refused login as its evidence.
+// RUST-ONLY: the TypeScript has the same up-front read and the same restore.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: minting a key never clobbers the password-login setting');
+  {
+    const readLogin = async () => {
+      const cfg = await (await fetch(`${A}/api/system-config`, { headers: { 'x-api-key': AKEY } })).json();
+      return cfg?.passwordLogin?.enabled;
+    };
+    const writeLogin = async (on) => {
+      const cfg = await (await fetch(`${A}/api/system-config`, { headers: { 'x-api-key': AKEY } })).json();
+      cfg.passwordLogin.enabled = on;
+      return (await fetch(`${A}/api/system-config`, {
+        method: 'PUT', headers: { 'x-api-key': AKEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg),
+      })).ok;
+    };
+
+    check('rig: C starts hardened, so the borrow path is the one under test', (await readLogin()) === false,
+          `passwordLogin=${await readLogin()}`);
+    const enabled = await writeLogin(true);
+    check('rig: an operator turns password login on', enabled && (await readLogin()) === true);
+
+    // Force an ORIGIN-side provisioning: a photo contributed from B becomes a stand-in account on C,
+    // which can only be minted through a login.
+    const albGate = await api(A, AKEY, '/albums', j({ albumName: `rust clobber ${Date.now()}` }));
+    const photoGate = await upload(A, AKEY, 'rust-clobber.jpg', `rb${Date.now() % 10000}`, '2026-08-20T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [photoGate]);
+    await api(A, AKEY, `/albums/${albGate.id}/assets`, { ...j({ ids: [photoGate] }), method: 'PUT' });
+    const linkGate = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albGate.id, allowUpload: true }))).key;
+    const joinedGate = await (await fetch(`${BS}/immich-shared-albums/join`,
+      jAuth(await inviteFor(ORIGIN_DIRECT, linkGate), BKEY))).json();
+    check('rig: B joined the album the provisioning will run for', !!joinedGate.album,
+          JSON.stringify(joinedGate).slice(0, 60));
+    const mirrorGate = await until(async () => {
+      const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinedGate.album && a.assetCount > 0);
+      return found || null;
+    }, 90000);
+    const contributed = await upload(B, BKEY, 'rust-clobber-b.jpg', `rc${Date.now() % 10000}`, '2026-08-21T10:00:00.000Z');
+    await ensurePreviews(B, BKEY, [contributed]);
+    await api(B, BKEY, `/albums/${mirrorGate.id}/assets`, { ...j({ ids: [contributed] }), method: 'PUT' });
+    const provisionedOnC = await until(async () => {
+      const there = (await albumAssets(A, AKEY, albGate.id)).some(a => /^shared-/.test(a.originalFileName || ''));
+      return there ? true : null;
+    }, 240000);
+    check('rig: C provisioned a contributor for the arriving photo', !!provisionedOnC,
+          provisionedOnC ? '' : 'no contributed stub appeared on C within 4 min');
+
+    check('THE OPERATOR\u2019S PASSWORD LOGIN SURVIVES THE PROVISIONING', (await readLogin()) === true,
+          `passwordLogin=${await readLogin()} after minting a key`);
+
+    // Put the hardening back: the rest of the rig (and the browser lane) expects a production-like C.
+    await writeLogin(false);
+  }
+}
+
 if (process.env.E2E_PROFILE) {
   const total = WAITS.reduce((s, w) => s + w.ms, 0);
   const polls = WAITS.reduce((s, w) => s + w.polls, 0);

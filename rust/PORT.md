@@ -259,6 +259,11 @@ Three, counting the provisioning lock below.
   reclaims the contributed photos on the way out (stored-FULL copies kept, as a leave does). The
   TypeScript never re-reads a link after redeem, so a link share there can only be ended by unlinking
   the household.
+- **Minting a key borrows the password-login setting only on EVIDENCE.** `ensure_utility_user` tries
+  the login first and reads `system-config` only after a refusal, because Immich caches that setting:
+  deciding from the read made a stale "disabled" restore `disabled` over an enable the addon never
+  made, so an operator's change was silently reverted and every sign-in answered `Password login has
+  been disabled`. The TypeScript reads it up front and has the same clobber.
 - **Placing a person is serialised per email.** `provision_lock` gives `ensure_utility_user` one
   provision per email, because two loops reaching the same person at once both `POST /admin/users`
   and Immich answers the loser `duplicate key value violates unique constraint "user_email_uq"`; the
