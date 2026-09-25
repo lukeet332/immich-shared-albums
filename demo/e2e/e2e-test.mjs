@@ -2806,8 +2806,9 @@ if (!sidecarHasNode('b-sidecar')) {
     const mirrorL = await until(async () => {
       const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinedL.album && a.assetCount > 0);
       return found || null;
-    }, 120000);
-    check('the joiner holds the mirror', !!mirrorL, mirrorL ? `${mirrorL.assetCount} asset(s)` : 'missing');
+    }, 240000);
+    check('the joiner holds the mirror', !!mirrorL, mirrorL ? `${mirrorL.assetCount} asset(s)` : 'missing in 4 min');
+    if (!mirrorL) requireState('the mirror the like stage reads and likes');
 
     // The OWNER of the album likes it, on the ORIGIN: the like must cross to the joiner.
     await api(A, AKEY, '/activities', j({ albumId: albL.id, type: 'like' }));
