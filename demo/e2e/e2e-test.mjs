@@ -877,7 +877,7 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
   // invisible to them whether or not the sidecar purged anything. The sidecar's own /peers view
   // is the honest answer - it reads what the sidecar still holds, not what the admin sees.
   const peersGone = await until(async () => {
-    const peers = await api(B, BKEY, '/peers');
+    const peers = await (await fetch(`${BS}/immich-shared-albums/peers`, { headers: { 'x-api-key': BKEY } })).json();
     return !(peers.albums || []).some(a => a.name === 'delete test') ? true : null;
   }, 900000);
   check('native leave: the mapping is gone from the sidecar\u2019s own peer view', !!peersGone, peersGone ? '' : 'still in /peers after 15 min');
