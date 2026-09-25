@@ -881,9 +881,13 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
     // The watcher pass is serialised behind every mapping\u2019s dial - a restarting peer in the
     // same pass costs its dial timeout per mapping, so detection latency is minutes, not seconds.
     return parsed.mappings === 0 && parsed.seen === 0 ? parsed : null;
-  }, 900000);
+  }, 1500000);
+  const lastCounts = sidecarSql('b-sidecar',
+    `SELECT (SELECT COUNT(*) FROM mappings WHERE albumId='${mirrorD.id}') AS mappings,
+            (SELECT COUNT(*) FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumId='${mirrorD.id}')) AS seen`);
+  const last = lastCounts ? JSON.parse(lastCounts)[0] : { mappings: -1, seen: -1 };
   check('native leave: the mapping and its ledger rows are gone (verified through the sidecar, not the admin visibility)',
-        !!ledgerGone, ledgerGone ? 'mapping rows=0, ledger rows=0' : 'the sidecar still holds them');
+        !!ledgerGone, ledgerGone ? 'mapping rows=0, ledger rows=0' : `still ${last.mappings} mapping(s), ${last.seen} ledger row(s) after 25 min`);
 }
 
 stage('kill test — uncached photos fail closed; cached ones survive from cache');
