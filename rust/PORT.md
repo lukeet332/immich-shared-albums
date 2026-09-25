@@ -63,6 +63,12 @@ Rust-only modules, and what earns them a file:
 - `p2p/upgrade.rs` → `web/upgrade.rs` — protocol upgrades (websockets) piped at the socket level.
   `passthrough` speaks request/response through a pooled client, and an upgrade is neither.
 - `web/query.rs` — query-string helpers used by several routes.
+- `web/activity_filter.rs` — hiding our own audit lines from ONE reader, in the answer they were
+  served. Immich's comment history reaches the browser as `GET /api/activities` through our
+  passthrough, so a per-person visibility preference can be honoured without touching Immich: the rows
+  stay in the database and stay in every other reader's view. The tag written when a line was posted
+  is what the filter matches, NOT the author — the relay posts another household's human comment as
+  that person's stand-in, and falls back to our own bot.
 - `sync/directory.rs` — the directory lane (`start_directory_loop`), which in the TypeScript is wired
   in `index.ts` beside the other two lanes.
 - `sync/link_grants.rs` — a link join lasts exactly as long as its link: the origin re-reads its own
@@ -171,7 +177,7 @@ valid connection can never address someone else's album.
 
 | Lane | What it proves | Command | Expected |
 | --- | --- | --- | --- |
-| Unit | pure logic, exactly | `cd rust && cargo test --lib` | `242 passed; 0 failed; 1 ignored` (the ignored one reads a Node-written `state.db`: `ISA_COMPAT_DB=… cargo test -- --ignored`) |
+| Unit | pure logic, exactly | `cd rust && cargo test --lib` | `248 passed; 0 failed; 1 ignored` (the ignored one reads a Node-written `state.db`: `ISA_COMPAT_DB=… cargo test -- --ignored`) |
 | Lint | the guard rules above | `cd rust && cargo clippy --all-targets` | no errors |
 | Image | the container contract: uid 1000, `/data` writable and owned by it, `HEALTHCHECK` healthy, the identity survives a restart | `bash rust/verify-image.sh` | `PASS — image contract holds` |
 | Panel | the Rust sidecar's own panel signs in and renders, with the sidecar fronting Immich on one origin | `bash rust/verify-panel.sh` | `5/5 checks passed` (incl. the "Create a link" button the install docs name) |

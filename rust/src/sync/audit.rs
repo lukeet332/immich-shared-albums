@@ -41,7 +41,23 @@ pub async fn audit_line(
         // Marked local so the comment loop does not push it back to the peer as something a human
         // said here; it is ours, and it says so.
         let _ = state.store.seen_act_add(&format!("local:{id}"), mapping_id);
+        // And tagged as an AUDIT line, which is what lets a reader hide these: the tag is exact where
+        // a text marker would not be, because a RELAYED human comment can also be posted by our bot
+        // (the relay falls back to it when the author has no stand-in key here).
+        let _ = state.store.seen_act_add(&format!("{AUDIT_ACTIVITY_TAG}{id}"), mapping_id);
     }
     crate::log!("audit on \"{}\": {text}", &album_id[..album_id.len().min(8)]);
     true
+}
+
+/// Prefix of the `seen_activity` tag that marks one Immich activity as ours-to-hide. Read by
+/// `web/activity_filter.rs`.
+pub const AUDIT_ACTIVITY_TAG: &str = "audit-activity:";
+
+/// Is this Immich activity id one of our audit lines? The lookup the per-person filter runs per row.
+pub fn is_audit_activity(state: &State, activity_id: &str) -> bool {
+    state
+        .store
+        .seen_act_has(&format!("{AUDIT_ACTIVITY_TAG}{activity_id}"))
+        .unwrap_or(false)
 }
