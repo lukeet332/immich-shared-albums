@@ -19,11 +19,11 @@ const PUSH_BATCH: usize = 400;
 /// The peer keeps saying it has no such album. Whatever happened over there — they unlinked us, lost
 /// their state, left — retrying every cycle forever only fills the log. Retire it like a 410;
 /// re-sharing the album starts a fresh mapping.
-const PUSH_404_DEAD_AFTER: u32 = 20;
+pub const PUSH_404_DEAD_AFTER: u32 = 20;
 
 /// Consecutive failed pushes per mapping. In memory on purpose: a restart resetting the count costs
 /// at most one extra cycle of retries, and it is not a fact worth a schema migration.
-fn push_failures() -> &'static Mutex<HashMap<String, u32>> {
+pub fn push_failures() -> &'static Mutex<HashMap<String, u32>> {
     static MAP: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -43,6 +43,69 @@ pub struct PushOutcome {
 }
 
 /// Offer this mapping's album to its peer, and record what landed.
+/// One household went silent on one album, and this side still owns it: retire the share and let
+/// the album keep its own record of it.
+///
+/// THE SURVIVOR WRITES THE TRAIL. The departed side cannot be written to at all once its link is
+/// gone, and the albums this side held for the share are being deleted around the retirement. The
+/// reason says what we OBSERVED — the peer unlinked us, lost its state, or its sidecar died; from
+/// here they all look alike, and the line says only that.
+pub async fn retire_dead_share(
+    state: &State,
+    client: &Client,
+    mapping: &Mapping,
+    peer: &Peer,
+    reason: &str,
+) {
+    if let Some(live) = state
+        .collections()
+        .mappings
+        .iter_mut()
+        .find(|m| m.id == mapping.id)
+    {
+        live.dead = true;
+        live.dead_at = Some(crate::config::iso_now());
+        live.dead_reason = Some(reason.to_string());
+    }
+    let _ = state.save();
+    crate::log!(
+        "\"{}\" no longer has \"{}\" ({reason}) — no longer pushing it",
+        peer.name,
+        mapping.album_name
+    );
+    if mapping.role != Role::Owner {
+        // The album is the peer's, not ours: nothing survives here to write on, and our own mirror
+        // is dealt with by the reconcile's own teardown.
+        return;
+    }
+    let bot_added = crate::sync::house_bot::add_house_bot_to_album_as(
+        state,
+        client,
+        &mapping.album_id,
+        &crate::immich::client::Auth::Admin,
+    )
+    .await;
+    if let Err(e) = bot_added {
+        crate::log!(
+            "could not put the bot on \"{}\" to record a share ending: {e}",
+            mapping.album_name
+        );
+        return;
+    }
+    crate::sync::audit::audit_line(
+        state,
+        client,
+        &mapping.id,
+        &mapping.album_id,
+        &format!("share-ended:{}", mapping.id),
+        &format!(
+            "\"{}\" stopped responding — this album is no longer shared with them.",
+            peer.name
+        ),
+    )
+    .await;
+}
+
 pub async fn push_album_refs(
     state: &State,
     client: &Client,
@@ -204,22 +267,36 @@ pub async fn push_album_refs(
     }
 
     if let Some(reason) = retire {
-        if let Some(live) = state
-            .collections()
-            .mappings
-            .iter_mut()
-            .find(|m| m.id == mapping.id)
-        {
-            live.dead = true;
-            live.dead_at = Some(crate::config::iso_now());
-            live.dead_reason = Some(reason.clone());
+        retire_dead_share(state, client, mapping, peer, &reason).await;
+        // THE SURVIVOR WRITES THE TRAIL. This side still owns the album and can put the bot on it;
+        // the other side cannot be written to at all once its link is gone, and the albums we held
+        // for this share are being deleted around this very line. The reason says what we OBSERVED
+        // — gone, unlinked, or a sidecar that died all look alike from here.
+        if mapping.role == Role::Owner {
+            let bot_added = crate::sync::house_bot::add_house_bot_to_album_as(
+                state,
+                client,
+                &mapping.album_id,
+                &crate::immich::client::Auth::Admin,
+            )
+            .await;
+            if let Err(e) = bot_added {
+                crate::log!("could not put the bot on \"{}\" to record a share ending: {e}", mapping.album_name);
+            } else {
+                crate::sync::audit::audit_line(
+                    state,
+                    client,
+                    &mapping.id,
+                    &mapping.album_id,
+                    &format!("share-ended:{}", mapping.id),
+                    &format!(
+                        "\"{}\" stopped responding — this album is no longer shared with them.",
+                        peer.name
+                    ),
+                )
+                .await;
+            }
         }
-        let _ = state.save();
-        crate::log!(
-            "\"{}\" no longer has \"{}\" ({reason}) — no longer pushing it",
-            peer.name,
-            mapping.album_name
-        );
     }
     if push_failed {
         return Ok(PushOutcome { in_sync: false });

@@ -72,12 +72,23 @@ pub async fn add_house_bot_to_album(
     album_id: &str,
     owner_creds: &Creds,
 ) -> Result<(), String> {
+    add_house_bot_to_album_as(state, client, album_id, &Auth::Creds(owner_creds)).await
+}
+
+/// The credential-taking form, for paths with no human in the room: the sidecar writing into an
+/// album of its OWN household, where the admin key already reaches.
+pub async fn add_house_bot_to_album_as(
+    state: &State,
+    client: &Client,
+    album_id: &str,
+    auth: &Auth<'_>,
+) -> Result<(), String> {
     let bot = ensure_house_bot(state, client).await?;
     let Some(bot_id) = bot.user_id.clone() else {
         return Err("the house bot has no user id after provisioning".to_string());
     };
     let album = client
-        .get_album(album_id, &Auth::Creds(owner_creds))
+        .get_album(album_id, auth)
         .await
         .map_err(|e| e.message())?
         .unwrap_or(serde_json::Value::Null);
@@ -95,7 +106,7 @@ pub async fn add_house_bot_to_album(
         .json(
             reqwest::Method::PUT,
             &format!("/albums/{album_id}/users"),
-            &Auth::Creds(owner_creds),
+            auth,
             Some(&json!({ "albumUsers": [{ "userId": bot_id, "role": "viewer" }] })),
         )
         .await

@@ -3,9 +3,10 @@ use crate::config::{bot_prefix, cfg, is_utility_email, marker_name, UTILITY_EMAI
 use crate::immich::client::{Auth, Client};
 use crate::immich::contributors::{ensure_utility_user, ContributorSpec};
 use crate::p2p::frame::RequestHeader;
+use crate::sync::peer_mapping_id::peer_album_mapping_id;
 use crate::p2p::transport::transport;
 use crate::state::State;
-use crate::store::Peer;
+use crate::store::{Peer, Role};
 use serde_json::{json, Value};
 
 /// The people THIS household offers a linked server, so that server can offer them as invite
@@ -170,6 +171,70 @@ pub fn start_directory_loop(state: std::sync::Arc<State>) {
             // because it is the one that already asks "who is still allowed in" — and because a
             // withdrawal has to be noticed before anything can be said about it in the album.
             crate::sync::link_grants::retire_withdrawn_link_grants(&state, client).await;
+            // ...and a peer can go silent on an album WITHOUT this side changing anything: an unlink
+            // binds the transport for the handshakes below, once per tick.
+            let mesh_transport = transport().expect("the invite loop needs the transport");
+            // ...and a peer can go silent on an album WITHOUT this side changing anything: an unlink
+            // deletes the peer's mappings, so our album sits untouched and the push path never
+            // fires, and the share would look live for ever. One cheap handshake per live share
+            // answers it, and the same retirement counter the push uses does the rest.
+            // The guard is bound in its own statement and dropped before the awaits below: holding
+            // it across an await makes the whole spawned loop non-Send (PORT.md's guard rule).
+            let live_shares: Vec<crate::store::Mapping> = {
+                let collections = state.collections();
+                collections
+                    .mappings
+                    .iter()
+                    .filter(|m| m.role == Role::Owner && !m.dead)
+                    .cloned()
+                    .collect()
+            };
+            for mapping in live_shares {
+                let peer_record = {
+                    let collections = state.collections();
+                    collections
+                        .peers
+                        .iter()
+                        .find(|p| p.pub_key == mapping.peer)
+                        .cloned()
+                };
+                let Some(peer) = peer_record else {
+                    continue;
+                };
+                let header = RequestHeader {
+                    path: format!("/albums/{}/version", peer_album_mapping_id(&mapping)),
+                    ..Default::default()
+                };
+                let answered = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    mesh_transport.round_trip(&peer, &header, None),
+                )
+                .await;
+                let counts = match answered {
+                    Ok(Ok((head, _))) if head.status == 404 => true,
+                    _ => false,
+                };
+                if !counts {
+                    continue;
+                }
+                let n = {
+                    let mut counts = crate::sync::engine::push_failures().lock().unwrap();
+                    let n = counts.entry(mapping.id.clone()).or_insert(0);
+                    *n += 1;
+                    *n
+                };
+                if n >= crate::sync::engine::PUSH_404_DEAD_AFTER {
+                    crate::sync::engine::push_failures().lock().unwrap().remove(&mapping.id);
+                    crate::sync::engine::retire_dead_share(
+                        &state,
+                        client,
+                        &mapping,
+                        &peer,
+                        &format!("peer answered 404 to {n} version checks in a row — it no longer has this album"),
+                    )
+                    .await;
+                }
+            }
             // Fire-and-forget, with one refresh in flight: the tick must not wait on a peer's dial,
             // and an unguarded spawn per tick is more parallelism than the behaviour it replaces had.
             refresh_peer_indexes_once(&state);
