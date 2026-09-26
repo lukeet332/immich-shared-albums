@@ -552,7 +552,11 @@ pub async fn handle_version(caller_pub: &str, album_mapping_id: &str) -> (u16, V
             json!({ "error": "unknown peer", "code": "unknown_peer" }),
         );
     }
-    let Some(mapping) = mapping_for(state, caller_pub, album_mapping_id, Some(Role::Owner)) else {
+    // ANY role, deliberately: the ORIGIN asks this of its members ("do you still hold my album?" —
+    // the silent-share retirement's handshake), and on the member's side that mapping is a Member.
+    // Demanding Owner here answered 404 to every healthy share, which retired live albums one
+    // handshake window after they were created. `dead` below still answers gone.
+    let Some(mapping) = mapping_for(state, caller_pub, album_mapping_id, None) else {
         return gone_or_404(state, caller_pub, album_mapping_id);
     };
     if mapping.dead {
