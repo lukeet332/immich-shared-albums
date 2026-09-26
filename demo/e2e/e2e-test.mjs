@@ -1492,12 +1492,17 @@ stage('native album invitations, per person (no share link)');
           return r.ok ? (await r.json()).ticks : null;
         };
         const CYCLES_TO_SURVIVE = 2;
+        // The sweep gate is ONE background lane at a time, and a lane may hold it through a peer
+        // round trip bounded by the transport's 120s DEADLINE — so both other loops can be frozen
+        // by a single slow cycle without being wedged. The window must outlast that worst case,
+        // or this check measures one slow cycle as if the loops had stopped.
+        const CYCLE_WAIT_MS = 200000;
         const ticksBefore = await ticksOn();
         const ticksAfter = ticksBefore && await until(async () => {
           const t = await ticksOn();
           return t && t.watcher >= ticksBefore.watcher + CYCLES_TO_SURVIVE
                    && t.invites >= ticksBefore.invites + CYCLES_TO_SURVIVE ? t : null;
-        }, 120000);
+        }, CYCLE_WAIT_MS);
         check('the member sidecar kept evaluating both loops while the mirror was left alone',
               !!ticksAfter,
               ticksBefore ? JSON.stringify({ before: ticksBefore, after: ticksAfter }) : 'sync/status unreadable — is ISA_TEST_HOOKS set on B?');
