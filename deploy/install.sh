@@ -52,9 +52,12 @@ INSTALL_DIR=$(ask "Install directory [./immich-shared-albums-live]:" ./immich-sh
 mkdir -p "$INSTALL_DIR"
 INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
 
-# The image is built from the repo root either way; ISA_DOCKERFILE names WHICH one, and the default
-# is the Rust build — the port is what ships. Set ISA_DOCKERFILE=Dockerfile to install the
-# TypeScript sidecar instead, which is kept as the reference implementation and the e2e baseline.
+# The compose project name IS the volume's name (<project>_isa-data). Two sidecar installs on one
+# host must therefore differ, or `down -v` on one destroys the other's identity — which is the
+# household's keypair, and losing it orphans every pairing.
+COMPOSE_PROJECT=$(ask "Compose project name (the state volume is named after it) [immich-shared-albums]:" "immich-shared-albums")
+
+# The sidecar image builds from the repo root.
 DOCKERFILE="${ISA_DOCKERFILE:-Dockerfile}"
 [ -f "$REPO_DIR/$DOCKERFILE" ] || { echo "no $DOCKERFILE in $REPO_DIR"; exit 1; }
 say "Building image from source ($DOCKERFILE)"
@@ -62,7 +65,7 @@ docker build -q -t immich-shared-albums:live -f "$REPO_DIR/$DOCKERFILE" "$REPO_D
 
 say "Writing $INSTALL_DIR/docker-compose.yml"
 cat > "$INSTALL_DIR/docker-compose.yml" <<EOF
-name: immich-shared-albums
+name: $COMPOSE_PROJECT
 services:
   immich-shared-albums:
     image: immich-shared-albums:live
@@ -123,6 +126,22 @@ if [ -n "$ok" ]; then
   echo "health: OK"
 else
   echo "health check failed — logs:"; (cd "$INSTALL_DIR" && docker compose logs immich-shared-albums --tail 30); exit 1
+fi
+
+# Health is unconditional (the sidecar fails open), so a wrong URL or a key Immich rejects would
+# otherwise read as a successful install and surface days later as an empty panel. Ask the sidecar
+# to exercise the exact path it will use forever: container -> Immich, with this key.
+say "Verifying Immich is reachable with this key"
+if (cd "$INSTALL_DIR" && docker compose exec -T immich-shared-albums \
+      wget -qO- --header="x-api-key: $ISA_API_KEY" "$IMMICH_URL/api/users/me" 2>/dev/null) | grep -q '"id"'; then
+  echo "key verified against $IMMICH_URL"
+else
+  echo "FAIL: the sidecar cannot use this key against $IMMICH_URL."
+  echo "  - check the URL is Immich's address as reachable from the docker network you named, and"
+  echo "  - check the key against deploy/api-key.md (created on an ADMIN account)."
+  echo "  Immich itself is untouched; fix and re-run this installer — it is safe to re-run."
+  (cd "$INSTALL_DIR" && docker compose logs immich-shared-albums --tail 20)
+  exit 1
 fi
 
 if [ "$PROXY_MODE" = "2" ]; then

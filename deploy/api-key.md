@@ -1,7 +1,8 @@
 # The API key
 
 The addon needs one Immich API key, created on an **admin account**. It does not need `all` —
-the list below is everything it uses, and the addon checks its key at startup and tells you
+the list below is everything it uses, the addon checks its key at startup and tells you,
+and install.sh proves the key against Immich before it reports the install a success
 exactly what's missing.
 
 In Immich: *Account settings → API keys → New API key*, then tick these:
