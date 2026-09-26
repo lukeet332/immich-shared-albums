@@ -75,7 +75,9 @@ Rust-only modules, and what earns them a file:
   used to provision an account for the PEER's bot on this server, which is what put a second
   "immich-shared-albums (bot)" in the user picker. A like that is UN-liked is not propagated — that
   matches comments, whose deletions do not propagate either.
-- `sync/trail.rs` — audit lines that WAIT for the album's owner. Our bot can only be put on an album by
+- `sync/trail.rs` — audit lines that WAIT for the album's owner, and the survivor's record of a share
+  whose peer went silent (`retire_dead_share`, driven by the invite loop's per-share handshake, which
+  counts 403 as well as 404: an unlink removes the peer before it stops answering anything else). Our bot can only be put on an album by
   someone who can already change it (Immich refuses the admin key), so a peer's join or leave — an
   event that happens while the owner is elsewhere — is queued in `trail_pending` and written on their
   next panel visit, which is the one moment we hold their credential and the list of albums they own.

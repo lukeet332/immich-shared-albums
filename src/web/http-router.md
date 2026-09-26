@@ -63,6 +63,12 @@ whether removing a person revoked anything depends on the kind of share (an invi
 IS the share; a link's is not — see "bearer grant" above), and that reasoning belongs here rather than
 in somebody's album.
 
+**A share can also end SILENTLY, and the survivor records it.** A peer that unlinks us (or loses its
+sidecar) stops answering, and nothing on this side changes — so the invite loop asks one `/version`
+handshake per live share, and 403/404 answers feed the same retirement counter the push uses
+(`sync/engine.rs::retire_dead_share`). The survivor writes the line into its own album, because this
+side still owns it and can put the bot on it.
+
 **One proxied request is acted on before it is forwarded.** `DELETE /api/shared-links/:id` is the
 only write whose trail needs the state it is about to destroy: the album it granted is read first, as
 the caller, and the withdrawal is written into that album afterwards by the house bot — added on the
