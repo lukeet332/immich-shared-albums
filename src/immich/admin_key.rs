@@ -31,7 +31,9 @@ pub const REQUIRED_ADMIN_PERMISSIONS: [&str; 16] = [
 pub async fn verify_admin_key_at_boot(client: &Client) {
     let admin = probe(client, "/admin/users").await;
     if admin == 403 {
-        crate::log!("ADMIN KEY IS MISSING REQUIRED PERMISSIONS — cross-server sharing will not work.");
+        crate::log!(
+            "ADMIN KEY IS MISSING REQUIRED PERMISSIONS — cross-server sharing will not work."
+        );
         crate::log!(
             "Create the key on an admin account with exactly: {}",
             REQUIRED_ADMIN_PERMISSIONS.join(", ")

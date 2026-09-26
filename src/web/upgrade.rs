@@ -59,7 +59,11 @@ pub async fn proxy_upgrade(req: Request) -> Response {
     let Some(on_upgrade) = req.extensions().get::<hyper::upgrade::OnUpgrade>().cloned() else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    if upstream.write_all(request_head(&req).as_bytes()).await.is_err() {
+    if upstream
+        .write_all(request_head(&req).as_bytes())
+        .await
+        .is_err()
+    {
         return StatusCode::BAD_GATEWAY.into_response();
     }
     let Some(answer) = read_answer(&mut upstream, &host, port).await else {
@@ -158,7 +162,11 @@ async fn read_answer(
             }
         }
     }
-    Some(UpstreamAnswer { status, headers, rest: read_so_far[head_end..].to_vec() })
+    Some(UpstreamAnswer {
+        status,
+        headers,
+        rest: read_so_far[head_end..].to_vec(),
+    })
 }
 
 /// The request line and headers, exactly as the client sent them.
@@ -188,13 +196,20 @@ fn request_head(req: &Request) -> String {
 fn upstream_host_port() -> Option<(String, u16)> {
     let uri: Uri = cfg().immich_url.parse().ok()?;
     let host = uri.host()?.to_string();
-    let default_port = if uri.scheme_str() == Some("https") { 443 } else { 80 };
+    let default_port = if uri.scheme_str() == Some("https") {
+        443
+    } else {
+        80
+    };
     Some((host, uri.port_u16().unwrap_or(default_port)))
 }
 
 /// The offset just past the blank line that ends a response head.
 fn find_head_end(bytes: &[u8]) -> Option<usize> {
-    bytes.windows(4).position(|w| w == b"\r\n\r\n").map(|at| at + 4)
+    bytes
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|at| at + 4)
 }
 
 #[cfg(test)]
@@ -210,14 +225,21 @@ mod tests {
         headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
         assert!(is_upgrade(&headers));
         // Case is not the client's to get right: `keep-alive, Upgrade` is what a browser sends.
-        headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive, Upgrade"));
+        headers.insert(
+            header::CONNECTION,
+            HeaderValue::from_static("keep-alive, Upgrade"),
+        );
         assert!(is_upgrade(&headers));
     }
 
     #[test]
     fn the_head_is_terminated_at_its_blank_line() {
         assert_eq!(find_head_end(b"HTTP/1.1 101 x\r\n\r\nbody"), Some(18));
-        assert_eq!(find_head_end(b"HTTP/1.1 101 x\r\n"), None, "an unfinished head has no end");
+        assert_eq!(
+            find_head_end(b"HTTP/1.1 101 x\r\n"),
+            None,
+            "an unfinished head has no end"
+        );
     }
 
     #[test]

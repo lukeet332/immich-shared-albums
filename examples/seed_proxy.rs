@@ -13,7 +13,9 @@ use serde_json::json;
 
 #[tokio::main]
 async fn main() {
-    let origin_asset = std::env::args().nth(1).unwrap_or_else(|| "origin-asset-1".into());
+    let origin_asset = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "origin-asset-1".into());
     config::install(Config::from_env().expect("config"));
     let booted = state::State::boot().expect("state");
     state::install(booted);
@@ -24,9 +26,10 @@ async fn main() {
     // Set by the harness after the origin has accepted this member's join.
     let peer_pub = std::env::var("PEER_PUB").unwrap_or_else(|_| "peer-that-is-not-linked".into());
     let peer_addr = std::env::var("PEER_ADDR").ok();
-    if let (Ok(pub_key), Ok(priv_key)) =
-        (std::env::var("IDENTITY_PUB"), std::env::var("IDENTITY_PRIV"))
-    {
+    if let (Ok(pub_key), Ok(priv_key)) = (
+        std::env::var("IDENTITY_PUB"),
+        std::env::var("IDENTITY_PRIV"),
+    ) {
         st.store.state.lock().unwrap().identity = Some(Identity {
             v: 1,
             alg: "ed25519".into(),
@@ -38,11 +41,17 @@ async fn main() {
 
     // The stub is owned by a stand-in for the REMOTE person, which is who owns a mirrored photo.
     let person = person_spec("Remote Nan", "remote-nan-id");
-    let stand_in = ensure_utility_user(st, &client, &person).await.expect("stand-in");
+    let stand_in = ensure_utility_user(st, &client, &person)
+        .await
+        .expect("stand-in");
     let key = stand_in.api_key.clone().expect("stand-in key");
 
     let album_id = client
-        .post("/albums", &Auth::Key(&key), &json!({ "albumName": "Intercepted mirror" }))
+        .post(
+            "/albums",
+            &Auth::Key(&key),
+            &json!({ "albumName": "Intercepted mirror" }),
+        )
         .await
         .expect("create album")
         .and_then(|a| a.get("id").and_then(|v| v.as_str()).map(str::to_string))
@@ -51,8 +60,12 @@ async fn main() {
     let asset = upload_asset(&client, &stub_jpeg(), "proxy-stub.jpg", &key, None)
         .await
         .expect("upload stub");
-    let asset_id = asset.get("id").and_then(|v| v.as_str()).expect("asset id").to_string();
-    add_to_album(&client, &album_id, &[asset_id.clone()], &key)
+    let asset_id = asset
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("asset id")
+        .to_string();
+    add_to_album(&client, &album_id, std::slice::from_ref(&asset_id), &key)
         .await
         .expect("file the stub into the mirror");
 
@@ -116,9 +129,18 @@ async fn main() {
     // `storedFull: false` is what makes this a PROXY row: the local asset is a stub, so the
     // interceptor is the only thing that can serve its true pixels.
     st.store
-        .seen_add("m-intercept", "checksum-1", &asset_id, Some(&origin_asset), false)
+        .seen_add(
+            "m-intercept",
+            "checksum-1",
+            &asset_id,
+            Some(&origin_asset),
+            false,
+        )
         .expect("record the ledger row");
     st.save().expect("save");
 
-    println!("{}", json!({ "assetId": asset_id, "albumId": album_id, "originAsset": origin_asset }));
+    println!(
+        "{}",
+        json!({ "assetId": asset_id, "albumId": album_id, "originAsset": origin_asset })
+    );
 }

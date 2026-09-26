@@ -8,8 +8,12 @@ use std::collections::HashMap;
 
 /// The only headers a byte route carries through. Framing headers describe a hop's encoding, which
 /// this proxy re-frames, so forwarding them corrupts the body.
-pub const BYTE_HEADERS: [&str; 4] =
-    ["content-type", "content-length", "content-range", "accept-ranges"];
+pub const BYTE_HEADERS: [&str; 4] = [
+    "content-type",
+    "content-length",
+    "content-range",
+    "accept-ranges",
+];
 
 /// One shape for bytes from anywhere — a local Immich fetch or a peer stream.
 pub struct ByteSource {
@@ -56,13 +60,22 @@ pub async fn fetch_true_bytes(
                 .mappings
                 .iter()
                 .find(|m| m.id == entry.mapping)
-                .and_then(|m| collections.peers.iter().find(|p| p.pub_key == m.peer).cloned())
+                .and_then(|m| {
+                    collections
+                        .peers
+                        .iter()
+                        .find(|p| p.pub_key == m.peer)
+                        .cloned()
+                })
         };
         if let Some(peer) = peer {
             if let Some(origin) = entry.origin_asset.as_deref() {
                 if let Some(transport) = transport() {
                     let path = format!("/assets/{origin}/{kind}");
-                    match transport.byte_request(&peer, &path, range, Some(&entry.mapping)).await {
+                    match transport
+                        .byte_request(&peer, &path, range, Some(&entry.mapping))
+                        .await
+                    {
                         Ok((head, body)) if head.status < 400 => {
                             return ByteSource {
                                 status: head.status,
@@ -88,9 +101,13 @@ pub async fn fetch_true_bytes(
         "playback" => format!("/assets/{asset_id}/video/playback"),
         _ => format!("/assets/{asset_id}/thumbnail?size=preview"),
     };
-    let extra: Vec<(String, String)> =
-        range.map(|r| vec![("Range".to_string(), r.to_string())]).unwrap_or_default();
-    match client.request(reqwest::Method::GET, &path, &Auth::Admin, &extra).await {
+    let extra: Vec<(String, String)> = range
+        .map(|r| vec![("Range".to_string(), r.to_string())])
+        .unwrap_or_default();
+    match client
+        .request(reqwest::Method::GET, &path, &Auth::Admin, &extra)
+        .await
+    {
         Ok(response) => {
             let status = response.status().as_u16();
             let headers = collect_byte_headers(response.headers());
@@ -100,7 +117,11 @@ pub async fn fetch_true_bytes(
                     .bytes_stream()
                     .map(|chunk| chunk.map(|bytes| bytes.to_vec()).unwrap_or_default()),
             );
-            ByteSource { status, headers, body: PeerBody::Stream(stream) }
+            ByteSource {
+                status,
+                headers,
+                body: PeerBody::Stream(stream),
+            }
         }
         // STATUS 0 is our own transport failure — nothing was asked of Immich, so nothing was
         // answered. Anything else is Immich's OWN answer and is passed through with its own status
@@ -137,7 +158,11 @@ pub async fn serve_peer_bytes(
     kind: &str,
     range: Option<&str>,
 ) -> PeerAnswer {
-    let known = state.collections().peers.iter().any(|p| p.pub_key == caller_pub);
+    let known = state
+        .collections()
+        .peers
+        .iter()
+        .any(|p| p.pub_key == caller_pub);
     if !known {
         return json_answer(403, serde_json::json!({ "error": "unknown peer" }));
     }
@@ -158,13 +183,21 @@ pub async fn serve_peer_bytes(
         return json_answer(403, serde_json::json!({ "error": "not shared with you" }));
     }
     let source = fetch_true_bytes(state, client, asset_id, kind, range).await;
-    PeerAnswer { status: source.status, headers: Some(source.headers), body: source.body }
+    PeerAnswer {
+        status: source.status,
+        headers: Some(source.headers),
+        body: source.body,
+    }
 }
 
 fn json_answer(status: u16, value: serde_json::Value) -> PeerAnswer {
     let mut headers = HashMap::new();
     headers.insert("content-type".to_string(), "application/json".to_string());
-    PeerAnswer { status, headers: Some(headers), body: PeerBody::Bytes(value.to_string().into_bytes()) }
+    PeerAnswer {
+        status,
+        headers: Some(headers),
+        body: PeerBody::Bytes(value.to_string().into_bytes()),
+    }
 }
 
 /// The peer route path for a byte read, or `None` when the path is not one.
@@ -183,9 +216,18 @@ mod tests {
 
     #[test]
     fn the_byte_route_matches_exactly_three_kinds() {
-        assert_eq!(byte_route("/assets/a1/preview"), Some(("a1".into(), "preview".into())));
-        assert_eq!(byte_route("/assets/a1/original"), Some(("a1".into(), "original".into())));
-        assert_eq!(byte_route("/assets/a1/playback"), Some(("a1".into(), "playback".into())));
+        assert_eq!(
+            byte_route("/assets/a1/preview"),
+            Some(("a1".into(), "preview".into()))
+        );
+        assert_eq!(
+            byte_route("/assets/a1/original"),
+            Some(("a1".into(), "original".into()))
+        );
+        assert_eq!(
+            byte_route("/assets/a1/playback"),
+            Some(("a1".into(), "playback".into()))
+        );
         // A THUMBNAIL is not a peer route: that is the app's own URL, served by the interceptor.
         assert_eq!(byte_route("/assets/a1/thumbnail"), None);
         assert_eq!(byte_route("/assets/a1"), None);

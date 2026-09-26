@@ -5,7 +5,9 @@ use crate::p2p::frame::RequestHeader;
 use crate::p2p::transport::transport;
 use crate::state::State;
 use crate::store::{Mapping, Peer, Role};
+use crate::sync::host_keys::host_key_of;
 use crate::sync::invitees::{diff_invitees, invitation_mirror_was_withdrawn};
+use crate::sync::peer_mapping_id::{peer_of, short_id};
 use serde_json::{json, Value};
 
 /// Immich album roles map onto the permission a share link would have carried.
@@ -15,6 +17,32 @@ pub fn permission_for(role: Option<&str>) -> &'static str {
     } else {
         "view"
     }
+}
+
+/// The permission a household's markers COMBINE to for one album: the more permissive of the two.
+///
+/// Several markers of one household may be invited to the same album with different roles, and
+/// whichever marker's album read happened to arrive first must not decide what gets mirrored — so
+/// the merge is order-independent, the way `invitees` is unioned: if any marker holds `contribute`,
+/// the household records `contribute`.
+pub fn widest_permission(left: &str, right: &str) -> String {
+    if left == "contribute" || right == "contribute" {
+        "contribute".to_string()
+    } else {
+        right.to_string()
+    }
+}
+
+/// A dead member mirror of the SAME share an invitation is about — replaceable, not a live mirror.
+///
+/// A mapping the watcher retired (transient read failures) lingers `dead` while the origin still
+/// offers the share; re-mirroring without clearing it would create a SECOND mirror of one share,
+/// the state a person cannot repair from the UI.
+pub fn dead_mirror_of_the_same_share(mapping: &Mapping, peer_pub: &str, album_id: &str) -> bool {
+    mapping.role == Role::Member
+        && mapping.peer == peer_pub
+        && mapping.dead
+        && (mapping.remote_album_id.as_deref() == Some(album_id) || mapping.album_id == album_id)
 }
 
 /// What one marker can see, split into "invited to" and "merely visible".
@@ -49,7 +77,9 @@ pub async fn albums_as_marker(
     let albums = read_caller_albums(client, marker_creds).await?;
     let mut seen = MarkerSeen::default();
     for album in &albums {
-        let Some(id) = album.get("id").and_then(|v| v.as_str()) else { continue };
+        let Some(id) = album.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
         seen.visible.insert(id.to_string());
         let members = album.get("albumUsers").and_then(|u| u.as_array());
         let mine = members.and_then(|list| {
@@ -73,16 +103,18 @@ pub async fn albums_as_marker(
         }
         // A v3 album response carries no ownerId — the owner is only discoverable inside albumUsers.
         let owner = members.and_then(|list| {
-            list.iter().find(|entry| entry.get("role").and_then(|r| r.as_str()) == Some("owner"))
+            list.iter()
+                .find(|entry| entry.get("role").and_then(|r| r.as_str()) == Some("owner"))
         });
         seen.invited.insert(
             id.to_string(),
             Invited {
-                name: album.get("albumName").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                permissions: permission_for(
-                    mine.get("role").and_then(|r| r.as_str()),
-                )
-                .to_string(),
+                name: album
+                    .get("albumName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                permissions: permission_for(mine.get("role").and_then(|r| r.as_str())).to_string(),
                 owner_name: owner
                     .and_then(|o| o.pointer("/user/name"))
                     .and_then(|v| v.as_str())
@@ -105,7 +137,10 @@ pub fn nudge_peer_invitations(peer: &Peer) {
     let Some(transport) = transport() else { return };
     let peer = peer.clone();
     tokio::spawn(async move {
-        let header = RequestHeader { path: "/invitations/nudge".into(), ..Default::default() };
+        let header = RequestHeader {
+            path: "/invitations/nudge".into(),
+            ..Default::default()
+        };
         let _ = transport.round_trip(&peer, &header, None).await;
     });
 }
@@ -118,7 +153,8 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
     let peers: Vec<Peer> = state.collections().peers.clone();
     let mut created = 0usize;
     for peer in peers {
-        let targets = crate::sync::directory::invite_targets_for(state, client, &peer.pub_key).await;
+        let targets =
+            crate::sync::directory::invite_targets_for(state, client, &peer.pub_key).await;
         // No marker means the directory is not shared yet, or ISA_PUBLISH_USER_DIRECTORY is off —
         // sharing is per person, so there is nobody to name and nothing to detect.
         if targets.is_empty() {
@@ -127,25 +163,26 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
 
         // Union every marker's view. Inviting two people from one household to one album must
         // mirror for both, so every person invited to a given album is remembered.
-        let mut invited: std::collections::HashMap<String, Invited> = std::collections::HashMap::new();
+        let mut invited: std::collections::HashMap<String, Invited> =
+            std::collections::HashMap::new();
         let mut visible: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut invitees: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         let mut read_failed = false;
 
         for (slug, user_id, _name) in &targets {
-            let Some(candidate) =
-                state.collections().contributors.get(slug).cloned()
-            else {
+            let Some(candidate) = state.collections().contributors.get(slug).cloned() else {
                 continue;
             };
-            let Some(key) = candidate.api_key.clone() else { continue };
+            let Some(key) = candidate.api_key.clone() else {
+                continue;
+            };
             let creds = key_creds(state, &key);
             match albums_as_marker(state, client, &creds, user_id).await {
                 Some(part) => {
                     crate::log!(
                         "marker {}: {} visible, {} invited",
-                        &user_id[..user_id.len().min(8)],
+                        short_id(user_id),
                         part.visible.len(),
                         part.invited.len()
                     );
@@ -153,7 +190,15 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
                         if let Some(peer_user_id) = candidate.peer_user_id.clone() {
                             invitees.entry(id.clone()).or_default().push(peer_user_id);
                         }
-                        invited.entry(id).or_insert(entry);
+                        // The COMBINED permission, not whichever marker was read first — see
+                        // `widest_permission`.
+                        invited
+                            .entry(id)
+                            .and_modify(|kept| {
+                                kept.permissions =
+                                    widest_permission(&kept.permissions, &entry.permissions);
+                            })
+                            .or_insert(entry);
                     }
                     visible.extend(part.visible);
                 }
@@ -233,7 +278,11 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
             // People added to or removed from the invite while the album stays shared.
             let mut changed = existing.dead;
             if existing.dead {
-                crate::log!("invitation re-added: \"{}\" -> \"{}\"", peer.name, entry.name);
+                crate::log!(
+                    "invitation re-added: \"{}\" -> \"{}\"",
+                    peer.name,
+                    entry.name
+                );
             }
             let mut sorted = for_peer_user_ids.clone();
             sorted.sort();
@@ -326,24 +375,22 @@ fn key_creds(_state: &State, key: &str) -> Creds {
 /// A sender can add or drop individual people without withdrawing the album. Follow it, or a
 /// de-invited person keeps the mirror forever and revocation silently does nothing.
 async fn sync_mirror_members(state: &State, client: &Client, mapping: &Mapping, wanted: &[String]) {
-    let Some(host_key) = mapping
-        .host_slug
-        .as_ref()
-        .and_then(|slug| state.collections().contributors.get(slug).and_then(|c| c.api_key.clone()))
-    else {
+    // SILENT SKIP, deliberately: without the mirror-owning stand-in's key the album cannot be read
+    // or widened at all, and the pull simply tries again next cycle.
+    let Some(host_key) = host_key_of(state, mapping) else {
         return;
     };
     if mapping.adopted == Some(true) {
         // Adopted means a local human owns it, so the sidecar's key cannot change its membership
         // whoever the invitation names — say so once instead of reading the album and the user table
         // to reach a 403 every tick.
-        if refused_memberships().lock().map(|mut seen| seen.insert(mapping.id.clone())).unwrap_or(false) {
-            let peer_name = state
-                .collections()
-                .peers
-                .iter()
-                .find(|p| p.pub_key == mapping.peer)
-                .map(|p| p.name.clone())
+        if refused_memberships()
+            .lock()
+            .map(|mut seen| seen.insert(mapping.id.clone()))
+            .unwrap_or(false)
+        {
+            let peer_name = peer_of(state, &mapping.peer)
+                .map(|p| p.name)
                 .unwrap_or_else(|| mapping.peer.clone());
             crate::log!(
                 "\"{}\" is reunified — its members are the local owner's to change, so changes made at \"{peer_name}\" need the reunion re-run from the panel",
@@ -353,7 +400,10 @@ async fn sync_mirror_members(state: &State, client: &Client, mapping: &Mapping, 
         return;
     }
     let Some(album) = client
-        .get(&format!("/albums/{}", mapping.album_id), &crate::immich::client::Auth::Key(&host_key))
+        .get(
+            &format!("/albums/{}", mapping.album_id),
+            &crate::immich::client::Auth::Key(&host_key),
+        )
         .await
         .ok()
         .flatten()
@@ -379,7 +429,11 @@ async fn sync_mirror_members(state: &State, client: &Client, mapping: &Mapping, 
             users
                 .iter()
                 .filter(|au| au.get("role").and_then(|r| r.as_str()) != Some("owner"))
-                .filter_map(|au| au.pointer("/user/id").and_then(|v| v.as_str()).map(str::to_string))
+                .filter_map(|au| {
+                    au.pointer("/user/id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -390,7 +444,7 @@ async fn sync_mirror_members(state: &State, client: &Client, mapping: &Mapping, 
     let diff = diff_invitees(wanted, &current, &local);
     if !diff.add.is_empty() {
         // Same vanilla-parity rule as the mirror itself: the share's permission picks the role.
-        let role = if mapping.permissions == "contribute" { "editor" } else { "viewer" };
+        let role = crate::sync::mirror::member_role(&mapping.permissions);
         let body = json!({
             "albumUsers": diff.add.iter().map(|id| json!({ "userId": id, "role": role })).collect::<Vec<_>>()
         });
@@ -459,22 +513,16 @@ static PULL_QUEUED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// which is what the browser lane's no-reload case holds them to prove.
 pub fn pull_invitations_soon(state: &std::sync::Arc<State>) {
     use std::sync::atomic::Ordering;
-    if PULL_RUNNING.swap(true, Ordering::SeqCst) {
+    // The flag is cleared by this guard however the task ends, so one failed pull can never wedge
+    // the route into "coalesced" for ever — a state where the sidecar still answers a nudge with
+    // `{ok:true}` and then never looks.
+    let Some(_running) = crate::sync::sweeps::RunningFlagGuard::claim(&PULL_RUNNING) else {
         PULL_QUEUED.store(true, Ordering::SeqCst);
         return;
-    }
+    };
     let state = state.clone();
     tokio::spawn(async move {
-        // The flag is cleared by this guard however the task ends, so one failed pull can never wedge
-        // the route into "coalesced" for ever — a state where the sidecar still answers a nudge with
-        // `{ok:true}` and then never looks.
-        struct ClearRunning;
-        impl Drop for ClearRunning {
-            fn drop(&mut self) {
-                PULL_RUNNING.store(false, Ordering::SeqCst);
-            }
-        }
-        let _clear = ClearRunning;
+        let _running = _running;
         let client = crate::immich::client::shared();
         loop {
             // Cleared BEFORE the pull, so a change that arrives mid-pull is seen as a follow-up
@@ -497,7 +545,10 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
     for peer in peers {
         let peer_started = std::time::Instant::now();
         let Some(transport) = transport() else { return };
-        let header = RequestHeader { path: "/invitations".into(), ..Default::default() };
+        let header = RequestHeader {
+            path: "/invitations".into(),
+            ..Default::default()
+        };
         // Bounded: a peer that cannot answer must not hold the whole sweep, and an unreachable one
         // simply tries again next cycle.
         let Ok(Ok((head, body))) = tokio::time::timeout(
@@ -513,7 +564,11 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
             continue;
         }
         let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        let invitations = parsed.get("invitations").and_then(|i| i.as_array()).cloned().unwrap_or_default();
+        let invitations = parsed
+            .get("invitations")
+            .and_then(|i| i.as_array())
+            .cloned()
+            .unwrap_or_default();
         crate::log!(
             "invitation pull \"{}\": {} offered, {}ms to fetch",
             peer.name,
@@ -523,8 +578,10 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
 
         let mut offered: std::collections::HashSet<String> = std::collections::HashSet::new();
         for invitation in &invitations {
-            let Some(album_id) =
-                invitation.pointer("/album/id").and_then(|v| v.as_str()).map(str::to_string)
+            let Some(album_id) = invitation
+                .pointer("/album/id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
             else {
                 continue;
             };
@@ -552,7 +609,11 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
                 let for_user_ids: Vec<String> = invitation
                     .get("forUserIds")
                     .and_then(|v| v.as_array())
-                    .map(|ids| ids.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 if known.role == Role::Member && known.via == "invite" {
                     sync_mirror_members(state, client, &known, &for_user_ids).await;
@@ -564,6 +625,32 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
+            // A mapping the watcher retired lingers DEAD while the origin still offers this share —
+            // creating a fresh mirror beside it would leave a second mirror of one share, the state
+            // a person cannot repair from the UI. Tear the stale one down first. `notify_origin:
+            // false` because the origin withdrew NOTHING — it is offering the very share again.
+            let stale: Option<String> = state
+                .collections()
+                .mappings
+                .iter()
+                .find(|m| dead_mirror_of_the_same_share(m, &peer.pub_key, &album_id))
+                .map(|m| m.id.clone());
+            if let Some(stale_id) = stale {
+                match crate::sync::leave::leave_album(state, client, &stale_id, false).await {
+                    Ok(_) => crate::log!(
+                        "replaced the dead mirror of \"{album_name}\" before re-mirroring it"
+                    ),
+                    Err(e) => {
+                        // Teardown failed: re-mirroring NOW would create the very second mirror
+                        // this exists to prevent. The origin keeps offering the share, so the
+                        // next pull retries the teardown and then the mirror.
+                        crate::log!(
+                            "could not remove the dead mirror of \"{album_name}\": {e} — deferring re-mirroring to the next pull"
+                        );
+                        continue;
+                    }
+                }
+            }
             let permissions = invitation
                 .get("permissions")
                 .and_then(|v| v.as_str())
@@ -574,7 +661,11 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
             let for_user_ids: Vec<String> = invitation
                 .get("forUserIds")
                 .and_then(|v| v.as_array())
-                .map(|ids| ids.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default();
             let request = crate::sync::mirror::MirrorRequest {
                 peer: &peer,
@@ -594,7 +685,10 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
                     .and_then(|v| v.as_str())
                     .map(str::to_string),
                 for_user_ids: Some(for_user_ids.clone()),
-                reunified: invitation.get("reunified").and_then(|v| v.as_bool()).unwrap_or(false),
+                reunified: invitation
+                    .get("reunified")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 via: "invite",
             };
             match crate::sync::mirror::ensure_mirror(state, client, &request).await {
@@ -628,7 +722,11 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
             match crate::sync::leave::leave_album(state, client, &id, true).await {
                 Ok(_) => {
                     changed = true;
-                    crate::log!("\"{}\" withdrew \"{}\" — removed the mirror it created", peer.name, name);
+                    crate::log!(
+                        "\"{}\" withdrew \"{}\" — removed the mirror it created",
+                        peer.name,
+                        name
+                    );
                 }
                 Err(e) => crate::log!("could not remove withdrawn mirror \"{name}\": {e}"),
             }
@@ -648,11 +746,8 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
 }
 
 /// A peer asking us to look at our invitations NOW.
-pub fn handle_invitations_nudge(
-    state: &std::sync::Arc<State>,
-    caller_pub: &str,
-) -> (u16, Value) {
-    if !state.collections().peers.iter().any(|p| p.pub_key == caller_pub) {
+pub fn handle_invitations_nudge(state: &std::sync::Arc<State>, caller_pub: &str) -> (u16, Value) {
+    if peer_of(state, caller_pub).is_none() {
         return (403, json!({ "error": "unknown peer" }));
     }
     crate::sync::status::record_nudge(crate::sync::status::NudgeKind::Invitations);
@@ -702,7 +797,95 @@ mod tests {
     fn an_editor_contributes_and_everything_else_views() {
         assert_eq!(permission_for(Some("editor")), "contribute");
         assert_eq!(permission_for(Some("viewer")), "view");
-        assert_eq!(permission_for(Some("owner")), "view", "an owner is not an invitation at all");
-        assert_eq!(permission_for(None), "view", "anything unrecognised is the safe role");
+        assert_eq!(
+            permission_for(Some("owner")),
+            "view",
+            "an owner is not an invitation at all"
+        );
+        assert_eq!(
+            permission_for(None),
+            "view",
+            "anything unrecognised is the safe role"
+        );
+    }
+
+    #[test]
+    fn two_markers_of_one_household_agree_on_contribute_whichever_was_read_first() {
+        // Two markers of one household invited to the same album, one as editor and one as viewer,
+        // name the SAME share: the household holds it at the more permissive of the two, so which
+        // marker's answer arrived first must not decide what gets mirrored.
+        assert_eq!(widest_permission("view", "contribute"), "contribute");
+        assert_eq!(
+            widest_permission("contribute", "view"),
+            "contribute",
+            "order must not decide"
+        );
+        assert_eq!(widest_permission("view", "view"), "view");
+    }
+
+    #[test]
+    fn a_dead_member_mirror_of_the_same_share_is_replaced() {
+        // A mapping the watcher retired lingers dead while the origin still offers the share; a
+        // re-invite that finds it must tear it down rather than create a SECOND mirror of one share.
+        let mut m = fixture_member_mirror("album-1");
+        m.dead = true;
+        assert!(dead_mirror_of_the_same_share(&m, "peer-a", "album-1"));
+    }
+
+    #[test]
+    fn a_live_mirror_or_another_share_is_never_replaced() {
+        let live = fixture_member_mirror("album-1");
+        assert!(
+            !dead_mirror_of_the_same_share(&live, "peer-a", "album-1"),
+            "still in use"
+        );
+        let other_album = fixture_member_mirror("album-2");
+        assert!(!dead_mirror_of_the_same_share(
+            &other_album,
+            "peer-a",
+            "album-1"
+        ));
+        // An owner mapping to the same peer is this household's own share, never a mirror to replace.
+        let mut owner = fixture_member_mirror("album-1");
+        owner.dead = true;
+        owner.role = Role::Owner;
+        assert!(!dead_mirror_of_the_same_share(&owner, "peer-a", "album-1"));
+        // ...and only the share's own peer's dead mirror counts.
+        let mut other_peer = fixture_member_mirror("album-1");
+        other_peer.dead = true;
+        other_peer.peer = "peer-b".into();
+        assert!(!dead_mirror_of_the_same_share(
+            &other_peer,
+            "peer-a",
+            "album-1"
+        ));
+    }
+
+    fn fixture_member_mirror(remote_album: &str) -> Mapping {
+        Mapping {
+            id: "m1".into(),
+            role: Role::Member,
+            album_id: "local-mirror".into(),
+            album_name: "Holidays".into(),
+            peer: "peer-a".into(),
+            remote_album_id: Some(remote_album.into()),
+            remote_mapping_id: None,
+            permissions: "view".into(),
+            host_slug: None,
+            via: "invite".into(),
+            for_peer_user_ids: None,
+            album_owner_name: None,
+            album_owner_id: None,
+            adopted: None,
+            reunified: None,
+            dead: false,
+            dead_at: None,
+            dead_reason: None,
+            fail_count: None,
+            local_version: None,
+            remote_version: None,
+            comment_count: None,
+            remote_comment_count: None,
+        }
     }
 }

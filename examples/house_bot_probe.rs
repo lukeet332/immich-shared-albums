@@ -24,10 +24,14 @@ async fn main() {
     let st = state::state();
     let client = Client::new();
 
-    let first = ensure_house_bot(st, &client).await.expect("provision the house bot");
+    let first = ensure_house_bot(st, &client)
+        .await
+        .expect("provision the house bot");
     // Provisioned twice on purpose: it is created lazily, so every caller may ask, and a second
     // call must return the SAME account rather than making another one.
-    let second = ensure_house_bot(st, &client).await.expect("provision again");
+    let second = ensure_house_bot(st, &client)
+        .await
+        .expect("provision again");
     let bot_id = first.user_id.clone().expect("bot user id");
 
     // The name as IMMICH holds it, not as we asked for it — a rename elsewhere would be invisible
@@ -46,7 +50,11 @@ async fn main() {
     // An album owned by the ADMIN, so the bot joining it is a real membership on someone else's
     // album — the case `addHouseBotToAlbum` exists for.
     let album = client
-        .post("/albums", &Auth::Admin, &json!({ "albumName": "House bot probe" }))
+        .post(
+            "/albums",
+            &Auth::Admin,
+            &json!({ "albumName": "House bot probe" }),
+        )
         .await
         .expect("create album")
         .and_then(|a| a.get("id").and_then(|v| v.as_str()).map(str::to_string))
@@ -58,8 +66,12 @@ async fn main() {
     headers.insert("x-api-key".to_string(), config::cfg().api_key.clone());
     let owner_creds = Creds { headers };
 
-    add_house_bot_to_album(st, &client, &album, &owner_creds).await.expect("first add");
-    add_house_bot_to_album(st, &client, &album, &owner_creds).await.expect("second add");
+    add_house_bot_to_album(st, &client, &album, &owner_creds)
+        .await
+        .expect("first add");
+    add_house_bot_to_album(st, &client, &album, &owner_creds)
+        .await
+        .expect("second add");
 
     let after = client
         .get_album(&album, &Auth::Creds(&owner_creds))
@@ -77,7 +89,10 @@ async fn main() {
                     au.pointer("/user/id").and_then(|v| v.as_str()) == Some(bot_id.as_str())
                 })
                 .map(|au| {
-                    au.get("role").and_then(|r| r.as_str()).unwrap_or("?").to_string()
+                    au.get("role")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("?")
+                        .to_string()
                 })
                 .collect()
         })
@@ -85,7 +100,10 @@ async fn main() {
 
     // The bot reads the album with ITS OWN key — the whole reason it was added.
     let readable = client
-        .get_album(&album, &Auth::Key(first.api_key.as_deref().unwrap_or_default()))
+        .get_album(
+            &album,
+            &Auth::Key(first.api_key.as_deref().unwrap_or_default()),
+        )
         .await
         .ok()
         .flatten()
@@ -105,7 +123,11 @@ async fn main() {
 
     // And it cannot do the one thing a widened key would allow: mint another key.
     let can_mint_keys = client
-        .post("/api-keys", &Auth::Key(bot_key), &json!({ "name": "widened", "permissions": ["all"] }))
+        .post(
+            "/api-keys",
+            &Auth::Key(bot_key),
+            &json!({ "name": "widened", "permissions": ["all"] }),
+        )
         .await
         .is_ok();
 

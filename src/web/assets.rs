@@ -79,7 +79,10 @@ pub fn sign_in_page(what: &str) -> String {
 pub fn share_page(endpoint_token: &str, album_name: Option<&str>, cover: Option<&str>) -> String {
     SHARE_HTML
         .replace("%%ENDPOINT%%", &escape_html(endpoint_token))
-        .replace("%%ALBUM%%", &escape_html(album_name.unwrap_or("Shared album")))
+        .replace(
+            "%%ALBUM%%",
+            &escape_html(album_name.unwrap_or("Shared album")),
+        )
         .replace("%%COVER%%", &escape_html(cover.unwrap_or("")))
 }
 

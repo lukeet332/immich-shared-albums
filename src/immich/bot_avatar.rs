@@ -27,18 +27,14 @@ fn round_rect(x0: f64, y0: f64, x1: f64, y1: f64, radius: f64, colour: [u8; 4]) 
 }
 
 fn circle(cx: f64, cy: f64, r: f64, colour: [u8; 4]) -> Shape {
-    Shape { colour, covers: Box::new(move |x, y| (x - cx).powi(2) + (y - cy).powi(2) <= r * r) }
+    Shape {
+        colour,
+        covers: Box::new(move |x, y| (x - cx).powi(2) + (y - cy).powi(2) <= r * r),
+    }
 }
 
 /// A line with round ends: everything within half its thickness of the segment.
-fn limb(
-    x0: f64,
-    y0: f64,
-    x1: f64,
-    y1: f64,
-    thickness: f64,
-    colour: [u8; 4],
-) -> Shape {
+fn limb(x0: f64, y0: f64, x1: f64, y1: f64, thickness: f64, colour: [u8; 4]) -> Shape {
     let half = thickness / 2.0;
     let dx = x1 - x0;
     let dy = y1 - y0;
@@ -61,15 +57,43 @@ fn robot(size: f64) -> Vec<Shape> {
         round_rect(0.0, 0.0, size, size, at(0.22), BACKDROP),
         limb(at(0.5), at(0.09), at(0.5), at(0.24), at(0.035), FACE), // antenna
         circle(at(0.5), at(0.075), at(0.045), FACE),
-        limb(head.0 + at(0.02), at(0.7), at(0.16), at(0.83), at(0.05), FACE), // arms
-        limb(head.2 - at(0.02), at(0.7), at(0.84), at(0.83), at(0.05), FACE),
+        limb(
+            head.0 + at(0.02),
+            at(0.7),
+            at(0.16),
+            at(0.83),
+            at(0.05),
+            FACE,
+        ), // arms
+        limb(
+            head.2 - at(0.02),
+            at(0.7),
+            at(0.84),
+            at(0.83),
+            at(0.05),
+            FACE,
+        ),
         round_rect(body.0, body.1, body.2, body.3, at(0.05), FACE), // body
-        limb(at(0.42), body.3 - at(0.01), at(0.42), at(0.95), at(0.05), FACE), // legs
-        limb(at(0.58), body.3 - at(0.01), at(0.58), at(0.95), at(0.05), FACE),
+        limb(
+            at(0.42),
+            body.3 - at(0.01),
+            at(0.42),
+            at(0.95),
+            at(0.05),
+            FACE,
+        ), // legs
+        limb(
+            at(0.58),
+            body.3 - at(0.01),
+            at(0.58),
+            at(0.95),
+            at(0.05),
+            FACE,
+        ),
         circle(at(0.44), at(0.77), at(0.055), BACKDROP), // the link in its chest: two rings that overlap
         circle(at(0.56), at(0.77), at(0.055), BACKDROP),
         round_rect(head.0, head.1, head.2, head.3, at(0.08), FACE), // head last, so it sits on top
-        circle(at(0.39), at(0.43), at(0.05), INK), // eyes
+        circle(at(0.39), at(0.43), at(0.05), INK),                  // eyes
         circle(at(0.61), at(0.43), at(0.05), INK),
     ]
 }
@@ -127,7 +151,11 @@ fn crc32(buf: &[u8]) -> u32 {
     for byte in buf {
         crc ^= *byte as u32;
         for _ in 0..8 {
-            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     crc ^ 0xffff_ffff
@@ -153,13 +181,16 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     let mut raw = vec![0u8; height as usize * (stride + 1)];
     for y in 0..height as usize {
         raw[y * (stride + 1)] = 0; // filter type None
-        raw[y * (stride + 1) + 1..(y + 1) * (stride + 1)].copy_from_slice(&rgba[y * stride..(y + 1) * stride]);
+        raw[y * (stride + 1) + 1..(y + 1) * (stride + 1)]
+            .copy_from_slice(&rgba[y * stride..(y + 1) * stride]);
     }
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
-    let compressed = match encoder.write_all(&raw).and_then(|_| encoder.finish()) {
-        Ok(bytes) => bytes,
-        Err(_) => Vec::new(),
-    };
+    // An encode failure answers an EMPTY PNG rather than a half-written one: the avatar is a
+    // stand-in, so blank beats corrupt.
+    let compressed = encoder
+        .write_all(&raw)
+        .and_then(|_| encoder.finish())
+        .unwrap_or_default();
     let mut header = [0u8; 13];
     header[0..4].copy_from_slice(&width.to_be_bytes());
     header[4..8].copy_from_slice(&height.to_be_bytes());
@@ -179,13 +210,26 @@ mod tests {
     #[test]
     fn the_avatar_is_a_png_of_the_size_asked_for() {
         let png = bot_avatar_png(128);
-        assert_eq!(&png[0..8], &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], "PNG magic");
+        assert_eq!(
+            &png[0..8],
+            &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+            "PNG magic"
+        );
         assert_eq!(&png[12..16], b"IHDR");
-        assert_eq!(u32::from_be_bytes([png[16], png[17], png[18], png[19]]), 128);
-        assert_eq!(u32::from_be_bytes([png[20], png[21], png[22], png[23]]), 128);
+        assert_eq!(
+            u32::from_be_bytes([png[16], png[17], png[18], png[19]]),
+            128
+        );
+        assert_eq!(
+            u32::from_be_bytes([png[20], png[21], png[22], png[23]]),
+            128
+        );
         assert_eq!(png[24], 8, "bits per channel");
         assert_eq!(png[25], 6, "colour type RGBA");
-        assert!(png.windows(4).any(|w| w == b"IEND"), "the stream is terminated");
+        assert!(
+            png.windows(4).any(|w| w == b"IEND"),
+            "the stream is terminated"
+        );
     }
 
     #[test]
@@ -211,7 +255,8 @@ mod tests {
         let mut at = 8usize;
         let mut idat = Vec::new();
         while at + 8 <= png.len() {
-            let length = u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]) as usize;
+            let length =
+                u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]) as usize;
             let kind = &png[at + 4..at + 8];
             if kind == b"IDAT" {
                 idat.extend_from_slice(&png[at + 8..at + 8 + length]);
@@ -219,7 +264,9 @@ mod tests {
             at += 12 + length;
         }
         let mut raw = Vec::new();
-        ZlibDecoder::new(&idat[..]).read_to_end(&mut raw).expect("zlib stream");
+        ZlibDecoder::new(&idat[..])
+            .read_to_end(&mut raw)
+            .expect("zlib stream");
         let stride = size * 4;
         let mut out = vec![0u8; size * stride];
         for y in 0..size {

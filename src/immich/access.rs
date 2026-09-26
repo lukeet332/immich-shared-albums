@@ -75,6 +75,94 @@ pub fn creds_from_headers(headers: &HeaderMap) -> Option<Creds> {
     }
 }
 
+/// The albums this caller can see, as IMMICH answers for their own credential.
+///
+/// Failure and emptiness are DIFFERENT answers and must not share one value: `None` means the read
+/// was refused (the credential is not valid), `Some(vec![])` means the caller genuinely has no
+/// albums. Collapsing them is how a panel ends up telling someone they own nothing when in fact the
+/// sidecar could not ask.
+pub async fn read_caller_albums(
+    client: &crate::immich::client::Client,
+    creds: &Creds,
+) -> Option<Vec<serde_json::Value>> {
+    match client
+        .get("/albums", &crate::immich::client::Auth::Creds(creds))
+        .await
+    {
+        Ok(Some(serde_json::Value::Array(albums))) => Some(albums),
+        Ok(Some(_)) => Some(Vec::new()),
+        Ok(None) => Some(Vec::new()),
+        Err(_) => None,
+    }
+}
+
+/// The ids of the albums a caller may see.
+///
+/// Immich scopes `GET /albums` to the credential, so this IS the caller's own membership — never a
+/// list to filter for them. A mapping whose album is absent from it is not leaked, because the
+/// question is never asked of a list the caller cannot have.
+pub async fn visible_album_ids(
+    client: &crate::immich::client::Client,
+    creds: &Creds,
+) -> Option<std::collections::HashSet<String>> {
+    let albums = read_caller_albums(client, creds).await?;
+    Some(
+        albums
+            .iter()
+            .filter_map(|a| a.get("id").and_then(|v| v.as_str()).map(str::to_string))
+            .collect(),
+    )
+}
+
+/// The local album as the given credential can see it, or `None` when it cannot.
+///
+/// `None` is the point: a caller cannot go on to read `albumUsers` off a refusal, which is how a
+/// panel ends up filtering a plan it never had.
+pub async fn read_album_as(
+    client: &crate::immich::client::Client,
+    album_id: &str,
+    auth: &crate::immich::client::Auth<'_>,
+) -> Option<serde_json::Value> {
+    client.get_album(album_id, auth).await.ok().flatten()
+}
+
+/// Every asset the credential can see in the album, or `None` when it cannot see the album at all.
+///
+/// An EMPTY album and a REFUSED read are different answers and must not share one value: collapsing
+/// them is the silent failure this module exists to remove.
+pub async fn read_album_assets_as(
+    client: &crate::immich::client::Client,
+    album_id: &str,
+    auth: &crate::immich::client::Auth<'_>,
+) -> Option<Vec<serde_json::Value>> {
+    let mut out = Vec::new();
+    let mut page = 1i64;
+    while page > 0 {
+        let body = serde_json::json!({
+            "albumIds": [album_id],
+            "page": page,
+            "size": 500,
+            "withExif": true,
+        });
+        let response = match client.post("/search/metadata", auth, &body).await {
+            Ok(Some(value)) => value,
+            _ => return None,
+        };
+        if let Some(items) = response.pointer("/assets/items").and_then(|v| v.as_array()) {
+            out.extend(items.iter().cloned());
+        }
+        page = response
+            .pointer("/assets/nextPage")
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse().ok())
+                    .or_else(|| v.as_i64())
+            })
+            .unwrap_or(0);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,7 +191,10 @@ mod tests {
         ]);
         let creds = creds_from_headers(&h).unwrap();
         assert_eq!(creds.headers.len(), 3);
-        assert_eq!(creds.headers.get("cookie").unwrap(), "immich_access_token=abc");
+        assert_eq!(
+            creds.headers.get("cookie").unwrap(),
+            "immich_access_token=abc"
+        );
         assert_eq!(creds.headers.get("x-api-key").unwrap(), "key-1");
         assert_eq!(creds.headers.get("authorization").unwrap(), "Bearer t");
         assert!(!creds.headers.contains_key("user-agent"));
@@ -194,85 +285,4 @@ mod tests {
         let creds = MappingAuth::for_mapping(&state, &mapping(Role::Owner, None)).expect("admin");
         assert!(matches!(creds.auth(), Auth::Admin));
     }
-}
-
-/// The albums this caller can see, as IMMICH answers for their own credential.
-///
-/// Failure and emptiness are DIFFERENT answers and must not share one value: `None` means the read
-/// was refused (the credential is not valid), `Some(vec![])` means the caller genuinely has no
-/// albums. Collapsing them is how a panel ends up telling someone they own nothing when in fact the
-/// sidecar could not ask.
-pub async fn read_caller_albums(
-    client: &crate::immich::client::Client,
-    creds: &Creds,
-) -> Option<Vec<serde_json::Value>> {
-    match client.get("/albums", &crate::immich::client::Auth::Creds(creds)).await {
-        Ok(Some(serde_json::Value::Array(albums))) => Some(albums),
-        Ok(Some(_)) => Some(Vec::new()),
-        Ok(None) => Some(Vec::new()),
-        Err(_) => None,
-    }
-}
-
-/// The ids of the albums a caller may see.
-///
-/// Immich scopes `GET /albums` to the credential, so this IS the caller's own membership — never a
-/// list to filter for them. A mapping whose album is absent from it is not leaked, because the
-/// question is never asked of a list the caller cannot have.
-pub async fn visible_album_ids(
-    client: &crate::immich::client::Client,
-    creds: &Creds,
-) -> Option<std::collections::HashSet<String>> {
-    let albums = read_caller_albums(client, creds).await?;
-    Some(
-        albums
-            .iter()
-            .filter_map(|a| a.get("id").and_then(|v| v.as_str()).map(str::to_string))
-            .collect(),
-    )
-}
-
-/// The local album as the given credential can see it, or `None` when it cannot.
-///
-/// `None` is the point: a caller cannot go on to read `albumUsers` off a refusal, which is how a
-/// panel ends up filtering a plan it never had.
-pub async fn read_album_as(
-    client: &crate::immich::client::Client,
-    album_id: &str,
-    auth: &crate::immich::client::Auth<'_>,
-) -> Option<serde_json::Value> {
-    client.get_album(album_id, auth).await.ok().flatten()
-}
-
-/// Every asset the credential can see in the album, or `None` when it cannot see the album at all.
-///
-/// An EMPTY album and a REFUSED read are different answers and must not share one value: collapsing
-/// them is the silent failure this module exists to remove.
-pub async fn read_album_assets_as(
-    client: &crate::immich::client::Client,
-    album_id: &str,
-    auth: &crate::immich::client::Auth<'_>,
-) -> Option<Vec<serde_json::Value>> {
-    let mut out = Vec::new();
-    let mut page = 1i64;
-    while page > 0 {
-        let body = serde_json::json!({
-            "albumIds": [album_id],
-            "page": page,
-            "size": 500,
-            "withExif": true,
-        });
-        let response = match client.post("/search/metadata", auth, &body).await {
-            Ok(Some(value)) => value,
-            _ => return None,
-        };
-        if let Some(items) = response.pointer("/assets/items").and_then(|v| v.as_array()) {
-            out.extend(items.iter().cloned());
-        }
-        page = response
-            .pointer("/assets/nextPage")
-            .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_i64()))
-            .unwrap_or(0);
-    }
-    Some(out)
 }

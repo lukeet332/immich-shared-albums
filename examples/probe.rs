@@ -25,10 +25,8 @@ const DIAL_DEADLINE: Duration = Duration::from_secs(10);
 const JSON_READ_LIMIT: usize = 64 * 1024 * 1024;
 
 fn main() {
-    let job: Value = serde_json::from_str(
-        std::env::args().nth(1).as_deref().unwrap_or("{}"),
-    )
-    .expect("the probe takes one JSON job");
+    let job: Value = serde_json::from_str(std::env::args().nth(1).as_deref().unwrap_or("{}"))
+        .expect("the probe takes one JSON job");
     let outcome = tokio::runtime::Runtime::new()
         .expect("tokio runtime")
         .block_on(async move { run(&job).await });
@@ -118,20 +116,34 @@ async fn drive(job: &Value) -> Result<Value, String> {
     };
 
     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
-    send.write_all(&frame(&serde_json::to_vec(&header).expect("header is JSON")))
+    send.write_all(&frame(
+        &serde_json::to_vec(&header).expect("header is JSON"),
+    ))
+    .await
+    .map_err(|e| e.to_string())?;
+    send.write_all(&frame(&body))
         .await
         .map_err(|e| e.to_string())?;
-    send.write_all(&frame(&body)).await.map_err(|e| e.to_string())?;
     send.finish().map_err(|e| e.to_string())?;
 
     let head_bytes = read_frame(&mut recv, HEADER_FRAME_LIMIT)
         .await
         .map_err(|e| e.to_string())?
-        .map_err(|over| format!("response header frame of {} bytes is over the limit", over.declared))?;
-    let head: Value = serde_json::from_slice(&head_bytes).map_err(|e| format!("bad response header: {e}"))?;
+        .map_err(|over| {
+            format!(
+                "response header frame of {} bytes is over the limit",
+                over.declared
+            )
+        })?;
+    let head: Value =
+        serde_json::from_slice(&head_bytes).map_err(|e| format!("bad response header: {e}"))?;
     let status = head.get("status").and_then(|s| s.as_u64()).unwrap_or(0) as u16;
 
-    if job.get("wantBytes").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if job
+        .get("wantBytes")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         let mut bytes_length: usize = 0;
         let mut chunk = vec![0u8; 256 * 1024];
         while let Some(n) = recv.read(&mut chunk).await.map_err(|e| e.to_string())? {

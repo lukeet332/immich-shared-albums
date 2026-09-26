@@ -32,8 +32,9 @@ pub fn distinct_contributors(manifest: &[Value], fallback_name: &str) -> Vec<Pee
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     for reference in manifest {
-        let Some(origin_user_id) =
-            reference.pointer("/contributor/originUserId").and_then(|v| v.as_str())
+        let Some(origin_user_id) = reference
+            .pointer("/contributor/originUserId")
+            .and_then(|v| v.as_str())
         else {
             continue;
         };
@@ -58,8 +59,13 @@ pub async fn peer_contributors(peer: &Peer, remote_target: Option<&str>) -> Vec<
     let Some(target) = remote_target.filter(|t| !t.is_empty()) else {
         return Vec::new();
     };
-    let Some(transport) = transport() else { return Vec::new() };
-    let header = RequestHeader { path: format!("/albums/{target}/manifest"), ..Default::default() };
+    let Some(transport) = transport() else {
+        return Vec::new();
+    };
+    let header = RequestHeader {
+        path: format!("/albums/{target}/manifest"),
+        ..Default::default()
+    };
     let Ok(Ok((head, body))) = tokio::time::timeout(
         std::time::Duration::from_millis(GRANT_MANIFEST_DEADLINE_MS),
         transport.round_trip(peer, &header, None),
@@ -72,7 +78,11 @@ pub async fn peer_contributors(peer: &Peer, remote_target: Option<&str>) -> Vec<
         return Vec::new();
     }
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let manifest = parsed.get("manifest").and_then(|m| m.as_array()).cloned().unwrap_or_default();
+    let manifest = parsed
+        .get("manifest")
+        .and_then(|m| m.as_array())
+        .cloned()
+        .unwrap_or_default();
     distinct_contributors(&manifest, &peer.name)
 }
 
@@ -112,7 +122,7 @@ pub async fn grant_album_writers(
             Err(e) => crate::log!(
                 "could not grant \"{}\" access to album {}: {e}",
                 contributor.display_name,
-                &album_id[..album_id.len().min(8)]
+                crate::sync::peer_mapping_id::short_id(album_id)
             ),
         }
     }
@@ -145,16 +155,25 @@ pub async fn grant_invited_humans(
         .map(|users| {
             users
                 .iter()
-                .filter_map(|au| au.pointer("/user/id").and_then(|v| v.as_str()).map(str::to_string))
+                .filter_map(|au| {
+                    au.pointer("/user/id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
                 .collect()
         })
         .unwrap_or_default();
-    let wanted: Vec<&String> = user_ids.iter().filter(|id| !already.contains(*id)).collect();
+    let wanted: Vec<&String> = user_ids
+        .iter()
+        .filter(|id| !already.contains(*id))
+        .collect();
     if wanted.is_empty() {
         return 0;
     }
-    let members: Vec<Value> =
-        wanted.iter().map(|id| serde_json::json!({ "userId": id, "role": role })).collect();
+    let members: Vec<Value> = wanted
+        .iter()
+        .map(|id| serde_json::json!({ "userId": id, "role": role }))
+        .collect();
     let count = members.len();
     if client
         .json(
@@ -235,7 +254,7 @@ pub async fn strip_album_bots(
                 Err(e) => {
                     crate::log!(
                         "  could not take our account off \"{}\" (attempt {attempt}): {e}",
-                        &album_id[..album_id.len().min(8)]
+                        crate::sync::peer_mapping_id::short_id(album_id)
                     );
                 }
             }
@@ -283,6 +302,9 @@ mod tests {
         // honest fallback — better than a blank account in someone's People list.
         let manifest = vec![json!({ "contributor": { "originUserId": "u1" } })];
         assert_eq!(distinct_contributors(&manifest, "The Smiths").len(), 1);
-        assert_eq!(distinct_contributors(&manifest, "The Smiths")[0].display_name, "The Smiths");
+        assert_eq!(
+            distinct_contributors(&manifest, "The Smiths")[0].display_name,
+            "The Smiths"
+        );
     }
 }

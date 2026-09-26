@@ -32,7 +32,10 @@ pub struct Refused {
 
 impl Refused {
     fn new(message: impl Into<String>, password_required: bool) -> Self {
-        Refused { message: message.into(), password_required }
+        Refused {
+            message: message.into(),
+            password_required,
+        }
     }
 }
 
@@ -77,10 +80,16 @@ pub async fn redeem_invite(
     password: Option<&str>,
 ) -> Result<Redeemed, Refused> {
     if invite.endpoint_pub.trim().is_empty() || invite.key.trim().is_empty() {
-        return Err(Refused::new("that does not look like a share invite", false));
+        return Err(Refused::new(
+            "that does not look like a share invite",
+            false,
+        ));
     }
     let transport = transport().ok_or_else(|| {
-        Refused::new("this server's peer transport is not running — try again in a moment", false)
+        Refused::new(
+            "this server's peer transport is not running — try again in a moment",
+            false,
+        )
     })?;
 
     // Dialled through a THROWAWAY peer record, never the stored one: this is the first contact, and
@@ -105,7 +114,10 @@ pub async fn redeem_invite(
         "household": { "name": cfg().name },
     })
     .to_string();
-    let header = RequestHeader { path: "/invites/redeem".into(), ..Default::default() };
+    let header = RequestHeader {
+        path: "/invites/redeem".into(),
+        ..Default::default()
+    };
 
     let (head, body) = transport
         .round_trip(&dialling, &header, Some(body.as_bytes()))
@@ -114,7 +126,10 @@ pub async fn redeem_invite(
     let answered: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
 
     if head.status >= 400 {
-        let code = answered.get("code").and_then(|c| c.as_str()).unwrap_or_default();
+        let code = answered
+            .get("code")
+            .and_then(|c| c.as_str())
+            .unwrap_or_default();
         let password_required = answered
             .get("passwordRequired")
             .and_then(|v| v.as_bool())
@@ -129,7 +144,10 @@ pub async fn redeem_invite(
                     .map(|e| format!(" ({})", e.chars().take(120).collect::<String>()))
                     .unwrap_or_default();
                 if code.is_empty() {
-                    format!("the other server refused the join ({}){detail}", head.status)
+                    format!(
+                        "the other server refused the join ({}){detail}",
+                        head.status
+                    )
                 } else {
                     format!("the other server refused the join ({})", head.status)
                 }
@@ -140,23 +158,43 @@ pub async fn redeem_invite(
 
     // The identity check, before anything the answer says is believed.
     let household = answered.get("household").cloned().unwrap_or(Value::Null);
-    let public_key = household.get("publicKey").and_then(|v| v.as_str()).unwrap_or_default();
+    let public_key = household
+        .get("publicKey")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     if public_key != invite.endpoint_pub {
         return Err(Refused::new(
             "the origin answered with a different identity than the invite named",
             false,
         ));
     }
-    let household_name =
-        household.get("name").and_then(|v| v.as_str()).unwrap_or("origin").to_string();
+    let household_name = household
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("origin")
+        .to_string();
     let album = answered.get("album").cloned().unwrap_or(Value::Null);
-    let album_id = album.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-    let album_name = album.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let album_id = album
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let album_name = album
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
     if album_id.is_empty() || album_name.is_empty() {
-        return Err(Refused::new("the other server's answer named no album", false));
+        return Err(Refused::new(
+            "the other server's answer named no album",
+            false,
+        ));
     }
     let protocol = answered.get("protocol").and_then(|v| v.as_i64());
-    let version = answered.get("version").and_then(|v| v.as_str()).map(str::to_string);
+    let version = answered
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
 
     // A newer origin is a warning, never a refusal: the wire is backwards-compatible by design, and
     // refusing to join would strand a household on an old build for no reason.
@@ -169,13 +207,20 @@ pub async fn redeem_invite(
     }
 
     let owner = answered.get("albumOwner").cloned().unwrap_or(Value::Null);
-    let manifest_len =
-        answered.get("manifest").and_then(|m| m.as_array()).map(|m| m.len()).unwrap_or(0);
+    let manifest_len = answered
+        .get("manifest")
+        .and_then(|m| m.as_array())
+        .map(|m| m.len())
+        .unwrap_or(0);
 
     // PIN IT, now that it has proved who it is. Re-joining refreshes the hints rather than creating
     // a second record, so a person who moved networks is reachable again.
     let mut collections = state.collections();
-    match collections.peers.iter_mut().find(|p| p.pub_key == public_key) {
+    match collections
+        .peers
+        .iter_mut()
+        .find(|p| p.pub_key == public_key)
+    {
         Some(existing) => {
             existing.name = household_name.clone();
             existing.version = version.clone();
@@ -196,7 +241,9 @@ pub async fn redeem_invite(
         }),
     }
     drop(collections);
-    state.save().map_err(|e| Refused::new(format!("could not record the link: {e}"), false))?;
+    state
+        .save()
+        .map_err(|e| Refused::new(format!("could not record the link: {e}"), false))?;
 
     Ok(Redeemed {
         household_name,
@@ -214,9 +261,18 @@ pub async fn redeem_invite(
             .get("displayName")
             .and_then(|v| v.as_str())
             .map(str::to_string),
-        owner_user_id: owner.get("originUserId").and_then(|v| v.as_str()).map(str::to_string),
-        remote_mapping_id: answered.get("mappingId").and_then(|v| v.as_str()).map(str::to_string),
-        reunified: answered.get("reunified").and_then(|v| v.as_bool()).unwrap_or(false),
+        owner_user_id: owner
+            .get("originUserId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        remote_mapping_id: answered
+            .get("mappingId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        reunified: answered
+            .get("reunified")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         manifest_len,
     })
 }
@@ -232,7 +288,11 @@ mod tests {
             Some("this share link has expired"),
             "a known code is ours to word"
         );
-        assert_eq!(refusal_text("something_new"), None, "an unknown code must fall through");
+        assert_eq!(
+            refusal_text("something_new"),
+            None,
+            "an unknown code must fall through"
+        );
     }
 
     #[test]
@@ -253,8 +313,11 @@ mod tests {
             endpoint_addrs: None,
             key: "k".into(),
         };
-        assert_eq!(empty.endpoint_pub.trim().is_empty(), true);
-        let no_key = Invite { key: String::new(), ..empty.clone() };
+        assert!(empty.endpoint_pub.trim().is_empty());
+        let no_key = Invite {
+            key: String::new(),
+            ..empty.clone()
+        };
         assert!(no_key.key.trim().is_empty());
     }
 }

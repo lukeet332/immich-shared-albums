@@ -44,7 +44,10 @@ impl std::fmt::Debug for Config {
             .field("mirror_album_template", &self.mirror_album_template)
             .field("cache_max_mb", &self.cache_max_mb)
             .field("max_body_kb", &self.max_body_kb)
-            .field("link_join_requires_password", &self.link_join_requires_password)
+            .field(
+                "link_join_requires_password",
+                &self.link_join_requires_password,
+            )
             .field("bot_quota_mb", &self.bot_quota_mb)
             .field("trace_sync", &self.trace_sync)
             .field("publish_user_directory", &self.publish_user_directory)
@@ -86,7 +89,9 @@ fn env_int(name: &str, dflt: u64, min: u64) -> Result<u64, ConfigError> {
     };
     match raw.trim().parse::<u64>() {
         Ok(n) if n >= min => Ok(n),
-        _ => Err(ConfigError(format!("{name}={raw} is not a whole number >= {min}"))),
+        _ => Err(ConfigError(format!(
+            "{name}={raw} is not a whole number >= {min}"
+        ))),
     }
 }
 
@@ -241,18 +246,16 @@ pub const UTILITY_EMAIL_DOMAIN: &str = "immich-shared-albums.internal";
 
 /// Domains earlier versions used for bot accounts. Still recognised so a bot made by an older
 /// version stays classified as a bot. Never used for NEW bots.
-pub const LEGACY_UTILITY_DOMAINS: [&str; 2] =
-    ["immich-shared-albums.invalid", "sidecar.local"];
+pub const LEGACY_UTILITY_DOMAINS: [&str; 2] = ["immich-shared-albums.invalid", "sidecar.local"];
 
 /// Is this one of our bot users? The single source of truth — never inline the check. The leading
 /// `@` is required, so a subdomain lookalike is not a match.
 pub fn is_utility_email(email: Option<&str>) -> bool {
-    match email {
-        None => false,
-        Some(email) => std::iter::once(UTILITY_EMAIL_DOMAIN)
-            .chain(LEGACY_UTILITY_DOMAINS)
-            .any(|d| email.ends_with(&format!("@{d}"))),
-    }
+    let Some((_, domain)) = email.and_then(|e| e.rsplit_once('@')) else {
+        return false;
+    };
+    // Allocation-free: this filters every user in every directory poll.
+    domain == UTILITY_EMAIL_DOMAIN || LEGACY_UTILITY_DOMAINS.contains(&domain)
 }
 
 /// One local account per remote person, doing both jobs: it owns their mirrored photos, and it is
@@ -271,9 +274,8 @@ pub mod marker_name {
     /// An invite marker is a DESTINATION you pick in Immich's album picker, so it names the person
     /// and the server the album is going to.
     pub fn person(person_name: &str, peer_name: &str) -> String {
-        let suffix = if peer_name.to_lowercase().ends_with("server")
-            || peer_name.to_lowercase().ends_with("servers")
-        {
+        let peer = peer_name.to_lowercase();
+        let suffix = if peer.ends_with("server") || peer.ends_with("servers") {
             ""
         } else {
             " server"
@@ -311,6 +313,37 @@ pub fn person_name(name: Option<&str>) -> String {
 /// share page probes the ORIGIN's prefix, so it could never be per-install configuration.
 pub const ROUTE_PREFIX: &str = "/immich-shared-albums";
 
+/// A config for tests. `cfg` is a BOOT singleton — installed once, never mutated — so every test
+/// module shares ONE, rather than each installing its own and racing for the OnceLock. That race
+/// was real: whichever module ran first decided the data dir, and a test asserting on 0700
+/// permissions then failed because another module's config had won.
+#[cfg(test)]
+pub fn install_test_config() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        install(Config {
+            immich_url: "http://127.0.0.1:1".into(),
+            api_key: "test".into(),
+            name: "Test household".into(),
+            port: 8300,
+            p2p_port: 8300,
+            data_dir: "/tmp/isa-test-data".into(),
+            sync_poll_ms: 20000,
+            comment_poll_ms: 5000,
+            mirror_album_template: "{name}".into(),
+            cache_max_mb: 0,
+            max_body_kb: 1024,
+            link_join_requires_password: false,
+            bot_quota_mb: 0,
+            trace_sync: false,
+            publish_user_directory: true,
+            relay: true,
+            reconcile_debug: false,
+            test_hooks: false,
+        });
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,21 +360,29 @@ mod tests {
     fn a_port_out_of_range_is_refused_rather_than_wrapped() {
         assert_eq!(parse_port("ISA_PORT", 8300).unwrap(), 8300);
         assert_eq!(parse_port("ISA_PORT", 65535).unwrap(), 65535);
-        assert_eq!(parse_port("ISA_P2P_PORT", 0).unwrap(), 0, "0 means a random port");
+        assert_eq!(
+            parse_port("ISA_P2P_PORT", 0).unwrap(),
+            0,
+            "0 means a random port"
+        );
         let over = parse_port("ISA_PORT", 70000).unwrap_err();
         assert_eq!(over.0, "ISA_PORT=70000 is not a port (highest is 65535)");
     }
 
     #[test]
     fn utility_email_matches_current_and_legacy_domains() {
-        assert!(is_utility_email(Some("person-abc@immich-shared-albums.internal")));
+        assert!(is_utility_email(Some(
+            "person-abc@immich-shared-albums.internal"
+        )));
         assert!(is_utility_email(Some("x@immich-shared-albums.invalid")));
         assert!(is_utility_email(Some("x@sidecar.local")));
     }
 
     #[test]
     fn utility_email_rejects_subdomain_lookalikes_and_humans() {
-        assert!(!is_utility_email(Some("x@evil.immich-shared-albums.internal")));
+        assert!(!is_utility_email(Some(
+            "x@evil.immich-shared-albums.internal"
+        )));
         assert!(!is_utility_email(Some("nan@example.com")));
         assert!(!is_utility_email(None));
     }
@@ -373,38 +414,13 @@ mod tests {
 
     #[test]
     fn marker_name_does_not_stack_server_twice() {
-        assert_eq!(marker_name::person("Bob", "Bob's server"), "Bob (via Bob's server)");
-        assert_eq!(marker_name::person("Nan", "The Smiths"), "Nan (via The Smiths server)");
+        assert_eq!(
+            marker_name::person("Bob", "Bob's server"),
+            "Bob (via Bob's server)"
+        );
+        assert_eq!(
+            marker_name::person("Nan", "The Smiths"),
+            "Nan (via The Smiths server)"
+        );
     }
-}
-
-/// A config for tests. `cfg` is a BOOT singleton — installed once, never mutated — so every test
-/// module shares ONE, rather than each installing its own and racing for the OnceLock. That race
-/// was real: whichever module ran first decided the data dir, and a test asserting on 0700
-/// permissions then failed because another module's config had won.
-#[cfg(test)]
-pub fn install_test_config() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        install(Config {
-            immich_url: "http://127.0.0.1:1".into(),
-            api_key: "test".into(),
-            name: "Test household".into(),
-            port: 8300,
-            p2p_port: 8300,
-            data_dir: "/tmp/isa-test-data".into(),
-            sync_poll_ms: 20000,
-            comment_poll_ms: 5000,
-            mirror_album_template: "{name}".into(),
-            cache_max_mb: 0,
-            max_body_kb: 1024,
-            link_join_requires_password: false,
-            bot_quota_mb: 0,
-            trace_sync: false,
-            publish_user_directory: true,
-            relay: true,
-            reconcile_debug: false,
-            test_hooks: false,
-        });
-    });
 }

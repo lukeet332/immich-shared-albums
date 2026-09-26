@@ -116,7 +116,13 @@ async fn main() {
         }),
     };
 
-    let mapping = st.collections().mappings.iter().find(|m| m.id == "m-probe").cloned().unwrap();
+    let mapping = st
+        .collections()
+        .mappings
+        .iter()
+        .find(|m| m.id == "m-probe")
+        .cloned()
+        .unwrap();
     match materialise_ref(st, &client, &mapping, &peer, &reference).await {
         Ok(true) => {
             let row = st.store.seen_for_mapping("m-probe").unwrap_or_default();

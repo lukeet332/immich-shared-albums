@@ -1,8 +1,5 @@
 /** immich/materialise.rs — making a peer's photo a real row in this household's library. See ARCHITECTURE.md. */
-
-use crate::immich::client::{
-    add_to_album, apply_ref_metadata, stub_jpeg, upload_asset, Client,
-};
+use crate::immich::client::{add_to_album, apply_ref_metadata, stub_jpeg, upload_asset, Client};
 use crate::immich::contributors::ensure_contributor;
 use crate::immich::refs::AssetRef;
 use crate::media::jpeg::jpeg_of_size;
@@ -35,7 +32,10 @@ const CT_EXT: [(&str, &str); 6] = [
 
 fn ext_for_content_type(content_type: &str) -> Option<&'static str> {
     let base = content_type.split(';').next().unwrap_or("").trim();
-    CT_EXT.iter().find(|(ct, _)| *ct == base).map(|(_, ext)| *ext)
+    CT_EXT
+        .iter()
+        .find(|(ct, _)| *ct == base)
+        .map(|(_, ext)| *ext)
 }
 
 /// One flight per ALBUM and photo, not per mapping. The suppression below is album-level, so keying
@@ -55,17 +55,29 @@ pub(crate) async fn fetch_full_original(
     reference: &AssetRef,
     mapping_id: &str,
 ) -> Result<Option<(Vec<u8>, String)>, ()> {
-    let Some(transport) = transport() else { return Ok(None) };
+    let Some(transport) = transport() else {
+        return Ok(None);
+    };
     let path = format!("/assets/{}/original", reference.origin_asset);
-    let (head, body) = match transport.byte_request(peer, &path, None, Some(mapping_id)).await {
+    let (head, body) = match transport
+        .byte_request(peer, &path, None, Some(mapping_id))
+        .await
+    {
         Ok(v) => v,
         Err(e) => {
-            crate::log!("full-copy fetch for {} failed ({e}) — will retry", reference.origin_asset);
+            crate::log!(
+                "full-copy fetch for {} failed ({e}) — will retry",
+                reference.origin_asset
+            );
             return Err(());
         }
     };
     if head.status >= 400 {
-        crate::log!("full-copy fetch for {} answered {} — will retry", reference.origin_asset, head.status);
+        crate::log!(
+            "full-copy fetch for {} answered {} — will retry",
+            reference.origin_asset,
+            head.status
+        );
         return Err(());
     }
     if body.len() > MAX_FULL_BYTES {
@@ -76,7 +88,11 @@ pub(crate) async fn fetch_full_original(
         .as_ref()
         .and_then(|h| h.get("content-type"))
         .and_then(|ct| ext_for_content_type(ct))
-        .unwrap_or(if reference.kind == "video" { "mp4" } else { "jpg" })
+        .unwrap_or(if reference.kind == "video" {
+            "mp4"
+        } else {
+            "jpg"
+        })
         .to_string();
     Ok(Some((body, ext)))
 }
@@ -91,7 +107,11 @@ pub async fn materialise_ref(
     peer: &Peer,
     reference: &AssetRef,
 ) -> Result<bool, String> {
-    if state.store.seen_has(&mapping.id, &reference.checksum).unwrap_or(false) {
+    if state
+        .store
+        .seen_has(&mapping.id, &reference.checksum)
+        .unwrap_or(false)
+    {
         return Ok(true);
     }
     let flight_key = format!("{}:{}", mapping.album_id, reference.checksum);
@@ -116,12 +136,21 @@ async fn materialise_flight(
 ) -> Result<bool, String> {
     // Re-run BOTH checks now the flight is ours: whoever held it may have recorded exactly the row
     // this is looking for, and an album-level duplicate is the one thing it must not miss.
-    if state.store.seen_has(&mapping.id, &reference.checksum).unwrap_or(false) {
+    if state
+        .store
+        .seen_has(&mapping.id, &reference.checksum)
+        .unwrap_or(false)
+    {
         return Ok(true);
     }
-    let rows = state.store.seen_for_checksum(&reference.checksum).unwrap_or_default();
+    let rows = state
+        .store
+        .seen_for_checksum(&reference.checksum)
+        .unwrap_or_default();
     let mappings = state.collections().mappings.clone();
-    if let Some(already) = existing_copy_in_album(&mapping.album_id, &reference.checksum, &mappings, &rows) {
+    if let Some(already) =
+        existing_copy_in_album(&mapping.album_id, &reference.checksum, &mappings, &rows)
+    {
         // Point at the stub the album already has instead of making a second one. The row is
         // recorded for THIS mapping because the version cursor and the deletion sweep both read it:
         // when this mapping's peer stops offering the photo, its sweep retracts the row, and the
@@ -145,7 +174,12 @@ async fn materialise_upload(
     peer: &Peer,
     reference: &AssetRef,
 ) -> Result<bool, String> {
-    let mut ext = if reference.kind == "video" { "mp4" } else { "jpg" }.to_string();
+    let mut ext = if reference.kind == "video" {
+        "mp4"
+    } else {
+        "jpg"
+    }
+    .to_string();
     let mut stored_full = false;
 
     // Default is the hotlink model: nothing of the photo is stored, just a tiny stub the app can
@@ -172,52 +206,69 @@ async fn materialise_upload(
     let bytes = match bytes {
         Some(full) => full,
         None => {
-        let stub = if reference.kind == "video" {
-            // A playable 2 MiB prefix so the tile carries a real poster and duration; the rest
-            // streams on demand.
-            let Some(transport) = transport() else { return Ok(false) };
-            let path = format!("/assets/{}/playback", reference.origin_asset);
-            match transport
-                .byte_request(peer, &path, Some("bytes=0-2097151"), Some(&mapping.id))
-                .await
-            {
-                Ok((head, body)) if head.status < 400 => {
-                    if body.len() > VIDEO_PREFIX_GUARD {
-                        // We asked for 2 MiB; a peer that ignored the range must not cost us heap.
-                        crate::log!("playback stub for {} ignored the range (>4MB) — deferring", reference.origin_asset);
+            let stub = if reference.kind == "video" {
+                // A playable 2 MiB prefix so the tile carries a real poster and duration; the rest
+                // streams on demand.
+                let Some(transport) = transport() else {
+                    return Ok(false);
+                };
+                let path = format!("/assets/{}/playback", reference.origin_asset);
+                match transport
+                    .byte_request(peer, &path, Some("bytes=0-2097151"), Some(&mapping.id))
+                    .await
+                {
+                    Ok((head, body)) if head.status < 400 => {
+                        if body.len() > VIDEO_PREFIX_GUARD {
+                            // We asked for 2 MiB; a peer that ignored the range must not cost us heap.
+                            crate::log!(
+                                "playback stub for {} ignored the range (>4MB) — deferring",
+                                reference.origin_asset
+                            );
+                            return Ok(false);
+                        }
+                        let _ = VIDEO_PREFIX_BYTES;
+                        body
+                    }
+                    Ok((head, _)) => {
+                        crate::log!(
+                            "playback stub fetch failed for {}: {}",
+                            reference.origin_asset,
+                            head.status
+                        );
                         return Ok(false);
                     }
-                    let _ = VIDEO_PREFIX_BYTES;
-                    body
+                    Err(e) => {
+                        crate::log!(
+                            "playback stub fetch error for {}: {e}",
+                            reference.origin_asset
+                        );
+                        return Ok(false);
+                    }
                 }
-                Ok((head, _)) => {
-                    crate::log!("playback stub fetch failed for {}: {}", reference.origin_asset, head.status);
-                    return Ok(false);
+            } else {
+                // Size the stub to the origin's aspect ratio so Immich lays the mirror out correctly (the
+                // grid tile's shape and the viewer's box). A ref from an older peer carries no dimensions,
+                // so it falls back to the legacy 1x1 stub.
+                match reference
+                    .exif
+                    .as_ref()
+                    .and_then(|e| Some((e.width?, e.height?)))
+                {
+                    Some((w, h)) => jpeg_of_size(w as f64, h as f64),
+                    None => stub_jpeg(),
                 }
-                Err(e) => {
-                    crate::log!("playback stub fetch error for {}: {e}", reference.origin_asset);
-                    return Ok(false);
-                }
-            }
-        } else {
-            // Size the stub to the origin's aspect ratio so Immich lays the mirror out correctly (the
-            // grid tile's shape and the viewer's box). A ref from an older peer carries no dimensions,
-            // so it falls back to the legacy 1x1 stub.
-            match reference.exif.as_ref().and_then(|e| Some((e.width?, e.height?))) {
-                Some((w, h)) => jpeg_of_size(w as f64, h as f64),
-                None => stub_jpeg(),
-            }
-        };
-        // The random tail keeps each stub a DISTINCT asset: Immich dedupes identical bytes per user.
-        let mut with_tail = stub;
-        let mut tail = [0u8; 8];
-        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut tail);
-        with_tail.extend_from_slice(&tail);
-        with_tail
+            };
+            // The random tail keeps each stub a DISTINCT asset: Immich dedupes identical bytes per user.
+            let mut with_tail = stub;
+            let mut tail = [0u8; 8];
+            rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut tail);
+            with_tail.extend_from_slice(&tail);
+            with_tail
         }
     };
 
-    let uploaded_id = upload_as_contributor(state, client, mapping, peer, reference, &bytes, &ext).await?;
+    let uploaded_id =
+        upload_as_contributor(state, client, mapping, peer, reference, &bytes, &ext).await?;
     let _ = state.store.seen_add(
         &mapping.id,
         &reference.checksum,
@@ -227,7 +278,11 @@ async fn materialise_upload(
     );
     crate::log!(
         "materialised {} ref from \"{}\" into \"{}\"",
-        if stored_full { "full copy of" } else { "stub for" },
+        if stored_full {
+            "full copy of"
+        } else {
+            "stub for"
+        },
         contributor_display_name(peer, reference),
         mapping.album_name
     );
@@ -259,10 +314,13 @@ pub(crate) async fn upload_as_contributor(
     // `None` is legitimate and means the HOUSEHOLD key: `hostSlug` names a stand-in only on a
     // MIRROR, so an owner mapping — this household's own album, owned by a human — has none. The
     // TypeScript treats a missing host key the same way, by letting its default (admin) key apply.
-    let host_key = mapping
-        .host_slug
-        .as_ref()
-        .and_then(|slug| state.collections().contributors.get(slug).and_then(|c| c.api_key.clone()));
+    let host_key = mapping.host_slug.as_ref().and_then(|slug| {
+        state
+            .collections()
+            .contributors
+            .get(slug)
+            .and_then(|c| c.api_key.clone())
+    });
 
     // On an INVITATION album a human already added the people they chose — their membership IS the
     // share. So for an invited person we must never add them: if they are missing, that absence is
@@ -298,7 +356,9 @@ pub(crate) async fn upload_as_contributor(
     )
     .await?;
     let Some(contributor_key) = contributor.api_key.clone() else {
-        return Err(format!("contributor \"{display_name}\" has no API key yet — will retry"));
+        return Err(format!(
+            "contributor \"{display_name}\" has no API key yet — will retry"
+        ));
     };
 
     // Base64 checksums contain `/` and `+` — never let them into filenames.
@@ -309,16 +369,31 @@ pub(crate) async fn upload_as_contributor(
         .take(12)
         .collect();
     let filename = format!("shared-{slug}.{ext}");
-    let uploaded = upload_asset(client, bytes, &filename, &contributor_key, reference.taken_at.as_deref())
-        .await
-        .map_err(|e| e.message())?;
-    let Some(uploaded_id) = uploaded.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+    let uploaded = upload_asset(
+        client,
+        bytes,
+        &filename,
+        &contributor_key,
+        reference.taken_at.as_deref(),
+    )
+    .await
+    .map_err(|e| e.message())?;
+    let Some(uploaded_id) = uploaded
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+    else {
         return Err(format!("upload of {filename} returned no asset id"));
     };
 
-    add_to_album(client, &mapping.album_id, &[uploaded_id.clone()], &contributor_key)
-        .await
-        .map_err(|e| e.message())?;
+    add_to_album(
+        client,
+        &mapping.album_id,
+        std::slice::from_ref(&uploaded_id),
+        &contributor_key,
+    )
+    .await
+    .map_err(|e| e.message())?;
     apply_ref_metadata(client, &uploaded_id, reference, &contributor_key).await;
     Ok(uploaded_id)
 }
@@ -339,15 +414,24 @@ pub async fn upgrade_stub_to_full(
     reference: &AssetRef,
     stub_asset_id: &str,
 ) -> Result<bool, String> {
-    let Some((bytes, ext)) = fetch_full_original(peer, reference, &mapping.id).await.map_err(|()| {
-        format!("could not fetch the original of {} — will retry", reference.origin_asset)
-    })? else {
+    let Some((bytes, ext)) = fetch_full_original(peer, reference, &mapping.id)
+        .await
+        .map_err(|()| {
+            format!(
+                "could not fetch the original of {} — will retry",
+                reference.origin_asset
+            )
+        })?
+    else {
         return Ok(false);
     };
-    let uploaded_id = upload_as_contributor(state, client, mapping, peer, reference, &bytes, &ext).await?;
+    let uploaded_id =
+        upload_as_contributor(state, client, mapping, peer, reference, &bytes, &ext).await?;
     // REMOVE FIRST: `seen_add` ignores a row the stub already wrote, so without this the ledger keeps
     // pointing at the stub and every cycle retries the same upgrade.
-    let _ = state.store.seen_remove_entry(&mapping.id, &reference.checksum);
+    let _ = state
+        .store
+        .seen_remove_entry(&mapping.id, &reference.checksum);
     let _ = state.store.seen_add(
         &mapping.id,
         &reference.checksum,
@@ -355,7 +439,9 @@ pub async fn upgrade_stub_to_full(
         Some(&reference.origin_asset),
         true,
     );
-    crate::immich::materialise::delete_proxy_asset(state, client, stub_asset_id).await.ok();
+    crate::immich::materialise::delete_proxy_asset(state, client, stub_asset_id)
+        .await
+        .ok();
     Ok(true)
 }
 
@@ -386,10 +472,20 @@ pub async fn delete_proxy_asset(
     let mut seen_by_admin = false;
     let mut owner_id = String::new();
 
-    match client.get(&format!("/assets/{asset_id}"), &crate::immich::client::Auth::Admin).await {
+    match client
+        .get(
+            &format!("/assets/{asset_id}"),
+            &crate::immich::client::Auth::Admin,
+        )
+        .await
+    {
         Ok(Some(asset)) => {
             seen_by_admin = true;
-            owner_id = asset.get("ownerId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            owner_id = asset
+                .get("ownerId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
         }
         Ok(None) => {}
         // A 4xx means the admin cannot see it, which is the expected case for a stand-in's asset:
@@ -410,9 +506,19 @@ pub async fn delete_proxy_asset(
     if !seen_by_admin {
         // The admin cannot see it. Exactly one stand-in owns it; find the one that can.
         for (_, key) in &stand_ins {
-            match client.get(&format!("/assets/{asset_id}"), &crate::immich::client::Auth::Key(key)).await {
+            match client
+                .get(
+                    &format!("/assets/{asset_id}"),
+                    &crate::immich::client::Auth::Key(key),
+                )
+                .await
+            {
                 Ok(Some(asset)) => {
-                    owner_id = asset.get("ownerId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    owner_id = asset
+                        .get("ownerId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
                     break;
                 }
                 Ok(None) => {}
@@ -460,7 +566,10 @@ mod tests {
         assert_eq!(ext_for_content_type("image/jpeg"), Some("jpg"));
         assert_eq!(ext_for_content_type("video/mp4"), Some("mp4"));
         // A charset parameter must not defeat the match.
-        assert_eq!(ext_for_content_type("image/jpeg; charset=binary"), Some("jpg"));
+        assert_eq!(
+            ext_for_content_type("image/jpeg; charset=binary"),
+            Some("jpg")
+        );
         assert_eq!(ext_for_content_type("application/octet-stream"), None);
         assert_eq!(ext_for_content_type(""), None);
     }

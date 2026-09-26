@@ -50,7 +50,12 @@ fn subscribers() -> &'static Mutex<HashMap<u64, UnboundedSender<PanelEvent>>> {
 /// How many panels are listening. The rig asserts a panel is connected before it changes anything,
 /// so a passing test cannot be one that had nobody to notify.
 pub fn panel_count() -> usize {
-    subscribers().lock().map(|s| s.len()).unwrap_or(0)
+    // A POISONED lock is not an empty channel: it means a subscriber panicked mid-dispatch, and the
+    // set behind it is still perfectly usable — so the guard is recovered rather than read as 0.
+    subscribers()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .len()
 }
 
 pub fn hints_emitted() -> u64 {
@@ -74,24 +79,19 @@ impl Subscription {
 
 impl Drop for Subscription {
     fn drop(&mut self) {
-        if let Ok(mut open) = subscribers().lock() {
-            open.remove(&self.id);
-            crate::log!("panel stopped following events ({} open)", open.len());
-        }
+        let mut open = subscribers().lock().unwrap_or_else(|p| p.into_inner());
+        open.remove(&self.id);
+        crate::log!("panel stopped following events ({} open)", open.len());
     }
 }
 
 pub fn subscribe() -> Subscription {
     let (sender, events) = unbounded_channel();
     let id = NEXT_SUBSCRIPTION_ID.fetch_add(1, Ordering::Relaxed);
-    let open = match subscribers().lock() {
-        Ok(mut open) => {
-            open.insert(id, sender);
-            open.len()
-        }
-        Err(_) => 0,
-    };
-    crate::log!("panel following events ({open} open)");
+    let mut open = subscribers().lock().unwrap_or_else(|p| p.into_inner());
+    open.insert(id, sender);
+    let count = open.len();
+    crate::log!("panel following events ({count} open)");
     Subscription { id, events }
 }
 
@@ -99,16 +99,15 @@ pub fn subscribe() -> Subscription {
 pub fn emit(event: PanelEvent) {
     HINTS_EMITTED.fetch_add(1, Ordering::Relaxed);
     // ONE acquisition, and the guard is released before the log: taking this lock twice in one call
-    // is the shape that has deadlocked this port before.
-    let watching = match subscribers().lock() {
-        Ok(open) => {
-            for sender in open.values() {
-                // A closed socket is not the emitter's problem; its drop unsubscribes it.
-                let _ = sender.send(event);
-            }
-            open.len()
+    // is the shape that has deadlocked this port before. The guard is recovered from poison rather
+    // than dropped: a subscriber panicking mid-dispatch does not unsign the others.
+    let watching = {
+        let open = subscribers().lock().unwrap_or_else(|p| p.into_inner());
+        for sender in open.values() {
+            // A closed socket is not the emitter's problem; its drop unsubscribes it.
+            let _ = sender.send(event);
         }
-        Err(_) => return,
+        open.len()
     };
     if watching > 0 {
         crate::log!("panel hint \"{}\" → {watching} watching", event.as_str());
@@ -141,14 +140,24 @@ mod tests {
             "and so does the second"
         );
         drop(first);
-        assert_eq!(panel_count(), baseline + 1, "dropping a panel unsubscribes it");
+        assert_eq!(
+            panel_count(),
+            baseline + 1,
+            "dropping a panel unsubscribes it"
+        );
         emit(PanelEvent::Index);
-        assert_eq!(futures_lite::future::block_on(second.next()), Some(PanelEvent::Index));
+        assert_eq!(
+            futures_lite::future::block_on(second.next()),
+            Some(PanelEvent::Index)
+        );
     }
 
     #[test]
     fn the_wire_names_are_the_only_ones_parse_accepts() {
-        assert_eq!(PanelEvent::parse("invitations"), Some(PanelEvent::Invitations));
+        assert_eq!(
+            PanelEvent::parse("invitations"),
+            Some(PanelEvent::Invitations)
+        );
         assert_eq!(PanelEvent::parse("index"), Some(PanelEvent::Index));
         assert_eq!(PanelEvent::parse("shares"), Some(PanelEvent::Shares));
         assert_eq!(PanelEvent::parse("albums"), None);

@@ -110,6 +110,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn a_row_from_a_mapping_of_ANOTHER_album_does_not_suppress() {
         // The same photo in two different albums is the ordinary case, not a duplicate.
         let found = existing_copy_in_album(
@@ -122,6 +123,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn a_row_from_a_DEAD_mapping_of_the_same_album_does_not_suppress() {
         let found = existing_copy_in_album(
             "album-1",
@@ -145,7 +147,8 @@ mod tests {
 
     #[test]
     fn with_no_rows_nothing_is_suppressed() {
-        let found = existing_copy_in_album("album-1", "summer.jpg", &[mapping("m1", "album-1")], &[]);
+        let found =
+            existing_copy_in_album("album-1", "summer.jpg", &[mapping("m1", "album-1")], &[]);
         assert!(found.is_none());
     }
 
@@ -155,7 +158,12 @@ mod tests {
         // full local copy rather than silently becoming a stub.
         let mut full = row("m1", "summer.jpg");
         full.stored_full = true;
-        let found = existing_copy_in_album("album-1", "summer.jpg", &[mapping("m1", "album-1")], &[full]);
+        let found = existing_copy_in_album(
+            "album-1",
+            "summer.jpg",
+            &[mapping("m1", "album-1")],
+            &[full],
+        );
         assert!(found.unwrap().stored_full);
     }
 }

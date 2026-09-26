@@ -43,7 +43,9 @@ impl Settings {
             .unwrap_or(DEFAULT_TTL_MINUTES);
         Settings {
             // Default ON: absent is not "off".
-            share_link_join: get("shareLinkJoin").and_then(|v| v.as_bool()).unwrap_or(true),
+            share_link_join: get("shareLinkJoin")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
             pairing_ttl_minutes: ttl,
             store_shared_assets_locally: get("storeSharedAssetsLocally")
                 .and_then(|v| v.as_bool())
@@ -106,7 +108,10 @@ mod tests {
                 &serde_json::json!({"pairingTtlMinutes": 99999, "shareLinkJoin": true}),
             )
             .unwrap();
-        assert_eq!(Settings::read(&store).pairing_ttl_minutes, DEFAULT_TTL_MINUTES);
+        assert_eq!(
+            Settings::read(&store).pairing_ttl_minutes,
+            DEFAULT_TTL_MINUTES
+        );
         assert!(Settings::ttl_is_valid(5));
         assert!(Settings::ttl_is_valid(1440));
         assert!(!Settings::ttl_is_valid(4));

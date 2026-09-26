@@ -14,10 +14,16 @@ async fn main() {
     let st = state::state();
     let client = Client::new();
     immich_shared_albums::p2p::transport::install(
-        Transport::start(immich_shared_albums::p2p::routes::handler()).await.expect("transport"),
+        Transport::start(immich_shared_albums::p2p::routes::handler())
+            .await
+            .expect("transport"),
     );
 
-    let before = st.store.seen_for_mapping("m-seeded").map(|r| r.len()).unwrap_or(0);
+    let before = st
+        .store
+        .seen_for_mapping("m-seeded")
+        .map(|r| r.len())
+        .unwrap_or(0);
     let stub = st
         .store
         .seen_for_mapping("m-seeded")
@@ -57,34 +63,57 @@ async fn main() {
         )
         .await
         .expect("upload stub as the stand-in");
-        let asset_id = asset.get("id").and_then(|v| v.as_str()).expect("asset id").to_string();
+        let asset_id = asset
+            .get("id")
+            .and_then(|v| v.as_str())
+            .expect("asset id")
+            .to_string();
         if let Some(album) = &album_id {
             immich_shared_albums::immich::client::add_to_album(
                 &client,
                 album,
-                &[asset_id.clone()],
+                std::slice::from_ref(&asset_id),
                 &host_key,
             )
             .await
             .expect("file the stub into the mirror");
         }
         st.store
-            .seen_add("m-seeded", "seeded-checksum", &asset_id, Some("origin-asset"), false)
+            .seen_add(
+                "m-seeded",
+                "seeded-checksum",
+                &asset_id,
+                Some("origin-asset"),
+                false,
+            )
             .expect("record the ledger row");
         println!("(seeded a stub owned by the host stand-in: {asset_id})");
     }
 
-    let before = st.store.seen_for_mapping("m-seeded").map(|r| r.len()).unwrap_or(0);
+    let before = st
+        .store
+        .seen_for_mapping("m-seeded")
+        .map(|r| r.len())
+        .unwrap_or(0);
 
     let outcome = leave_album(st, &client, "m-seeded", true).await;
-    let after_ledger = st.store.seen_for_mapping("m-seeded").map(|r| r.len()).unwrap_or(0);
+    let after_ledger = st
+        .store
+        .seen_for_mapping("m-seeded")
+        .map(|r| r.len())
+        .unwrap_or(0);
 
     // Can the stub still be read? The admin key proves nothing on its own — Immich scopes reads per
     // credential, so an asset owned by a stand-in 404s to the admin whether or not it exists. Ask
     // EVERY credential we hold and report which ones see it.
     let mut readable_by: Vec<String> = Vec::new();
     if let Some(id) = &stub {
-        if client.get(&format!("/assets/{id}"), &Auth::Admin).await.map(|v| v.is_some()).unwrap_or(false) {
+        if client
+            .get(&format!("/assets/{id}"), &Auth::Admin)
+            .await
+            .map(|v| v.is_some())
+            .unwrap_or(false)
+        {
             readable_by.push("admin".to_string());
         }
         // COLLECTED FIRST: the `collections()` guard must not be held across the reads below, which

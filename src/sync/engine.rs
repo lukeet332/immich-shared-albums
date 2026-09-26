@@ -7,7 +7,8 @@ use crate::p2p::frame::RequestHeader;
 use crate::p2p::transport::transport;
 use crate::state::State;
 use crate::store::{Mapping, Peer, Role};
-use crate::sync::peer_mapping_id::peer_album_mapping_id;
+use crate::sync::peer_mapping_id::{peer_album_mapping_id, peer_of, remote_target, short_id};
+use crate::sync::sweeps::SetEntryGuard;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -28,12 +29,13 @@ pub fn push_failures() -> &'static Mutex<HashMap<String, u32>> {
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The credential that reads this mapping's local album.
-///
-/// A member mirror is owned by the stand-in for the ORIGIN's album owner, so the admin key may not
-/// be a member and Immich refuses it. An owner mapping IS this household's album, so the admin key
-/// is the correct one there. Returning `None` for a member mapping with no host key is deliberate:
-/// falling back to the admin key would reproduce the exact refusal this exists to avoid.
+/// How stale the user table `users_by_id` serves may be, per lane. The WATCHER tolerates a
+/// minute-old table: it decides per cycle, so an account it misses is corrected on the next tick.
+/// The fast lanes (comments, invite targets) run seconds-level and pay ten seconds, so a
+/// stand-in provisioned moments ago is still seen without re-reading Immich every tick.
+pub const USER_MAP_MAX_AGE_MS: i64 = 60_000;
+/// The fast-lane counterpart — see `USER_MAP_MAX_AGE_MS`.
+pub const USER_MAP_MAX_AGE_FAST_MS: i64 = 10_000;
 
 /// What a push achieved. `in_sync` is true when every ref landed, which is the WATCHER's cue to
 /// store the version it read — not this function's, because a caller that has not read a version
@@ -151,7 +153,7 @@ pub async fn push_album_refs(
         );
     }
 
-    let users = crate::immich::client::users_by_id(client, 60_000).await;
+    let users = crate::immich::client::users_by_id(client, USER_MAP_MAX_AGE_MS).await;
     let ledger = crate::p2p::protocol::ledger_of_state();
     let (fresh, awaiting_shape) =
         refs::shareable_assets(state, &assets, &users, ledger, &mapping.id);
@@ -242,7 +244,7 @@ pub async fn push_album_refs(
                     "peer answered 404 to {n} pushes in a row — it no longer has this album"
                 ));
                 counts.remove(&mapping.id);
-            } else if *n == 1 || *n % 10 == 0 {
+            } else if *n == 1 || (*n).is_multiple_of(10) {
                 crate::log!(
                     "ref push to \"{}\" failed: {}{}",
                     peer.name,
@@ -267,36 +269,9 @@ pub async fn push_album_refs(
     }
 
     if let Some(reason) = retire {
+        // THE SURVIVOR WRITES THE TRAIL — the owner half (bot + audit line) lives inside
+        // `retire_dead_share`, the one place that marks a share ended.
         retire_dead_share(state, client, mapping, peer, &reason).await;
-        // THE SURVIVOR WRITES THE TRAIL. This side still owns the album and can put the bot on it;
-        // the other side cannot be written to at all once its link is gone, and the albums we held
-        // for this share are being deleted around this very line. The reason says what we OBSERVED
-        // — gone, unlinked, or a sidecar that died all look alike from here.
-        if mapping.role == Role::Owner {
-            let bot_added = crate::sync::house_bot::add_house_bot_to_album_as(
-                state,
-                client,
-                &mapping.album_id,
-                &crate::immich::client::Auth::Admin,
-            )
-            .await;
-            if let Err(e) = bot_added {
-                crate::log!("could not put the bot on \"{}\" to record a share ending: {e}", mapping.album_name);
-            } else {
-                crate::sync::audit::audit_line(
-                    state,
-                    client,
-                    &mapping.id,
-                    &mapping.album_id,
-                    &format!("share-ended:{}", mapping.id),
-                    &format!(
-                        "\"{}\" stopped responding — this album is no longer shared with them.",
-                        peer.name
-                    ),
-                )
-                .await;
-            }
-        }
     }
     if push_failed {
         return Ok(PushOutcome { in_sync: false });
@@ -352,80 +327,6 @@ pub fn record_manifest_offered(state: &State, mapping_id: &str, manifest: &[Asse
     record_offered_refs(state, mapping_id, manifest);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_batch_stays_under_the_receivers_body_cap() {
-        // 400 refs at ~1.5KB each is well under the default 1 MiB frame, and protocol 2 has no way
-        // to signal "split and resend" — so the split has to happen here.
-        assert_eq!(PUSH_BATCH, 400);
-        assert!(
-            PUSH_BATCH * 2048 < 1024 * 1024,
-            "a full batch must fit an ISA_MAX_BODY_KB frame"
-        );
-    }
-
-    #[test]
-    fn a_404_is_tolerated_for_a_while_and_then_retires() {
-        // A 404 is transient by protocol — the member's mirror may not exist yet. Twenty in a row
-        // is not transient.
-        assert_eq!(PUSH_404_DEAD_AFTER, 20);
-        assert!(
-            PUSH_404_DEAD_AFTER > 1,
-            "one 404 must not retire a live share"
-        );
-    }
-
-    fn users_of(rows: &[(&str, bool)]) -> crate::immich::client::USERS {
-        rows.iter()
-            .map(|(id, utility)| {
-                (
-                    id.to_string(),
-                    crate::immich::client::UserInfo {
-                        name: id.to_string(),
-                        utility: *utility,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    fn album_with_members(ids: &[&str]) -> serde_json::Value {
-        serde_json::json!({
-            "albumUsers": ids.iter().map(|id| serde_json::json!({ "user": { "id": id } })).collect::<Vec<_>>()
-        })
-    }
-
-    #[test]
-    fn a_stand_in_left_alone_is_not_a_native_leave() {
-        // The stand-in IS the membership the sidecar created; counting it as a person would make
-        // every mirror look occupied for ever, or (worse) freed the moment a human left and took the
-        // stand-in's row with it.
-        let album = album_with_members(&["stand-in"]);
-        let users = users_of(&[("stand-in", true)]);
-        assert_eq!(human_members(&album, &users), 0);
-    }
-
-    #[test]
-    fn one_real_person_still_there_is_not_a_leave() {
-        let album = album_with_members(&["stand-in", "human"]);
-        let users = users_of(&[("stand-in", true), ("human", false)]);
-        assert_eq!(human_members(&album, &users), 1);
-    }
-
-    #[test]
-    fn an_unknown_member_id_never_makes_the_album_look_empty() {
-        // The user map is a minute stale at worst, and a brand-new account is the one thing it can
-        // miss. Acting on that would delete a mirror someone is still looking at — so only a KNOWN
-        // member list may be read as "0 humans", which is what `member_list_is_known` gates.
-        assert!(!member_list_is_known(&serde_json::json!({ "assetCount": 2 })));
-        assert!(!member_list_is_known(&serde_json::json!({ "albumUsers": null })));
-        assert!(member_list_is_known(&album_with_members(&[])));
-    }
-}
-
 /// Per-mapping mutex: the join-time reconcile is fired unawaited and can race the interval loop —
 /// both would materialise the same "missing" refs, and stubs are unique bytes, so Immich cannot
 /// dedup the collision into one asset.
@@ -447,13 +348,7 @@ pub async fn reconcile_once(state: &State, client: &Client) {
         .cloned()
         .collect();
     for mapping in members {
-        let Some(peer) = state
-            .collections()
-            .peers
-            .iter()
-            .find(|p| p.pub_key == mapping.peer)
-            .cloned()
-        else {
+        let Some(peer) = peer_of(state, &mapping.peer) else {
             continue;
         };
         if let Err(e) = reconcile_mapping(state, client, &mapping, &peer, false).await {
@@ -471,16 +366,14 @@ pub async fn reconcile_mapping(
     peer: &Peer,
     force: bool,
 ) -> Result<(), String> {
-    {
-        let mut set = reconciling().lock().unwrap();
-        if set.contains(&mapping.id) {
-            return Ok(());
-        }
-        set.insert(mapping.id.clone());
-    }
-    let result = reconcile_inner(state, client, mapping, peer, force).await;
-    reconciling().lock().unwrap().remove(&mapping.id);
-    result
+    // HELD ACROSS the whole body, deliberately: bound inside a block that closed before the work,
+    // the guard released the id before `reconcile_inner` even started and the overlap guard
+    // covered nothing. Holding it across this `.await` is safe — the guard carries no std lock
+    // here, it re-locks on drop.
+    let Some(_reconciling) = SetEntryGuard::claim(reconciling(), &mapping.id) else {
+        return Ok(());
+    };
+    reconcile_inner(state, client, mapping, peer, force).await
 }
 
 async fn reconcile_inner(
@@ -490,14 +383,9 @@ async fn reconcile_inner(
     peer: &Peer,
     force: bool,
 ) -> Result<(), String> {
-    let target = mapping
-        .remote_mapping_id
-        .clone()
-        .or_else(|| mapping.remote_album_id.clone())
-        .unwrap_or_default();
-    if target.is_empty() {
+    let Some(target) = remote_target(mapping) else {
         return Err(format!("no remote album id for \"{}\"", mapping.album_name));
-    }
+    };
     let Some(transport) = transport() else {
         return Err("the peer transport is not running".to_string());
     };
@@ -654,7 +542,7 @@ async fn reconcile_inner(
                 all_ok = false;
                 crate::log!(
                     "reconcile materialise failed ({}): {e}",
-                    &reference.checksum[..reference.checksum.len().min(10)]
+                    short_id(&reference.checksum)
                 );
             }
         }
@@ -718,7 +606,7 @@ async fn reconcile_inner(
                 Err(e) => {
                     crate::log!(
                         "description refresh failed for {}: {e}",
-                        &entry.local_asset[..8.min(entry.local_asset.len())]
+                        short_id(&entry.local_asset)
                     );
                     all_ok = false; // the cursor must not advance past a refresh that did not land
                 }
@@ -820,7 +708,7 @@ async fn last_human_left(client: &Client, album: &Value) -> bool {
     if !member_list_is_known(album) {
         return false;
     }
-    let users = crate::immich::client::users_by_id(client, 60_000).await;
+    let users = crate::immich::client::users_by_id(client, USER_MAP_MAX_AGE_MS).await;
     human_members(album, &users) == 0
 }
 
@@ -899,40 +787,30 @@ async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Res
     // cycle, so deferred refs keep re-offering rather than being silently written off. One blind
     // spot: a member deleting their own CONTRIBUTION from their library removes it from the album
     // WITHOUT bumping `updatedAt` (Immich bumps on album edits, not on library deletes), so the
-    // version alone never re-offers. The album's own asset count is the cheap tell — a mirror holds
-    // origin stubs (ledger rows) plus this household's contributions (offered rows), so a count
-    // that shrank below what we still account for means something left, and the push below
-    // computes the real diff.
-    let expected_assets = state
-        .store
-        .seen_for_mapping(&mapping.id)
-        .map(|r| r.len())
-        .unwrap_or(0)
-        + state.store.offered_count(&mapping.id).unwrap_or(0);
+    // version alone never re-offers. The album's own asset count is the cheap tell — see
+    // `album_is_unchanged` for what the count is compared against.
+    let stubs = state.store.seen_origin_count(&mapping.id).unwrap_or(0);
+    let contributions = state.store.offered_count(&mapping.id).unwrap_or(0);
     let album_count = album
         .get("assetCount")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
-    if let Some(updated_at) = updated_at.as_deref() {
-        if mapping.local_version.as_deref() == Some(updated_at) && album_count >= expected_assets {
-            return Ok(());
-        }
+    if album_is_unchanged(
+        mapping.local_version.as_deref(),
+        updated_at.as_deref(),
+        album_count,
+        stubs,
+        contributions,
+    ) {
+        return Ok(());
     }
 
-    if mapping.role == Role::Member {
-        // View-only: nothing to push.
-        if mapping.permissions == "view" {
-            return Ok(());
-        }
+    // View-only: nothing to push.
+    if mapping.role == Role::Member && mapping.permissions == "view" {
+        return Ok(());
     }
 
-    let Some(peer) = state
-        .collections()
-        .peers
-        .iter()
-        .find(|p| p.pub_key == mapping.peer)
-        .cloned()
-    else {
+    let Some(peer) = peer_of(state, &mapping.peer) else {
         return Ok(()); // no peer record: nothing to push to
     };
 
@@ -954,6 +832,26 @@ async fn watch_mapping(state: &State, client: &Client, mapping: &Mapping) -> Res
     Ok(())
 }
 
+/// The watcher's unchanged-album handshake, as a pure function so the accounting it rests on can
+/// be tested directly.
+///
+/// A mirror album holds two kinds of photo, each recorded in its own ledger: ORIGIN STUBS (ledger
+/// rows naming a source — `seen` rows whose `originAsset` is set) and THIS HOUSEHOLD'S
+/// CONTRIBUTIONS (the `offered` rows). Pushed contributions are ALSO written into `seen` (with no
+/// origin), so counting all of `seen` plus `offered` would double them and the skip would never
+/// fire for any album that ever carried a contribution — every tick paying a full asset read. A
+/// count BELOW what we still account for means something left the album without bumping
+/// `updatedAt`; the push then computes the real diff.
+fn album_is_unchanged(
+    local_version: Option<&str>,
+    updated_at: Option<&str>,
+    album_count: usize,
+    stubs: usize,
+    contributions: usize,
+) -> bool {
+    local_version == updated_at && album_count >= stubs + contributions
+}
+
 /// The watch loop: `ISA_SYNC_POLL_MS` between passes, guarded against overlapping itself.
 pub fn start_watch_loop(state: Arc<crate::state::State>) {
     let period = std::time::Duration::from_millis(crate::config::cfg().sync_poll_ms);
@@ -973,4 +871,103 @@ pub fn start_watch_loop(state: Arc<crate::state::State>) {
             crate::sync::sweeps::finish_sweep("watch");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_handshake_counts_stubs_and_contributions_not_every_ledger_row() {
+        // A mirror with 2 stubs and 3 contributions holds 5 photos. Counting every `seen` row
+        // (stubs PLUS the 3 pushed contributions, also recorded there) double-counted and the
+        // skip never fired for an album that ever carried a contribution.
+        let version = Some("2026-01-01T00:00:00.000Z");
+        assert!(album_is_unchanged(version, version, 5, 2, 3));
+        // Below what we still account for: something left without a version bump — no skip.
+        assert!(!album_is_unchanged(version, version, 4, 2, 3));
+        // Above is fine: the album grew but `updatedAt` did not move (e.g. our own push landed
+        // between reads) — the push below would find nothing fresh anyway.
+        assert!(album_is_unchanged(version, version, 6, 2, 3));
+        // The version gate stands on its own: a moved version is never a skip.
+        assert!(!album_is_unchanged(Some("earlier"), version, 5, 2, 3));
+        assert!(!album_is_unchanged(None, version, 5, 2, 3));
+    }
+
+    #[test]
+    // Both are consts, so clippy folds the comparison; the assertion is still the contract.
+    #[allow(clippy::assertions_on_constants)]
+    fn a_batch_stays_under_the_receivers_body_cap() {
+        // 400 refs at ~1.5KB each is well under the default 1 MiB frame, and protocol 2 has no way
+        // to signal "split and resend" — so the split has to happen here.
+        assert_eq!(PUSH_BATCH, 400);
+        assert!(
+            PUSH_BATCH * 2048 < 1024 * 1024,
+            "a full batch must fit an ISA_MAX_BODY_KB frame"
+        );
+    }
+
+    #[test]
+    // Both are consts, so clippy folds the comparison; the assertion is still the contract.
+    #[allow(clippy::assertions_on_constants)]
+    fn a_404_is_tolerated_for_a_while_and_then_retires() {
+        // A 404 is transient by protocol — the member's mirror may not exist yet. Twenty in a row
+        // is not transient.
+        assert_eq!(PUSH_404_DEAD_AFTER, 20);
+        assert!(
+            PUSH_404_DEAD_AFTER > 1,
+            "one 404 must not retire a live share"
+        );
+    }
+
+    fn users_of(rows: &[(&str, bool)]) -> crate::immich::client::USERS {
+        rows.iter()
+            .map(|(id, utility)| {
+                (
+                    id.to_string(),
+                    crate::immich::client::UserInfo {
+                        name: id.to_string(),
+                        utility: *utility,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn album_with_members(ids: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "albumUsers": ids.iter().map(|id| serde_json::json!({ "user": { "id": id } })).collect::<Vec<_>>()
+        })
+    }
+
+    #[test]
+    fn a_stand_in_left_alone_is_not_a_native_leave() {
+        // The stand-in IS the membership the sidecar created; counting it as a person would make
+        // every mirror look occupied for ever, or (worse) freed the moment a human left and took the
+        // stand-in's row with it.
+        let album = album_with_members(&["stand-in"]);
+        let users = users_of(&[("stand-in", true)]);
+        assert_eq!(human_members(&album, &users), 0);
+    }
+
+    #[test]
+    fn one_real_person_still_there_is_not_a_leave() {
+        let album = album_with_members(&["stand-in", "human"]);
+        let users = users_of(&[("stand-in", true), ("human", false)]);
+        assert_eq!(human_members(&album, &users), 1);
+    }
+
+    #[test]
+    fn an_unknown_member_id_never_makes_the_album_look_empty() {
+        // The user map is a minute stale at worst, and a brand-new account is the one thing it can
+        // miss. Acting on that would delete a mirror someone is still looking at — so only a KNOWN
+        // member list may be read as "0 humans", which is what `member_list_is_known` gates.
+        assert!(!member_list_is_known(
+            &serde_json::json!({ "assetCount": 2 })
+        ));
+        assert!(!member_list_is_known(
+            &serde_json::json!({ "albumUsers": null })
+        ));
+        assert!(member_list_is_known(&album_with_members(&[])));
+    }
 }

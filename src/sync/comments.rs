@@ -6,10 +6,11 @@ use crate::p2p::frame::RequestHeader;
 use crate::p2p::transport::transport;
 use crate::state::State;
 use crate::store::{Mapping, Peer, Role};
+use crate::sync::host_keys::host_key_of;
 use crate::sync::house_bot::ensure_house_bot;
-use crate::sync::peer_mapping_id::peer_album_mapping_id;
+use crate::sync::peer_mapping_id::{peer_album_mapping_id, peer_of, remote_target};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 /// The credential that can read an album's activity.
 ///
@@ -17,11 +18,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// invited human, so the sidecar's own admin may not be a member at all and Immich answers
 /// `400 Not found or no album.read access` on every poll. The mirror-owning stand-in always has
 /// access, because it owns the album. An owner mapping keeps the household key.
-fn album_reader_auth(state: &State, mapping: &Mapping) -> Result<crate::immich::access::MappingAuth, String> {
+fn album_reader_auth(
+    state: &State,
+    mapping: &Mapping,
+) -> Result<crate::immich::access::MappingAuth, String> {
     crate::immich::access::MappingAuth::for_mapping(state, mapping)
 }
 
-async fn get_comments(client: &Client, album_id: &str, auth: &Auth<'_>) -> Result<Vec<Value>, String> {
+async fn get_comments(
+    client: &Client,
+    album_id: &str,
+    auth: &Auth<'_>,
+) -> Result<Vec<Value>, String> {
     // NO type filter: Immich's activities are comments AND likes, and both belong to the
     // conversation a joiner is looking at. Callers branch on the row's own `type`.
     let path = format!("/activities?albumId={album_id}");
@@ -87,7 +95,10 @@ pub async fn materialise_comments(
 ) -> Result<serde_json::Map<String, Value>, String> {
     let mut ids = serde_json::Map::new();
     for comment in comments {
-        let remote_id = comment.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+        let remote_id = comment
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
         if remote_id.is_empty() {
             continue;
         }
@@ -95,7 +106,10 @@ pub async fn materialise_comments(
         if state.store.seen_act_has(&tag).unwrap_or(false) {
             continue;
         }
-        let author = comment.get("author").and_then(|v| v.as_str()).unwrap_or(&peer.name);
+        let author = comment
+            .get("author")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&peer.name);
         // The peer's own BOT is machinery, not a person: its audit lines are that household's record,
         // and materialising them here provisioned an account for it on THIS server — which is what
         // put a second "immich-shared-albums (bot)" in the user picker. Every build names its bot
@@ -104,13 +118,14 @@ pub async fn materialise_comments(
             continue;
         }
         let author_user_id = comment.get("authorUserId").and_then(|v| v.as_str());
-        let text = comment.get("comment").and_then(|v| v.as_str()).unwrap_or_default();
+        let text = comment
+            .get("comment")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
 
-        // The mirror's own stand-in, when there is one: see `album_reader_auth`.
-        let host_key = mapping
-            .host_slug
-            .as_ref()
-            .and_then(|slug| state.collections().contributors.get(slug).and_then(|c| c.api_key.clone()));
+        // The mirror's own stand-in, when there is one — see `album_reader_auth`. `None` here is a
+        // FALLBACK, not a refusal: `host_auth(None)` posts under the household key instead.
+        let host_key = host_key_of(state, mapping);
 
         // A LIKE is posted as a like: it renders as "X liked it" here, exactly as it did at home.
         // Owned, because the poster borrows it for the whole round trip.
@@ -135,7 +150,8 @@ pub async fn materialise_comments(
         {
             Ok(contributor) => {
                 let key = contributor.api_key.clone().unwrap_or_default();
-                match post_activity(client, &mapping.album_id, &kind, text, &Auth::Key(&key)).await {
+                match post_activity(client, &mapping.album_id, &kind, text, &Auth::Key(&key)).await
+                {
                     Ok(posted) => posted,
                     Err(e) if cannot_succeed(&e) => {
                         let bot = ensure_house_bot(state, client).await?;
@@ -159,12 +175,21 @@ pub async fn materialise_comments(
             Err(e) => return Err(e),
         };
 
-        let local_id = posted.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let local_id = posted
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
         let _ = state.store.seen_act_add(&tag, &mapping.id);
         // Do not echo it back to where it came from.
-        let _ = state.store.seen_act_add(&format!("local:{local_id}"), &mapping.id);
+        let _ = state
+            .store
+            .seen_act_add(&format!("local:{local_id}"), &mapping.id);
         ids.insert(remote_id.to_string(), json!(local_id));
-        crate::log!("synced comment from \"{author}\" into \"{}\"", mapping.album_name);
+        crate::log!(
+            "synced comment from \"{author}\" into \"{}\"",
+            mapping.album_name
+        );
     }
     Ok(ids)
 }
@@ -200,7 +225,13 @@ pub fn nudge_peers(state: &State, album_id: &str, except_peer_pub: Option<&str>)
                     && m.role == Role::Owner
                     && Some(m.peer.as_str()) != except_peer_pub
             })
-            .filter_map(|m| collections.peers.iter().find(|p| p.pub_key == m.peer).cloned())
+            .filter_map(|m| {
+                collections
+                    .peers
+                    .iter()
+                    .find(|p| p.pub_key == m.peer)
+                    .cloned()
+            })
             .collect()
     };
     for peer in targets {
@@ -209,7 +240,10 @@ pub fn nudge_peers(state: &State, album_id: &str, except_peer_pub: Option<&str>)
         // Deliberately NOT awaited: the caller is answering a peer, and a nudge that blocks that
         // answer would make one household's latency another's.
         tokio::spawn(async move {
-            let header = RequestHeader { path, ..Default::default() };
+            let header = RequestHeader {
+                path,
+                ..Default::default()
+            };
             let _ = transport.round_trip(&peer, &header, None).await;
         });
     }
@@ -223,13 +257,18 @@ pub async fn handle_activity(
     mapping_id: &str,
     body: &[u8],
 ) -> (u16, Value) {
-    let Some(peer) = state.collections().peers.iter().find(|p| p.pub_key == caller_pub).cloned()
-    else {
-        return (403, json!({ "error": "unknown peer", "code": "unknown_peer" }));
+    let Some(peer) = peer_of(state, caller_pub) else {
+        return (
+            403,
+            json!({ "error": "unknown peer", "code": "unknown_peer" }),
+        );
     };
     let Some(mapping) = crate::p2p::protocol::mapping_for(state, &peer.pub_key, mapping_id, None)
     else {
-        return (404, json!({ "error": "unknown album mapping", "code": "unknown_mapping" }));
+        return (
+            404,
+            json!({ "error": "unknown album mapping", "code": "unknown_mapping" }),
+        );
     };
     // DELIBERATELY no permissions gate: view-only governs PHOTOS, not conversation. A shared album
     // is still a shared space to talk in, and revoking upload rights must not mute anyone.
@@ -237,7 +276,11 @@ pub async fn handle_activity(
         Ok(parsed) => parsed,
         Err(e) => return (400, json!({ "error": format!("malformed body: {e}") })),
     };
-    let comments = parsed.get("comments").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+    let comments = parsed
+        .get("comments")
+        .and_then(|c| c.as_array())
+        .cloned()
+        .unwrap_or_default();
     match materialise_comments(state, client, &mapping, &peer, &comments).await {
         Ok(ids) => {
             if !ids.is_empty() {
@@ -257,8 +300,7 @@ pub async fn handle_comments(
     caller_pub: &str,
     mapping_id: &str,
 ) -> (u16, Value) {
-    let Some(peer) = state.collections().peers.iter().find(|p| p.pub_key == caller_pub).cloned()
-    else {
+    let Some(peer) = peer_of(state, caller_pub) else {
         return (403, json!({ "error": "unknown peer" }));
     };
     // `owner`: only the household that owns the album answers for it. A member answering would let
@@ -266,9 +308,12 @@ pub async fn handle_comments(
     let Some(mapping) =
         crate::p2p::protocol::mapping_for(state, &peer.pub_key, mapping_id, Some(Role::Owner))
     else {
-        return (404, json!({ "error": "unknown album mapping", "code": "unknown_mapping" }));
+        return (
+            404,
+            json!({ "error": "unknown album mapping", "code": "unknown_mapping" }),
+        );
     };
-    let users = users_by_id(client, 10_000).await;
+    let users = users_by_id(client, crate::sync::engine::USER_MAP_MAX_AGE_FAST_MS).await;
     // Our own bot's id, bound before anything else: the canonical list keeps OUR trail here, but a
     // person stand-in is also a utility account and its rows are a human's relayed words.
     let house_bot_id = state
@@ -279,18 +324,28 @@ pub async fn handle_comments(
     // An owner mapping reads as the household; a member mapping reads as the stand-in that owns the
     // mirror, and is refused when this household holds no key for it.
     let Ok(creds) = album_reader_auth(state, &mapping) else {
-        return (500, json!({ "error": "could not read the album's activity" }));
+        return (
+            500,
+            json!({ "error": "could not read the album's activity" }),
+        );
     };
     let auth = creds.auth();
     let Ok(activities) = get_comments(client, &mapping.album_id, &auth).await else {
-        return (500, json!({ "error": "could not read the album's activity" }));
+        return (
+            500,
+            json!({ "error": "could not read the album's activity" }),
+        );
     };
     let comments: Vec<Value> = activities
         .iter()
         .filter(|a| {
             // Comments with text, and likes. A LIKE carries no text, so a text-only filter is what
             // kept them from ever leaving this server.
-            let is_comment = a.get("comment").and_then(|c| c.as_str()).map(|c| !c.is_empty()).unwrap_or(false);
+            let is_comment = a
+                .get("comment")
+                .and_then(|c| c.as_str())
+                .map(|c| !c.is_empty())
+                .unwrap_or(false);
             let is_like = a.get("type").and_then(|t| t.as_str()) == Some("like");
             if !(is_comment || is_like) {
                 return false;
@@ -304,7 +359,9 @@ pub async fn handle_comments(
             // household's comments from ever reaching a third household that joined later.
             let author_is_our_bot = house_bot_id
                 .as_ref()
-                .map(|bot_id| a.pointer("/user/id").and_then(|v| v.as_str()) == Some(bot_id.as_str()))
+                .map(|bot_id| {
+                    a.pointer("/user/id").and_then(|v| v.as_str()) == Some(bot_id.as_str())
+                })
                 .unwrap_or(false);
             !author_is_our_bot
         })
@@ -314,7 +371,11 @@ pub async fn handle_comments(
             let record = users.get(id);
             let raw = record
                 .map(|u| u.name.clone())
-                .or_else(|| user.get("name").and_then(|v| v.as_str()).map(str::to_string))
+                .or_else(|| {
+                    user.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
                 .unwrap_or_else(|| cfg().name.clone());
             // Strip the "(via …)" decoration only from BOT authors — a human genuinely named with a
             // trailing parenthesis must travel as written.
@@ -343,17 +404,26 @@ static COMMENTS_RUNNING: AtomicBool = AtomicBool::new(false);
 /// The fast lane: the activity COUNT is one indexed query, so a seconds-level cadence stays cheap
 /// and the full activity fetch runs only when the count moved.
 pub async fn sync_comments_once(state: &State, client: &Client) {
-    let ids: Vec<String> = state.collections().mappings.iter().map(|m| m.id.clone()).collect();
+    let ids: Vec<String> = state
+        .collections()
+        .mappings
+        .iter()
+        .map(|m| m.id.clone())
+        .collect();
     for id in ids {
-        let Some(mapping) = state.collections().mappings.iter().find(|m| m.id == id).cloned() else {
+        let Some(mapping) = state
+            .collections()
+            .mappings
+            .iter()
+            .find(|m| m.id == id)
+            .cloned()
+        else {
             continue;
         };
         if mapping.dead {
             continue;
         }
-        let Some(peer) =
-            state.collections().peers.iter().find(|p| p.pub_key == mapping.peer).cloned()
-        else {
+        let Some(peer) = peer_of(state, &mapping.peer) else {
             continue;
         };
         if let Err(e) = sync_one_album(state, client, &mapping, &peer).await {
@@ -377,16 +447,17 @@ async fn sync_one_album(
     let creds = album_reader_auth(state, mapping)?;
     let auth = creds.auth();
     let stats = client
-        .get(&format!("/activities/statistics?albumId={}", mapping.album_id), &auth)
+        .get(
+            &format!("/activities/statistics?albumId={}", mapping.album_id),
+            &auth,
+        )
         .await
         .ok()
         .flatten();
     // Comments AND likes: a like that moved must pass this gate or it is never pushed.
-    let count = stats.as_ref().and_then(|s| {
-        Some(
-            s.get("comments").and_then(|v| v.as_i64()).unwrap_or(0)
-                + s.get("likes").and_then(|v| v.as_i64()).unwrap_or(0),
-        )
+    let count = stats.as_ref().map(|s| {
+        s.get("comments").and_then(|v| v.as_i64()).unwrap_or(0)
+            + s.get("likes").and_then(|v| v.as_i64()).unwrap_or(0)
     });
     if let Some(count) = count {
         if Some(count) == mapping.comment_count {
@@ -405,21 +476,39 @@ async fn sync_one_album(
         .into_iter()
         .filter(|a| {
             let id = a.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-            let author_id = a.pointer("/user/id").and_then(|v| v.as_str()).unwrap_or_default();
+            let author_id = a
+                .pointer("/user/id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             // Comments travel as text; likes travel as themselves. Both are conversation.
-            let is_comment = a.get("comment").and_then(|c| c.as_str()).map(|c| !c.is_empty()).unwrap_or(false);
+            let is_comment = a
+                .get("comment")
+                .and_then(|c| c.as_str())
+                .map(|c| !c.is_empty())
+                .unwrap_or(false);
             let is_like = a.get("type").and_then(|t| t.as_str()) == Some("like");
             (is_comment || is_like)
-                && !state.store.seen_act_has(&format!("local:{id}")).unwrap_or(false)
-                && !state.store.seen_act_has(&format!("remote:{id}")).unwrap_or(false)
+                && !state
+                    .store
+                    .seen_act_has(&format!("local:{id}"))
+                    .unwrap_or(false)
+                && !state
+                    .store
+                    .seen_act_has(&format!("remote:{id}"))
+                    .unwrap_or(false)
                 && !utility_ids.iter().any(|u| u == author_id)
         })
         .collect();
 
     let store_count = |state: &State, mapping: &Mapping, count: Option<i64>| {
-        if let (Some(count), Some(live)) =
-            (count, state.collections().mappings.iter_mut().find(|m| m.id == mapping.id))
-        {
+        if let (Some(count), Some(live)) = (
+            count,
+            state
+                .collections()
+                .mappings
+                .iter_mut()
+                .find(|m| m.id == mapping.id),
+        ) {
             live.comment_count = Some(count);
         }
         let _ = state.save();
@@ -434,7 +523,10 @@ async fn sync_one_album(
     if target.is_empty() {
         // A mirror with no remote id addresses nothing: `/albums//activity` is not a route, and the
         // comment stays pending rather than being posted at a stranger.
-        crate::log!("no remote album id for \"{}\" — nothing to push comments to", mapping.album_name);
+        crate::log!(
+            "no remote album id for \"{}\" — nothing to push comments to",
+            mapping.album_name
+        );
         return Ok(());
     }
 
@@ -453,8 +545,13 @@ async fn sync_one_album(
         })
         .collect();
     let body = json!({ "comments": payload }).to_string();
-    let header = RequestHeader { path: format!("/albums/{target}/activity"), ..Default::default() };
-    let Some(transport) = transport() else { return Ok(()) };
+    let header = RequestHeader {
+        path: format!("/albums/{target}/activity"),
+        ..Default::default()
+    };
+    let Some(transport) = transport() else {
+        return Ok(());
+    };
     let (head, response) = transport
         .round_trip(peer, &header, Some(body.as_bytes()))
         .await
@@ -464,7 +561,9 @@ async fn sync_one_album(
     }
     for activity in &fresh {
         if let Some(id) = activity.get("id").and_then(|v| v.as_str()) {
-            let _ = state.store.seen_act_add(&format!("local:{id}"), &mapping.id);
+            let _ = state
+                .store
+                .seen_act_add(&format!("local:{id}"), &mapping.id);
         }
     }
     // The origin answers with canonical ids for our comments — remember them so the canonical pull
@@ -472,7 +571,9 @@ async fn sync_one_album(
     if let Ok(parsed) = serde_json::from_slice::<Value>(&response) {
         if let Some(ids) = parsed.get("ids").and_then(|i| i.as_object()) {
             for origin_id in ids.values().filter_map(|v| v.as_str()) {
-                let _ = state.store.seen_act_add(&format!("remote:{origin_id}"), &mapping.id);
+                let _ = state
+                    .store
+                    .seen_act_add(&format!("remote:{origin_id}"), &mapping.id);
             }
         }
     }
@@ -483,38 +584,62 @@ async fn sync_one_album(
 
 /// Pull the origin's canonical comment set. Gated by the comment count in the version handshake, so
 /// an unchanged conversation costs one small request.
-pub async fn pull_canonical_comments(state: &State, client: &Client, mapping: &Mapping, peer: &Peer) {
-    let target = mapping
-        .remote_mapping_id
-        .clone()
-        .or_else(|| mapping.remote_album_id.clone())
-        .unwrap_or_default();
-    if target.is_empty() {
+pub async fn pull_canonical_comments(
+    state: &State,
+    client: &Client,
+    mapping: &Mapping,
+    peer: &Peer,
+) {
+    let Some(target) = remote_target(mapping) else {
         return;
-    }
+    };
     let Some(transport) = transport() else { return };
-    let version_header = RequestHeader { path: format!("/albums/{target}/version"), ..Default::default() };
-    let Ok((head, body)) = transport.round_trip(peer, &version_header, None).await else { return };
+    let version_header = RequestHeader {
+        path: format!("/albums/{target}/version"),
+        ..Default::default()
+    };
+    let Ok((head, body)) = transport.round_trip(peer, &version_header, None).await else {
+        return;
+    };
     if head.status >= 400 {
         return;
     }
     let version: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let Some(count) = version.get("comments").and_then(|v| v.as_i64()) else { return };
+    let Some(count) = version.get("comments").and_then(|v| v.as_i64()) else {
+        return;
+    };
     if Some(count) == mapping.remote_comment_count {
         return;
     }
-    let comments_header = RequestHeader { path: format!("/albums/{target}/comments"), ..Default::default() };
-    let Ok((head, body)) = transport.round_trip(peer, &comments_header, None).await else { return };
+    let comments_header = RequestHeader {
+        path: format!("/albums/{target}/comments"),
+        ..Default::default()
+    };
+    let Ok((head, body)) = transport.round_trip(peer, &comments_header, None).await else {
+        return;
+    };
     if head.status >= 400 {
         return;
     }
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let comments = parsed.get("comments").and_then(|c| c.as_array()).cloned().unwrap_or_default();
-    if materialise_comments(state, client, mapping, peer, &comments).await.is_err() {
+    let comments = parsed
+        .get("comments")
+        .and_then(|c| c.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if materialise_comments(state, client, mapping, peer, &comments)
+        .await
+        .is_err()
+    {
         // Leave the cursor where it is: the next cycle retries rather than skipping the messages.
         return;
     }
-    if let Some(live) = state.collections().mappings.iter_mut().find(|m| m.id == mapping.id) {
+    if let Some(live) = state
+        .collections()
+        .mappings
+        .iter_mut()
+        .find(|m| m.id == mapping.id)
+    {
         live.remote_comment_count = Some(count);
     }
     let _ = state.save();
@@ -535,12 +660,12 @@ pub fn start_comment_loop(state: std::sync::Arc<State>) {
                 continue;
             }
             crate::sync::status::record_loop_tick(crate::sync::status::LoopName::Comments);
-            if COMMENTS_RUNNING.swap(true, Ordering::SeqCst) {
+            let Some(_running) = crate::sync::sweeps::RunningFlagGuard::claim(&COMMENTS_RUNNING)
+            else {
                 crate::sync::sweeps::finish_sweep("comments");
                 continue;
-            }
+            };
             sync_comments_once(&state, crate::immich::client::shared()).await;
-            COMMENTS_RUNNING.store(false, Ordering::SeqCst);
             crate::sync::sweeps::finish_sweep("comments");
         }
     });
@@ -558,7 +683,9 @@ mod tests {
         assert!(cannot_succeed("no activity.create access"));
         assert!(cannot_succeed("not a member of this album"));
         assert!(!cannot_succeed("timed out after 15s"));
-        assert!(!cannot_succeed("immich /activities -> 500 Internal Server Error"));
+        assert!(!cannot_succeed(
+            "immich /activities -> 500 Internal Server Error"
+        ));
         assert!(!cannot_succeed("connection reset by peer"));
     }
 }

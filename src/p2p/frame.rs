@@ -87,14 +87,20 @@ pub struct ResponseHeader {
 
 impl ResponseHeader {
     pub fn new(status: u16) -> Self {
-        ResponseHeader { status, headers: None }
+        ResponseHeader {
+            status,
+            headers: None,
+        }
     }
 
     /// The JSON routes answer with exactly this content type.
     pub fn json(status: u16) -> Self {
         let mut headers = std::collections::HashMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
-        ResponseHeader { status, headers: Some(headers) }
+        ResponseHeader {
+            status,
+            headers: Some(headers),
+        }
     }
 }
 
@@ -152,7 +158,12 @@ mod tests {
         let mut wire = u32::MAX.to_le_bytes().to_vec();
         wire.extend_from_slice(&[0u8; 64]);
         let got = read_all(&wire, 1024).await;
-        assert_eq!(got, Err(OverLimit { declared: u32::MAX as usize }));
+        assert_eq!(
+            got,
+            Err(OverLimit {
+                declared: u32::MAX as usize
+            })
+        );
     }
 
     #[tokio::test]
@@ -168,7 +179,11 @@ mod tests {
     #[test]
     fn a_request_header_omits_absent_optional_fields() {
         // The TypeScript sends `JSON.stringify({path, range})`, where an absent range disappears.
-        let bare = serde_json::to_string(&RequestHeader { path: "/hello".into(), ..Default::default() }).unwrap();
+        let bare = serde_json::to_string(&RequestHeader {
+            path: "/hello".into(),
+            ..Default::default()
+        })
+        .unwrap();
         assert_eq!(bare, "{\"path\":\"/hello\"}");
         let with_range = serde_json::to_string(&RequestHeader {
             path: "/assets/a1/playback".into(),
@@ -176,13 +191,19 @@ mod tests {
             mapping: None,
         })
         .unwrap();
-        assert_eq!(with_range, "{\"path\":\"/assets/a1/playback\",\"range\":\"bytes=0-2097151\"}");
+        assert_eq!(
+            with_range,
+            "{\"path\":\"/assets/a1/playback\",\"range\":\"bytes=0-2097151\"}"
+        );
     }
 
     #[test]
     fn a_json_response_header_carries_the_lowercase_content_type() {
         let h = ResponseHeader::json(200);
-        assert_eq!(h.headers.as_ref().unwrap().get("content-type").unwrap(), "application/json");
+        assert_eq!(
+            h.headers.as_ref().unwrap().get("content-type").unwrap(),
+            "application/json"
+        );
         // A byte route forwards exactly these four, and nothing else.
         assert_eq!(h.status, 200);
     }
@@ -196,18 +217,24 @@ mod tests {
     #[test]
     fn request_headers_parse_from_the_shape_the_oracle_sends() {
         // Exactly what demo/e2e/iroh-client.mjs writes: JSON.stringify({path, range}).
-        let parsed: RequestHeader = serde_json::from_str("{\"path\":\"/hello\",\"range\":null}").unwrap();
+        let parsed: RequestHeader =
+            serde_json::from_str("{\"path\":\"/hello\",\"range\":null}").unwrap();
         assert_eq!(parsed.path, "/hello");
         assert_eq!(parsed.range, None);
-        let parsed: RequestHeader = serde_json::from_str("{\"path\":\"/assets/x/preview\"}").unwrap();
+        let parsed: RequestHeader =
+            serde_json::from_str("{\"path\":\"/assets/x/preview\"}").unwrap();
         assert_eq!(parsed.path, "/assets/x/preview");
     }
 
     #[test]
     fn response_headers_parse_from_the_shape_the_oracle_expects() {
         let parsed: ResponseHeader =
-            serde_json::from_str("{\"status\":200,\"headers\":{\"content-type\":\"image/jpeg\"}}").unwrap();
+            serde_json::from_str("{\"status\":200,\"headers\":{\"content-type\":\"image/jpeg\"}}")
+                .unwrap();
         assert_eq!(parsed.status, 200);
-        assert_eq!(parsed.headers.unwrap().get("content-type").unwrap(), "image/jpeg");
+        assert_eq!(
+            parsed.headers.unwrap().get("content-type").unwrap(),
+            "image/jpeg"
+        );
     }
 }

@@ -49,7 +49,9 @@ pub async fn backfill_full_copies(
         if done >= MAX_PER_CYCLE {
             break;
         }
-        let Some(stub_asset_id) = stubs.get(&reference.checksum) else { continue };
+        let Some(stub_asset_id) = stubs.get(&reference.checksum) else {
+            continue;
+        };
         match crate::immich::materialise::upgrade_stub_to_full(
             state,
             client,
@@ -62,12 +64,15 @@ pub async fn backfill_full_copies(
         {
             Ok(true) => {
                 done += 1;
-                crate::log!("backfilled a full local copy into \"{}\"", mapping.album_name);
+                crate::log!(
+                    "backfilled a full local copy into \"{}\"",
+                    mapping.album_name
+                );
             }
             Ok(false) => {}
             Err(e) => crate::log!(
                 "backfill failed ({}): {e}",
-                &reference.checksum[..reference.checksum.len().min(10)]
+                crate::sync::peer_mapping_id::short_id(&reference.checksum)
             ),
         }
     }

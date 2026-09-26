@@ -68,6 +68,7 @@ picker, for the same reason. Known costs; do not make either worse without sayin
 | `sync/directory.rs` | the directory lane: the people each server offers |
 | `sync/engine.rs` | the push/pull engine, and the retirement of a share whose peer went silent |
 | `sync/house_bot.rs` | the house bot: provisioning, permissions, placement |
+| `sync/host_keys.rs` | the API key a mapping's album is owned and read by |
 | `sync/index_freshness.rs`, `index_offer.rs` | what is published, and when it went stale |
 | `sync/invitees.rs`, `invites.rs` | who an invitation is for, and the invitation lane |
 | `sync/leave.rs` | undoing a join, and what it reclaims |

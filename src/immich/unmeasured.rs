@@ -11,7 +11,10 @@ fn hidden() -> &'static Mutex<HashSet<String>> {
 
 /// Whether a rig has hidden this photo's dimensions.
 pub fn is_hidden_as_unmeasured(asset_id: &str) -> bool {
-    hidden().lock().map(|set| set.contains(asset_id)).unwrap_or(false)
+    hidden()
+        .lock()
+        .map(|set| set.contains(asset_id))
+        .unwrap_or(false)
 }
 
 /// Hide or reveal one photo's dimensions, by asset id on the server being asked. Rig-only.
@@ -34,8 +37,14 @@ mod tests {
         assert!(!is_hidden_as_unmeasured("a"));
         hide_as_unmeasured("a", true);
         assert!(is_hidden_as_unmeasured("a"));
-        assert!(!is_hidden_as_unmeasured("b"), "hiding one photo must not hide another");
+        assert!(
+            !is_hidden_as_unmeasured("b"),
+            "hiding one photo must not hide another"
+        );
         hide_as_unmeasured("a", false);
-        assert!(!is_hidden_as_unmeasured("a"), "revealing must actually reveal");
+        assert!(
+            !is_hidden_as_unmeasured("a"),
+            "revealing must actually reveal"
+        );
     }
 }

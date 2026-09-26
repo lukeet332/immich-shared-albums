@@ -443,6 +443,18 @@ if (mirrorAssets) {
   check('repeat view is a cache HIT (byte-identical)',
         thumbRes2.headers.get('x-cache') === 'HIT' && sha1(await thumbRes2.arrayBuffer()) === sha1(originThumb),
         `x-cache: ${thumbRes2.headers.get('x-cache')}`);
+  // THE AUTH INVARIANT behind the hotlink path: a caller with NO credential and NO share key must
+  // get Immich's own refusal, never the true bytes. The interceptor once probed as the ADMIN key
+  // when nobody was signed in — it can read the bot accounts' stubs, so the probe never failed and
+  // any caller who could name a stub id streamed the photo without Immich's 401.
+  const anonymousOriginal = await fetch(`${BS}/api/assets/${gpsProxy.id}/original`);
+  check("an anonymous original answers Immich's own refusal, not the bytes",
+        anonymousOriginal.status === 401,
+        `status: ${anonymousOriginal.status}`);
+  const anonymousThumb = await fetch(`${BS}/api/assets/${gpsProxy.id}/thumbnail`);
+  check("an anonymous thumbnail answers Immich's own refusal, not the bytes",
+        anonymousThumb.status === 401,
+        `status: ${anonymousThumb.status}`);
 }
 
 stage('a photo Immich has not measured is held back, then arrives shaped');
@@ -1480,12 +1492,17 @@ stage('native album invitations, per person (no share link)');
           return r.ok ? (await r.json()).ticks : null;
         };
         const CYCLES_TO_SURVIVE = 2;
+        // The sweep gate is ONE background lane at a time, and a lane may hold it through a peer
+        // round trip bounded by the transport's 120s DEADLINE — so both other loops can be frozen
+        // by a single slow cycle without being wedged. The window must outlast that worst case,
+        // or this check measures one slow cycle as if the loops had stopped.
+        const CYCLE_WAIT_MS = 200000;
         const ticksBefore = await ticksOn();
         const ticksAfter = ticksBefore && await until(async () => {
           const t = await ticksOn();
           return t && t.watcher >= ticksBefore.watcher + CYCLES_TO_SURVIVE
                    && t.invites >= ticksBefore.invites + CYCLES_TO_SURVIVE ? t : null;
-        }, 120000);
+        }, CYCLE_WAIT_MS);
         check('the member sidecar kept evaluating both loops while the mirror was left alone',
               !!ticksAfter,
               ticksBefore ? JSON.stringify({ before: ticksBefore, after: ticksAfter }) : 'sync/status unreadable — is ISA_TEST_HOOKS set on B?');

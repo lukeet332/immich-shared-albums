@@ -1,14 +1,17 @@
 /** sync/matches.rs — pairing two households' albums by hand. See ARCHITECTURE.md. */
 use crate::store::{Mapping, OwnedAlbum, Role};
-use serde_json::Value;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// An album name as two servers can agree on it: trimmed, inner whitespace collapsed, lowercased.
 /// The pairing rule is name-based, so the comparison has to survive the ways two people type the
 /// same album — and it must NOT be cleverer than that, because a fuzzy match would propose merging
 /// albums that are not the same.
 pub fn normalise_album_name(name: &str) -> String {
-    name.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Two records describe the same span of time.
@@ -18,10 +21,17 @@ pub fn normalise_album_name(name: &str) -> String {
 /// one-day span rather than an empty one.)
 pub fn dates_overlap(mine: &OwnedAlbum, theirs: &OwnedAlbum) -> bool {
     let mine_from = mine.start_date.clone().unwrap_or_default();
-    let mine_to = mine.end_date.clone().or_else(|| mine.start_date.clone()).unwrap_or_default();
+    let mine_to = mine
+        .end_date
+        .clone()
+        .or_else(|| mine.start_date.clone())
+        .unwrap_or_default();
     let theirs_from = theirs.start_date.clone().unwrap_or_default();
-    let theirs_to =
-        theirs.end_date.clone().or_else(|| theirs.start_date.clone()).unwrap_or_default();
+    let theirs_to = theirs
+        .end_date
+        .clone()
+        .or_else(|| theirs.start_date.clone())
+        .unwrap_or_default();
     if mine_from.is_empty() || theirs_from.is_empty() {
         return false;
     }
@@ -35,7 +45,10 @@ pub fn dates_overlap(mine: &OwnedAlbum, theirs: &OwnedAlbum) -> bool {
 fn as_one_row(candidate: &AlbumCandidate) -> String {
     format!(
         "{}\u{1}{}\u{1}{}\u{1}{}",
-        candidate.mine.name, candidate.theirs.name, candidate.theirs.owner_user_id.as_deref().unwrap_or(""), candidate.theirs.owner_name
+        candidate.mine.name,
+        candidate.theirs.name,
+        candidate.theirs.owner_user_id.as_deref().unwrap_or(""),
+        candidate.theirs.owner_name
     )
 }
 
@@ -49,42 +62,6 @@ pub struct AlbumCandidate {
     pub same_dates: bool,
     /// Why this pair was proposed, in the words the panel prints.
     pub why: String,
-}
-
-/// Immich's own album list as an owned index. Unknown entries are DROPPED rather than guessed at,
-/// because a guess here offers someone's library to a linked server.
-pub fn albums_i_publish_from(albums: &[Value], caller_user_id: &str) -> Vec<OwnedAlbum> {
-    if caller_user_id.is_empty() {
-        return Vec::new();
-    }
-    albums
-        .iter()
-        .filter_map(|album| {
-            let members = album.get("albumUsers").and_then(|m| m.as_array())?;
-            let owner = members.iter().find(|entry| {
-                entry.get("role").and_then(|r| r.as_str()) == Some("owner")
-                    && entry.pointer("/user/id").and_then(|v| v.as_str()).is_some()
-            })?;
-            let owner_id = owner.pointer("/user/id").and_then(|v| v.as_str()).unwrap_or_default();
-            // The caller must be the OWNER, as IMMICH says. Anything else is an album they can
-            // merely see, and offering it publishes someone else's library to a linked server.
-            if owner_id != caller_user_id {
-                return None;
-            }
-            Some(OwnedAlbum {
-                name: album.get("albumName").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                asset_count: album.get("assetCount").and_then(|v| v.as_i64()).unwrap_or(0),
-                start_date: album.get("startDate").and_then(|v| v.as_str()).map(str::to_string),
-                end_date: album.get("endDate").and_then(|v| v.as_str()).map(str::to_string),
-                owner_name: owner
-                    .pointer("/user/name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                owner_user_id: Some(caller_user_id.to_string()),
-            })
-        })
-        .collect()
 }
 
 /// One row of the ledger a mapping keeps, as adoption seeds it.
@@ -107,13 +84,22 @@ pub fn seed_rows_for(assets: &[Value]) -> Vec<SeedRow> {
         // an empty string is falsy there — so `""` is not an id, and accepting it here would key a
         // ledger row on nothing.
         let (Some(checksum), Some(id)) = (
-            asset.get("checksum").and_then(|v| v.as_str()).filter(|c| !c.is_empty()),
-            asset.get("id").and_then(|v| v.as_str()).filter(|i| !i.is_empty()),
+            asset
+                .get("checksum")
+                .and_then(|v| v.as_str())
+                .filter(|c| !c.is_empty()),
+            asset
+                .get("id")
+                .and_then(|v| v.as_str())
+                .filter(|i| !i.is_empty()),
         ) else {
             continue;
         };
         if seen.insert(checksum.to_string()) {
-            rows.push(SeedRow { checksum: checksum.to_string(), local_asset: id.to_string() });
+            rows.push(SeedRow {
+                checksum: checksum.to_string(),
+                local_asset: id.to_string(),
+            });
         }
     }
     rows
@@ -126,10 +112,16 @@ pub fn seed_rows_for(assets: &[Value]) -> Vec<SeedRow> {
 /// what makes the merge reach both sides. And a peer that could not be asked (no manifest) seeds
 /// NOTHING, deliberately: offering a duplicate materialises a stub beside the peer's own original,
 /// which nothing repairs on its own, while the other direction is repaired by a later reunion.
-pub fn seed_rows_for_adoption(assets: &[Value], peer_holds: Option<&std::collections::HashSet<String>>) -> Vec<SeedRow> {
+pub fn seed_rows_for_adoption(
+    assets: &[Value],
+    peer_holds: Option<&std::collections::HashSet<String>>,
+) -> Vec<SeedRow> {
     let rows = seed_rows_for(assets);
     match peer_holds {
-        Some(held) => rows.into_iter().filter(|r| held.contains(&r.checksum)).collect(),
+        Some(held) => rows
+            .into_iter()
+            .filter(|r| held.contains(&r.checksum))
+            .collect(),
         // `None` is "nobody could be asked" — NOT "they hold nothing". Both seed nothing, but the
         // caller logs them differently, so the distinction is kept in the signature.
         None => Vec::new(),
@@ -145,15 +137,19 @@ pub fn match_albums(mine: &[OwnedAlbum], theirs: &[OwnedAlbum]) -> Vec<AlbumCand
     let mut by_name: std::collections::HashMap<String, Vec<OwnedAlbum>> =
         std::collections::HashMap::new();
     for album in theirs {
-        by_name.entry(normalise_album_name(&album.name)).or_default().push(album.clone());
+        by_name
+            .entry(normalise_album_name(&album.name))
+            .or_default()
+            .push(album.clone());
     }
     let mut candidates: Vec<AlbumCandidate> = Vec::new();
     let mut shown: std::collections::HashSet<String> = std::collections::HashSet::new();
     for album in mine {
-        let Some(bucket) = by_name.get(&normalise_album_name(&album.name)) else { continue };
+        let Some(bucket) = by_name.get(&normalise_album_name(&album.name)) else {
+            continue;
+        };
         for peer_album in bucket {
-            if peer_album.owner_user_id.is_some()
-                && peer_album.owner_user_id == album.owner_user_id
+            if peer_album.owner_user_id.is_some() && peer_album.owner_user_id == album.owner_user_id
             {
                 continue;
             }
@@ -233,7 +229,10 @@ pub enum ReunionStep {
     /// No share yet, or the share ended: invite again.
     Invite,
     /// A mirror they were given, which they may adopt their own album into.
-    Accept { #[serde(rename = "mappingId")] mapping_id: String },
+    Accept {
+        #[serde(rename = "mappingId")]
+        mapping_id: String,
+    },
     /// The share they gave away. Nothing to do but wait for the other side.
     Waiting,
     /// Already done — listed elsewhere, not offered again.
@@ -241,7 +240,9 @@ pub enum ReunionStep {
 }
 
 pub fn reunion_step_for(share: Option<&ShareForReunion<'_>>) -> ReunionStep {
-    let Some(share) = share else { return ReunionStep::Invite };
+    let Some(share) = share else {
+        return ReunionStep::Invite;
+    };
     if share.dead {
         return ReunionStep::Invite;
     }
@@ -249,7 +250,9 @@ pub fn reunion_step_for(share: Option<&ShareForReunion<'_>>) -> ReunionStep {
         return ReunionStep::Reunited;
     }
     if share.role == Role::Member {
-        ReunionStep::Accept { mapping_id: share.id.to_string() }
+        ReunionStep::Accept {
+            mapping_id: share.id.to_string(),
+        }
     } else {
         ReunionStep::Waiting
     }
@@ -313,13 +316,22 @@ mod tests {
         assert_eq!(normalise_album_name("  Summer   Trip "), "summer trip");
         assert_eq!(normalise_album_name("SUMMER TRIP"), "summer trip");
         // But NOT fuzzily: two different albums must not be proposed as halves of one.
-        assert_ne!(normalise_album_name("Summer Trip"), normalise_album_name("Summer Trip 2"));
+        assert_ne!(
+            normalise_album_name("Summer Trip"),
+            normalise_album_name("Summer Trip 2")
+        );
     }
 
     #[test]
     fn a_missing_date_never_matches_on_nothing() {
-        assert!(!dates_overlap(&album("a", "me", None, None), &album("b", "you", None, None)));
-        assert!(!dates_overlap(&album("a", "me", Some("2026-01-01"), None), &album("b", "you", None, None)));
+        assert!(!dates_overlap(
+            &album("a", "me", None, None),
+            &album("b", "you", None, None)
+        ));
+        assert!(!dates_overlap(
+            &album("a", "me", Some("2026-01-01"), None),
+            &album("b", "you", None, None)
+        ));
         // A one-day album is a one-day SPAN, not an empty one.
         assert!(dates_overlap(
             &album("a", "me", Some("2026-01-01"), None),
@@ -333,12 +345,34 @@ mod tests {
 
     #[test]
     fn the_same_owner_on_both_sides_is_one_library_not_two_halves() {
-        let mine = vec![album("Holidays", "alice", Some("2026-01-01"), Some("2026-01-02"))];
-        let theirs = vec![album("Holidays", "alice", Some("2026-01-01"), Some("2026-01-02"))];
-        assert!(match_albums(&mine, &theirs).is_empty(), "same person, same library");
+        let mine = vec![album(
+            "Holidays",
+            "alice",
+            Some("2026-01-01"),
+            Some("2026-01-02"),
+        )];
+        let theirs = vec![album(
+            "Holidays",
+            "alice",
+            Some("2026-01-01"),
+            Some("2026-01-02"),
+        )];
+        assert!(
+            match_albums(&mine, &theirs).is_empty(),
+            "same person, same library"
+        );
 
-        let theirs_other = vec![album("Holidays", "bob", Some("2026-01-01"), Some("2026-01-02"))];
-        assert_eq!(match_albums(&mine, &theirs_other).len(), 1, "two people, two halves");
+        let theirs_other = vec![album(
+            "Holidays",
+            "bob",
+            Some("2026-01-01"),
+            Some("2026-01-02"),
+        )];
+        assert_eq!(
+            match_albums(&mine, &theirs_other).len(),
+            1,
+            "two people, two halves"
+        );
     }
 
     #[test]
@@ -363,7 +397,11 @@ mod tests {
             json!({ "id": "", "checksum": "c4" }),   // an empty id is not an id
         ];
         let rows = seed_rows_for(&assets);
-        assert_eq!(rows.len(), 1, "one row per checksum, and only what can be keyed");
+        assert_eq!(
+            rows.len(),
+            1,
+            "one row per checksum, and only what can be keyed"
+        );
         assert_eq!(rows[0].local_asset, "a1");
     }
 
@@ -376,7 +414,10 @@ mod tests {
         let held: std::collections::HashSet<String> = ["theirs".to_string()].into_iter().collect();
         let seeded = seed_rows_for_adoption(&assets, Some(&held));
         assert_eq!(seeded.len(), 1);
-        assert_eq!(seeded[0].checksum, "theirs", "only theirs — ours must be OFFERED, that is the merge");
+        assert_eq!(
+            seeded[0].checksum, "theirs",
+            "only theirs — ours must be OFFERED, that is the merge"
+        );
     }
 
     #[test]
@@ -389,24 +430,63 @@ mod tests {
 
     #[test]
     fn a_share_has_a_direction_and_only_the_received_one_is_acceptable() {
-        let member = ShareForReunion { id: "m1", role: Role::Member, adopted: false, reunified: false, dead: false };
-        assert_eq!(reunion_step_for(Some(&member)), ReunionStep::Accept { mapping_id: "m1".into() });
-        let owner = ShareForReunion { id: "m2", role: Role::Owner, adopted: false, reunified: false, dead: false };
-        assert_eq!(reunion_step_for(Some(&owner)), ReunionStep::Waiting, "the one they gave away");
+        let member = ShareForReunion {
+            id: "m1",
+            role: Role::Member,
+            adopted: false,
+            reunified: false,
+            dead: false,
+        };
+        assert_eq!(
+            reunion_step_for(Some(&member)),
+            ReunionStep::Accept {
+                mapping_id: "m1".into()
+            }
+        );
+        let owner = ShareForReunion {
+            id: "m2",
+            role: Role::Owner,
+            adopted: false,
+            reunified: false,
+            dead: false,
+        };
+        assert_eq!(
+            reunion_step_for(Some(&owner)),
+            ReunionStep::Waiting,
+            "the one they gave away"
+        );
     }
 
     #[test]
     fn a_reunion_already_done_is_not_offered_again() {
         // Leaving it in the list offered a reunion that had already happened.
-        let adopted = ShareForReunion { id: "m1", role: Role::Member, adopted: true, reunified: false, dead: false };
+        let adopted = ShareForReunion {
+            id: "m1",
+            role: Role::Member,
+            adopted: true,
+            reunified: false,
+            dead: false,
+        };
         assert_eq!(reunion_step_for(Some(&adopted)), ReunionStep::Reunited);
-        let reunified = ShareForReunion { id: "m1", role: Role::Owner, adopted: false, reunified: true, dead: false };
+        let reunified = ShareForReunion {
+            id: "m1",
+            role: Role::Owner,
+            adopted: false,
+            reunified: true,
+            dead: false,
+        };
         assert_eq!(reunion_step_for(Some(&reunified)), ReunionStep::Reunited);
     }
 
     #[test]
     fn an_ended_share_is_no_share_so_invite_again() {
-        let dead = ShareForReunion { id: "m1", role: Role::Member, adopted: false, reunified: false, dead: true };
+        let dead = ShareForReunion {
+            id: "m1",
+            role: Role::Member,
+            adopted: false,
+            reunified: false,
+            dead: true,
+        };
         assert_eq!(reunion_step_for(Some(&dead)), ReunionStep::Invite);
         assert_eq!(reunion_step_for(None), ReunionStep::Invite);
     }

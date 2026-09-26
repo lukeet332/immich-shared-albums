@@ -26,9 +26,9 @@ fn now_ms() -> i64 {
 /// limit on JOINING, and ending joins that already happened is a policy change with its own test to
 /// write, not something to infer from an unparsed timestamp. See the note in ARCHITECTURE.md.
 fn album_has_link(links: &[Value], album_id: &str) -> bool {
-    links.iter().any(|l| {
-        l.pointer("/album/id").and_then(|v| v.as_str()) == Some(album_id)
-    })
+    links
+        .iter()
+        .any(|l| l.pointer("/album/id").and_then(|v| v.as_str()) == Some(album_id))
 }
 
 /// One check per interval, whoever asks. Returns whether this call may do the read.
@@ -89,11 +89,9 @@ async fn retire_link_grant(state: &State, client: &Client, mapping_id: &str) {
     // names this mapping, so a photo another share also claims is not deleted under it. A stored-FULL
     // copy is this household's own bytes and is kept — the leave rule, applied to a withdrawal.
     let mut reclaimed = 0usize;
-    for entry in state
-        .store
-        .seen_for_mapping(mapping_id)
-        .unwrap_or_default()
-    {
+    let mut unpurged: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let entries = state.store.seen_for_mapping(mapping_id).unwrap_or_default();
+    for entry in &entries {
         if entry.origin_asset.is_none() || entry.stored_full {
             continue;
         }
@@ -105,17 +103,44 @@ async fn retire_link_grant(state: &State, client: &Client, mapping_id: &str) {
         if owner.map(|o| o.mapping != mapping_id).unwrap_or(false) {
             continue;
         }
-        match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset).await
+        match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset)
+            .await
         {
             Ok(crate::immich::materialise::PurgeOutcome::Purged) => reclaimed += 1,
-            Ok(_) => {}
-            Err(e) => crate::log!(
-                "could not reclaim {} after a withdrawn share: {e}",
-                entry.local_asset
-            ),
+            // Absent to every credential we hold: nothing left to collect.
+            Ok(crate::immich::materialise::PurgeOutcome::AlreadyGone) => {}
+            // It exists and is not ours to delete: the row must say so, or the stub is orphaned
+            // with nothing left able to find it.
+            Ok(crate::immich::materialise::PurgeOutcome::NotOurs) => {
+                unpurged.insert(entry.checksum.clone());
+            }
+            Err(e) => {
+                crate::log!(
+                    "could not reclaim {} after a withdrawn share: {e}",
+                    entry.local_asset
+                );
+                unpurged.insert(entry.checksum.clone());
+            }
         }
     }
-    let _ = state.store.seen_forget_proxies(mapping_id);
+    // Forget only the rows whose purge SETTLED — the leave rule. A row whose stub could not be
+    // deleted is the only record that the stub exists, so it is kept (and logged) rather than
+    // spliced away under a mapping that is now marked dead.
+    if unpurged.is_empty() {
+        let _ = state.store.seen_forget_proxies(mapping_id);
+    } else {
+        for entry in &entries {
+            if unpurged.contains(&entry.checksum) || entry.stored_full {
+                continue;
+            }
+            let _ = state.store.seen_remove_entry(mapping_id, &entry.checksum);
+        }
+        crate::log!(
+            "left {unpurged} contributed photo ledger row(s) of \"{album_name}\" un-reclaimed — kept so a retry can find them",
+            unpurged = unpurged.len(),
+            album_name = album_name
+        );
+    }
     // Stop serving the bytes BEFORE the mapping is marked dead: entitlement is what the member reads
     // with, and a window where the grant is retired but the bytes are still offered is a window where
     // a withdrawn household can still pull originals.
@@ -168,7 +193,11 @@ mod tests {
     fn a_link_row_with_no_album_is_not_a_grant_for_anything() {
         // Immich's own rows are not a contract we get to assume: a row missing `album.id` must not
         // match every album in the loop, or one malformed link would keep every share alive.
-        let links = vec![json!({ "key": "a" }), json!({ "album": {} }), json!({ "album": { "id": 7 } })];
+        let links = vec![
+            json!({ "key": "a" }),
+            json!({ "album": {} }),
+            json!({ "album": { "id": 7 } }),
+        ];
         assert!(!album_has_link(&links, "album-here"));
     }
 }

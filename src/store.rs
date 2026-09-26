@@ -27,12 +27,6 @@ impl Direction {
             Direction::FromThem => "from-them",
         }
     }
-    fn from_str(s: &str) -> Self {
-        match s {
-            "from-them" => Direction::FromThem,
-            _ => Direction::ToThem,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,10 +44,14 @@ impl Role {
             Role::Member => "member",
         }
     }
-    fn from_str(s: &str) -> Self {
+    /// Strict, unlike the rest of the row parse: owner and member are not interchangeable
+    /// (a member mirror always looks "withdrawn" to origin-side checks), so an unknown value
+    /// must never silently become one of them. `None` means the row is refused at load.
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "member" => Role::Member,
-            _ => Role::Owner,
+            "owner" => Some(Role::Owner),
+            "member" => Some(Role::Member),
+            _ => None,
         }
     }
 }
@@ -158,7 +156,7 @@ pub struct Peer {
     pub last_addrs: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Contributor {
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -179,7 +177,7 @@ pub struct Contributor {
 
 /// The transport identity, exactly as `state.ts` writes it. The JSON member names are `pub` and
 /// `priv`; `pub` is a Rust keyword, so the FIELD is renamed rather than the wire member.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Identity {
     pub v: i64,
     pub alg: String,
@@ -191,6 +189,35 @@ pub struct Identity {
     pub private: String,
     #[serde(rename = "createdAt")]
     pub created_at: String,
+}
+
+/// Both structs hold secrets — the ed25519 seed IS this server, and a contributor's api_key can
+/// act as them — so `Debug` is hand-written, like `Config`'s: `{identity:?}` must never print
+/// what a log line would leak.
+impl std::fmt::Debug for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Identity")
+            .field("v", &self.v)
+            .field("alg", &self.alg)
+            .field("public", &self.public)
+            .field("private", &"[REDACTED]")
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Contributor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Contributor")
+            .field("user_id", &self.user_id)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("avatar_done", &self.avatar_done)
+            .field("via_peer", &self.via_peer)
+            .field("peer_user_id", &self.peer_user_id)
+            .field("home_peer", &self.home_peer)
+            .finish()
+    }
 }
 
 /// The three collections `save()` rewrites wholesale. The ledgers are written per-row instead —
@@ -288,7 +315,8 @@ impl Store {
         // Indexes naming a MIGRATED column belong after the chain: a fresh table has the column,
         // a migrated one gains it in the branch above, and IF NOT EXISTS runs either way.
         conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS published_albums_peer ON published_albums (peer, direction);",
+            "CREATE INDEX IF NOT EXISTS published_albums_peer ON published_albums (peer, direction);
+             CREATE INDEX IF NOT EXISTS seen_checksum ON seen (checksum);",
         )?;
         drop(conn);
         self.load_collections()?;
@@ -297,7 +325,7 @@ impl Store {
 
     pub fn user_version(&self) -> Result<i64, StoreError> {
         let conn = self.conn.lock().unwrap();
-        Ok(user_version(&conn)?)
+        user_version(&conn)
     }
 
     // ---- kv ----
@@ -400,6 +428,18 @@ impl Store {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
+    /// How many of a mapping's ledger rows name a SOURCE — the stub half of a mirror. The
+    /// watcher's unchanged-album handshake wants exactly this plus `offered_count`: rows without
+    /// an origin are this side's own pushed photos, which `offered` already counts.
+    pub fn seen_origin_count(&self, mapping: &str) -> Result<usize, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM seen WHERE mapping = ?1 AND originAsset IS NOT NULL",
+            [mapping],
+            |r| r.get::<_, i64>(0).map(|n| n as usize),
+        )?)
+    }
+
     pub fn seen_for_checksum(&self, checksum: &str) -> Result<Vec<SeenEntry>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -491,9 +531,8 @@ impl Store {
     /// (one row per join or leave) and drained on a person's visit.
     pub fn trail_pending_all(&self) -> Result<Vec<TrailRow>, StoreError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, albumId, mappingId, event, text FROM trail_pending ORDER BY id",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT id, albumId, mappingId, event, text FROM trail_pending ORDER BY id")?;
         let rows = stmt.query_map([], |r| {
             Ok(TrailRow {
                 id: r.get(0)?,
@@ -594,6 +633,8 @@ impl Store {
     ) -> Result<Vec<String>, StoreError> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        let current: std::collections::HashSet<&str> =
+            current_asset_ids.iter().map(String::as_str).collect();
         let existing: Vec<String> = {
             let mut stmt = tx.prepare("SELECT asset FROM offered WHERE mapping = ?1")?;
             let rows = stmt.query_map([mapping], |r| r.get::<_, String>(0))?;
@@ -601,7 +642,9 @@ impl Store {
         };
         let mut revoked = Vec::new();
         for asset in existing {
-            if !current_asset_ids.iter().any(|a| a == &asset) {
+            // Set membership, not a scan: this runs per album per cycle, and albums run to
+            // thousands of assets.
+            if !current.contains(asset.as_str()) {
                 tx.execute(
                     "DELETE FROM offered WHERE mapping = ?1 AND asset = ?2",
                     rusqlite::params![mapping, asset],
@@ -827,9 +870,23 @@ impl Store {
                         remoteCommentCount FROM mappings",
             )?;
             let rows = stmt.query_map([], |r| {
+                let id: String = r.get(0)?;
+                let role: String = r.get(1)?;
+                let Some(role) = Role::parse(&role) else {
+                    // Fail towards under-sharing: a mapping that cannot be classified is not
+                    // loaded, so nothing origin-side ever reads it as an owner mapping.
+                    crate::log!(
+                        "mappings row {id} carries role \"{role}\" — not \"owner\" or \"member\"; refusing to load it"
+                    );
+                    return Err(rusqlite::Error::InvalidColumnType(
+                        1,
+                        "role".into(),
+                        rusqlite::types::Type::Text,
+                    ));
+                };
                 Ok(Mapping {
-                    id: r.get(0)?,
-                    role: Role::from_str(&r.get::<_, String>(1)?),
+                    id,
+                    role,
                     album_id: r.get(2)?,
                     album_name: r.get(3)?,
                     peer: r.get(4)?,
@@ -856,7 +913,14 @@ impl Store {
                     remote_comment_count: r.get(22)?,
                 })
             })?;
-            rows.filter_map(|r| r.ok()).collect()
+            // A row that failed to classify (or decode) must FAIL THE LOAD, never silently
+            // vanish: the row is absent from memory, and the next `save()` rewrites this table
+            // from memory — a dropped row here would be DELETED there, and a mapping the
+            // sidecar can no longer see is a live share nobody can withdraw. Same doctrine as
+            // the version refusal: migrated or refused, never guessed at.
+            rows.collect::<Result<Vec<Mapping>, _>>().map_err(|e| {
+                StoreError::Corrupt(format!("a mappings row could not be loaded ({e})"))
+            })?
         };
 
         let contributors: std::collections::HashMap<String, Contributor> = {
@@ -899,54 +963,21 @@ impl Store {
     /// contributors. It does NOT touch seen, seen_activity, offered, added, cache or
     /// published_albums — those are written per-row as they happen.
     pub fn save(&self) -> Result<(), StoreError> {
-        // BOUNDED, and loud on failure. `state` is a non-reentrant `std::sync::Mutex`, so a caller
-        // that already holds it through `collections()` deadlocks against itself — and a deadlocked
-        // sidecar simply stops answering, which reads as a mysterious hang rather than a bug. Normal
-        // contention clears in microseconds, so a save that cannot take the lock for seconds was
-        // never going to succeed; saying so turns a silent hang into a named failure.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        let _ = &self.conn; // the second lock below is bounded the same way, and for the same reason
-        let state = loop {
-            match self.state.try_lock() {
-                Ok(guard) => break guard,
-                Err(std::sync::TryLockError::Poisoned(e)) => break e.into_inner(),
-                Err(std::sync::TryLockError::WouldBlock) => {
-                    if std::time::Instant::now() >= deadline {
-                        // Reported once per wait, then falls through to the ordinary blocking lock.
-                        // LOUD, then block as before: this warns without changing what a save
-                        // does. Skipping it would trade a hang for silent data loss.
-                        crate::log!(
-                            "SAVE BLOCKED for 3s on the state lock — a self-deadlock or severe contention. Blocking as normal, but this is the bug."
-                        );
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-            }
-        };
-        // BOUNDED for the same reason as `state` above, and this one is worse: a caller blocked
-        // HERE is already holding `state`, so every other task blocks behind it and the whole
-        // sidecar goes quiet. Normal contention is microseconds.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        let mut conn = loop {
-            match self.conn.try_lock() {
-                Ok(guard) => break guard,
-                Err(std::sync::TryLockError::Poisoned(e)) => break e.into_inner(),
-                Err(std::sync::TryLockError::WouldBlock) => {
-                    if std::time::Instant::now() >= deadline {
-                        crate::log!(
-                            "SAVE BLOCKED ON THE DATABASE for 3s while HOLDING the state lock — every other task is blocked behind this one."
-                        );
-                        break self.conn.lock().unwrap_or_else(|e| e.into_inner());
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-            }
-        };
+        // BOUNDED, and loud on failure. Both locks here are non-reentrant `std::sync::Mutex`es, so
+        // a caller that already holds one through `collections()` deadlocks against itself — and a
+        // deadlocked sidecar simply stops answering, which reads as a mysterious hang rather than a
+        // bug. Normal contention clears in microseconds, so a wait that outlives the bound was
+        // never going to succeed; naming it turns a silent hang into a named failure. The second
+        // lock is the worse one: a caller blocked there already holds `state`, so every other task
+        // queues behind it and the whole sidecar goes quiet.
+        let state = bounded_lock(&self.state, "nothing yet", "the state lock");
+        let mut conn = bounded_lock(&self.conn, "the state lock", "the database");
         let tx = conn.transaction()?;
         if let Some(identity) = &state.identity {
             tx.execute(
                 "INSERT OR REPLACE INTO kv (name, value) VALUES ('identity', ?1)",
-                [serde_json::to_string(identity).unwrap_or_else(|_| "null".into())],
+                [serde_json::to_string(identity)
+                    .expect("Identity is a plain struct: serialization cannot fail")],
             )?;
         }
         tx.execute("DELETE FROM peers", [])?;
@@ -1178,15 +1209,25 @@ fn insert_published(
 }
 
 fn group_by_owner(albums: &[OwnedAlbum]) -> Vec<(String, Vec<OwnedAlbum>)> {
-    let mut out: Vec<(String, Vec<OwnedAlbum>)> = Vec::new();
+    // First-seen owner order is preserved (a bare HashMap would shuffle owners between runs),
+    // without the O(n²) rescan the earlier list version cost.
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, Vec<OwnedAlbum>> =
+        std::collections::HashMap::new();
     for a in albums {
         let owner = a.owner_user_id.clone().unwrap_or_default();
-        match out.iter_mut().find(|(o, _)| *o == owner) {
-            Some((_, group)) => group.push(a.clone()),
-            None => out.push((owner, vec![a.clone()])),
+        if !groups.contains_key(&owner) {
+            order.push(owner.clone());
         }
+        groups.entry(owner).or_default().push(a.clone());
     }
-    out
+    order
+        .into_iter()
+        .map(|owner| {
+            let group = groups.remove(&owner).unwrap_or_default();
+            (owner, group)
+        })
+        .collect()
 }
 
 fn now_ms() -> i64 {
@@ -1201,7 +1242,39 @@ pub enum StoreError {
     Sqlite(String),
     Io(String),
     PreV1,
+    Corrupt(String),
     SchemaVersion { found: i64, expected: i64 },
+}
+
+/// Take a non-reentrant lock, refusing to spin forever: once the wait outlives `SAVE_LOCK_WAIT`
+/// the failure is NAMED (a self-deadlock or severe contention — the deadlock class this port has
+/// hit repeatedly), and the ordinary blocking lock is taken as the log says, so the caller either
+/// proceeds or blocks visibly instead of spinning silently for ever. Poison is recovered because a
+/// poisoned lock here means a task panicked mid-save; the last committed data still stands and
+/// refusing it would lose every later write.
+fn bounded_lock<'a, T>(
+    mutex: &'a Mutex<T>,
+    held: &str,
+    waiting_for: &str,
+) -> std::sync::MutexGuard<'a, T> {
+    const SAVE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+    const RETRY_SLEEP: std::time::Duration = std::time::Duration::from_millis(5);
+    let deadline = std::time::Instant::now() + SAVE_LOCK_WAIT;
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return guard,
+            Err(std::sync::TryLockError::Poisoned(e)) => return e.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    crate::log!(
+                        "SAVE blocked {SAVE_LOCK_WAIT:?} waiting for {waiting_for} while holding {held} — every other task is blocked behind this one. Blocking as normal, but this is the bug."
+                    );
+                    return mutex.lock().unwrap_or_else(|e| e.into_inner());
+                }
+                std::thread::sleep(RETRY_SLEEP);
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for StoreError {
@@ -1213,6 +1286,11 @@ impl std::fmt::Display for StoreError {
                 f,
                 "state.db is from a pre-v1 build. Stop the container, delete the data volume, \
                  and pair the servers again — pre-v1 state is not migrated."
+            ),
+            StoreError::Corrupt(e) => write!(
+                f,
+                "state.db holds a row this build refuses to load ({e}) — it will not be rewritten \
+                 behind your back. Restore the volume or delete it and pair the servers again."
             ),
             StoreError::SchemaVersion { found, expected } => write!(
                 f,
@@ -1311,6 +1389,31 @@ mod tests {
     }
 
     #[test]
+    fn a_mappings_row_that_cannot_be_classified_refuses_the_store_instead_of_vanishing() {
+        // A dropped row would be DELETED by the next save()'s wholesale rewrite: a mapping the
+        // sidecar can no longer see is a live share nobody can withdraw. Refuse, like PreV1.
+        let dir = std::env::temp_dir().join(format!("isa-role-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let store = Store::open(dir.to_str().unwrap()).unwrap();
+            drop(store);
+            let c = Connection::open(dir.join("state.db")).unwrap();
+            c.execute(
+                "INSERT INTO mappings (id, role, albumId, albumName, peer, permissions, via)
+                 VALUES ('m-corrupt', 'admin', 'a1', 'A', 'peer-1', 'view', 'invite')",
+                [],
+            )
+            .unwrap();
+        }
+        match Store::open(dir.to_str().unwrap()).err() {
+            Some(StoreError::Corrupt(_)) => {}
+            other => panic!("expected a Corrupt refusal, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn ledger_by_asset_prefers_the_row_that_can_be_resolved_to_a_source() {
         let s = store();
         // The watcher's bookkeeping row carries no origin. Two rows for one local asset are normal
@@ -1346,6 +1449,56 @@ mod tests {
         s.seen_add("m1", "sum", "asset", Some("origin"), true)
             .unwrap();
         assert!(s.ledger_by_asset("asset").unwrap().unwrap().stored_full);
+    }
+
+    #[test]
+    fn the_stub_count_names_sources_not_bookkeeping_rows() {
+        let s = store();
+        // A pushed contribution has no origin; a stub does. The handshake counts only the stubs.
+        s.seen_add("m1", "pushed-sum", "ours", None, false).unwrap();
+        assert_eq!(s.seen_origin_count("m1").unwrap(), 0);
+        s.seen_add("m1", "stub-sum", "stub", Some("origin-a"), false)
+            .unwrap();
+        s.seen_add("m1", "full-sum", "full", Some("origin-b"), true)
+            .unwrap();
+        assert_eq!(s.seen_origin_count("m1").unwrap(), 2);
+        // A stored-FULL copy still names its source: it counts, it is not a contribution.
+        assert_eq!(s.seen_for_mapping("m1").unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_role_that_is_neither_owner_nor_member_is_refused_not_guessed() {
+        // The owner/member distinction is load-bearing: a member mirror must never silently
+        // become an owner mapping, or retiring it kills a live album.
+        assert_eq!(Role::parse("owner"), Some(Role::Owner));
+        assert_eq!(Role::parse("member"), Some(Role::Member));
+        assert_eq!(Role::parse("Owner"), None);
+        assert_eq!(Role::parse(""), None);
+        assert_eq!(Role::parse("admin"), None);
+    }
+
+    #[test]
+    fn debug_output_never_carries_the_private_key_or_a_contributors_secrets() {
+        let identity = Identity {
+            v: 1,
+            alg: "ed25519".into(),
+            public: "pub-bytes".into(),
+            private: "SECRET-SEED".into(),
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+        };
+        assert!(!format!("{identity:?}").contains("SECRET-SEED"));
+        let contributor = Contributor {
+            user_id: Some("u".into()),
+            api_key: Some("SECRET-KEY".into()),
+            password: Some("SECRET-PASSWORD".into()),
+            avatar_done: false,
+            via_peer: None,
+            peer_user_id: None,
+            home_peer: None,
+        };
+        let printed = format!("{contributor:?}");
+        assert!(!printed.contains("SECRET-KEY"));
+        assert!(!printed.contains("SECRET-PASSWORD"));
     }
 
     #[test]

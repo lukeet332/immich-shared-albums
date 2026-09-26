@@ -5,9 +5,9 @@ use crate::media::{cache, proxy};
 use crate::p2p::transport::{transport, PeerBody};
 use crate::state::State;
 use axum::body::{Body as HttpBody, Bytes};
-use futures_lite::StreamExt;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use futures_lite::StreamExt;
 
 /// Which of the app's own asset URLs was asked for. `/thumbnail` is the grid, `/original` the
 /// viewer, `/video/playback` the transcoded stream.
@@ -52,12 +52,36 @@ fn bytes_response(status: StatusCode, headers: Vec<(String, String)>, body: Vec<
     for (name, value) in headers {
         builder = builder.header(name, value);
     }
-    builder.body(HttpBody::from(body)).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    builder
+        .body(HttpBody::from(body))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 fn empty_status(status: u16) -> Response {
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
-    Response::builder().status(code).body(HttpBody::empty()).unwrap_or_else(|_| code.into_response())
+    Response::builder()
+        .status(code)
+        .body(HttpBody::empty())
+        .unwrap_or_else(|_| code.into_response())
+}
+
+/// Whom the stub probe may ask Immich as: the caller's own credential when they forwarded one, or
+/// NO credential header when all they carry is a share link's `?key=` — the link is itself the
+/// authority, and its expiry and password are Immich's to judge.
+///
+/// A request with NEITHER is refused here rather than probed. Probing as the admin key instead
+/// would authorise every stub in the ledger: the admin key can read the bot accounts' assets, so
+/// the probe could never fail and the true bytes would stream to any caller who could name a stub
+/// id — bypassing Immich's own 401 and every share link's expiry with it.
+fn probe_authority<'a>(
+    creds: Option<&'a crate::immich::access::Creds>,
+    key: Option<&str>,
+) -> Option<Auth<'a>> {
+    match (creds, key) {
+        (Some(creds), _) => Some(Auth::Creds(creds)),
+        (None, Some(_)) => Some(Auth::Anonymous),
+        (None, None) => None,
+    }
 }
 
 /// Serve the app's asset URL from the OWNER when the local row is only a stub.
@@ -83,19 +107,24 @@ pub async fn serve(
     // decides with the link's own authority (its expiry, its password) instead of 401ing a visitor
     // who is legitimately looking at a stub they were sent.
     let creds = creds_from_headers(headers);
-    let auth = match &creds {
-        Some(creds) => Auth::Creds(creds),
-        // No credential at all: fall back to the household key, which answers 404 for an asset it
-        // does not own rather than the caller's own 401. The probe below still decides.
-        None => Auth::Admin,
-    };
     // A share link's own authority, forwarded so Immich decides with it rather than 401ing a visitor.
     let key = crate::web::query::param(query, "key");
+    let Some(auth) = probe_authority(creds.as_ref(), key.as_deref()) else {
+        // No credential and no share key: this request carries no authority at all, so it is not
+        // ours to answer — the passthrough hands it to Immich, whose own 401 is the answer.
+        return None;
+    };
     let probe = match &key {
-        Some(key) => format!("/assets/{asset_id}?key={}", crate::web::query::urlencode(key)),
+        Some(key) => format!(
+            "/assets/{asset_id}?key={}",
+            crate::web::query::urlencode(key)
+        ),
         None => format!("/assets/{asset_id}"),
     };
-    match client.request(reqwest::Method::GET, &probe, &auth, &[]).await {
+    match client
+        .request(reqwest::Method::GET, &probe, &auth, &[])
+        .await
+    {
         Ok(_) => {}
         // Immich's own answer — a 401 for an anonymous visitor, a 403 for a link that expired, a
         // 404 for one withdrawn. Passed through so the app shows what Immich would have.
@@ -126,7 +155,10 @@ pub async fn serve(
         // long enough to ride the outage out — and must then re-ask, or a tile would stay a
         // placeholder for the 7-day lifetime real bytes carry.
         let stub = format!("/assets/{asset_id}/thumbnail?size=preview");
-        if let Ok(response) = client.request(reqwest::Method::GET, &stub, &Auth::Admin, &[]).await {
+        if let Ok(response) = client
+            .request(reqwest::Method::GET, &stub, &Auth::Admin, &[])
+            .await
+        {
             let content_type = response
                 .headers()
                 .get(header::CONTENT_TYPE)
@@ -147,18 +179,21 @@ pub async fn serve(
 
     let source = proxy::fetch_true_bytes(state, client, asset_id, kind.wire(), range).await;
     let mut out: Vec<(String, String)> = source.headers.into_iter().collect();
-    out.push(("cache-control".to_string(), "private, max-age=604800, immutable".to_string()));
+    out.push((
+        "cache-control".to_string(),
+        "private, max-age=604800, immutable".to_string(),
+    ));
     // An ORIGINAL can be megabytes (a video prefix especially), so the local answer arrives as a
     // stream and is passed straight through. Buffering it here to serve it would defeat the reason
     // `fetch_true_bytes` streams at all.
     let body = match source.body {
         PeerBody::Bytes(bytes) => HttpBody::from(bytes),
-        PeerBody::Stream(stream) => HttpBody::from_stream(
-            stream.map(|chunk| Ok::<_, std::io::Error>(Bytes::from(chunk))),
-        ),
+        PeerBody::Stream(stream) => {
+            HttpBody::from_stream(stream.map(|chunk| Ok::<_, std::io::Error>(Bytes::from(chunk))))
+        }
     };
-    let mut builder = Response::builder()
-        .status(StatusCode::from_u16(source.status).unwrap_or(StatusCode::OK));
+    let mut builder =
+        Response::builder().status(StatusCode::from_u16(source.status).unwrap_or(StatusCode::OK));
     for (name, value) in out {
         builder = builder.header(name, value);
     }
@@ -171,28 +206,40 @@ pub async fn serve(
 
 /// A preview's headers. Advertised as immutable because a photo's bytes never change, and tagged
 /// with where the bytes came from: HIT is the cache, MISS is the owner, BYPASS is the local stub.
-fn preview_header_list(
+fn byte_headers(
     cache_state: &'static str,
     length: usize,
     content_type: Option<&str>,
+    cache_control: &'static str,
 ) -> Vec<(String, String)> {
     vec![
-        ("content-type".to_string(), content_type.unwrap_or("image/jpeg").to_string()),
-        ("cache-control".to_string(), "private, max-age=604800, immutable".to_string()),
+        (
+            "content-type".to_string(),
+            content_type.unwrap_or("image/jpeg").to_string(),
+        ),
+        ("cache-control".to_string(), cache_control.to_string()),
         ("x-cache".to_string(), cache_state.to_string()),
         ("content-length".to_string(), length.to_string()),
     ]
 }
 
+fn preview_header_list(
+    cache_state: &'static str,
+    length: usize,
+    content_type: Option<&str>,
+) -> Vec<(String, String)> {
+    byte_headers(
+        cache_state,
+        length,
+        content_type,
+        "private, max-age=604800, immutable",
+    )
+}
+
 /// The placeholder's headers: unlike the owner's bytes this is not the photo, so it may only be
 /// held briefly — a minute, not the 7 days real bytes carry — and the browser must re-ask.
 fn bypass_header_list(length: usize, content_type: Option<&str>) -> Vec<(String, String)> {
-    vec![
-        ("content-type".to_string(), content_type.unwrap_or("image/jpeg").to_string()),
-        ("cache-control".to_string(), "private, max-age=60".to_string()),
-        ("x-cache".to_string(), "BYPASS".to_string()),
-        ("content-length".to_string(), length.to_string()),
-    ]
+    byte_headers("BYPASS", length, content_type, "private, max-age=60")
 }
 
 /// Ask the owner for the preview, bounded. The 32 MiB guard is stricter than the transport's own
@@ -207,14 +254,24 @@ async fn from_owner(state: &State, mapping_id: &str, origin: &str) -> Option<Vec
             .mappings
             .iter()
             .find(|m| m.id == mapping_id)
-            .and_then(|m| collections.peers.iter().find(|p| p.pub_key == m.peer).cloned())
+            .and_then(|m| {
+                collections
+                    .peers
+                    .iter()
+                    .find(|p| p.pub_key == m.peer)
+                    .cloned()
+            })
     }?;
     let transport = transport()?;
     let path = format!("/assets/{origin}/preview");
     match transport.byte_request(&peer, &path, None, None).await {
         Ok((head, body)) if head.status < 400 && body.len() <= PREVIEW_LIMIT => Some(body),
         Ok((_head, body)) if body.len() > PREVIEW_LIMIT => {
-            crate::log!("preview from \"{}\" was {} bytes — refusing to buffer it", peer.name, body.len());
+            crate::log!(
+                "preview from \"{}\" was {} bytes — refusing to buffer it",
+                peer.name,
+                body.len()
+            );
             None
         }
         Ok(_) => None,
@@ -228,12 +285,53 @@ async fn from_owner(state: &State, mapping_id: &str, origin: &str) -> Option<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::immich::access::Creds;
+
+    #[test]
+    fn a_forwarded_credential_is_always_the_probe_authority() {
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("x-api-key".to_string(), "k".to_string());
+        let creds = Creds { headers };
+        assert!(matches!(
+            probe_authority(Some(&creds), None),
+            Some(Auth::Creds(_))
+        ));
+        assert!(matches!(
+            probe_authority(Some(&creds), Some("link-key")),
+            Some(Auth::Creds(_))
+        ));
+    }
+
+    #[test]
+    fn a_share_link_key_probes_with_no_credential_header_at_all() {
+        // The link is the authority; a key header would widen the request beyond it.
+        assert!(matches!(
+            probe_authority(None, Some("link-key")),
+            Some(Auth::Anonymous)
+        ));
+    }
+
+    #[test]
+    fn neither_a_credential_nor_a_key_is_refused_rather_than_probed() {
+        // Probing as the admin key instead authorises every stub: it can read the bot accounts'
+        // assets, so the probe could never fail and the bytes would stream without Immich's 401.
+        assert!(probe_authority(None, None).is_none());
+    }
 
     #[test]
     fn only_the_three_app_urls_are_intercepted() {
-        assert_eq!(interceptor_route("/api/assets/a1/thumbnail"), Some(("a1", Kind::Thumbnail)));
-        assert_eq!(interceptor_route("/api/assets/a1/original"), Some(("a1", Kind::Original)));
-        assert_eq!(interceptor_route("/api/assets/a1/video/playback"), Some(("a1", Kind::Playback)));
+        assert_eq!(
+            interceptor_route("/api/assets/a1/thumbnail"),
+            Some(("a1", Kind::Thumbnail))
+        );
+        assert_eq!(
+            interceptor_route("/api/assets/a1/original"),
+            Some(("a1", Kind::Original))
+        );
+        assert_eq!(
+            interceptor_route("/api/assets/a1/video/playback"),
+            Some(("a1", Kind::Playback))
+        );
         assert_eq!(interceptor_route("/api/assets/a1"), None);
         assert_eq!(interceptor_route("/api/assets/a1/thumb"), None);
         assert_eq!(interceptor_route("/api/assets//thumbnail"), None);
@@ -250,6 +348,9 @@ mod tests {
     }
 
     #[test]
+    // The two limits are consts, so clippy can fold the comparison — the assertion is still the
+    // contract: the preview guard must stay strictly below the transport's blanket body ceiling.
+    #[allow(clippy::assertions_on_constants)]
     fn the_preview_guard_is_stricter_than_the_transport_ceiling() {
         // A preview is ~100KB. The interceptor refuses well before the transport's blanket 64 MiB,
         // because buffering 32 MiB of "preview" is a page load spent on one broken tile.
@@ -262,11 +363,19 @@ mod tests {
         // does change — it becomes the real bytes the moment the owner is reachable again — so a
         // browser that saw it during an outage must re-ask within a minute, not after 7 days.
         let bypass = bypass_header_list(1047, None);
-        let cc = bypass.iter().find(|(n, _)| n == "cache-control").map(|(_, v)| v).unwrap();
+        let cc = bypass
+            .iter()
+            .find(|(n, _)| n == "cache-control")
+            .map(|(_, v)| v)
+            .unwrap();
         assert!(cc.contains("max-age=60"), "cache-control={cc}");
         assert!(!cc.contains("immutable"), "cache-control={cc}");
         let real = preview_header_list("MISS", 1047, None);
-        let real_cc = real.iter().find(|(n, _)| n == "cache-control").map(|(_, v)| v).unwrap();
+        let real_cc = real
+            .iter()
+            .find(|(n, _)| n == "cache-control")
+            .map(|(_, v)| v)
+            .unwrap();
         assert!(real_cc.contains("immutable"), "cache-control={real_cc}");
     }
 }

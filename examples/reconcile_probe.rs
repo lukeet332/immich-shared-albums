@@ -23,7 +23,12 @@ async fn main() {
             .expect("transport"),
     );
 
-    let ledger = |st: &state::State| st.store.seen_for_mapping("m-seeded").map(|r| r.len()).unwrap_or(0);
+    let ledger = |st: &state::State| {
+        st.store
+            .seen_for_mapping("m-seeded")
+            .map(|r| r.len())
+            .unwrap_or(0)
+    };
     let cursor = |st: &state::State| {
         st.collections()
             .mappings
@@ -32,9 +37,18 @@ async fn main() {
             .and_then(|m| m.remote_version.clone())
     };
 
-    println!("{}", json!({ "phase": "before", "ledger": ledger(st), "cursor": cursor(st) }));
+    println!(
+        "{}",
+        json!({ "phase": "before", "ledger": ledger(st), "cursor": cursor(st) })
+    );
     reconcile_once(st, &client).await;
-    println!("{}", json!({ "phase": "after-first", "ledger": ledger(st), "cursor": cursor(st) }));
+    println!(
+        "{}",
+        json!({ "phase": "after-first", "ledger": ledger(st), "cursor": cursor(st) })
+    );
     reconcile_once(st, &client).await;
-    println!("{}", json!({ "phase": "after-second", "ledger": ledger(st), "cursor": cursor(st) }));
+    println!(
+        "{}",
+        json!({ "phase": "after-second", "ledger": ledger(st), "cursor": cursor(st) })
+    );
 }

@@ -12,8 +12,14 @@ use serde_json::json;
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let origin_user_id = args.get(1).cloned().unwrap_or_else(|| "probe-person".into());
-    let display_name = args.get(2).cloned().unwrap_or_else(|| "Probe Person".into());
+    let origin_user_id = args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| "probe-person".into());
+    let display_name = args
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| "Probe Person".into());
 
     config::install(Config::from_env().expect("config"));
     let booted = state::State::boot().expect("state");

@@ -53,6 +53,10 @@ pub enum Auth<'a> {
     Key(&'a str),
     /// A caller's own forwarded credential.
     Creds(&'a Creds),
+    /// Deliberately NO credential header. A public share link is itself the authority: Immich
+    /// decides with the `?key=` the caller forwarded, and adding a key header would widen what
+    /// the request can read beyond the link.
+    Anonymous,
 }
 
 pub struct Client {
@@ -113,6 +117,7 @@ impl Client {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            Auth::Anonymous => Vec::new(),
         }
     }
 
@@ -415,8 +420,6 @@ mod tests {
             "a transport failure is not a visibility answer"
         );
     }
-
-    use super::*;
 
     #[test]
     fn a_cache_miss_style_failure_is_classified_by_status_not_by_text() {

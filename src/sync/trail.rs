@@ -47,7 +47,8 @@ pub async fn drain_for_caller(
         // on their album at all. A refusal leaves the row queued, which is the honest outcome — it
         // will be tried again next visit rather than half-written.
         if let Err(e) =
-            crate::sync::house_bot::add_house_bot_to_album(state, client, &row.album_id, creds).await
+            crate::sync::house_bot::add_house_bot_to_album(state, client, &row.album_id, creds)
+                .await
         {
             // A refusal is usually an album that is gone, so this is bounded rather than retried on
             // every visit for ever — but it is still a RETRY, because a transient Immich failure
@@ -55,13 +56,13 @@ pub async fn drain_for_caller(
             match state.store.trail_pending_bump(row.id) {
                 Ok(true) => crate::log!(
                     "giving up on an audit line for {} ({}) after {} tries: {e}",
-                    &row.album_id[..row.album_id.len().min(8)],
+                    crate::sync::peer_mapping_id::short_id(&row.album_id),
                     row.event,
                     crate::store::TRAIL_MAX_ATTEMPTS
                 ),
                 _ => crate::log!(
                     "could not put the bot on {} to record a {}: {e}",
-                    &row.album_id[..row.album_id.len().min(8)],
+                    crate::sync::peer_mapping_id::short_id(&row.album_id),
                     row.event
                 ),
             }
@@ -123,19 +124,41 @@ mod tests {
             .trail_pending_add("album-gone", "m1", "left", "they left")
             .unwrap();
         for attempt in 1..crate::store::TRAIL_MAX_ATTEMPTS {
-            assert!(!s.store.trail_pending_bump(id).unwrap(), "still worth asking (try {attempt})");
+            assert!(
+                !s.store.trail_pending_bump(id).unwrap(),
+                "still worth asking (try {attempt})"
+            );
             assert_eq!(s.store.trail_pending_count().unwrap(), 1);
         }
-        assert!(s.store.trail_pending_bump(id).unwrap(), "the last try gives up");
-        assert_eq!(s.store.trail_pending_count().unwrap(), 0, "and the row is gone");
+        assert!(
+            s.store.trail_pending_bump(id).unwrap(),
+            "the last try gives up"
+        );
+        assert_eq!(
+            s.store.trail_pending_count().unwrap(),
+            0,
+            "and the row is gone"
+        );
     }
 
     #[test]
     fn a_line_waits_until_its_album_is_the_callers_to_write() {
         let s = state();
         assert!(!has_pending(&s), "nothing queued costs nothing");
-        enqueue(&s, "album-a", "m1", "joined", &joined_text("Mock household (C)"));
-        enqueue(&s, "album-b", "m2", "left", &left_text("Demo household (B)"));
+        enqueue(
+            &s,
+            "album-a",
+            "m1",
+            "joined",
+            &joined_text("Mock household (C)"),
+        );
+        enqueue(
+            &s,
+            "album-b",
+            "m2",
+            "left",
+            &left_text("Demo household (B)"),
+        );
         assert!(has_pending(&s));
         assert_eq!(s.store.trail_pending_count().unwrap(), 2);
         let rows = s.store.trail_pending_all().unwrap();
