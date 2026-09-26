@@ -36,8 +36,9 @@ cleanup
 
 # The prompts, in order: network, immich url, household name, host port, API key, reverse proxy,
 # public-proxy, install dir. Answering them is the point — this is the operator's path.
-answers=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
-  "$NET" "http://immich-b:2283" "Install check" "$HOST_PORT" "$API_KEY" "n" "n" "$INSTALL_DIR")
+answers=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+  "$NET" "http://immich-b:2283" "Install check" "$HOST_PORT" "$API_KEY" "n" "n" "$INSTALL_DIR" \
+  "immich-shared-albums")
 
 echo "running deploy/install.sh with $DOCKERFILE"
 if ! printf '%s\n' "$answers" | ISA_DOCKERFILE="$DOCKERFILE" bash deploy/install.sh > /tmp/isa-install.log 2>&1; then

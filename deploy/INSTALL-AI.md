@@ -43,11 +43,16 @@ ASK ME (only these):
 
 INSTALL:
 1. git clone https://github.com/lukeet332/immich-shared-albums
-2. Either run `bash deploy/install.sh` interactively with me, or replicate what
-   it does: build the image, write a compose file joining the sidecar to the
-   Immich docker network with env ISA_IMMICH_URL, ISA_IMMICH_API_KEY (in a chmod-600
-   .env file, never in the yml), ISA_HOUSEHOLD_NAME, and a NAMED
-   volume (isa-data) for /data. Start it with docker compose up -d.
+2. Run `bash deploy/install.sh` interactively with me. It asks for a compose
+   project name too — the state volume is named after it, so give it a distinct
+   name if this host will ever run a second sidecar (default: immich-shared-albums).
+   Before it reports success, the installer proves the key works: it asks the
+   sidecar's own container to call Immich with it, and fails with a fix-it message
+   if the URL or the key is wrong. (Replicating it by hand is possible but you
+   would be re-implementing those checks: build the image, write a compose file
+   joining the sidecar to the Immich docker network with env ISA_IMMICH_URL,
+   ISA_IMMICH_API_KEY in a chmod-600 .env file — never in the yml —
+   ISA_HOUSEHOLD_NAME, and a NAMED volume for /data.)
 3. If I have NO reverse proxy, skip the routes entirely: the sidecar is itself a
    front for Immich — everything that isn't shared-album traffic passes through,
    websockets included. Just tell me to point my Immich apps and browser at the
