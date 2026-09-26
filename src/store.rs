@@ -277,6 +277,11 @@ impl Store {
         // Locking per helper instead deadlocks: `std::sync::Mutex` is not reentrant.
         let conn = self.conn.lock().unwrap();
         conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+        // A second writer (another boot overlapping a restart, a test booting the same directory
+        // concurrently) must WAIT for the lock, not fail the open: `database is locked` here was a
+        // boot failure for a condition that clears in milliseconds. 5s, because a genuine stuck
+        // lock should still surface rather than hang the sidecar.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )?;
