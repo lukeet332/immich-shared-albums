@@ -6,11 +6,12 @@
 !package.json
 !package-lock.json
 !src/
+# The lane's protocol oracle is its own image and needs the JS iroh client.
+!demo/e2e/*.mjs
 # The Rust image build needs the crate and the COMMITTED UI it embeds at compile time
 # (rust/src/web/assets.rs include_str!s ../../../src/web/dist/). Both target/ and .cargo-home/
 # live under rust/ and are gigabytes, so they are re-excluded explicitly.
 !rust/
 rust/target/
 rust/.cargo-home/
-src/**/*.test.ts
 src/web/ui/
