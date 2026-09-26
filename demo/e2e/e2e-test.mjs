@@ -165,9 +165,6 @@ const rigOwns = (container, env) => {
     return { ok: RIG_PROJECTS.includes(owner), owner };
   } catch { return { ok: false, owner: '(no such container)' }; }
 };
-const SQLITE_ROWS_JSON =
-  'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db",{readOnly:true});' +
-  'process.stdout.write(JSON.stringify(db.prepare(process.argv[1]).all()))';
 // The Rust sidecar's image has no `node` in it, so reading its state must not go through one. Same
 // rule as the shell helper: a throwaway sqlite container on the same Docker host, so the WAL locks
 // are shared exactly as they are for the in-container reader. `-readonly` cannot unlink the WAL.
