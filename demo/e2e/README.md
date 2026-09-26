@@ -141,9 +141,9 @@ at anything but its own mocks**, even on a machine where a real Immich (or a rea
 listening. Four layers, and all of them are in the repo rather than in anyone's host config:
 
 1. **One build per image, named for what it is.** A run builds `immich-shared-albums:demo` (the
-   sidecar under test) and `immich-shared-albums:probe` (the independent JavaScript oracle, which
-   needs Node and so is built from the root Dockerfile whatever the sidecar uses — a Rust sidecar
-   image has no Node, and a probe that dies with `exec: node: not found` reads as a product failure).
+   sidecar under test); the wire oracle is `examples/probe.rs`, built from the same Dockerfile's
+   probe stage and extracted by the rig script — one implementation's framing, driven from outside
+   the product's process.
 1. **The address map is one set of variables**, read by the composes, `run-mock-e2e.sh`, the suite
    and the browser lane alike: `PORT_IMMICH_{B,C,D}` (defaults `2284–2286`), `PORT_SIDECAR_{B,C,D}`
    (`8301–8303`) and `RIG_BIND` (`127.0.0.1`). Put a host's map in a file **outside the repo** and
