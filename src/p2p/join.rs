@@ -28,6 +28,10 @@ pub struct Refused {
     /// The album needs its share password (or the one given was wrong). The panel turns this into a
     /// password prompt rather than an error, so it has to survive as a distinct fact.
     pub password_required: bool,
+    /// A DEAD DEPENDENCY, not a refused request: the transport is down or the other server could
+    /// not be dialled. The route answers it 502, so the panel reads "try again" instead of "you
+    /// mistyped something you cannot type".
+    pub retryable: bool,
 }
 
 impl Refused {
@@ -35,6 +39,15 @@ impl Refused {
         Refused {
             message: message.into(),
             password_required,
+            retryable: false,
+        }
+    }
+
+    fn unavailable(message: impl Into<String>) -> Self {
+        Refused {
+            message: message.into(),
+            password_required: false,
+            retryable: true,
         }
     }
 }
@@ -86,10 +99,7 @@ pub async fn redeem_invite(
         ));
     }
     let transport = transport().ok_or_else(|| {
-        Refused::new(
-            "this server's peer transport is not running — try again in a moment",
-            false,
-        )
+        Refused::unavailable("this server's peer transport is not running — try again in a moment")
     })?;
 
     // Dialled through a THROWAWAY peer record, never the stored one: this is the first contact, and
@@ -122,7 +132,7 @@ pub async fn redeem_invite(
     let (head, body) = transport
         .round_trip(&dialling, &header, Some(body.as_bytes()))
         .await
-        .map_err(|e| Refused::new(format!("could not reach the other server: {e}"), false))?;
+        .map_err(|e| Refused::unavailable(format!("could not reach the other server: {e}")))?;
     let answered: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
 
     if head.status >= 400 {
@@ -243,7 +253,7 @@ pub async fn redeem_invite(
     drop(collections);
     state
         .save()
-        .map_err(|e| Refused::new(format!("could not record the link: {e}"), false))?;
+        .map_err(|e| Refused::unavailable(format!("could not record the link: {e}")))?;
 
     Ok(Redeemed {
         household_name,

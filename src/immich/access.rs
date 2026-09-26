@@ -36,7 +36,15 @@ impl MappingAuth {
         mapping
             .host_slug
             .as_ref()
-            .and_then(|slug| state.collections().contributors.get(slug).and_then(|c| c.api_key.clone()))
+            .and_then(|slug| {
+                state
+                    .collections()
+                    .contributors
+                    .get(slug)
+                    .map(|c| c.api_key.clone())
+            })
+            // Empty = the stand-in's key was never minted; that is not a key.
+            .filter(|key| !key.is_empty())
             .map(MappingAuth::Key)
             .ok_or_else(|| {
                 format!(
@@ -239,10 +247,24 @@ mod tests {
         contributors.insert(
             "person-abc".to_string(),
             crate::store::Contributor {
-                user_id: Some("u1".into()),
-                api_key: Some("stand-in-key".into()),
+                user_id: "u1".into(),
+                api_key: "stand-in-key".into(),
                 password: None,
                 avatar_done: true,
+                via_peer: None,
+                peer_user_id: None,
+                home_peer: None,
+            },
+        );
+        // Not provisioned yet: an empty id and an empty key, the shape a mid-provisioning crash
+        // persists. The mirror it owns must read as keyless, not as a key that is "".
+        contributors.insert(
+            "person-empty".to_string(),
+            crate::store::Contributor {
+                user_id: String::new(),
+                api_key: String::new(),
+                password: None,
+                avatar_done: false,
                 via_peer: None,
                 peer_user_id: None,
                 home_peer: None,
@@ -276,6 +298,10 @@ mod tests {
         assert!(
             MappingAuth::for_mapping(&state, &mapping(Role::Member, Some("person-gone"))).is_err(),
             "a key for an account we do not hold is not a key"
+        );
+        assert!(
+            MappingAuth::for_mapping(&state, &mapping(Role::Member, Some("person-empty"))).is_err(),
+            "an empty key is not provisioned, not a key that is \"\""
         );
     }
 

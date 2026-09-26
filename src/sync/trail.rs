@@ -56,13 +56,13 @@ pub async fn drain_for_caller(
             match state.store.trail_pending_bump(row.id) {
                 Ok(true) => crate::log!(
                     "giving up on an audit line for {} ({}) after {} tries: {e}",
-                    crate::sync::peer_mapping_id::short_id(&row.album_id),
+                    crate::config::short_id(&row.album_id),
                     row.event,
                     crate::store::TRAIL_MAX_ATTEMPTS
                 ),
                 _ => crate::log!(
                     "could not put the bot on {} to record a {}: {e}",
-                    crate::sync::peer_mapping_id::short_id(&row.album_id),
+                    crate::config::short_id(&row.album_id),
                     row.event
                 ),
             }

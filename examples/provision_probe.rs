@@ -36,7 +36,7 @@ async fn main() {
                     "stateKey": spec.state_key,
                     "email": spec.email,
                     "userId": contributor.user_id,
-                    "hasApiKey": contributor.api_key.is_some(),
+                    "hasApiKey": !contributor.api_key.is_empty(),
                     "retainedPassword": contributor.password.is_some(),
                 })
             );

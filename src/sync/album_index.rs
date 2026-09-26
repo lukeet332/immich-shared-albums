@@ -195,7 +195,7 @@ pub async fn invite_peer_to_reunite(
     peer: &Peer,
     album_name: &str,
     owner_user_id: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), crate::web::route_error::RouteError> {
     // What the peer published, read NOW. A panel's rows come from the index the loop keeps, which
     // may not have pulled this peer since they published — and an invitation is an explicit act, so
     // it may wait briefly for the truth where a page load must not.
@@ -211,16 +211,21 @@ pub async fn invite_peer_to_reunite(
                 && crate::sync::matches::normalise_album_name(&a.name) == wanted
         })
         .ok_or_else(|| {
-            "that pairing is not in this server's index — open the panel again and retry"
-                .to_string()
+            crate::web::route_error::RouteError::bad_input(
+                "that pairing is not in this server's index — open the panel again and retry",
+            )
         })?;
 
-    let caller_albums = read_caller_albums(client, creds)
-        .await
-        .ok_or_else(|| "could not read your albums".to_string())?;
+    let caller_albums = read_caller_albums(client, creds).await.ok_or_else(|| {
+        crate::web::route_error::RouteError::unavailable("could not read your albums")
+    })?;
     let mine =
         crate::sync::adoption::find_adoptable_album(album_name, &caller_albums, caller_user_id)
-            .ok_or_else(|| format!("you have no album called \"{album_name}\""))?;
+            .ok_or_else(|| {
+                crate::web::route_error::RouteError::bad_input(format!(
+                    "you have no album called \"{album_name}\""
+                ))
+            })?;
 
     // THE MEMBERSHIP IS THE INVITATION, so it is added the way a human's would be and the ordinary
     // scanner turns it into one — the same path, the same mapping, the same everything. Two things
@@ -238,7 +243,8 @@ pub async fn invite_peer_to_reunite(
         true,
         true,
     )
-    .await?;
+    .await
+    .map_err(|e| crate::web::route_error::RouteError::unavailable(e.to_string()))?;
 
     // READ IT BACK rather than trust the call. `ensure_contributor` deliberately swallows a failed
     // add — attribution can retry — but a panel that says "Invited" for someone who is not on the
@@ -255,16 +261,17 @@ pub async fn invite_peer_to_reunite(
                 .and_then(|u| u.as_array())
                 .map(|users| {
                     users.iter().any(|au| {
-                        au.pointer("/user/id").and_then(|v| v.as_str()) == person.user_id.as_deref()
+                        au.pointer("/user/id").and_then(|v| v.as_str())
+                            == Some(person.user_id.as_str())
                     })
                 })
         })
         .unwrap_or(false);
     if !is_member {
-        return Err(format!(
+        return Err(crate::web::route_error::RouteError::bad_input(format!(
             "could not share \"{}\" with {} — nothing was changed",
             mine.name, theirs.owner_name
-        ));
+        )));
     }
 
     // Run the scanner NOW rather than on its next tick: the mapping it records is what turns the row
@@ -288,10 +295,10 @@ pub async fn invite_peer_to_reunite(
     // No mapping means the peer is never told, and the inviter's row would sit on "Invite" for ever
     // after a success notice. That IS a failure, and it has to read as one.
     let Some(mapping) = mapping else {
-        return Err(format!(
+        return Err(crate::web::route_error::RouteError::unavailable(format!(
             "\"{}\" is shared with {}, but the invitation was not recorded — open the panel again",
             mine.name, theirs.owner_name
-        ));
+        )));
     };
     if let Err(e) =
         crate::sync::house_bot::add_house_bot_to_album(state, client, &mine.album_id, creds).await

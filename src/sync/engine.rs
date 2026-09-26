@@ -1,4 +1,5 @@
 /** sync/engine.rs — the watcher: pushing what is new here out to peers. See ARCHITECTURE.md. */
+use crate::config::short_id;
 use crate::immich::access::read_album_assets_as;
 use crate::immich::client::Client;
 use crate::immich::refs::{self, AssetRef};
@@ -7,7 +8,7 @@ use crate::p2p::frame::RequestHeader;
 use crate::p2p::transport::transport;
 use crate::state::State;
 use crate::store::{Mapping, Peer, Role};
-use crate::sync::peer_mapping_id::{peer_album_mapping_id, peer_of, remote_target, short_id};
+use crate::sync::peer_mapping_id::{peer_album_mapping_id, peer_of, remote_target};
 use crate::sync::sweeps::SetEntryGuard;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};

@@ -20,7 +20,9 @@ pub fn contributor_api_key(state: &State, slug: &str) -> Option<String> {
         .collections()
         .contributors
         .get(slug)
-        .and_then(|c| c.api_key.clone())
+        .map(|c| c.api_key.clone())
+        // Empty = not provisioned yet (a mid-provisioning crash persists ""), not a usable key.
+        .filter(|key| !key.is_empty())
 }
 
 #[cfg(test)]
@@ -36,8 +38,8 @@ mod tests {
         s.collections().contributors.insert(
             "person-owner".into(),
             Contributor {
-                user_id: Some("u1".into()),
-                api_key: Some("key-1".into()),
+                user_id: "u1".into(),
+                api_key: "key-1".into(),
                 password: None,
                 avatar_done: false,
                 via_peer: None,
@@ -56,8 +58,8 @@ mod tests {
         s.collections().contributors.insert(
             "person-keyless".into(),
             Contributor {
-                user_id: Some("u2".into()),
-                api_key: None,
+                user_id: "u2".into(),
+                api_key: String::new(),
                 password: None,
                 avatar_done: false,
                 via_peer: None,
