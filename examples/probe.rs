@@ -32,10 +32,18 @@ fn main() {
     let outcome = tokio::runtime::Runtime::new()
         .expect("tokio runtime")
         .block_on(async move { run(&job).await });
-    println!(
-        "{}",
-        serde_json::to_string(&outcome).expect("the answer is JSON")
-    );
+    // Infallible on purpose: the wire round trip already happened, and panicking HERE would waste
+    // it for an answer that is a serde_json::Value by construction.
+    let answer = serde_json::to_string(&outcome)
+        .unwrap_or_else(|_| "{{\"status\":0,\"json\":null}}".to_string());
+    println!("{answer}");
+    // A transport failure is a PROBE failure, and the lane's one retry exists for exactly that: it
+    // keys on the container's exit, so exiting 0 here would make a flaky dial read as a red check.
+    // A bad job is different — the lane's own harness bug — and stays a panic, which the lane
+    // handles the same way it did for the oracle that came before this one.
+    if outcome.get("status").and_then(|s| s.as_u64()) == Some(0) {
+        std::process::exit(1);
+    }
 }
 
 async fn run(job: &Value) -> Value {
