@@ -4,13 +4,13 @@ The single process's one HTTP entry point and the HTML it serves — for humans 
 
 | File             | What it does                                                                                                                                                                                                                                                                                                                                                               |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `server.ts`      | The router: a thin dispatch table mapping each path to a handler. Exports `server`; `index.ts` calls `.listen()`.                                                                                                                                                                                                                                                          |
-| `passthrough.ts` | The transparent fall-through proxy to Immich for anything that isn't a sidecar route (SPA bundles, `/api`, `?native=1` share pages). Pure stream both directions — it buffers and rewrites nothing; uploads must never be buffered here.                                                                                                                                   |
-| `upgrade.ts`     | Websockets and any other protocol upgrade, piped at the socket level. Separate from `passthrough.ts` because `fetch()` cannot carry an upgrade at all: these never reach the router, arriving on the server's `upgrade` event instead. Two transports, two files.                                                                                                          |
-| `assets.ts`      | Reads the committed `dist/` artifacts once, rewrites the route prefix, and fills each document's `%%TOKENS%%` with escaped per-request values (household name, og tags, the sign-in reason). The only server-side code that touches HTML, and it contains none.                                                                                                            |
-| `ui/`            | The whole front-end, one Preact workspace: `lib/Document.tsx` (the single document every page prerenders into), `lib/theme.ts`, `lib/confirm.tsx` (the one confirmation every acting screen asks through), and `pages/{panel,accept,share,sign-in}` — each page is TSX components plus a real `.css` file. `scripts/build-web.mjs` bundles and prerenders it into `dist/`. |
+| `web/server.rs`      | The router: a thin dispatch table mapping each path to a handler. Exports `server`; `main.rs` calls `.listen()`.                                                                                                                                                                                                                                                          |
+| `web/passthrough.rs` | The transparent fall-through proxy to Immich for anything that isn't a sidecar route (SPA bundles, `/api`, `?native=1` share pages). Pure stream both directions — it buffers and rewrites nothing; uploads must never be buffered here.                                                                                                                                   |
+| `web/upgrade.rs`     | Websockets and any other protocol upgrade, piped at the socket level. Separate from `web/passthrough.rs` because `fetch()` cannot carry an upgrade at all: these never reach the router, arriving on the server's `upgrade` event instead. Two transports, two files.                                                                                                          |
+| `web/assets.rs`      | Reads the committed `dist/` artifacts once, rewrites the route prefix, and fills each document's `%%TOKENS%%` with escaped per-request values (household name, og tags, the sign-in reason). The only server-side code that touches HTML, and it contains none.                                                                                                            |
+| `ui/`            | The whole front-end, one Preact workspace: `src/web/ui/lib/Document.tsxx` (the single document every page prerenders into), `src/web/ui/lib/theme.ts`, `src/web/ui/lib/confirm.tsxx` (the one confirmation every acting screen asks through), and `pages/{panel,accept,share,sign-in}` — each page is TSX components plus a real `.css` file. `scripts/build-web.mjs` bundles and prerenders it into `dist/`. |
 | `dist/`          | Committed build output — `<page>.js`, `<page>.css`, prerendered `<page>.html`. Committed so the Dockerfile stays seven lines with no build step; the pre-commit hook rebuilds and stages it, and CI fails on drift.                                                                                                                                                        |
-| `auth.ts`        | Who is calling a human-facing route. Forwards the caller's own Immich credentials (session cookie or API key) to Immich's `/users/me` and believes the answer. The sidecar has no accounts of its own and must never invent any.                                                                                                                                           |
+| `web/auth.rs`        | Who is calling a human-facing route. Forwards the caller's own Immich credentials (session cookie or API key) to Immich's `/users/me` and believes the answer. The sidecar has no accounts of its own and must never invent any.                                                                                                                                           |
 
 ## Who may call what
 
@@ -20,13 +20,13 @@ There are three tiers, and each is enforced server-side:
 | Tier            | Routes                                                                                                                                                                                                                                    | Gate                                                                                                                                                                                                                                                                                                                                                                   |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Public          | `/immich-shared-albums/health`, `/immich-shared-albums/accept`, `/immich-shared-albums/assets/*`, `/share/:key` (the join document; `?native=1` passes through)                                                                           | none — liveness, static pages and their assets. `health` returns `{ok:true}` and nothing else, because the join card probes it cross-origin to discover a sidecar.                                                                                                                                                                                                     |
-| Signed-in human | `/immich-shared-albums/join`, `/leave`, `/peers`, `/pairings`, `/pairings/revoke`, `/pair`, `/settings`, `/unlink`, `/me/albums`, `/me/matches`, `/me/preferences`, `/me/albums/publish`, `/me/reunite`, `/me/unreunite`, `/me/invite`, `/events`, the panel | `auth.ts` against the caller's Immich session. `join` takes the account from the **session**, not the request body; naming a different user requires admin. `/me/invite`, `/me/reunite`, `/me/unreunite` and the panel are caller-scoped, not admin: they act on the caller's own albums. The rest requires admin — server links and settings are admin-owned objects. |
+| Signed-in human | `/immich-shared-albums/join`, `/leave`, `/peers`, `/pairings`, `/pairings/revoke`, `/pair`, `/settings`, `/unlink`, `/me/albums`, `/me/matches`, `/me/preferences`, `/me/albums/publish`, `/me/reunite`, `/me/unreunite`, `/me/invite`, `/events`, the panel | `web/auth.rs` against the caller's Immich session. `join` takes the account from the **session**, not the request body; naming a different user requires admin. `/me/invite`, `/me/reunite`, `/me/unreunite` and the panel are caller-scoped, not admin: they act on the caller's own albums. The rest requires admin — server links and settings are admin-owned objects. |
 | Peers           | **nothing** — peer operations left HTTP entirely and ride mutually authenticated iroh QUIC; see [`../p2p/wire-protocol.md`](../p2p/wire-protocol.md). The router serves humans and the app, full stop.                                    |
 
 The accept page's client-side `whoami` is UX only — it tells someone to sign in before
 they fill a form. The server never trusts it.
 
-**Two ordering rules in `server.ts`:** route before reading a body (only the sidecar's own
+**Two ordering rules in `web/server.rs`:** route before reading a body (only the sidecar's own
 JSON routes are buffered, under `ISA_MAX_BODY_KB`; passthrough traffic including photo uploads
 streams through), and authorise before doing work.
 
@@ -42,7 +42,7 @@ exactly like the panel itself (a session), carrying a `{ type }` hint — `invit
 `shares` — and never any data. The panel's reaction is to re-read `/me/albums` and `/me/matches` as
 the caller, so a hint cannot show anyone something they could not fetch themselves, and a sidecar
 without the route answers 404 and leaves the panel behaving as it did before. Emitting is
-`emitPanelEvent` from `panel-events.ts`, which the sync and peer layers call when a nudge arrives or
+`emitPanelEvent` from `web/server.rs`, which the sync and peer layers call when a nudge arrives or
 a share changes. **Every emit is gated on the change it announces** (`indexChanged` before hinting
 `index`, `changed` before `invitations`, the write itself before `shares`): the panel's own re-read
 goes back through those same refresh paths, so an ungated hint tells a page that just asked to ask
@@ -50,7 +50,7 @@ again, for as long as it stays open. `/sync/status` answers the running total as
 how the browser lane asserts an idle open panel is not doing that.
 
 **`/immich-shared-albums/` is the chooser.** It is the one URL worth remembering, so it is gated on a
-session rather than on admin: it asks Immich who is calling (`pages/root/App.tsx`) and either opens
+session rather than on admin: it asks Immich who is calling (`src/web/ui/pages/root/App.tsxx`) and either opens
 the personal panel directly (anyone) or offers the two panels (an admin). The admin panel lives at
 `/admin` because a choice has to point somewhere; `/me` is the personal panel.
 
@@ -96,7 +96,7 @@ activity is excluded at the ORIGIN: our bot's lines are this household's trail, 
 peer to mirror.
 
 **The per-user routes answer as the caller.** `/me/albums` and `/me/matches` read Immich with the
-caller's own forwarded credential (`immich/access.ts` decides that once), so membership and
+caller's own forwarded credential (`immich/access.rs` decides that once), so membership and
 ownership are Immich's answers rather than a filtered admin read — and `/me/albums/publish` reads
 the albums from Immich too, so a request body can only name the peer it is offering them to.
 `/me/invite` is the same rule applied to a write: it re-derives the caller's own album from their list
@@ -105,7 +105,7 @@ this sidecar makes to Immich on a human's behalf.
 
 Panel settings live in the kv `settings` row: `pairingTtlMinutes` (how long a minted pairing link stays redeemable, default 15, clamped 5–1440 — the ticket itself is shown exactly once and only its hash persists) and `shareLinkJoin` (default on), which governs the
 whole capability: off means every `/share/*` request passes straight through **and** the iroh
-`/invites/redeem` route answers 403 (`p2p/routes.ts`) — hiding the card without refusing the
+`/invites/redeem` route answers 403 (`p2p/routes.rs`) — hiding the card without refusing the
 join would be a setting that lies.
 
 The element ids `#who`, `#go`, `#out`, `#openapp` and the join card's `#immich-shared-albums-banner .card`/`input`/`button.join`/`.err` are a **test contract**: the browser lane drives

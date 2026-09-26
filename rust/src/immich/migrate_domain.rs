@@ -1,4 +1,4 @@
-//! immich/migrate_domain.rs — one-time, idempotent rename of bot accounts onto the current email domain. See PORT.md.
+//! immich/migrate_domain.rs — one-time, idempotent rename of bot accounts onto the current email domain. See ARCHITECTURE.md.
 //!
 //! When the bot email domain changes, existing accounts keep their old address — they are resolved by
 //! state key (person id), not email, so nothing breaks and no duplicate is created. But the old

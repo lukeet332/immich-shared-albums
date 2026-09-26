@@ -1,4 +1,4 @@
-//! sync/traffic_triggers.rs — what a request through the Immich proxy tells us to do, pure. See PORT.md.
+//! sync/traffic_triggers.rs — what a request through the Immich proxy tells us to do, pure. See ARCHITECTURE.md.
 
 /// What a request means for the work this sidecar does in the background.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

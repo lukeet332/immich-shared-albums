@@ -1,4 +1,4 @@
-/** sync/directory.rs — the people each server offers, and the invite targets it creates. See PORT.md. */
+/** sync/directory.rs — the people each server offers, and the invite targets it creates. See ARCHITECTURE.md. */
 use crate::config::{bot_prefix, cfg, is_utility_email, marker_name, UTILITY_EMAIL_DOMAIN};
 use crate::immich::client::{Auth, Client};
 use crate::immich::contributors::{ensure_utility_user, ContributorSpec};
@@ -179,7 +179,7 @@ pub fn start_directory_loop(state: std::sync::Arc<State>) {
             // fires, and the share would look live for ever. One cheap handshake per live share
             // answers it, and the same retirement counter the push uses does the rest.
             // The guard is bound in its own statement and dropped before the awaits below: holding
-            // it across an await makes the whole spawned loop non-Send (PORT.md's guard rule).
+            // it across an await makes the whole spawned loop non-Send (ARCHITECTURE.md's guard rule).
             let live_shares: Vec<crate::store::Mapping> = {
                 let collections = state.collections();
                 collections

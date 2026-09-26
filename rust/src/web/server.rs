@@ -1,4 +1,4 @@
-/** web/server.rs — the router: a thin dispatch table mapping each path to a handler. See PORT.md. */
+/** web/server.rs — the router: a thin dispatch table mapping each path to a handler. See ARCHITECTURE.md. */
 use crate::config::{cfg, ROUTE_PREFIX};
 use crate::p2p::pair::{pending_pairings, revoke_pairing};
 use crate::p2p::transport::transport;
@@ -16,7 +16,7 @@ use base64::Engine as _;
 use futures_lite::StreamExt;
 use serde_json::{json, Value};
 
-/// The whole HTTP surface. ORDER IS LOAD-BEARING and is documented in PORT.md; each step's
+/// The whole HTTP surface. ORDER IS LOAD-BEARING and is documented in ARCHITECTURE.md; each step's
 /// position is justified there. Steps that are not ported yet are marked and fail closed.
 pub async fn serve(req: Request) -> Response {
     let method = req.method().clone();

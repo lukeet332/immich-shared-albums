@@ -1,4 +1,4 @@
-/** state.rs — the store instance, this household's transport identity, and the thin accessors. See PORT.md. */
+/** state.rs — the store instance, this household's transport identity, and the thin accessors. See ARCHITECTURE.md. */
 use crate::config::cfg;
 use crate::store::{Collections, Identity, Store, StoreError};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

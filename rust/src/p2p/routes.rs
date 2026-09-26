@@ -1,4 +1,4 @@
-/** p2p/routes.rs — the peer route table: the only place peer operations exist. See PORT.md. */
+/** p2p/routes.rs — the peer route table: the only place peer operations exist. See ARCHITECTURE.md. */
 use crate::config::SIDECAR_VERSION;
 use crate::p2p::frame::RequestHeader;
 use crate::p2p::transport::{PeerAnswer, PeerHandler};

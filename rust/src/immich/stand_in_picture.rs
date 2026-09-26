@@ -1,4 +1,4 @@
-//! immich/stand_in_picture.rs — whose face an account of ours wears. See PORT.md.
+//! immich/stand_in_picture.rs — whose face an account of ours wears. See ARCHITECTURE.md.
 
 /// What to do about the profile picture on one of our own utility accounts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

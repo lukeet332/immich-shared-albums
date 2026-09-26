@@ -1,4 +1,4 @@
-/** immich/refs.rs — turning local assets into the refs that travel on the wire. See PORT.md. */
+/** immich/refs.rs — turning local assets into the refs that travel on the wire. See ARCHITECTURE.md. */
 use crate::config::{cfg, is_utility_email, person_name};
 use crate::immich::client::USERS;
 use serde::{Deserialize, Serialize};

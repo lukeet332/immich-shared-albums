@@ -1,4 +1,4 @@
-/** sync/invites.rs — native album invitations, per person. See PORT.md. */
+/** sync/invites.rs — native album invitations, per person. See ARCHITECTURE.md. */
 use crate::immich::access::{read_caller_albums, Creds};
 use crate::immich::client::Client;
 use crate::p2p::frame::RequestHeader;

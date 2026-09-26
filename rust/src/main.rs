@@ -1,4 +1,4 @@
-/** main.rs — entry / composition root. Starts the server, then the loops. See PORT.md. */
+/** main.rs — entry / composition root. Starts the server, then the loops. See ARCHITECTURE.md. */
 use immich_shared_albums::config::{cfg, Config};
 use immich_shared_albums::{config, log, p2p, state, web};
 

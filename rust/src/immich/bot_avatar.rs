@@ -1,4 +1,4 @@
-//! immich/bot_avatar.rs — the picture our own accounts wear in Immich's People list, drawn here so it ships with the addon and needs no third party. See PORT.md.
+//! immich/bot_avatar.rs — the picture our own accounts wear in Immich's People list, drawn here so it ships with the addon and needs no third party. See ARCHITECTURE.md.
 
 /// The face: a robot, with the addon's own twist — the link in its chest is a shared album.
 const INK: [u8; 4] = [15, 23, 42, 255]; // eyes, and the line the limbs are drawn in

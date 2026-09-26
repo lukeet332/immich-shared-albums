@@ -1,4 +1,4 @@
-/** web/query.rs — reading and writing query strings, in one place. See PORT.md. */
+/** web/query.rs — reading and writing query strings, in one place. See ARCHITECTURE.md. */
 
 /// `application/x-www-form-urlencoded` decoding, which is what a query string is: `+` means a space
 /// and `%XX` is a byte. Bytes are collected first and decoded as UTF-8 at the end, so a multi-byte

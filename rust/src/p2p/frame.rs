@@ -1,4 +1,4 @@
-/** p2p/frame.rs — the isa/2 frame codec: two u32-LE length prefixes per request. See PORT.md. */
+/** p2p/frame.rs — the isa/2 frame codec: two u32-LE length prefixes per request. See ARCHITECTURE.md. */
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt};
 

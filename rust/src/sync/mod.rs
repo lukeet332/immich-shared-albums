@@ -1,4 +1,4 @@
-/** sync/mod.rs — reconcile, comment and invite loops. See PORT.md. */
+/** sync/mod.rs — reconcile, comment and invite loops. See ARCHITECTURE.md. */
 pub mod adoption;
 pub mod album_grant;
 pub mod album_index;

@@ -42,32 +42,17 @@ jobs:
         run: npm run format:check
       - name: Lint (eslint)
         run: npm run lint
-      - name: Types (tsc)
+      - name: Types (tsc, the panel UI)
         run: npm run typecheck
       - name: Import cycles
         run: npm run cycles
-      - name: Unit tests
-        run: npm test
-
   e2e:
-    # TWO LANES, one job definition: the TypeScript sidecar (the reference implementation and the
-    # baseline) and the Rust one (what install.sh ships). Separate runners, so neither can time the
-    # other out and a failure in one still reports the other's result. The Rust lane pays a cold
-    # cargo build (~15 minutes: musl, LTO, bundled SQLite), which is why the timeout covers both.
-    strategy:
-      fail-fast: false
-      matrix:
-        sidecar:
-          - name: typescript
-            dockerfile: Dockerfile
-          - name: rust
-            dockerfile: rust/Dockerfile
-    name: e2e (${{ matrix.sidecar.name }})
+    name: e2e
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      # Which Dockerfile builds the image under test, read by the background build below.
-      ISA_DOCKERFILE: ${{ matrix.sidecar.dockerfile }}
+      # The sidecar under test is the Rust build; there is no other.
+      ISA_DOCKERFILE: rust/Dockerfile
       # push/PR runs pin the known-good Immich BY DIGEST (upstream mutates even version
       # tags — observed live 2026-08-16); the weekly cron chases :release as a canary
       IMMICH_REF: ${{ github.event_name == 'schedule' && ':release' || '@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb' }}

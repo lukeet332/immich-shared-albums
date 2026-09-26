@@ -1,4 +1,4 @@
-//! web/upgrade.rs — protocol upgrades (websockets), proxied at the socket level. See PORT.md.
+//! web/upgrade.rs — protocol upgrades (websockets), proxied at the socket level. See ARCHITECTURE.md.
 //!
 //! Separate from `passthrough` on purpose: that path speaks request/response through a pooled HTTP
 //! client, and an upgrade is neither. This is what makes the sidecar viable as the SINGLE front for

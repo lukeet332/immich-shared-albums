@@ -1,9 +1,9 @@
-/** config.rs — process configuration, the shared logger, and small string constants. See PORT.md. */
+/** config.rs — process configuration, the shared logger, and small string constants. See ARCHITECTURE.md. */
 use std::sync::OnceLock;
 
 pub const SIDECAR_VERSION: &str = "1.1.1"; // x-release-please-version
 
-/// Every setting here comes from an `ISA_`-prefixed variable, for the reason given in PORT.md
+/// Every setting here comes from an `ISA_`-prefixed variable, for the reason given in ARCHITECTURE.md
 /// ("Why ISA_"). Parsing is strict and fails loudly at boot: a typo'd boolean must never fail
 /// open, and a bad cadence must never become a zero-length interval.
 #[derive(Clone)]

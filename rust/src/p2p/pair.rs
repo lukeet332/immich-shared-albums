@@ -1,4 +1,4 @@
-/** p2p/pair.rs — pairing links two servers on their own, with no album involved. See PORT.md. */
+/** p2p/pair.rs — pairing links two servers on their own, with no album involved. See ARCHITECTURE.md. */
 use crate::config::{cfg, SIDECAR_VERSION};
 use crate::p2p::transport::{is_connection_death, Transport};
 use crate::protocol::PROTOCOL_VERSION;

@@ -1,4 +1,4 @@
-/** p2p/join.rs — the MEMBER side of joining: dial the origin an invite names, and redeem it. See PORT.md. */
+/** p2p/join.rs — the MEMBER side of joining: dial the origin an invite names, and redeem it. See ARCHITECTURE.md. */
 use crate::config::{cfg, SIDECAR_VERSION};
 use crate::p2p::frame::RequestHeader;
 use crate::p2p::transport::transport;

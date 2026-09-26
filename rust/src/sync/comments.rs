@@ -1,4 +1,4 @@
-/** sync/comments.rs — cross-server comment sync. See PORT.md. */
+/** sync/comments.rs — cross-server comment sync. See ARCHITECTURE.md. */
 use crate::config::{cfg, person_name};
 use crate::immich::client::{users_by_id, Auth, Client};
 use crate::immich::contributors::ensure_contributor;

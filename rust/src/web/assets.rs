@@ -1,4 +1,4 @@
-/** web/assets.rs — serves the committed dist/ artifacts and fills their %%TOKENS%%, escaped. See PORT.md. */
+/** web/assets.rs — serves the committed dist/ artifacts and fills their %%TOKENS%%, escaped. See ARCHITECTURE.md. */
 use crate::config::{cfg, ROUTE_PREFIX};
 
 /// The committed build output, embedded at compile time so the shipped binary needs no asset

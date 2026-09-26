@@ -1,4 +1,4 @@
-/** store.rs — the raw SQLite layer: schema, migrations, and every ledger. See PORT.md. */
+/** store.rs — the raw SQLite layer: schema, migrations, and every ledger. See ARCHITECTURE.md. */
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;

@@ -1,4 +1,4 @@
-/** sync/sweeps.rs — the state of the background loops: held still, or working. See PORT.md. */
+/** sync/sweeps.rs — the state of the background loops: held still, or working. See ARCHITECTURE.md. */
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};

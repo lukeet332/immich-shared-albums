@@ -1,4 +1,4 @@
-/** p2p/protocol.rs — the inbound peer handlers. See PORT.md. */
+/** p2p/protocol.rs — the inbound peer handlers. See ARCHITECTURE.md. */
 use crate::config::{cfg, SIDECAR_VERSION};
 use crate::immich::access::read_album_assets_as;
 use crate::immich::client::{get_shared_link_by_key, owner_name, Client};

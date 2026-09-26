@@ -1,4 +1,4 @@
-/** web/frontend.rs — every human-facing surface this addon serves, in one table. See PORT.md. */
+/** web/frontend.rs — every human-facing surface this addon serves, in one table. See ARCHITECTURE.md. */
 use crate::web::assets;
 
 /// Who may see a surface. `Admin` is the panel, because it is the only surface that acts on the

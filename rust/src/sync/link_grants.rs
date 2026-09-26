@@ -1,4 +1,4 @@
-/** sync/link_grants.rs — a link join lasts exactly as long as its link. See PORT.md. */
+/** sync/link_grants.rs — a link join lasts exactly as long as its link. See ARCHITECTURE.md. */
 use crate::immich::client::{Auth, Client};
 use crate::p2p::entitlement::forget_offered;
 use crate::state::State;
@@ -24,7 +24,7 @@ fn now_ms() -> i64 {
 /// Presence is the whole test, and deliberately so: a link row this code cannot fully read must not
 /// revoke somebody's share. `expiresAt` is therefore NOT a withdrawal here — an expired link is a
 /// limit on JOINING, and ending joins that already happened is a policy change with its own test to
-/// write, not something to infer from an unparsed timestamp. See the note in PORT.md.
+/// write, not something to infer from an unparsed timestamp. See the note in ARCHITECTURE.md.
 fn album_has_link(links: &[Value], album_id: &str) -> bool {
     links.iter().any(|l| {
         l.pointer("/album/id").and_then(|v| v.as_str()) == Some(album_id)

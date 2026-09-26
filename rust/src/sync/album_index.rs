@@ -1,4 +1,4 @@
-/** sync/album_index.rs — publishing a person's owned albums so a linked peer can match them. See PORT.md. */
+/** sync/album_index.rs — publishing a person's owned albums so a linked peer can match them. See ARCHITECTURE.md. */
 use crate::immich::access::{read_caller_albums, Creds};
 use crate::immich::client::Client;
 use crate::state::State;

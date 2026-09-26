@@ -1,4 +1,4 @@
-/** p2p/transport.rs — the iroh peer transport: endpoint lifecycle, dial-by-key, request framing. See PORT.md. */
+/** p2p/transport.rs — the iroh peer transport: endpoint lifecycle, dial-by-key, request framing. See ARCHITECTURE.md. */
 use crate::config::cfg;
 use crate::p2p::frame::{
     frame, read_frame, RequestHeader, ResponseHeader, HEADER_FRAME_LIMIT, JSON_BODY_LIMIT,

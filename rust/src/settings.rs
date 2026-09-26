@@ -1,4 +1,4 @@
-/** settings.rs — the `settings` kv row, in one place. See PORT.md. */
+/** settings.rs — the `settings` kv row, in one place. See ARCHITECTURE.md. */
 use crate::store::{Store, StoreError};
 
 /// How long a minted pairing link stays redeemable. The ticket itself is shown exactly once and

@@ -1,4 +1,4 @@
-/** protocol.rs — the wire contract. Both peers must agree on every constant here. See PORT.md. */
+/** protocol.rs — the wire contract. Both peers must agree on every constant here. See ARCHITECTURE.md. */
 
 /// The protocol MAJOR. Carried in the ALPN, so a future major can dual-serve the previous one and
 /// needs no flag day. Independent of SIDECAR_VERSION: a release can change without a wire change.

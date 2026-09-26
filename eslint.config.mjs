@@ -20,10 +20,10 @@ export default tseslint.config(
     ignores: ['src/web/dist/**', 'node_modules/**', 'demo/**', 'scripts/**', 'eslint.config.mjs'],
   },
   {
-    files: ['src/**/*.ts'],
+    files: ['src/web/ui/**/*.{ts,tsx}'],
     extends: [tseslint.configs.base],
     languageOptions: {
-      parserOptions: { project: ['./tsconfig.json'], tsconfigRootDir: import.meta.dirname },
+      parserOptions: { project: ['./src/web/ui/tsconfig.json'], tsconfigRootDir: import.meta.dirname },
     },
     rules: {
       // This whole codebase is concurrent async loops sharing one state object. An unawaited
@@ -70,17 +70,5 @@ export default tseslint.config(
       '@typescript-eslint/await-thenable': 'error',
       eqeqeq: ['error', 'smart'],
     },
-  },
-  {
-    // config.ts and types.ts are where those single sources of truth are declared.
-    files: ['src/config.ts', 'src/types.ts'],
-    rules: { 'no-restricted-syntax': 'off' },
-  },
-  {
-    // Tests assert on the literals precisely because production code must not inline them.
-    // node:test's `test()` returns a promise that is designed to be left unawaited, so the
-    // floating-promise rule is pure noise here — the one exemption, and a deliberate one.
-    files: ['src/**/*.test.ts'],
-    rules: { 'no-restricted-syntax': 'off', '@typescript-eslint/no-floating-promises': 'off' },
   },
 );

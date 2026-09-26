@@ -1,4 +1,4 @@
-//! immich/admin_key.rs — the admin key's required scopes, and the boot check that verifies them. See PORT.md.
+//! immich/admin_key.rs — the admin key's required scopes, and the boot check that verifies them. See ARCHITECTURE.md.
 
 use crate::immich::client::{Auth, Client};
 

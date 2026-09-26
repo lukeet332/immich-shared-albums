@@ -1,4 +1,4 @@
-/** sync/audit.rs — the trail an album keeps of its own history. See PORT.md. */
+/** sync/audit.rs — the trail an album keeps of its own history. See ARCHITECTURE.md. */
 use crate::immich::client::Client;
 use crate::state::State;
 

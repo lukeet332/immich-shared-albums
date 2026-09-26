@@ -1,4 +1,4 @@
-/** sync/mirror.rs — creating the local mirror of a remote album. See PORT.md. */
+/** sync/mirror.rs — creating the local mirror of a remote album. See ARCHITECTURE.md. */
 use crate::config::{bot_prefix, cfg, is_utility_email, UTILITY_EMAIL_DOMAIN};
 use crate::immich::access::Creds;
 use crate::immich::client::{Auth, Client};

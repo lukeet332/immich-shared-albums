@@ -1,4 +1,4 @@
-/** sync/album_suppression.rs — refusing to materialise a photo the album already holds. See PORT.md. */
+/** sync/album_suppression.rs — refusing to materialise a photo the album already holds. See ARCHITECTURE.md. */
 use crate::store::{Mapping, SeenEntry};
 
 /// The mappings whose local half IS this album — the set a duplicate could arrive through.

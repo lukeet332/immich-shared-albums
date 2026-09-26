@@ -1,4 +1,4 @@
-/** web/activity_filter.rs — hiding our own audit lines from ONE reader, in the answer they were served. See PORT.md. */
+/** web/activity_filter.rs — hiding our own audit lines from ONE reader, in the answer they were served. See ARCHITECTURE.md. */
 use serde_json::Value;
 
 use crate::sync::audit::is_audit_activity;

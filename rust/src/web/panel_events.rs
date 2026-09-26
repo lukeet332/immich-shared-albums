@@ -1,4 +1,4 @@
-/** web/panel_events.rs — the hint channel to panels that are open. See PORT.md. */
+/** web/panel_events.rs — the hint channel to panels that are open. See ARCHITECTURE.md. */
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};

@@ -1,4 +1,4 @@
-/** immich/mod.rs — the local Immich API layer. See PORT.md. */
+/** immich/mod.rs — the local Immich API layer. See ARCHITECTURE.md. */
 pub mod access;
 pub mod admin_key;
 pub mod bot_avatar;

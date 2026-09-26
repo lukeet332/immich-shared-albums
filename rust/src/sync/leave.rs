@@ -1,4 +1,4 @@
-/** sync/leave.rs — undoing a join. See PORT.md. */
+/** sync/leave.rs — undoing a join. See ARCHITECTURE.md. */
 use crate::immich::client::Client;
 use crate::p2p::entitlement::forget_offered;
 use crate::p2p::frame::RequestHeader;

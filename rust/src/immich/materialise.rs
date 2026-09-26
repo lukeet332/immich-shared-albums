@@ -1,4 +1,4 @@
-/** immich/materialise.rs — making a peer's photo a real row in this household's library. See PORT.md. */
+/** immich/materialise.rs — making a peer's photo a real row in this household's library. See ARCHITECTURE.md. */
 
 use crate::immich::client::{
     add_to_album, apply_ref_metadata, stub_jpeg, upload_asset, Client,

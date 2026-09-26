@@ -1,4 +1,4 @@
-/** sync/album_teardown.rs — what leaving a share is allowed to remove. See PORT.md. */
+/** sync/album_teardown.rs — what leaving a share is allowed to remove. See ARCHITECTURE.md. */
 use crate::store::{Mapping, Role};
 
 /// The fields the decision reads.

@@ -1,4 +1,4 @@
-/** immich/contributors.rs — one Immich account per remote person, and the membership rules. See PORT.md. */
+/** immich/contributors.rs — one Immich account per remote person, and the membership rules. See ARCHITECTURE.md. */
 use crate::config::{bot_prefix, cfg, is_utility_email, UTILITY_EMAIL_DOMAIN, UTILITY_SUFFIX};
 use base64::Engine as _;
 use crate::immich::client::{Auth, Client};
