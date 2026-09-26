@@ -3,15 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit && tsc -p src/web/ui",
-    "lint": "eslint src",
+    "typecheck": "tsc -p src/web/ui",
+    "lint": "eslint src/web/ui",
     "lint:fix": "eslint src --fix",
-    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"scripts/**/*.mjs\" \"*.json\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"scripts/**/*.mjs\" \"*.json\"",
+    "format": "prettier --write \"src/web/ui/**/*.{ts,tsx,css}\" \"scripts/**/*.mjs\" \"*.json\"",
+    "format:check": "prettier --check \"src/web/ui/**/*.{ts,tsx,css}\" \"scripts/**/*.mjs\" \"*.json\"",
     "cycles": "node scripts/check-cycles.mjs",
-    "test": "docker run --rm -e ISA_IMMICH_API_KEY=test-only -v \"$PWD/src\":/app/src -v \"$PWD/scripts\":/app/scripts -v \"$PWD/package.json\":/app/package.json -v \"$PWD/package-lock.json\":/app/package-lock.json -v isa-node-modules:/app/node_modules -w /app node:24-alpine sh -c 'npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1; node --test \"src/**/*.test.ts\"'",
-    "verify": "npm run verify:fast && npm run check:runtime && npm test",
-    "check:runtime": "docker run --rm -e ISA_IMMICH_API_KEY=test-only -v \"$PWD/src\":/app/src -v \"$PWD/scripts\":/app/scripts -v \"$PWD/package.json\":/app/package.json -v \"$PWD/package-lock.json\":/app/package-lock.json -v isa-node-modules:/app/node_modules -w /app node:24-alpine sh -c 'npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1; node scripts/check-runtime.mjs'",
+    "verify": "npm run verify:fast",
     "verify:fast": "npm run build:web && npm run format:check && npm run lint && npm run typecheck && npm run cycles && node scripts/check-tokens.mjs && node scripts/check-contrast.mjs",
     "prepare": "git config core.hooksPath .githooks",
     "build:web": "node scripts/build-web.mjs"
@@ -24,9 +22,8 @@
     "preact-render-to-string": "^6.7.0",
     "prettier": "^3.9.6",
     "typescript": "^5.6.0",
-    "typescript-eslint": "^8.67.0"
-  },
-  "dependencies": {
+    "typescript-eslint": "^8.67.0",
     "@number0/iroh": "1.1.0"
-  }
+  },
+  "dependencies": {}
 }

@@ -97,7 +97,7 @@ if [ -z "${SKIP_BUILD:-}" ]; then
   echo "== build image (commit $COMMIT) =="
   # ISA_DOCKERFILE names WHICH Dockerfile builds the rig's sidecar, so the port's replacement can be
   # run through this whole suite before it becomes the default. Every normal run uses the default.
-  IMAGE_DOCKERFILE="${ISA_DOCKERFILE:-Dockerfile}"
+  IMAGE_DOCKERFILE="${ISA_DOCKERFILE:-rust/Dockerfile}"
   echo "   (from $IMAGE_DOCKERFILE)"
   # ISA_BUILD_ARGS exists so a build can carry extra --build-arg flags, e.g. debug symbols for a
   # hang that has to be diagnosed with gdb. Every normal run passes none.
@@ -111,12 +111,13 @@ fi
 
 # The iroh probe is the INDEPENDENT JavaScript oracle, and it is NOT the image under test: under
 # ISA_DOCKERFILE=rust/Dockerfile the sidecar image has no node at all, and every probe would die with
-# "exec: node: not found", which reads as a product failure. So it is built from the root Dockerfile
+# "exec: node: not found", which reads as a product failure. So the oracle has its own image
+# (demo/e2e/probe.Dockerfile)
 # whatever the sidecar uses — and it is built OUTSIDE the branch above, because a SKIP_BUILD run
 # (CI pre-builds the sidecar image in the background) still needs an oracle to ask anything at all.
 # Always built rather than `docker image inspect`-guarded: the layer cache makes an unchanged build
 # about a second, and a probe image left over from an older lockfile would answer for the wrong code.
-( cd "$DIR" && docker build -q -t immich-shared-albums:probe . >/dev/null ) \
+( cd "$DIR" && docker build -q -f demo/e2e/probe.Dockerfile -t immich-shared-albums:probe . >/dev/null ) \
   || { echo "!! probe image build failed — the independent oracle cannot run" >&2; exit 1; }
 export PROBE_IMAGE=immich-shared-albums:probe
 
@@ -143,11 +144,8 @@ reset_state() { # reset_state <compose-dir> <service>
 # (2026-09-18: `state.db-wal (deleted)` on PID 1 of all three rig sidecars — the cause of every
 # local-only e2e failure.) A reader inside the container shares the locks and is safe. Linux (CI)
 # never had the problem, which is why it looked like flakiness. One row per line, first column.
-SQLITE_COL='const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db",{readOnly:true});process.stdout.write(db.prepare(process.argv[1]).all().map(r=>Object.values(r)[0]).join("\n"))'
-# ...but WHAT reads it must not depend on the sidecar's runtime: the Node image has `node`, the Rust
-# one does not, and `docker compose exec ... node` then fails with "executable file not found". This
-# tiny reader is the language-agnostic path, still a container on the same Docker host, so it shares
-# the WAL locks exactly as the in-container reader does.
+# The reader is a container on the same Docker host, so it shares the WAL locks exactly as an
+# in-container reader would.
 READER_IMAGE=immich-shared-albums:sqlite-reader
 ensure_reader() {
   docker image inspect "$READER_IMAGE" >/dev/null 2>&1 && return 0
@@ -161,13 +159,8 @@ sidecar_data_dir() { # the host path behind a sidecar's /data
 sidecar_col() { # sidecar_col <service> <sql> — run from that household's compose dir
   # -readonly matters: it cannot checkpoint or unlink the WAL, so it is safe even where the locks
   # do not reach (the macOS bind-mount case this comment block exists for).
-  # Probe for the runtime rather than trusting an exit code: `docker compose exec` reports a missing
-  # binary on STDOUT with status 0, so a fallback keyed on failure never fires and the error text is
-  # read as the query's result.
-  if docker compose exec -T "$1" sh -c 'command -v node >/dev/null 2>&1' 2>/dev/null; then
-    docker compose exec -T "$1" node -e "$SQLITE_COL" "$2" 2>/dev/null
-    return 0
-  fi
+  # The sidecar image has no runtime to exec into (rust/ARCHITECTURE.md), so reads go through the
+  # reader container, which shares the WAL locks exactly as an in-container reader would.
   local src; src=$(sidecar_data_dir "$1") || return 1
   [ -n "$src" ] || return 1
   ensure_reader || return 1

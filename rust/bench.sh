@@ -5,8 +5,8 @@
 #   bash rust/bench.sh
 #
 # Both run as containers from their own image, so what is compared is the ARTEFACT that ships, not a
-# debug binary. The Node sidecar is built from the repo's root Dockerfile; the Rust one from
-# rust/Dockerfile. Every number is taken the same way for both: the same curl, the same request
+# debug binary, built from rust/Dockerfile. Every number is taken the same way: the same curl, the
+# same request
 # count, the same warm-up.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -39,7 +39,7 @@ stop() { docker rm -f "$1" >/dev/null 2>&1; }
 
 # ---- image size (the artefact itself) ----
 echo "=== image ===" | tee -a "$OUT"
-for spec in "immich-shared-albums:node|Node|Dockerfile" "immich-shared-albums:rust|Rust|rust/Dockerfile"; do
+for spec in "immich-shared-albums:rust|Rust|rust/Dockerfile"; do
   img=${spec%%|*}; rest=${spec#*|}; label=${rest%%|*}
   docker image inspect "$img" >/dev/null 2>&1 || { echo "building $img"; docker build -q -t "$img" -f "${rest##*|}" . >/dev/null 2>&1; }
   size=$(docker image inspect "$img" --format '{{.Size}}' 2>/dev/null)
