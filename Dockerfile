@@ -1,6 +1,6 @@
 # Pinned by digest: the tag is mutable and this image ships to ghcr, so an unpinned base would let
 # the published artefact change with no commit here. Dependabot's docker ecosystem moves the digest.
-FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80
 WORKDIR /app
 # The one production dependency: the iroh peer transport (native, pinned by the lockfile).
 COPY package.json package-lock.json ./
