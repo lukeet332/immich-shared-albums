@@ -1,4 +1,4 @@
-/** immich/client.rs — the local Immich REST client: one wrapper every read and write goes through. See PORT.md. */
+/** immich/client.rs — the local Immich REST client: one wrapper every read and write goes through. See ARCHITECTURE.md. */
 use crate::config::cfg;
 use crate::immich::access::Creds;
 use serde_json::Value;

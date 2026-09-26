@@ -65,12 +65,12 @@
 
 | Doc | What it answers |
 | :--- | :--- |
-| [Architecture](./src/ARCHITECTURE.md) | the whole design on one page — components, data flow, iron rules |
-| [Wire protocol](./src/p2p/wire-protocol.md) | how two servers pair, share and stream, and what the connection proves |
-| [Sync loops](./src/sync/sync-loops.md) | how albums, invitations and withdrawals reconcile |
-| [Byte path](./src/media/hotlink-bytes.md) | where the actual pixels come from when you view a shared photo |
-| [HTTP surface](./src/web/http-router.md) | every route the addon serves, and who may call it |
-| [Immich API layer](./src/immich/local-immich-api.md) | the accounts the addon creates and the Immich quirks it absorbs |
+| [Architecture](./rust/ARCHITECTURE.md) | the whole design on one page — components, data flow, iron rules |
+| [Wire protocol](./rust/docs/wire-protocol.md) | how two servers pair, share and stream, and what the connection proves |
+| [Sync loops](./rust/docs/sync-loops.md) | how albums, invitations and withdrawals reconcile |
+| [Byte path](./rust/docs/hotlink-bytes.md) | where the actual pixels come from when you view a shared photo |
+| [HTTP surface](./rust/docs/http-router.md) | every route the addon serves, and who may call it |
+| [Immich API layer](./rust/docs/local-immich-api.md) | the accounts the addon creates and the Immich quirks it absorbs |
 | [Contributing](./AGENTS.md) | the working contract for humans and AI agents — conventions, tests, invariants |
 | [Demo rig](./demo/) | three complete households in Docker, plus the e2e suites that gate every change |
 

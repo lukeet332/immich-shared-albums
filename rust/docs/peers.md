@@ -1,7 +1,7 @@
 # Peer lookups and nudges
 
-`peers.ts` — who a caller is (`peerByPub`), which mapping a peer may touch (`mappingFor`), and the
-fire-and-forget nudge. Transport, framing and dialing live in [`p2p/transport.ts`](./p2p/) — see
+`store.rs` — who a caller is (`peerByPub`), which mapping a peer may touch (`mappingFor`), and the
+fire-and-forget nudge. Transport, framing and dialing live in [`p2p/transport.rs`](./p2p/) — see
 [`p2p/wire-protocol.md`](./p2p/wire-protocol.md).
 
 ## Identity is the connection

@@ -1,4 +1,4 @@
-/** web/passthrough.rs — transparent streaming proxy to Immich for every non-sidecar route. See PORT.md. */
+/** web/passthrough.rs — transparent streaming proxy to Immich for every non-sidecar route. See ARCHITECTURE.md. */
 use crate::config::cfg;
 use axum::body::Body;
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};

@@ -1,4 +1,4 @@
-//! sync/index_freshness.rs — offering a person's albums to linked peers from the traffic they already make. See PORT.md.
+//! sync/index_freshness.rs — offering a person's albums to linked peers from the traffic they already make. See ARCHITECTURE.md.
 
 use crate::immich::access::Creds;
 use crate::immich::client::Client;

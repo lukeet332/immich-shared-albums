@@ -1,4 +1,4 @@
-/** web/share_link_audit.rs — the album's own record of a share link being withdrawn. See PORT.md. */
+/** web/share_link_audit.rs — the album's own record of a share link being withdrawn. See ARCHITECTURE.md. */
 use axum::http::HeaderMap;
 use serde_json::Value;
 

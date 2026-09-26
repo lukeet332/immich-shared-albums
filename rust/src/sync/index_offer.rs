@@ -1,4 +1,4 @@
-//! sync/index_offer.rs — when a person's albums are worth offering to a peer again. See PORT.md.
+//! sync/index_offer.rs — when a person's albums are worth offering to a peer again. See ARCHITECTURE.md.
 
 use crate::store::OwnedAlbum;
 

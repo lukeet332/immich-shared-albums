@@ -1,4 +1,4 @@
-/** sync/peer_mapping_id.rs — the id a peer addresses the album behind a mapping by. See PORT.md. */
+/** sync/peer_mapping_id.rs — the id a peer addresses the album behind a mapping by. See ARCHITECTURE.md. */
 use crate::store::{Mapping, Role};
 
 /// What a peer's routes mean when they name this mapping's album (`/albums/:id/refs`, `/comments`).

@@ -1,4 +1,4 @@
-/** sync/engine.rs — the watcher: pushing what is new here out to peers. See PORT.md. */
+/** sync/engine.rs — the watcher: pushing what is new here out to peers. See ARCHITECTURE.md. */
 use crate::immich::access::read_album_assets_as;
 use crate::immich::client::Client;
 use crate::immich::refs::{self, AssetRef};

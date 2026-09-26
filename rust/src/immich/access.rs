@@ -1,4 +1,4 @@
-/** immich/access.rs — whose Immich credential reads a local album. See PORT.md. */
+/** immich/access.rs — whose Immich credential reads a local album. See ARCHITECTURE.md. */
 use axum::http::HeaderMap;
 use std::collections::HashMap;
 

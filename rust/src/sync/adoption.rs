@@ -1,4 +1,4 @@
-/** sync/adoption.rs — proving an album is the caller's own before it may be adopted. See PORT.md. */
+/** sync/adoption.rs — proving an album is the caller's own before it may be adopted. See ARCHITECTURE.md. */
 use crate::sync::matches::normalise_album_name;
 use serde_json::Value;
 

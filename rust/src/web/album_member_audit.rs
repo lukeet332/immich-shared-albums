@@ -1,4 +1,4 @@
-/** web/album_member_audit.rs — the album's own record of somebody being taken off it. See PORT.md. */
+/** web/album_member_audit.rs — the album's own record of somebody being taken off it. See ARCHITECTURE.md. */
 use axum::http::HeaderMap;
 
 use crate::immich::client::Client;

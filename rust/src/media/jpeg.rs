@@ -1,4 +1,4 @@
-/** media/jpeg.rs — a tiny, dependency-free baseline-JPEG generator for mirror stubs. See PORT.md. */
+/** media/jpeg.rs — a tiny, dependency-free baseline-JPEG generator for mirror stubs. See ARCHITECTURE.md. */
 //
 // A mirrored photo is represented locally by a placeholder; the real pixels stream from the owner
 // through the byte interceptor. Immich reads the placeholder's DIMENSIONS and lays the photo out

@@ -1,4 +1,4 @@
-/** sync/trail.rs — audit lines that wait for the album's owner. See PORT.md. */
+/** sync/trail.rs — audit lines that wait for the album's owner. See ARCHITECTURE.md. */
 use crate::immich::client::Client;
 use crate::state::State;
 

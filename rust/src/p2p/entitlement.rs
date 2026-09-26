@@ -1,4 +1,4 @@
-/** p2p/entitlement.rs — what a peer may READ, as distinct from who it is. See PORT.md. */
+/** p2p/entitlement.rs — what a peer may READ, as distinct from who it is. See ARCHITECTURE.md. */
 use crate::state::State;
 use crate::store::Role;
 

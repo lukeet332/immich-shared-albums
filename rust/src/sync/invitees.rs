@@ -1,4 +1,4 @@
-//! sync/invitees.rs — who should be on a mirror, as pure set arithmetic. See PORT.md.
+//! sync/invitees.rs — who should be on a mirror, as pure set arithmetic. See ARCHITECTURE.md.
 //!
 //! Extracted from `sync_mirror_members` so it can be tested without a container. This is the only
 //! code path that removes a real person from a real album, so it is worth being able to check in

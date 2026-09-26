@@ -1,4 +1,4 @@
-/** p2p/unlink.rs — what the panel shows for a linked server, and what an unlink tears down. See PORT.md. */
+/** p2p/unlink.rs — what the panel shows for a linked server, and what an unlink tears down. See ARCHITECTURE.md. */
 use crate::config::{bot_prefix, cfg};
 use crate::immich::client::Client;
 use crate::state::State;

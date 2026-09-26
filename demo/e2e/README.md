@@ -49,7 +49,7 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
    shortening one converts a clear assertion failure into a timeout. Shrink the *interval*, leave
    the *budget*.
 3. **Wait on convergence, not on a clock.** The sidecar records its cursors only after a clean
-   pass, and `sync/status.ts` exposes that as `settled` plus a cycle count — so a wait can end when
+   pass, and `sync/status.rs` exposes that as `settled` plus a cycle count — so a wait can end when
    the work ends instead of after a guess. Peers can ask the same question over
    `GET /albums/:mappingId/status` (feature `sync-status`; a 404 means an older peer — wait instead).
 4. **The rig's cadence reaches the suite through one value, `SYNC_POLL_MS`.** `stable()` proves
@@ -93,7 +93,7 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
    same shape: bounded retry, structured failure, never an uncaught throw.
 10. **"It must survive N cycles" needs a count, not a duration.** A sleep cannot tell five cycles
     from none — a watcher that died on its first pass passes a 55s sleep identically. The sidecar
-    counts every evaluation of its watcher and invite loops (`recordLoopTick` in `sync/status.ts`,
+    counts every evaluation of its watcher and invite loops (`record_loop_tick` in `sync/status.rs`,
     called at the **top** of each tick, before any skip — unlike `cycles`, which counts passes that
     did work and therefore stops the moment a mapping settles). The rig reads it over
     `GET /immich-shared-albums/sync/status?albumId=` — present only with `ISA_TEST_HOOKS`,
@@ -102,7 +102,7 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
     outright — `POST /immich-shared-albums/test/pause-sweeps` with `{"paused":true}`, released with
     `false` — and a held loop records no tick at all: that is how the browser lane proves an
     invitation, an accept and **both** halves of a union arrived over the wire rather than on a
-    timer. `sweeps.ts` holds the flag; `sync-loops.md` says which loops read it.
+    timer. `sync/sweeps.rs` holds the flag; `rust/docs/sync-loops.md` says which loops read it.
     `POST /immich-shared-albums/test/hide-dimensions` with `{"assetId":…,"hidden":true}` is the
     other half of that idea: it makes one photo look as it does in the window between an upload and
     Immich's metadata job, so the suite can assert the photo is HELD BACK rather than mirrored as a

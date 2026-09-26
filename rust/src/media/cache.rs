@@ -1,4 +1,4 @@
-/** media/cache.rs — a bounded LRU byte-cache for streamed previews. See PORT.md. */
+/** media/cache.rs — a bounded LRU byte-cache for streamed previews. See ARCHITECTURE.md. */
 use crate::config::cfg;
 use crate::state::state;
 use sha1::{Digest, Sha1};

@@ -1,4 +1,4 @@
-/** web/auth.rs — who is calling a human-facing sidecar route. See PORT.md. */
+/** web/auth.rs — who is calling a human-facing sidecar route. See ARCHITECTURE.md. */
 use crate::config::cfg;
 use crate::immich::access::{creds_from_headers, Creds};
 use axum::http::HeaderMap;

@@ -1,4 +1,4 @@
-/** sync/status.rs — whether a mapping has finished its work, answered rather than guessed. See PORT.md. */
+/** sync/status.rs — whether a mapping has finished its work, answered rather than guessed. See ARCHITECTURE.md. */
 use crate::store::Mapping;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};

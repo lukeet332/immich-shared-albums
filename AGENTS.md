@@ -35,7 +35,7 @@ it as Immich's problem. Concretely, and these are design rules not sentiments:
 
 Two known costs contradict this today — a key on the admin _account_ (scoped, but still able to
 manage users), and one real Immich account per remote person. They are listed in
-[src/ARCHITECTURE.md](./src/ARCHITECTURE.md) "Where this falls short today". **Do not make either
+[rust/ARCHITECTURE.md](./rust/ARCHITECTURE.md) "Where this falls short today". **Do not make either
 worse without saying so.**
 
 ## Golden rules
@@ -43,7 +43,7 @@ worse without saying so.**
 - **Never touch Immich itself.** This is a sidecar: it only ever adds its own container
   and talks to Immich over the public API. Never modify Immich's source, compose
   services, database, or upload folders. Everything must fail open — Immich has to work
-  perfectly with the sidecar dead. (Design invariants: [src/ARCHITECTURE.md](./src/ARCHITECTURE.md)
+  perfectly with the sidecar dead. (Design invariants: [rust/ARCHITECTURE.md](./rust/ARCHITECTURE.md)
   "Iron rules".)
 - **Keep the docs in sync — and this rule is load-bearing, not housekeeping.** Any behaviour change
   updates the relevant doc(s) **in the same change**. A doc that lies is worse than no doc: treat
@@ -81,8 +81,9 @@ worse without saying so.**
     extraction is not done while a literal of it remains somewhere else.
   - **The test cases are in the tree.** `src/web/ui/lib/tokens.css` is the only file under
     `src/web/ui` that contains a colour, and every page stylesheet imports it. An invitation's owner
-    mapping is written in one place — `src/sync/album-invite.ts` leaves the write to
-    `detectInvitesOnce` in `src/sync/invites.ts` rather than recording a second one itself.
+    mapping is written in one place — `rust/src/sync/album_index.rs` (`invite_peer_to_reunite`)
+    leaves the write to `detect_invites_once` in `rust/src/sync/invites.rs` rather than recording a
+    second one itself.
   - **Make it enforceable where it can be.** `scripts/check-tokens.mjs` fails on a colour literal
     outside `tokens.css` — its per-file allowances are empty, so the ratchet is a wall;
     `scripts/check-contrast.mjs` fails when a text pair drops below AA. Both run in `verify:fast` —
@@ -151,9 +152,9 @@ worse without saying so.**
 
 Two lanes, and the right one depends on whether Immich is involved.
 
-- **Pure logic → strict TDD.** Add the case to `src/*.test.ts`, watch it fail, then implement.
+- **Pure logic → strict TDD.** Add the case to the Rust test module (`cargo test --lib`), watch it fail, then implement.
   Sub-second loop (`npm test`), so there is no excuse to skip it. Anything that can be a pure
-  function should be one, precisely so it can be tested this way — see `sync/invitees.ts`.
+  function should be one, precisely so it can be tested this way — see `rust/src/sync/invitees.rs`.
 - **Immich-facing behaviour → discover, then pin, then implement.** Probe the real thing on the
   mock rig, write the e2e assertion, then implement. The test still precedes the implementation; it
   just follows the discovery. You cannot write a correct test against an API you are guessing at,
@@ -314,7 +315,7 @@ instructions. Re-read every comment you touch, in full.
 Granular on purpose. Pick the nearest level that earns one:
 
 - **File-level** — one module carrying dense reasoning of its own, e.g. a `store.md` next to
-  `store.ts`, created the first time a module earns it.
+  `store.rs`, created the first time a module earns it.
 - **Folder-level** (`wire-protocol.md`, `sync-loops.md`) — a concern spanning several files, where
   the useful explanation is how they fit together.
 - **Neither** — most files. A module whose names already say what it does needs no doc; it still
@@ -322,15 +323,15 @@ Granular on purpose. Pick the nearest level that earns one:
 - **Both** is fine. A file-level doc for the hard module, a folder doc for the concern around it.
 
 A concern starts as one file at `src/` root, and graduates to a folder with its own doc when it
-needs several files. `src/ARCHITECTURE.md` describes the whole tree.
+needs several files. `rust/ARCHITECTURE.md` describes the whole tree.
 
 ## Every source file opens with one line: what it is, and where its doc is
 
 A single line, first line, no exceptions:
 
 ```ts
-/** sync/invites.ts — sharing an album by inviting a PERSON in Immich's own picker. See sync-loops.md. */
-/** sync/leave.ts — undoing a join. See sync-loops.md. */
+/** sync/invites.rs — sharing an album by inviting a PERSON in Immich's own picker. See docs/sync-loops.md. */
+/** sync/leave.rs — undoing a join. See docs/sync-loops.md. */
 ```
 
 Format: `path — brief description. See <doc>.md.`
@@ -338,8 +339,8 @@ Format: `path — brief description. See <doc>.md.`
 The one comment naming cannot replace, because it answers a question the code cannot: **where is
 the context for this file?**
 
-- A doc may sit beside the file (a `config.md` next to `config.ts`, once one earns it) or cover the
-  folder under a different name (`p2p/protocol.ts` → `wire-protocol.md`). Without the pointer you
+- A doc may sit beside the file (a `config.md` next to `config.rs`, once one earns it) or cover the
+  folder under a different name (`rust/src/p2p/protocol.rs` → `docs/wire-protocol.md`). Without the pointer you
   would guess or grep.
 - It is machine-followable, which matters because agents work here: open the file, read one line,
   load exactly the right doc before changing anything.
@@ -390,8 +391,7 @@ All six are judgement calls, which is why they are written down rather than left
 
 Enforced by lint or tests wherever that is possible.
 
-- **Bot namespaces stay disjoint** — no `BOT_PREFIX` may prefix another (`invariants.test.ts`
-  asserts it).
+- **Bot namespaces stay disjoint** — no `BOT_PREFIX` may prefix another (the Rust unit tests assert it).
 - **Album membership is not intent.** One account per remote person does both jobs: it owns their
   mirrored photos _and_ is what a human picks to share with them, so the sidecar adds these
   accounts to albums itself. Two records carry the distinction instead of the namespace:
@@ -409,12 +409,12 @@ Enforced by lint or tests wherever that is possible.
 - **Owner and member mappings are not interchangeable.** Origin-side logic must filter
   `role === 'owner'`; a member's mirror always looks "withdrawn" to origin-side checks, and
   retiring it kills a live album one poll after it was created.
-- **Route before reading a body** in `web/server.ts`, and mark deliberate fire-and-forget with
+- **Route before reading a body** in `rust/src/web/server.rs`, and mark deliberate fire-and-forget with
   `void` so it is distinguishable from a forgotten `await`.
 
 ## Layout
 
 One principle: **group by concern, and let the shape evolve.** New files, new folders and
 reshaped boundaries are expected as the project grows — nothing here freezes the tree. The
-_current_ module map and data flow live in [src/ARCHITECTURE.md](./src/ARCHITECTURE.md); when a
+_current_ module map and data flow live in [rust/ARCHITECTURE.md](./rust/ARCHITECTURE.md); when a
 change moves the shape, it moves that map in the same change.

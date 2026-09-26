@@ -1,4 +1,4 @@
-/** web/interceptor.rs — the app-facing byte interceptor for proxy assets. See PORT.md. */
+/** web/interceptor.rs — the app-facing byte interceptor for proxy assets. See ARCHITECTURE.md. */
 use crate::immich::access::creds_from_headers;
 use crate::immich::client::{Auth, Client};
 use crate::media::{cache, proxy};

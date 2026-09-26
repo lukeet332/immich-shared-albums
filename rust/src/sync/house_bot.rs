@@ -1,4 +1,4 @@
-/** sync/house-bot.rs — this household's own bot account. See PORT.md. */
+/** sync/house-bot.rs — this household's own bot account. See ARCHITECTURE.md. */
 use crate::config::{bot_prefix, UTILITY_EMAIL_DOMAIN};
 use crate::immich::access::Creds;
 use crate::immich::client::{Auth, Client};

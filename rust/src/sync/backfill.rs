@@ -1,5 +1,5 @@
 //! sync/backfill.rs — when the admin turns on "store shared assets locally", upgrade the mirrors we
-//! already hold as stubs into full local copies. See PORT.md.
+//! already hold as stubs into full local copies. See ARCHITECTURE.md.
 //!
 //! Runs inside the reconcile pass (under its per-mapping mutex), a bounded number per cycle so a big
 //! album drains over several ticks, and stops on its own once no stub rows remain.

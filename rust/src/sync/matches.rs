@@ -1,4 +1,4 @@
-/** sync/matches.rs — pairing two households' albums by hand. See PORT.md. */
+/** sync/matches.rs — pairing two households' albums by hand. See ARCHITECTURE.md. */
 use crate::store::{Mapping, OwnedAlbum, Role};
 use serde_json::Value;
 use serde::{Deserialize, Serialize};

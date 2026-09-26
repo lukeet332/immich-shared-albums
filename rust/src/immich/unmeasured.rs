@@ -1,4 +1,4 @@
-/** immich/unmeasured.rs — the rig's list of photos to treat as not yet measured by Immich. See PORT.md. */
+/** immich/unmeasured.rs — the rig's list of photos to treat as not yet measured by Immich. See ARCHITECTURE.md. */
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 

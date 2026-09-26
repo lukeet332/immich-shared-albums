@@ -1,4 +1,4 @@
-/** media/proxy.rs — the hotlink byte path: true pixels resolved locally or chained to the owner over iroh. See PORT.md. */
+/** media/proxy.rs — the hotlink byte path: true pixels resolved locally or chained to the owner over iroh. See ARCHITECTURE.md. */
 use crate::immich::client::{Auth, Client};
 use crate::p2p::entitlement::peer_may_read;
 use crate::p2p::transport::{transport, ByteStream, PeerAnswer, PeerBody};

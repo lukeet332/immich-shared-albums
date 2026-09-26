@@ -1,4 +1,4 @@
-/** sync/album_grant.rs — who may touch a reunified album, and who must not. See PORT.md. */
+/** sync/album_grant.rs — who may touch a reunified album, and who must not. See ARCHITECTURE.md. */
 use crate::immich::access::Creds;
 use crate::immich::client::{Auth, Client};
 use crate::immich::contributors::ensure_contributor;
