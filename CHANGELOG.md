@@ -5,6 +5,58 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## [1.2.0](https://github.com/lukeet332/immich-shared-albums/compare/v1.1.1...v1.2.0) (2026-09-26)
+
+
+### Features
+
+* bind the peer transport to a stable UDP port ([#71](https://github.com/lukeet332/immich-shared-albums/issues/71)) ([befe01e](https://github.com/lukeet332/immich-shared-albums/commit/befe01e805e575d4eff54aa0ddadbc9389b1a1e4))
+* carry the reunified category with the share ([#95](https://github.com/lukeet332/immich-shared-albums/issues/95)) ([de458ac](https://github.com/lukeet332/immich-shared-albums/commit/de458ac2c6f78e2cf893b58481e7a2de9327c994))
+* cut the e2e suite from 499s to ~320s by waiting on convergence, not clocks ([#55](https://github.com/lukeet332/immich-shared-albums/issues/55)) ([c83b178](https://github.com/lukeet332/immich-shared-albums/commit/c83b178813ba14464a2348fd25246ef5bf826b02))
+* give the personal panel a heading and a way out ([#87](https://github.com/lukeet332/immich-shared-albums/issues/87)) ([760a8f8](https://github.com/lukeet332/immich-shared-albums/commit/760a8f85f215b5ad11d76f63c28476ab72c1b654))
+* invite and accept a reunion from the panel ([#113](https://github.com/lukeet332/immich-shared-albums/issues/113)) ([6a537fd](https://github.com/lukeet332/immich-shared-albums/commit/6a537fdcac6c705e1b3462a2e6a67f036480f23b))
+* match two people's split albums by name, owner and dates ([#81](https://github.com/lukeet332/immich-shared-albums/issues/81)) ([1daa7f7](https://github.com/lukeet332/immich-shared-albums/commit/1daa7f79122bdc78b47067de27d4724ddff8fd25))
+* one root URL that opens the right panel ([#88](https://github.com/lukeet332/immich-shared-albums/issues/88)) ([cd32f9a](https://github.com/lukeet332/immich-shared-albums/commit/cd32f9af2995f17a2bed30b8a2110bb9d05da0d3))
+* per-user panel scaffold (/me) — keystone for reunification ([#49](https://github.com/lukeet332/immich-shared-albums/issues/49)) ([c756ba6](https://github.com/lukeet332/immich-shared-albums/commit/c756ba68f6804334143fb01f9a2ab44ff377b827))
+* port the sidecar to Rust and ship it by default ([6ee6a2e](https://github.com/lukeet332/immich-shared-albums/commit/6ee6a2e8a0588b972768b58fd0e304712d1bd728))
+* publish a person's owned albums so a linked peer can match them ([#82](https://github.com/lukeet332/immich-shared-albums/issues/82)) ([4e79bdd](https://github.com/lukeet332/immich-shared-albums/commit/4e79bddc3a60bb59e810a707ac80bae96326ef79))
+* record that an album is reunified, and never delete an adopted one ([#93](https://github.com/lukeet332/immich-shared-albums/issues/93)) ([f05ed7b](https://github.com/lukeet332/immich-shared-albums/commit/f05ed7b6e84b0362b6057ef42d7eaec50e5892c1))
+* reunite partial albums from the panel ([#102](https://github.com/lukeet332/immich-shared-albums/issues/102)) ([0a2496c](https://github.com/lukeet332/immich-shared-albums/commit/0a2496cddb5f5212471153de657be3210fe60dfc))
+* seed an adopted album's ledger, so none of it is offered back ([#91](https://github.com/lukeet332/immich-shared-albums/issues/91)) ([0b90c1e](https://github.com/lukeet332/immich-shared-albums/commit/0b90c1e2c4ee91ace01f5be13cf00a0f4d3f312f))
+* show possible reunions in the per-user panel ([#83](https://github.com/lukeet332/immich-shared-albums/issues/83)) ([b042ee5](https://github.com/lukeet332/immich-shared-albums/commit/b042ee536ece38777c4e3640297e309d76225bc2))
+* tell a person whether it worked ([#115](https://github.com/lukeet332/immich-shared-albums/issues/115)) ([92d8842](https://github.com/lukeet332/immich-shared-albums/commit/92d8842ac27d6123aed8e2dd5cfde2310040c2a9))
+* the admin panel asks through the same dialog, and says less ([#118](https://github.com/lukeet332/immich-shared-albums/issues/118)) ([817a69a](https://github.com/lukeet332/immich-shared-albums/commit/817a69a2c1a3c0c843acb3200cf0070d55670aa6))
+* the reunion flow is nudge-driven, and open panels follow it ([#128](https://github.com/lukeet332/immich-shared-albums/issues/128)) ([beff0cc](https://github.com/lukeet332/immich-shared-albums/commit/beff0cc9114bcf27a4f1bf78ed6328f068d0356f))
+* the wire oracle is a Rust example ([02faa3e](https://github.com/lukeet332/immich-shared-albums/commit/02faa3e3e793928621f8a12f65b9675bfb0d5c8b))
+
+
+### Bug Fixes
+
+* a person's stand-in keeps their own face, and our bot names itself ([#125](https://github.com/lukeet332/immich-shared-albums/issues/125)) ([fa9d926](https://github.com/lukeet332/immich-shared-albums/commit/fa9d92602e453906b2ecaa69b7cb699b4eef22be))
+* a photo Immich has not measured is never mirrored as a square stub ([#130](https://github.com/lukeet332/immich-shared-albums/issues/130)) ([2458939](https://github.com/lukeet332/immich-shared-albums/commit/2458939aa647566029541880e0d29b04db821f67))
+* a reunion hands the other half over at once, not at the next sweep ([#129](https://github.com/lukeet332/immich-shared-albums/issues/129)) ([658b994](https://github.com/lukeet332/immich-shared-albums/commit/658b994518a1709ec176e1a09901e3345f8c5971))
+* a reunion merges both ways, instead of only into the side that accepted ([#123](https://github.com/lukeet332/immich-shared-albums/issues/123)) ([7f779ca](https://github.com/lukeet332/immich-shared-albums/commit/7f779ca19d538cfea99ed61d1c145f97f4afb411))
+* answer a proxied rejection instead of hanging the caller ([#109](https://github.com/lukeet332/immich-shared-albums/issues/109)) ([f9a68a3](https://github.com/lukeet332/immich-shared-albums/commit/f9a68a3833334e0bfef9284c8a067dbbf86941c2))
+* **e2e:** reset sidecar state properly, and fail fast when the rig is dirty ([#57](https://github.com/lukeet332/immich-shared-albums/issues/57)) ([8a2d30b](https://github.com/lukeet332/immich-shared-albums/commit/8a2d30bff756dae82e5f45faad27134fb4d847f8))
+* exit on SIGTERM so a container stop does not wait out its grace period ([#60](https://github.com/lukeet332/immich-shared-albums/issues/60)) ([700283c](https://github.com/lukeet332/immich-shared-albums/commit/700283c2e1319c12e7364d1e98b1145c2c3c78cb))
+* give a peer dial its own 10s budget so an offline owner fails closed fast ([#64](https://github.com/lukeet332/immich-shared-albums/issues/64)) ([f0ada02](https://github.com/lukeet332/immich-shared-albums/commit/f0ada0212f556d351b3eae4b86c234d2011a3fca))
+* hand Immich the bare share path, so the framed album keeps its metadata ([#106](https://github.com/lukeet332/immich-shared-albums/issues/106)) ([a5d31bb](https://github.com/lukeet332/immich-shared-albums/commit/a5d31bb01701e3c3570a7de71d45d516f69e9787))
+* name the album-reunion problem in the reader's terms ([#86](https://github.com/lukeet332/immich-shared-albums/issues/86)) ([85d1e76](https://github.com/lukeet332/immich-shared-albums/commit/85d1e761558b4ef437b6760acfb8b80f7712c9db))
+* never offer a photo whose owner the user cache has not seen ([#73](https://github.com/lukeet332/immich-shared-albums/issues/73)) ([082190a](https://github.com/lukeet332/immich-shared-albums/commit/082190aa805b1aa9d3bc18a17413b553383581af))
+* per-user panel reads the caller's albums as the caller ([#78](https://github.com/lukeet332/immich-shared-albums/issues/78)) ([e197972](https://github.com/lukeet332/immich-shared-albums/commit/e1979722e4f03d6e3dcf6155d761558476733933))
+* record an accept-flow reunion as reunified, and stop offering one already made ([#108](https://github.com/lukeet332/immich-shared-albums/issues/108)) ([982cb7b](https://github.com/lukeet332/immich-shared-albums/commit/982cb7ba2203651d48f32fdcc49bdaecfe2bd173))
+* refuse to provision a utility account for a server being unlinked ([#72](https://github.com/lukeet332/immich-shared-albums/issues/72)) ([2592890](https://github.com/lukeet332/immich-shared-albums/commit/259289059d7ef34539981f00bd987bb0b524dbba))
+* retire a mapping whose peer keeps answering 404, and stop logging every retry ([#74](https://github.com/lukeet332/immich-shared-albums/issues/74)) ([3bb6ac8](https://github.com/lukeet332/immich-shared-albums/commit/3bb6ac850913d08c137f5ed4fdd240c09c917012))
+* show one reunion row per pairing a person can tell apart ([#112](https://github.com/lukeet332/immich-shared-albums/issues/112)) ([e382689](https://github.com/lukeet332/immich-shared-albums/commit/e3826891ab632870e921efe938988f67a529301c))
+* stop matching against a peer's albums once it withdraws them ([#107](https://github.com/lukeet332/immich-shared-albums/issues/107)) ([1465ba0](https://github.com/lukeet332/immich-shared-albums/commit/1465ba0678c8e4a5752ae01f7e7070c2ecd9953c))
+* stub bytes are served only to callers Immich itself would serve ([#156](https://github.com/lukeet332/immich-shared-albums/issues/156)) ([a8523e2](https://github.com/lukeet332/immich-shared-albums/commit/a8523e2bea88c16c8cd4bee81bfbd3d5bc51bad2))
+* the album's trail records an un-reunite ([#126](https://github.com/lukeet332/immich-shared-albums/issues/126)) ([77fdafa](https://github.com/lukeet332/immich-shared-albums/commit/77fdafa52e3bc2aac4e601b1c2c2276d11e10501))
+* the installer proves the key, names its volume, and tells the truth about itself ([113df10](https://github.com/lukeet332/immich-shared-albums/commit/113df1054f68f4bb45c7c3581372cd84b3f79521))
+* the invitation stage reads its mirror through the narrowing, not through a throw ([00a3083](https://github.com/lukeet332/immich-shared-albums/commit/00a3083575872c85066ff744efcc97dcd1061722))
+* the panel offers the undo only where it works, and fits a phone ([#121](https://github.com/lukeet332/immich-shared-albums/issues/121)) ([84cde33](https://github.com/lukeet332/immich-shared-albums/commit/84cde33ae6301b288d5c92b444d29738c2326dbc))
+* the signed-out pages lose their theme, and claim work that is not happening ([#119](https://github.com/lukeet332/immich-shared-albums/issues/119)) ([3813856](https://github.com/lukeet332/immich-shared-albums/commit/381385679234cc3f7c8d3bbd3ca0f1d1d054abd6))
+* the silent-share handshake counts CONSECUTIVE failures ([b6f083e](https://github.com/lukeet332/immich-shared-albums/commit/b6f083e36bb08383d30c193faf28fbd4759573a5))
+
 ## [1.1.1](https://github.com/lukeet332/immich-shared-albums/compare/v1.1.0...v1.1.1) (2026-09-17)
 
 
