@@ -94,7 +94,10 @@ mod tests {
     fn tag_as_audit(state: &crate::state::State, id: &str) {
         state
             .store
-            .seen_act_add(&format!("{}{id}", crate::sync::audit::AUDIT_ACTIVITY_TAG), "m1")
+            .seen_act_add(
+                &format!("{}{id}", crate::sync::audit::AUDIT_ACTIVITY_TAG),
+                "m1",
+            )
             .unwrap();
     }
 
@@ -106,7 +109,12 @@ mod tests {
         let rows = vec![json!({ "id": "a1", "comment": "hello" })];
         tag_as_audit(&s, "a1");
         assert!(audit_visible_for(&s, "user-1"));
-        assert!(filter_activities_body(&s, "user-1", serde_json::to_vec(&rows).unwrap().as_slice()).is_none());
+        assert!(filter_activities_body(
+            &s,
+            "user-1",
+            serde_json::to_vec(&rows).unwrap().as_slice()
+        )
+        .is_none());
     }
 
     #[test]
@@ -122,7 +130,9 @@ mod tests {
         tag_as_audit(&s, "audit-2");
         let kept = without_audit_lines(&s, &rows);
         assert_eq!(
-            kept.iter().map(|r| r["id"].as_str().unwrap()).collect::<Vec<_>>(),
+            kept.iter()
+                .map(|r| r["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
             vec!["human-1", "human-2"],
             "the human comments survive, in the order they arrived"
         );
@@ -164,6 +174,9 @@ mod tests {
         let s = state();
         set_audit_visible(&s, "user-1", false).unwrap();
         assert!(!audit_visible_for(&s, "user-1"));
-        assert!(audit_visible_for(&s, "user-2"), "another person is unaffected");
+        assert!(
+            audit_visible_for(&s, "user-2"),
+            "another person is unaffected"
+        );
     }
 }

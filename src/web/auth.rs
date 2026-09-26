@@ -36,7 +36,10 @@ fn whoami_client() -> Option<&'static reqwest::Client> {
     if let Some(client) = WHOAMI.get() {
         return Some(client);
     }
-    let built = reqwest::Client::builder().timeout(WHOAMI_DEADLINE).build().ok()?;
+    let built = reqwest::Client::builder()
+        .timeout(WHOAMI_DEADLINE)
+        .build()
+        .ok()?;
     Some(WHOAMI.get_or_init(|| built))
 }
 
@@ -49,7 +52,10 @@ pub async fn caller_signed_in(headers: &HeaderMap) -> Option<SignedIn> {
     let creds = caller_creds(headers)?;
     let http = whoami_client()?;
     let mut req = http
-        .get(format!("{}/api/users/me", cfg().immich_url.trim_end_matches('/')))
+        .get(format!(
+            "{}/api/users/me",
+            cfg().immich_url.trim_end_matches('/')
+        ))
         .header("Accept", "application/json");
     for (name, value) in &creds.headers {
         req = req.header(name, value);
@@ -63,8 +69,15 @@ pub async fn caller_signed_in(headers: &HeaderMap) -> Option<SignedIn> {
     Some(SignedIn {
         caller: Caller {
             id,
-            name: user.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string(),
-            is_admin: user.get("isAdmin").and_then(|a| a.as_bool()).unwrap_or(false),
+            name: user
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            is_admin: user
+                .get("isAdmin")
+                .and_then(|a| a.as_bool())
+                .unwrap_or(false),
         },
         creds,
     })
@@ -114,7 +127,10 @@ mod tests {
         let body = sign_in_required("join a shared album");
         assert_eq!(body["needsAuth"], true);
         assert_eq!(body["signInUrl"], "/auth/login");
-        assert!(body["error"].as_str().unwrap().contains("join a shared album"));
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("join a shared album"));
         assert!(body["error"].as_str().unwrap().contains("Test household"));
     }
 }

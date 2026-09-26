@@ -1,4 +1,4 @@
-/** web/album_member_audit.rs — the album's own record of somebody being taken off it. See ARCHITECTURE.md. */
+/** web/album_member_audit.rs — the album's own record of a removal, and the ONE fire-and-forget trail writer both audit files share. See ARCHITECTURE.md. */
 use axum::http::HeaderMap;
 
 use crate::immich::client::Client;
@@ -10,41 +10,71 @@ use crate::immich::client::Client;
 /// album every time was an explanation nobody asked to read. That distinction lives in the docs
 /// (`p2p/wire-protocol.md`, "bearer grant") and in the line a withdrawn link posts for itself.
 ///
-/// Fire and forget: the removal has already been answered, and the bot is added on the caller's own
-/// credential because on their album that membership is their act.
+/// Fire and forget: the removal has already been answered.
 pub fn post_removal(
     state: std::sync::Arc<crate::state::State>,
     headers: HeaderMap,
     album_id: String,
     removed_user_id: String,
 ) {
+    // One line per person removed, so two removals are two lines: `audit_line` tags by event AND
+    // album, and a plain "removed" would suppress every removal after the first.
+    let mapping_id = format!("member:{album_id}");
+    let event = format!("member_removed:{removed_user_id}");
+    record_on_album(
+        state,
+        headers,
+        album_id,
+        "a removal",
+        mapping_id,
+        event,
+        |client| async move { removal_text(&removed_person_name(client, &removed_user_id).await) },
+    );
+}
+
+/// The person's name as Immich has it now, or the fallback the line keeps when Immich cannot say.
+async fn removed_person_name(client: &Client, user_id: &str) -> String {
+    crate::immich::client::users_by_id(client, 60_000)
+        .await
+        .get(user_id)
+        .map(|u| u.name.clone())
+        .unwrap_or_else(|| "A person".to_string())
+}
+
+/// The one fire-and-forget writer both trails go through — `post_removal` here and
+/// `share_link_audit::post_withdrawal`: spawn, resolve the CALLER's credential, build the line,
+/// add the house bot to the album on that credential, then post one audit line. The bot-add stays
+/// BEFORE the line, because without the membership the bot cannot comment on the album at all —
+/// and the caller's credential is the right one, because on their album the membership is their
+/// act (the household admin key cannot reach an album a different person owns).
+///
+/// `why` is only the noun of the bot-add failure log. A failed add ends the trail quietly: on an
+/// album the caller can read but not re-share, that is where the trail stops.
+pub(crate) fn record_on_album<M, F>(
+    state: std::sync::Arc<crate::state::State>,
+    headers: HeaderMap,
+    album_id: String,
+    why: &'static str,
+    mapping_id: String,
+    event: String,
+    line: M,
+) where
+    M: FnOnce(&'static Client) -> F + Send + 'static,
+    F: std::future::Future<Output = String> + Send,
+{
     tokio::spawn(async move {
-        let client: &Client = crate::immich::client::shared();
+        let client: &'static Client = crate::immich::client::shared();
         let Some(creds) = crate::web::auth::caller_creds(&headers) else {
             return;
         };
-        let name = crate::immich::client::users_by_id(client, 60_000)
-            .await
-            .get(&removed_user_id)
-            .map(|u| u.name.clone())
-            .unwrap_or_else(|| "A person".to_string());
+        let line = line(client).await;
         if let Err(e) =
             crate::sync::house_bot::add_house_bot_to_album(&state, client, &album_id, &creds).await
         {
-            crate::log!("could not put the bot on {album_id} to record a removal: {e}");
+            crate::log!("could not put the bot on {album_id} to record {why}: {e}");
             return;
         }
-        // One line per person removed, so two removals are two lines: `audit_line` tags by event AND
-        // album, and a plain "removed" would suppress every removal after the first.
-        crate::sync::audit::audit_line(
-            &state,
-            client,
-            &format!("member:{album_id}"),
-            &album_id,
-            &format!("member_removed:{removed_user_id}"),
-            &removal_text(&name),
-        )
-        .await;
+        crate::sync::audit::audit_line(&state, client, &mapping_id, &album_id, &event, &line).await;
     });
 }
 

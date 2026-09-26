@@ -19,17 +19,20 @@ use serde_json::{json, Value};
 /// The whole HTTP surface. ORDER IS LOAD-BEARING and is documented in ARCHITECTURE.md; each step's
 /// position is justified there. Steps that are not ported yet are marked and fail closed.
 pub async fn serve(req: Request) -> Response {
-    let method = req.method().clone();
-    let uri = req.uri().clone();
-    let path = uri.path().to_string();
-    let headers = req.headers().clone();
-
     // 0. A protocol upgrade is not a request/response exchange at all: it has to be piped at the
     //    socket level, before anything here tries to read or answer it. Immich's live web updates are
     //    a websocket, so without this the web app silently loses them.
-    if crate::web::upgrade::is_upgrade(&headers) {
+    if crate::web::upgrade::is_upgrade(req.headers()) {
         return crate::web::upgrade::proxy_upgrade(req).await;
     }
+    // Taken apart BEFORE anything borrows the request, so every branch moves rather than clones:
+    // method, URI and headers are needed after the body is handed off, and cloning all three on
+    // every request was pure overhead.
+    let (parts, body) = req.into_parts();
+    let method = parts.method;
+    let uri = parts.uri;
+    let path = uri.path().to_string();
+    let headers = parts.headers;
 
     // 1. Human-facing surfaces — pages and scripts — come from ONE table, so "what exists and who
     //    may see it" is answerable by reading web/frontend.rs rather than tracing this file.
@@ -76,7 +79,7 @@ pub async fn serve(req: Request) -> Response {
     //    passthrough escape hatch — what the iframe loads, and where dismissing the card navigates.
     if let Some(key) = share_key_from_path(&path) {
         if method == Method::GET {
-            let native = query_has(&uri, "native");
+            let native = query::query_has(&uri, "native");
             if native {
                 // Hand Immich the BARE path. Its share route matches the exact path, so ANY query
                 // string answers 404 with the bare app shell: the album still boots client-side,
@@ -84,20 +87,14 @@ pub async fn serve(req: Request) -> Response {
                 // count) is gone and the address the dismiss link leaves behind is a 404 — so the
                 // link a recipient then copies previews as nothing. Only OUR marker is removed;
                 // any other parameter is not ours to drop.
-                let rest = stripped_query(&uri, "native");
+                let rest = query::stripped_query(&uri, "native");
                 let target = if rest.is_empty() {
                     path.clone()
                 } else {
                     format!("{path}?{rest}")
                 };
                 if let Ok(parsed) = target.parse::<Uri>() {
-                    return passthrough::proxy_to_immich(
-                        method,
-                        &parsed,
-                        &headers,
-                        req.into_body(),
-                    )
-                    .await;
+                    return passthrough::proxy_to_immich(method, &parsed, &headers, body).await;
                 }
             } else if Settings::read(&state().store).share_link_join {
                 return share_document(&key).await;
@@ -131,8 +128,7 @@ pub async fn serve(req: Request) -> Response {
     //    ways: a photo upload must never be buffered here. This comes BEFORE the body cap, because
     //    passthrough traffic is not ours to size.
     if !path.starts_with(ROUTE_PREFIX) {
-        let response =
-            passthrough::proxy_to_immich(method.clone(), &uri, &headers, req.into_body()).await;
+        let response = passthrough::proxy_to_immich(method.clone(), &uri, &headers, body).await;
         // AFTER the response, not before: an album mutation is only a change once Immich has made
         // it, and reading on the way in races the very write that prompted the read. Fire-and-forget
         // and fail-open — nothing about a proxied request may depend on this.
@@ -159,7 +155,6 @@ pub async fn serve(req: Request) -> Response {
             // sees a network error instead of the 413 this is here to deliver. Discarding the
             // chunks keeps memory O(1), which is the entire point of refusing early. Cutting the
             // upload off at the wire is the reverse proxy's job — see deploy/Caddyfile.snippet.
-            let body = req.into_body();
             tokio::spawn(async move {
                 let mut stream = body.into_data_stream();
                 while let Some(Ok(_)) = stream.next().await {}
@@ -171,24 +166,20 @@ pub async fn serve(req: Request) -> Response {
         }
     }
 
-    // 6. The sidecar's own JSON routes. Route before reading a body, then authorise.
-    match (method.clone(), path.as_str()) {
-        (Method::GET, p) if p == format!("{ROUTE_PREFIX}/peers") => return peers(&headers).await,
-        (Method::GET, p) if p == format!("{ROUTE_PREFIX}/settings") => {
-            return settings_get(&headers).await
-        }
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/settings") => {
-            return settings_post(&headers, req).await
-        }
-        (Method::GET, p) if p == format!("{ROUTE_PREFIX}/pairings") => {
-            return pairings_list(&headers).await
-        }
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/pairings") => {
-            return pairing_mint(&headers).await
-        }
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/pairings/revoke") => {
-            return pairing_revoke(&headers, req).await
-        }
+    // 6. The sidecar's own JSON routes. Route before reading a body, then authorise. The prefix is
+    //    stripped ONCE here rather than re-formatted in every arm; step 4 has already forwarded
+    //    everything without it, so a miss here cannot happen — but the 404 stands rather than
+    //    panicking if that ordering ever changes.
+    let Some(route) = path.strip_prefix(ROUTE_PREFIX) else {
+        return json_response(StatusCode::NOT_FOUND, json!({ "error": "not found" }));
+    };
+    match (method, route) {
+        (Method::GET, "/peers") => return peers(&headers).await,
+        (Method::GET, "/settings") => return settings_get(&headers).await,
+        (Method::POST, "/settings") => return settings_post(&headers, body).await,
+        (Method::GET, "/pairings") => return pairings_list(&headers).await,
+        (Method::POST, "/pairings") => return pairing_mint(&headers).await,
+        (Method::POST, "/pairings/revoke") => return pairing_revoke(&headers, body).await,
         // A joined album is removed by the ONLY credential that acts on the server as a whole: an
         // admin's. A member's mirror is not theirs to delete, and the purge below deletes accounts'
         // assets, so this is an admin route rather than one scoped to the caller.
@@ -200,97 +191,61 @@ pub async fn serve(req: Request) -> Response {
         // on the ORIGIN and writes an owner mapping there, so a preview that redeemed would enrol a
         // household on someone else's server merely because a page opened. The album's NAME is all
         // this needs, and it arrives from the share page the person just came from.
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/join/preview") => {
-            return join_preview(&headers, req).await
-        }
+        (Method::POST, "/join/preview") => return join_preview(&headers, body).await,
         // Joining is for the SIGNED-IN person: the invite is redeemed by someone, and the album
         // lands in their library. A body may name another user only for an admin acting for them.
         // The caller's OWN albums, read as THEM: Immich answers what they may see, so a mapping
         // whose album is missing from that list is never leaked.
-        (Method::GET, p) if p == format!("{ROUTE_PREFIX}/me/albums") => {
-            return my_albums(&headers).await
-        }
+        (Method::GET, "/me/albums") => return my_albums(&headers).await,
         // Offer the caller's own albums to one linked peer, so that peer can look for the other half
         // of a split album. Only the CALLER can be recorded as owner.
         // Possible reunions: albums on a linked server that look like the other half of one of
         // the caller's own. Read as THEM, so the server that owns the albums answers what they own.
         // Severing a link is admin-owned, like the link itself: it is not something expressed by
         // removing a bot from an album.
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/unlink") => {
-            return unlink(&headers, req).await
-        }
+        (Method::POST, "/unlink") => return unlink(&headers, body).await,
         // The panel's Invite: one membership, for one account, on the caller's OWN album and their
         // own credential — the one sharing action AGENTS.md allows outside Immich's UI, because the
         // reunion cannot start without it and the panel is where the pair is shown.
         // Un-reunify: undo the ADOPTION, not the share. The album and its own photos stay and the
         // share returns to an ordinary mirror, so the origin is NOT told to stop and keeps offering
         // the invitation, which the member's own invite poll turns back into a mirror.
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/me/unreunite") => {
-            return unreunite(&headers, req).await
-        }
+        (Method::POST, "/me/unreunite") => return unreunite(&headers, body).await,
         // Reunite: move a share onto an album the caller already owns, instead of keeping two.
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/me/reunite") => {
-            return reunite(&headers, req).await
-        }
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/me/invite") => {
-            return invite_to_reunite(&headers, req).await
-        }
-        (Method::GET, p) if p == format!("{ROUTE_PREFIX}/me/matches") => {
-            return my_matches(&headers).await
-        }
-        (Method::GET, p) if p == format!("{ROUTE_PREFIX}/me/preferences") => {
-            return my_preferences(&headers).await
-        }
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/me/preferences") => {
-            return set_my_preferences(&headers, req).await
-        }
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/me/albums/publish") => {
-            return publish_my_albums(&headers, req).await
-        }
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/join") => {
-            return join(&headers, req).await
-        }
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/leave") => {
-            return leave(&headers, req).await
-        }
+        (Method::POST, "/me/reunite") => return reunite(&headers, body).await,
+        (Method::POST, "/me/invite") => return invite_to_reunite(&headers, body).await,
+        (Method::GET, "/me/matches") => return my_matches(&headers).await,
+        (Method::GET, "/me/preferences") => return my_preferences(&headers).await,
+        (Method::POST, "/me/preferences") => return set_my_preferences(&headers, body).await,
+        (Method::POST, "/me/albums/publish") => return publish_my_albums(&headers, body).await,
+        (Method::POST, "/join") => return join(&headers, body).await,
+        (Method::POST, "/leave") => return leave(&headers, body).await,
         // Rig-only progress read, so a test can wait for convergence without speaking the peer
         // protocol. Gated the way every hook must be: absent unless ISA_TEST_HOOKS is set, and
         // admin-only even then.
-        (Method::GET, p) if p == format!("{ROUTE_PREFIX}/sync/status") => {
-            return sync_status_route(&headers, &uri).await
-        }
+        (Method::GET, "/sync/status") => return sync_status_route(&headers, &uri).await,
         // Rig-only: pretend Immich has not measured a photo yet, which is the window between an
         // upload and its metadata job. Gated like every hook: absent unless ISA_TEST_HOOKS is set.
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/test/hide-dimensions") => {
-            return hide_dimensions(&headers, req).await
-        }
+        (Method::POST, "/test/hide-dimensions") => return hide_dimensions(&headers, body).await,
         // Rig-only: emit a panel hint on demand, so a browser test can prove an open page reacts to
         // one without a reload. It answers how many panels are listening, which is also how a
         // subscription torn down early reads as 0 rather than as a page that quietly stops updating.
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/test/emit") => {
-            return test_emit(&headers, req).await
-        }
+        (Method::POST, "/test/emit") => return test_emit(&headers, body).await,
         // Rig-only: hold every background sweep, so a lane can prove a change arrived by push rather
         // than by the next tick. Gated like every hook: absent unless ISA_TEST_HOOKS is set.
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/test/pause-sweeps") => {
-            return pause_sweeps(&headers, req).await
-        }
+        (Method::POST, "/test/pause-sweeps") => return pause_sweeps(&headers, body).await,
         // Rig-only: forget every session, so the next request looks like the first one. The quiet
         // period that opens a session is fifteen minutes, which no test can wait out.
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/test/new-session") => {
-            return new_session(&headers).await
-        }
+        (Method::POST, "/test/new-session") => return new_session(&headers).await,
         // The panels' live channel: one open response per open panel, carrying hints only. Signed in,
         // like every panel route — the caller's own data is what they will re-read.
-        (Method::GET, p) if p == format!("{ROUTE_PREFIX}/events") => return events(&headers).await,
-        (Method::POST, p) if p == format!("{ROUTE_PREFIX}/pair") => {
-            return pairing_redeem(&headers, req).await
-        }
+        (Method::GET, "/events") => return events(&headers).await,
+        (Method::POST, "/pair") => return pairing_redeem(&headers, body).await,
         _ => {}
     }
 
-    // 8. The health probe names the protocol, so a join card can diagnose version skew.
-    if path == format!("{ROUTE_PREFIX}/health") {
+    // 7. The health probe names the protocol, so a join card can diagnose version skew.
+    if route == "/health" {
         return json_response(
             StatusCode::OK,
             json!({ "ok": true, "protocol": crate::protocol::PROTOCOL_VERSION }),
@@ -298,24 +253,15 @@ pub async fn serve(req: Request) -> Response {
         .with_header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
     }
 
-    // 9.
+    // 8.
     json_response(StatusCode::NOT_FOUND, json!({ "error": "not found" }))
 }
 
 /// One row per linked server, with what the link is currently carrying. Admin-only: server links
 /// are admin-owned objects, not something a per-user surface scopes to the caller.
 async fn peers(headers: &HeaderMap) -> Response {
-    let Some(caller) = caller_identity(headers).await else {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            sign_in_required("see connected servers"),
-        );
-    };
-    if !caller.is_admin {
-        return json_response(
-            StatusCode::FORBIDDEN,
-            json!({ "error": "only an admin can see connected servers" }),
-        );
+    if let Some(refusal) = admin_refusal(headers, "see connected servers").await {
+        return refusal;
     }
     let state = state();
     json_response(
@@ -329,53 +275,43 @@ async fn peers(headers: &HeaderMap) -> Response {
 }
 
 async fn settings_get(headers: &HeaderMap) -> Response {
-    let Some(caller) = caller_identity(headers).await else {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            sign_in_required("change settings"),
-        );
-    };
-    if !caller.is_admin {
-        return json_response(
-            StatusCode::FORBIDDEN,
-            json!({ "error": "only an admin can change settings" }),
-        );
+    if let Some(refusal) = admin_refusal(headers, "change settings").await {
+        return refusal;
     }
     json_response(StatusCode::OK, settings_json())
 }
 
-async fn settings_post(headers: &HeaderMap, req: Request) -> Response {
-    let Some(caller) = caller_identity(headers).await else {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            sign_in_required("change settings"),
-        );
-    };
-    if !caller.is_admin {
-        return json_response(
-            StatusCode::FORBIDDEN,
-            json!({ "error": "only an admin can change settings" }),
-        );
+/// The panel's POSTed settings. Absent means the current value stands — except `shareLinkJoin`,
+/// where absent means ON, not off, exactly as the panel has always been answered.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsPatch {
+    #[serde(default = "share_link_join_default")]
+    share_link_join: bool,
+    // An `Option`, because "absent" is resolved against the CURRENT value after the parse, not
+    // against a default: the field is only rejected when it is present and out of range.
+    #[serde(default)]
+    pairing_ttl_minutes: Option<i64>,
+    #[serde(default)]
+    store_shared_assets_locally: bool,
+}
+
+fn share_link_join_default() -> bool {
+    true
+}
+
+async fn settings_post(headers: &HeaderMap, body: HttpBody) -> Response {
+    if let Some(refusal) = admin_refusal(headers, "change settings").await {
+        return refusal;
     }
-    let limit = (cfg().max_body_kb * 1024) as usize;
-    let body = match axum::body::to_bytes(req.into_body(), limit).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return json_response(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                json!({ "error": format!("request body exceeds {}KB", cfg().max_body_kb) }),
-            )
-        }
-    };
-    let asked: Value = match serde_json::from_slice(&body) {
-        Ok(value) => value,
-        Err(e) => return json_response(StatusCode::BAD_REQUEST, json!({ "error": e.to_string() })),
+    let asked: SettingsPatch = match read_json_body(body).await {
+        Ok(asked) => asked,
+        Err(response) => return response,
     };
 
     let current = Settings::read(&state().store);
     let ttl = asked
-        .get("pairingTtlMinutes")
-        .and_then(|v| v.as_i64())
+        .pairing_ttl_minutes
         .unwrap_or(current.pairing_ttl_minutes);
     if !Settings::ttl_is_valid(ttl) {
         return json_response(
@@ -390,16 +326,9 @@ async fn settings_post(headers: &HeaderMap, req: Request) -> Response {
         );
     }
     let wanted = Settings {
-        // `!== false`: an absent field means ON, not off.
-        share_link_join: asked
-            .get("shareLinkJoin")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
+        share_link_join: asked.share_link_join,
         pairing_ttl_minutes: ttl,
-        store_shared_assets_locally: asked
-            .get("storeSharedAssetsLocally")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
+        store_shared_assets_locally: asked.store_shared_assets_locally,
     };
     if let Err(e) = wanted.write(&state().store) {
         return json_response(
@@ -410,17 +339,19 @@ async fn settings_post(headers: &HeaderMap, req: Request) -> Response {
     json_response(StatusCode::OK, settings_json())
 }
 
-/// Read a JSON body under `ISA_MAX_BODY_KB`, answering the same 413 the TypeScript does.
-async fn read_json_body(req: Request) -> Result<Value, Response> {
+/// Read a JSON body under `ISA_MAX_BODY_KB`, answering the same 413 the TypeScript does. The ONE
+/// place the sidecar's own routes read a body at all — the cap lives here, not in each handler.
+// The Err variant is a whole `Response` because a refusal IS a response, shaped exactly like a
+// success-path one; boxing it would not change what any caller does with it.
+#[allow(clippy::result_large_err)]
+async fn read_json_body<T: serde::de::DeserializeOwned>(body: HttpBody) -> Result<T, Response> {
     let limit = (cfg().max_body_kb * 1024) as usize;
-    let bytes = axum::body::to_bytes(req.into_body(), limit)
-        .await
-        .map_err(|_| {
-            json_response(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                json!({ "error": format!("request body exceeds {}KB", cfg().max_body_kb) }),
-            )
-        })?;
+    let bytes = axum::body::to_bytes(body, limit).await.map_err(|_| {
+        json_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            json!({ "error": format!("request body exceeds {}KB", cfg().max_body_kb) }),
+        )
+    })?;
     serde_json::from_slice(&bytes)
         .map_err(|e| json_response(StatusCode::BAD_REQUEST, json!({ "error": e.to_string() })))
 }
@@ -440,7 +371,7 @@ fn settings_json() -> Value {
 /// a list that could re-show it would make an already-shown code re-usable by anyone who can read
 /// the admin panel.
 async fn pairings_list(headers: &HeaderMap) -> Response {
-    if let Some(response) = require_admin(headers, "manage server links").await {
+    if let Some(response) = admin_refusal(headers, "manage server links").await {
         return response;
     }
     json_response(
@@ -452,7 +383,7 @@ async fn pairings_list(headers: &HeaderMap) -> Response {
 /// `POST /pairings` — mint a one-use link. It carries this server's endpoint, so it can only be
 /// made while the transport is up: a link that cannot be dialled is a link that lies.
 async fn pairing_mint(headers: &HeaderMap) -> Response {
-    if let Some(response) = require_admin(headers, "manage server links").await {
+    if let Some(response) = admin_refusal(headers, "manage server links").await {
         return response;
     }
     let Some(transport) = transport() else {
@@ -472,11 +403,11 @@ async fn pairing_mint(headers: &HeaderMap) -> Response {
 
 /// `POST /pairings/revoke` — withdraw a code that has not been used. Revoking one that is already
 /// gone is a success, not an error: the caller wanted it unusable and it is.
-async fn pairing_revoke(headers: &HeaderMap, req: Request) -> Response {
-    if let Some(response) = require_admin(headers, "manage server links").await {
+async fn pairing_revoke(headers: &HeaderMap, body: HttpBody) -> Response {
+    if let Some(response) = admin_refusal(headers, "manage server links").await {
         return response;
     }
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -497,11 +428,11 @@ async fn pairing_revoke(headers: &HeaderMap, req: Request) -> Response {
 
 /// `POST /pair` — paste a link another server gave us. The standalone way to link two servers: no
 /// album is involved, and pairing conveys no access to any photo.
-async fn pairing_redeem(headers: &HeaderMap, req: Request) -> Response {
-    if let Some(response) = require_admin(headers, "link a server").await {
+async fn pairing_redeem(headers: &HeaderMap, body: HttpBody) -> Response {
+    if let Some(response) = admin_refusal(headers, "link a server").await {
         return response;
     }
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -541,11 +472,11 @@ async fn pairing_redeem(headers: &HeaderMap, req: Request) -> Response {
 }
 
 /// `POST /leave` — give up a joined album: purge the stubs it created, then take the mirror with it.
-async fn leave(headers: &HeaderMap, req: Request) -> Response {
-    if let Some(response) = require_admin(headers, "leave a shared album").await {
+async fn leave(headers: &HeaderMap, body: HttpBody) -> Response {
+    if let Some(response) = admin_refusal(headers, "leave a shared album").await {
         return response;
     }
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -582,12 +513,12 @@ async fn leave(headers: &HeaderMap, req: Request) -> Response {
     }
 }
 
-/// The gate every server-level route passes: signed in AND an admin. `None` means "carry on".
+/// The refusal every server-level route gets from: signed in AND an admin. `None` means "carry on".
 ///
 /// Admin, because these act on the server rather than on the caller's own photos — linking and
 /// unlinking households, and deleting other accounts' assets. A signed-in non-admin gets 403 rather
 /// than 401: they are not going to fix it by signing in again.
-async fn require_admin(headers: &HeaderMap, what: &str) -> Option<Response> {
+async fn admin_refusal(headers: &HeaderMap, what: &str) -> Option<Response> {
     let Some(caller) = caller_identity(headers).await else {
         return Some(json_response(
             StatusCode::UNAUTHORIZED,
@@ -621,58 +552,62 @@ async fn my_albums(headers: &HeaderMap) -> Response {
             json!({ "error": "could not read your albums" }),
         );
     };
-    // ONE guard for both halves. `collections()` hands back a non-reentrant `std::sync::MutexGuard`,
-    // so looking a peer up with a SECOND call while the first is alive deadlocks the thread against
-    // its own lock — and the guard is held for the whole expression, so every other task that
-    // touches state blocks behind it and the sidecar stops answering entirely. Both lookups want the
-    // same snapshot anyway.
-    let collections = state().collections();
-    // The albums this person can AUTHORISE a membership on: their own. That is also the whole set the
-    // waiting trail can be about, because our bot can only be put on an album by someone who can
-    // already change it — and this visit is when we hold their credential to do it.
+    // `collections()` hands back a non-reentrant `std::sync::MutexGuard`, so a SECOND call while
+    // the first is alive deadlocks the thread against its own lock — every guard here is bound in
+    // its own statement and dropped before the next, and never across an `.await`.
+    let albums: Vec<Value> = {
+        let collections = state().collections();
+        collections
+            .mappings
+            .iter()
+            .filter(|m| !m.dead && visible.contains(&m.album_id))
+            .map(|m| {
+                let peer = collections
+                    .peers
+                    .iter()
+                    .find(|p| p.pub_key == m.peer)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "a linked server".to_string());
+                let mut entry = json!({
+                    "name": m.album_name,
+                    "role": if m.role == crate::store::Role::Owner { "owner" } else { "member" },
+                    "via": m.via,
+                    "peer": peer,
+                    "mappingId": m.id,
+                });
+                if m.reunified == Some(true) {
+                    entry["reunified"] = json!(true);
+                    // WHO did the adopting. The Un-reunite route undoes an ADOPTION, so a share the
+                    // PEER reunited (this household only invited) must not offer the button: it
+                    // would answer 404 on a click, and the undo for an invitation is Immich's own
+                    // album-sharing settings, not this route.
+                    entry["adoptedByUs"] = json!(m.adopted == Some(true));
+                }
+                entry
+            })
+            .collect()
+    };
+    // The trail that has been waiting for this person, detached so their panel never waits on it.
+    // The writable set is built only when a trail is actually waiting — on every other visit the
+    // mapping scan would be paid for nothing.
     //
     // A DEAD mapping still counts. Leaving marks the origin's mapping dead while the album itself
     // carries on existing, and a leave is exactly the event most likely to be waiting: requiring a
     // live mapping here would strand it for ever. A genuinely deleted album fails the add, and the
     // queue gives up on it after a few tries rather than retrying on every visit.
-    let writable_album_ids: Vec<String> = collections
-        .mappings
-        .iter()
-        .filter(|m| m.role == crate::store::Role::Owner && visible.contains(&m.album_id))
-        .map(|m| m.album_id.clone())
-        .collect();
-    let albums: Vec<Value> = collections
-        .mappings
-        .iter()
-        .filter(|m| !m.dead && visible.contains(&m.album_id))
-        .map(|m| {
-            let peer = collections
-                .peers
-                .iter()
-                .find(|p| p.pub_key == m.peer)
-                .map(|p| p.name.clone())
-                .unwrap_or_else(|| "a linked server".to_string());
-            let mut entry = json!({
-                "name": m.album_name,
-                "role": if m.role == crate::store::Role::Owner { "owner" } else { "member" },
-                "via": m.via,
-                "peer": peer,
-                "mappingId": m.id,
-            });
-            if m.reunified == Some(true) {
-                entry["reunified"] = json!(true);
-                // WHO did the adopting. The Un-reunite route undoes an ADOPTION, so a share the
-                // PEER reunited (this household only invited) must not offer the button: it would
-                // answer 404 on a click, and the undo for an invitation is Immich's own
-                // album-sharing settings, not this route.
-                entry["adoptedByUs"] = json!(m.adopted == Some(true));
-            }
-            entry
-        })
-        .collect();
-    // The trail that has been waiting for this person, detached so their panel never waits on it.
-    // The guard above is out of scope by here — an await with it alive would be a deadlock hazard.
     if crate::sync::trail::has_pending(state()) {
+        // The albums this person can AUTHORISE a membership on: their own. That is also the whole
+        // set the waiting trail can be about, because our bot can only be put on an album by
+        // someone who can already change it — and this visit is when we hold their credential.
+        let writable_album_ids: Vec<String> = {
+            let collections = state().collections();
+            collections
+                .mappings
+                .iter()
+                .filter(|m| m.role == crate::store::Role::Owner && visible.contains(&m.album_id))
+                .map(|m| m.album_id.clone())
+                .collect()
+        };
         let owned_state = state().clone();
         let creds = signed_in.creds.clone();
         tokio::spawn(async move {
@@ -696,11 +631,11 @@ async fn my_albums(headers: &HeaderMap) -> Response {
 }
 
 /// `POST /unlink` — sever a link and everything it brought with it.
-async fn unlink(headers: &HeaderMap, req: Request) -> Response {
-    if let Some(response) = require_admin(headers, "unlink a server").await {
+async fn unlink(headers: &HeaderMap, body: HttpBody) -> Response {
+    if let Some(response) = admin_refusal(headers, "unlink a server").await {
         return response;
     }
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -730,14 +665,14 @@ async fn unlink(headers: &HeaderMap, req: Request) -> Response {
 /// The album and its own photos stay; the peer's stubs go; the share returns to an ordinary mirror.
 /// The origin is deliberately NOT told to stop, so it keeps offering the invitation and the member's
 /// own invite poll turns it back into a mirror.
-async fn unreunite(headers: &HeaderMap, req: Request) -> Response {
+async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
         return json_response(
             StatusCode::UNAUTHORIZED,
             sign_in_required("un-reunite an album"),
         );
     };
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -860,14 +795,14 @@ async fn unreunite(headers: &HeaderMap, req: Request) -> Response {
 }
 
 /// `POST /me/reunite` — put the caller's own album in place of a share's mirror.
-async fn reunite(headers: &HeaderMap, req: Request) -> Response {
+async fn reunite(headers: &HeaderMap, body: HttpBody) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
         return json_response(
             StatusCode::UNAUTHORIZED,
             sign_in_required("reunite an album"),
         );
     };
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -929,14 +864,14 @@ async fn reunite(headers: &HeaderMap, req: Request) -> Response {
 }
 
 /// `POST /me/invite` — share the caller's album with the person who owns the other half.
-async fn invite_to_reunite(headers: &HeaderMap, req: Request) -> Response {
+async fn invite_to_reunite(headers: &HeaderMap, body: HttpBody) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
         return json_response(
             StatusCode::UNAUTHORIZED,
             sign_in_required("invite someone to reunite an album"),
         );
     };
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -996,7 +931,10 @@ async fn invite_to_reunite(headers: &HeaderMap, req: Request) -> Response {
 /// Default true — the trail exists to be read, and hiding it must be a choice somebody made.
 async fn my_preferences(headers: &HeaderMap) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("see your settings"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("see your settings"),
+        );
     };
     json_response(
         StatusCode::OK,
@@ -1011,11 +949,14 @@ async fn my_preferences(headers: &HeaderMap) -> Response {
 
 /// `POST /me/preferences` — and it is the CALLER's own row: a body naming somebody else is ignored,
 /// because there is no reason to let one person hide the trail for another.
-async fn set_my_preferences(headers: &HeaderMap, req: Request) -> Response {
+async fn set_my_preferences(headers: &HeaderMap, body: HttpBody) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
-        return json_response(StatusCode::UNAUTHORIZED, sign_in_required("change your settings"));
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            sign_in_required("change your settings"),
+        );
     };
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -1025,17 +966,15 @@ async fn set_my_preferences(headers: &HeaderMap, req: Request) -> Response {
             json!({ "error": "say whether the album activity should be visible" }),
         );
     };
-    if let Err(e) = crate::web::activity_filter::set_audit_visible(state(), &signed_in.caller.id, visible)
+    if let Err(e) =
+        crate::web::activity_filter::set_audit_visible(state(), &signed_in.caller.id, visible)
     {
         return json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": e.to_string() }),
         );
     }
-    json_response(
-        StatusCode::OK,
-        json!({ "auditVisibleInComments": visible }),
-    )
+    json_response(StatusCode::OK, json!({ "auditVisibleInComments": visible }))
 }
 
 /// `GET /me/matches` — the pairings this person could reunite.
@@ -1064,14 +1003,14 @@ async fn my_matches(headers: &HeaderMap) -> Response {
 }
 
 /// `POST /me/albums/publish` — offer the caller's own albums to one linked peer for matching.
-async fn publish_my_albums(headers: &HeaderMap, req: Request) -> Response {
+async fn publish_my_albums(headers: &HeaderMap, body: HttpBody) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
         return json_response(
             StatusCode::UNAUTHORIZED,
             sign_in_required("offer your albums for reunification"),
         );
     };
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -1122,14 +1061,14 @@ async fn publish_my_albums(headers: &HeaderMap, req: Request) -> Response {
 }
 
 /// `POST /join/preview` — would joining this link duplicate an album the caller already has?
-async fn join_preview(headers: &HeaderMap, req: Request) -> Response {
+async fn join_preview(headers: &HeaderMap, body: HttpBody) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
         return json_response(
             StatusCode::UNAUTHORIZED,
             sign_in_required("check this album against your own"),
         );
     };
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -1166,7 +1105,7 @@ async fn join_preview(headers: &HeaderMap, req: Request) -> Response {
 }
 
 /// `POST /join` — redeem a share invite and mirror the album it names.
-async fn join(headers: &HeaderMap, req: Request) -> Response {
+async fn join(headers: &HeaderMap, body: HttpBody) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
         return json_response(
             StatusCode::UNAUTHORIZED,
@@ -1174,7 +1113,7 @@ async fn join(headers: &HeaderMap, req: Request) -> Response {
         );
     };
     let caller = signed_in.caller;
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -1357,14 +1296,14 @@ fn decode_endpoint_token(token: &str) -> Option<(String, Option<String>, Option<
 /// Exists because the interesting case is a RACE: a photo uploaded moments before a push cycle has
 /// no dimensions yet, and mirroring it then produces a square stub at the peer that never corrects
 /// itself. A rig cannot reliably win that race by timing, so it is reproduced deliberately.
-async fn hide_dimensions(headers: &HeaderMap, req: Request) -> Response {
+async fn hide_dimensions(headers: &HeaderMap, body: HttpBody) -> Response {
     if !cfg().test_hooks {
         return json_response(StatusCode::NOT_FOUND, json!({ "error": "not found" }));
     }
-    if let Some(response) = require_admin(headers, "hide dimensions").await {
+    if let Some(response) = admin_refusal(headers, "hide dimensions").await {
         return response;
     }
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -1380,13 +1319,25 @@ async fn hide_dimensions(headers: &HeaderMap, req: Request) -> Response {
     crate::immich::unmeasured::hide_as_unmeasured(asset_id, hidden);
     crate::log!(
         "rig: dimensions for {} {}",
-        &asset_id[..asset_id.len().min(8)],
+        log_id_prefix(asset_id),
         if hidden { "hidden" } else { "visible again" }
     );
     json_response(
         StatusCode::OK,
         json!({ "assetId": asset_id, "hidden": hidden }),
     )
+}
+
+/// The head of an id for a log line, cut on a CHARACTER boundary: the id arrives in a request
+/// body, and a plain byte slice would panic the request thread on an attacker-chosen multi-byte
+/// character sitting exactly at the cut.
+fn log_id_prefix(id: &str) -> &str {
+    const LOG_ID_PREFIX_BYTES: usize = 8;
+    let mut end = id.len().min(LOG_ID_PREFIX_BYTES);
+    while !id.is_char_boundary(end) {
+        end -= 1;
+    }
+    &id[..end]
 }
 
 /// `GET /sync/status` — how far a mapping has got, plus the loop counters.
@@ -1398,17 +1349,8 @@ async fn sync_status_route(headers: &HeaderMap, uri: &Uri) -> Response {
     if !cfg().test_hooks {
         return json_response(StatusCode::NOT_FOUND, json!({ "error": "not found" }));
     }
-    let Some(caller) = caller_identity(headers).await else {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            sign_in_required("read sync status"),
-        );
-    };
-    if !caller.is_admin {
-        return json_response(
-            StatusCode::FORBIDDEN,
-            json!({ "error": "only an admin can read sync status" }),
-        );
+    if let Some(refusal) = admin_refusal(headers, "read sync status").await {
+        return refusal;
     }
     // The names are the WIRE contract, not a description: the suite reads `ticks.watcher` to tell a
     // nudge from a sweep, and an invented key reads as `undefined` — which compares false and looks
@@ -1456,7 +1398,7 @@ async fn new_session(headers: &HeaderMap) -> Response {
     if !cfg().test_hooks {
         return json_response(StatusCode::NOT_FOUND, json!({ "error": "not found" }));
     }
-    if let Some(response) = require_admin(headers, "forget sessions").await {
+    if let Some(response) = admin_refusal(headers, "forget sessions").await {
         return response;
     }
     crate::sync::index_freshness::forget_visits();
@@ -1507,14 +1449,14 @@ async fn events(headers: &HeaderMap) -> Response {
 }
 
 /// `POST /test/emit` — rig-only: emit a panel hint on demand, and say how many panels are listening.
-async fn test_emit(headers: &HeaderMap, req: Request) -> Response {
+async fn test_emit(headers: &HeaderMap, body: HttpBody) -> Response {
     if !cfg().test_hooks {
         return json_response(StatusCode::NOT_FOUND, json!({ "error": "not found" }));
     }
-    if let Some(response) = require_admin(headers, "emit an event").await {
+    if let Some(response) = admin_refusal(headers, "emit an event").await {
         return response;
     }
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -1536,14 +1478,14 @@ async fn test_emit(headers: &HeaderMap, req: Request) -> Response {
 }
 
 /// `POST /test/pause-sweeps` — rig-only: hold every background sweep, or release them.
-async fn pause_sweeps(headers: &HeaderMap, req: Request) -> Response {
+async fn pause_sweeps(headers: &HeaderMap, body: HttpBody) -> Response {
     if !cfg().test_hooks {
         return json_response(StatusCode::NOT_FOUND, json!({ "error": "not found" }));
     }
-    if let Some(response) = require_admin(headers, "hold the sweeps").await {
+    if let Some(response) = admin_refusal(headers, "hold the sweeps").await {
         return response;
     }
-    let body = match read_json_body(req).await {
+    let body = match read_json_body::<Value>(body).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -1663,27 +1605,6 @@ fn share_key_from_path(path: &str) -> Option<String> {
     Some(key.to_string())
 }
 
-fn query_has(uri: &Uri, name: &str) -> bool {
-    uri.query()
-        .map(|q| {
-            q.split('&')
-                .any(|pair| pair.split('=').next() == Some(name))
-        })
-        .unwrap_or(false)
-}
-
-/// The query string with one parameter removed, everything else kept in order.
-fn stripped_query(uri: &Uri, drop_name: &str) -> String {
-    uri.query()
-        .map(|q| {
-            q.split('&')
-                .filter(|pair| pair.split('=').next() != Some(drop_name))
-                .collect::<Vec<_>>()
-                .join("&")
-        })
-        .unwrap_or_default()
-}
-
 /// The join document: the native album in a same-origin iframe, with our card over it.
 ///
 /// The endpoint token is how a visitor's sidecar learns where to dial — the address travels in the
@@ -1785,5 +1706,18 @@ mod tests {
             action_or_default("join a shared album"),
             "join a shared album"
         );
+    }
+
+    #[test]
+    fn a_log_id_prefix_cuts_on_a_character_boundary_never_inside_one() {
+        // `hide_dimensions` logs the first few bytes of an id taken straight from the request
+        // body; slicing inside a multi-byte character is a panic on attacker-chosen input.
+        assert_eq!(log_id_prefix("0123456789"), "01234567");
+        assert_eq!(log_id_prefix("abc"), "abc");
+        assert_eq!(log_id_prefix(""), "");
+        // Four accented characters are exactly 8 bytes and must survive whole.
+        assert_eq!(log_id_prefix("éééé"), "éééé");
+        // Byte 8 falls inside a character here: the cut moves back to the last boundary.
+        assert_eq!(log_id_prefix("aaaaaaaé"), "aaaaaaa");
     }
 }

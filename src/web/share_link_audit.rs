@@ -2,7 +2,7 @@
 use axum::http::HeaderMap;
 use serde_json::Value;
 
-use crate::immich::client::{Auth, Client};
+use crate::immich::client::Auth;
 
 /// Resolve which album a share-link delete is about, BEFORE the link is gone.
 ///
@@ -33,33 +33,23 @@ pub async fn album_of_deleted_link(
 /// Record it on the album, as the person who did it.
 ///
 /// Fire-and-forget: the delete has already been answered, and a trail line must never make someone
-/// wait for their own click. The bot is added on the caller's own credential for the same reason the
-/// reunion does it that way — the membership is their act, and without it the bot cannot comment on
-/// their album at all.
-pub fn post_withdrawal(state: std::sync::Arc<crate::state::State>, headers: HeaderMap, album_id: String) {
-    tokio::spawn(async move {
-        let client: &Client = crate::immich::client::shared();
-        let Some(creds) = crate::web::auth::caller_creds(&headers) else {
-            return;
-        };
-        if let Err(e) =
-            crate::sync::house_bot::add_house_bot_to_album(&state, client, &album_id, &creds).await
-        {
-            // Best effort, and deliberately quiet at the call site: on an album the caller can read
-            // but not re-share, this is where the trail stops.
-            crate::log!("could not put the bot on {album_id} to record a withdrawn link: {e}");
-            return;
-        }
-        crate::sync::audit::audit_line(
-            &state,
-            client,
-            &format!("link:{album_id}"),
-            &album_id,
-            "link_withdrawn",
-            "Share link deleted.",
-        )
-        .await;
-    });
+/// wait for their own click. The bot-add, the caller's credential and the line all go through
+/// `album_member_audit::record_on_album` — the one writer both trails share.
+pub fn post_withdrawal(
+    state: std::sync::Arc<crate::state::State>,
+    headers: HeaderMap,
+    album_id: String,
+) {
+    let mapping_id = format!("link:{album_id}");
+    crate::web::album_member_audit::record_on_album(
+        state,
+        headers,
+        album_id,
+        "a withdrawn link",
+        mapping_id,
+        "link_withdrawn".to_string(),
+        |_| async { "Share link deleted.".to_string() },
+    );
 }
 
 /// Turn one `GET /api/shared-links` answer into the ids of links that no longer exist.
@@ -89,7 +79,10 @@ mod tests {
         // The collection route is not a delete of a link we can name, and a nested path is not a
         // link id: both must fall through rather than resolve to something arbitrary.
         assert_eq!(deleted_share_link_id("DELETE", "/api/shared-links"), None);
-        assert_eq!(deleted_share_link_id("DELETE", "/api/shared-links/abc/extra"), None);
+        assert_eq!(
+            deleted_share_link_id("DELETE", "/api/shared-links/abc/extra"),
+            None
+        );
         assert_eq!(deleted_share_link_id("DELETE", "/api/shared-links/"), None);
         // And nothing but a delete.
         assert_eq!(deleted_share_link_id("GET", "/api/shared-links/abc"), None);
@@ -103,7 +96,10 @@ mod tests {
             json!({ "id": "two", "album": { "id": "album-b" } }),
             json!({ "id": "three", "album": {} }),
         ];
-        assert_eq!(link_ids_for_album(&links, "album-a"), vec!["one".to_string()]);
+        assert_eq!(
+            link_ids_for_album(&links, "album-a"),
+            vec!["one".to_string()]
+        );
         assert!(link_ids_for_album(&links, "album-b").contains(&"two".to_string()));
         assert!(link_ids_for_album(&links, "album-missing").is_empty());
         // A row with no album id is nobody's grant: it must not match every album in the loop.

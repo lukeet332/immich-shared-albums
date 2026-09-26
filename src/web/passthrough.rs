@@ -8,7 +8,8 @@ use std::sync::OnceLock;
 /// Headers the upstream response must not carry through. `content-length` and `transfer-encoding`
 /// describe the upstream framing, which this proxy re-frames; `content-encoding` would leave the
 /// caller decoding a body we already decoded.
-const STRIPPED_RESPONSE_HEADERS: [&str; 3] = ["content-encoding", "transfer-encoding", "content-length"];
+const STRIPPED_RESPONSE_HEADERS: [&str; 3] =
+    ["content-encoding", "transfer-encoding", "content-length"];
 
 /// Headers a proxy must not forward verbatim: `host` names OUR listener, not Immich's.
 const STRIPPED_REQUEST_HEADERS: [&str; 2] = ["host", "content-length"];
@@ -25,13 +26,26 @@ fn upstream() -> Result<&'static reqwest::Client, String> {
     if let Some(client) = UPSTREAM.get() {
         return Ok(client);
     }
+    // Two bounds, neither a total timeout: a CONNECT that never completes and a response whose
+    // HEADERS never arrive are both a hung Immich hanging every proxied request — the exact
+    // opposite of the "fail loudly" contract below. Bodies stay unbounded: a video stream may
+    // legitimately run for an hour, and `read_timeout` bounds the IDLE GAP between chunks, not
+    // the transfer.
     let built = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
+        .read_timeout(UPSTREAM_IDLE_TIMEOUT)
         .build()
         .map_err(|e| e.to_string())?;
     // A lost race here just drops the duplicate; whichever client won is equivalent.
     Ok(UPSTREAM.get_or_init(|| built))
 }
+
+/// Reaching Immich is seconds of work: a TCP connect outlasting this is a dead upstream.
+const UPSTREAM_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The longest silence allowed mid-response. A photo or video chunk gap longer than this means
+/// the upstream died mid-stream; it is an IDLE bound, so long transfers are unaffected.
+const UPSTREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Proxy a request to Immich and stream the answer back.
 ///
@@ -42,7 +56,12 @@ fn upstream() -> Result<&'static reqwest::Client, String> {
 /// FAIL LOUDLY. A caller left waiting for a response they will never get is worse than an error, and
 /// it is exactly what an earlier version of this proxy did — so any failure answers 502 with the
 /// reason, never a dropped connection.
-pub async fn proxy_to_immich(method: Method, uri: &Uri, headers: &HeaderMap, body: Body) -> Response {
+pub async fn proxy_to_immich(
+    method: Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: Body,
+) -> Response {
     let path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
     // A share link being deleted takes its own history with it, so its album is resolved NOW, while
     // the link still answers — as the caller, whose act this is and whose credential is the only one
@@ -50,7 +69,11 @@ pub async fn proxy_to_immich(method: Method, uri: &Uri, headers: &HeaderMap, bod
     let withdrawn_album =
         crate::web::share_link_audit::album_of_deleted_link(method.as_str(), uri.path(), headers)
             .await;
-    let url = format!("{}{}", cfg().immich_url.trim_end_matches('/'), path_and_query);
+    let url = format!(
+        "{}{}",
+        cfg().immich_url.trim_end_matches('/'),
+        path_and_query
+    );
 
     let client = match upstream() {
         Ok(client) => client,
@@ -81,7 +104,8 @@ pub async fn proxy_to_immich(method: Method, uri: &Uri, headers: &HeaderMap, bod
         }
     };
 
-    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let upstream_headers = upstream.headers().clone();
     let mut response = Response::builder().status(status);
     for (name, value) in upstream_headers.iter() {
@@ -93,10 +117,9 @@ pub async fn proxy_to_immich(method: Method, uri: &Uri, headers: &HeaderMap, bod
     }
     // Somebody was taken off an album. Both ids are in the path, so this needs no pre-read — and it
     // is recorded after the fact, as the person who did it.
-    if let Some((album_id, user_id)) = crate::sync::traffic_triggers::removed_person(
-        method.as_str(),
-        uri.path(),
-    ) {
+    if let Some((album_id, user_id)) =
+        crate::sync::traffic_triggers::removed_person(method.as_str(), uri.path())
+    {
         crate::web::album_member_audit::post_removal(
             crate::state::state().clone(),
             headers.clone(),
@@ -107,7 +130,11 @@ pub async fn proxy_to_immich(method: Method, uri: &Uri, headers: &HeaderMap, bod
     // The withdrawal has happened: put it in the album, as the person who did it. Fire and forget,
     // so their click is never held up by a trail line.
     if let Some(album_id) = withdrawn_album {
-        crate::web::share_link_audit::post_withdrawal(crate::state::state().clone(), headers.clone(), album_id);
+        crate::web::share_link_audit::post_withdrawal(
+            crate::state::state().clone(),
+            headers.clone(),
+            album_id,
+        );
     }
     // The one route whose ANSWER is rewritten, and only for a reader who asked. Everything else
     // streams, and so does this when the preference is the default: see `filter_activities`.
@@ -131,14 +158,15 @@ pub async fn proxy_to_immich(method: Method, uri: &Uri, headers: &HeaderMap, bod
 /// know whose preference applies. Default is visible, so the common case re-serves bytes that were
 /// already fetched and unchanged.
 async fn filter_activities(headers: &HeaderMap, upstream: reqwest::Response) -> Response {
-    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let bytes = match upstream.bytes().await {
         Ok(bytes) => bytes,
         Err(e) => return unreachable_immich(&e.to_string()),
     };
     let filtered = match crate::web::auth::caller_signed_in(headers).await {
         Some(signed_in) => crate::web::activity_filter::filter_activities_body(
-            &crate::state::state(),
+            crate::state::state(),
             &signed_in.caller.id,
             &bytes,
         ),
@@ -154,7 +182,8 @@ async fn filter_activities(headers: &HeaderMap, upstream: reqwest::Response) -> 
 
 /// The one answer a caller must always get when Immich cannot be reached.
 fn unreachable_immich(reason: &str) -> Response {
-    let body = serde_json::json!({ "message": format!("the addons could not reach Immich: {reason}") });
+    let body =
+        serde_json::json!({ "message": format!("the addons could not reach Immich: {reason}") });
     Response::builder()
         .status(StatusCode::BAD_GATEWAY)
         .header(header::CONTENT_TYPE, "application/json")
@@ -172,7 +201,10 @@ mod tests {
         // waiting forever before this existed.
         let r = unreachable_immich("connection refused");
         assert_eq!(r.status(), StatusCode::BAD_GATEWAY);
-        assert_eq!(r.headers().get(header::CONTENT_TYPE).unwrap(), "application/json");
+        assert_eq!(
+            r.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
     }
 
     #[test]

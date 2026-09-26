@@ -48,19 +48,37 @@ pub const SURFACE_PATHS: [&str; 7] = [ROOT, ROOT_SLASH, ADMIN, ME, ME_SLASH, ACC
 /// server.rs, which is also where the ordering rules that cannot move are documented.
 pub fn surface_for(path: &str) -> Option<Surface> {
     let page = |body: fn() -> String, content_type: &'static str, access, action| {
-        Some(Surface { content_type, body: Body::Page(body), access, action })
+        Some(Surface {
+            content_type,
+            body: Body::Page(body),
+            access,
+            action,
+        })
     };
 
     match path {
         // The root is the one URL to remember, so it cannot be gated on admin: an ordinary user
         // typing it would meet a sign-in page. It asks who is calling and either offers the two
         // panels (admin) or opens the personal one directly.
-        ROOT | ROOT_SLASH => {
-            page(assets::root_page, HTML, Access::SignedIn, "open your shared albums")
-        }
+        ROOT | ROOT_SLASH => page(
+            assets::root_page,
+            HTML,
+            Access::SignedIn,
+            "open your shared albums",
+        ),
         // The admin panel keeps its own path now that the root is the chooser.
-        ADMIN => page(assets::panel_page, HTML, Access::Admin, "manage shared albums"),
-        ME | ME_SLASH => page(assets::me_page, HTML, Access::SignedIn, "see your shared albums"),
+        ADMIN => page(
+            assets::panel_page,
+            HTML,
+            Access::Admin,
+            "manage shared albums",
+        ),
+        ME | ME_SLASH => page(
+            assets::me_page,
+            HTML,
+            Access::SignedIn,
+            "see your shared albums",
+        ),
         ACCEPT => page(assets::accept_page, HTML, Access::Public, ""),
         _ => asset_surface(path),
     }
@@ -71,7 +89,12 @@ fn asset_surface(path: &str) -> Option<Surface> {
     // Look the asset up by NAME against the embedded table, so a traversal can never name a file.
     let content = assets::dist_asset(name)?;
     let content_type = if name.ends_with(".js") { JS } else { CSS };
-    Some(Surface { content_type, body: Body::Asset(content), access: Access::Public, action: "" })
+    Some(Surface {
+        content_type,
+        body: Body::Asset(content),
+        access: Access::Public,
+        action: "",
+    })
 }
 
 #[cfg(test)]
@@ -84,7 +107,10 @@ mod tests {
         // The single-source-of-truth check: ROUTE_PREFIX is fixed (a member's share page probes the
         // ORIGIN's prefix), so a literal here that drifts from it would serve nothing.
         for path in SURFACE_PATHS {
-            assert!(path.starts_with(ROUTE_PREFIX), "{path} is not under {ROUTE_PREFIX}");
+            assert!(
+                path.starts_with(ROUTE_PREFIX),
+                "{path} is not under {ROUTE_PREFIX}"
+            );
         }
     }
 
