@@ -154,7 +154,7 @@ async fn main() {
             "afterLedger": after_ledger,
             "purged": outcome.as_ref().map(|o| o.purged).unwrap_or(0),
             "left": outcome.as_ref().map(|o| o.left.clone()).unwrap_or_default(),
-            "error": outcome.as_ref().err().cloned(),
+            "error": outcome.as_ref().err().map(|e| e.to_string()),
             "stubReadableBy": readable_by,
             "refused": outcome.as_ref().map(|o| o.refused).unwrap_or(0),
             "failed": outcome.as_ref().map(|o| o.failed).unwrap_or(0),

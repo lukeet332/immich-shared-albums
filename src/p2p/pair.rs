@@ -1,6 +1,6 @@
 /** p2p/pair.rs — pairing links two servers on their own, with no album involved. See ARCHITECTURE.md. */
 use crate::config::{cfg, SIDECAR_VERSION};
-use crate::p2p::transport::{is_connection_death, Transport};
+use crate::p2p::transport::Transport;
 use crate::protocol::PROTOCOL_VERSION;
 use crate::settings::Settings;
 use crate::state::state;
@@ -78,7 +78,9 @@ fn now_ms() -> i64 {
 }
 
 /// Mint a code and return the ticket to hand to the other admin — the ONE time it is visible.
-pub fn mint_pairing(transport: &Transport, store: &Store) -> Result<(String, i64), String> {
+/// Infallible: nothing here can fail, so the route never has to answer an error minting cannot
+/// produce.
+pub fn mint_pairing(transport: &Transport, store: &Store) -> (String, i64) {
     let mut secret_bytes = [0u8; 32];
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut secret_bytes);
     let code = URL_SAFE_NO_PAD.encode(secret_bytes);
@@ -109,7 +111,7 @@ pub fn mint_pairing(transport: &Transport, store: &Store) -> Result<(String, i64
         "minted a pairing code, valid for {} minutes",
         ttl_ms / 60000
     );
-    Ok((format!("isa2-{encoded}"), entry.expires_at))
+    (format!("isa2-{encoded}"), entry.expires_at)
 }
 
 /// Parse a pasted ticket. The shape is narrow on purpose: an `isa2-` prefix, base64url only, and a
@@ -260,10 +262,15 @@ pub async fn handle_pair(transport: &Transport, caller_pub: &str, body: &[u8]) -
 /// One round trip pairs both ends: they learn our key from the connection itself, we learn theirs
 /// from the ticket — and the dial only succeeds if the far end HOLDS that key, so the identity in
 /// the ticket is verified by CONNECTING, not by trusting the answer.
-pub async fn redeem_pairing(transport: Arc<Transport>, raw_ticket: &str) -> Result<Value, String> {
-    let ticket = parse_ticket(raw_ticket).ok_or("that does not look like a server link")?;
+pub async fn redeem_pairing(
+    transport: Arc<Transport>,
+    raw_ticket: &str,
+) -> Result<Value, crate::web::route_error::RouteError> {
+    use crate::web::route_error::RouteError;
+    let ticket = parse_ticket(raw_ticket)
+        .ok_or_else(|| RouteError::bad_input("that does not look like a server link"))?;
     if ticket.pub_key == transport.public_key() {
-        return Err("that link is for this server".to_string());
+        return Err(RouteError::bad_input("that link is for this server"));
     }
     let peer = Peer {
         pub_key: ticket.pub_key.clone(),
@@ -290,21 +297,19 @@ pub async fn redeem_pairing(transport: Arc<Transport>, raw_ticket: &str) -> Resu
     let (head, body) = transport
         .round_trip(&peer, &header, Some(body.as_bytes()))
         .await
-        .map_err(|e| {
-            if is_connection_death(&e) {
-                "that server could not be reached".to_string()
-            } else {
-                e
-            }
-        })?;
+        .map_err(|e| RouteError::unavailable(e.to_string()))?;
     if head.status != 200 {
+        // The PEER refused the ticket — wrong code, already redeemed, expired. That is the
+        // caller's own paste being wrong, not a dead dependency.
         let reason = serde_json::from_slice::<Value>(&body)
             .ok()
             .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
             .unwrap_or_else(|| format!("status {}", head.status));
-        return Err(reason);
+        return Err(RouteError::bad_input(reason));
     }
-    let answer: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    let answer: Value = serde_json::from_slice(&body).map_err(|e| {
+        RouteError::unavailable(format!("the other server's answer was unreadable: {e}"))
+    })?;
     let linked = answer
         .pointer("/household/name")
         .and_then(|n| n.as_str())

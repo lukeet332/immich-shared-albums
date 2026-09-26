@@ -22,7 +22,7 @@ pub async fn unlink_peer(
     state: &State,
     client: &Client,
     pub_key: &str,
-) -> Result<UnlinkResult, String> {
+) -> Result<UnlinkResult, crate::web::route_error::RouteError> {
     // The window closes on drop, so a panic mid-teardown cannot leave the peer refused work.
     let _unlinking = state.unlinking_guard(pub_key);
     unlink_peer_now(state, client, pub_key).await
@@ -32,7 +32,7 @@ async fn unlink_peer_now(
     state: &State,
     client: &Client,
     pub_key: &str,
-) -> Result<UnlinkResult, String> {
+) -> Result<UnlinkResult, crate::web::route_error::RouteError> {
     let Some(peer) = state
         .collections()
         .peers
@@ -40,7 +40,9 @@ async fn unlink_peer_now(
         .find(|p| p.pub_key == pub_key)
         .cloned()
     else {
-        return Err("unknown household".to_string());
+        return Err(crate::web::route_error::RouteError::bad_input(
+            "unknown household",
+        ));
     };
     let household = peer.name.clone();
     let mut mirrors_removed = 0usize;
@@ -154,7 +156,9 @@ async fn unlink_peer_now(
     }
 
     state.collections().peers.retain(|p| p.pub_key != pub_key);
-    state.save().map_err(|e| e.to_string())?;
+    state
+        .save()
+        .map_err(|e| crate::web::route_error::RouteError::unavailable(e.to_string()))?;
     crate::log!(
         "unlinked \"{household}\" — {mirrors_removed} mirror(s) removed, {shares_revoked} share(s) revoked, {markers_removed} account(s) removed with their proxied photos"
     );
