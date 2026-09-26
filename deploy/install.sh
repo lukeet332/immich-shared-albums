@@ -54,8 +54,11 @@ INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
 
 # The compose project name IS the volume's name (<project>_isa-data). Two sidecar installs on one
 # host must therefore differ, or `down -v` on one destroys the other's identity — which is the
-# household's keypair, and losing it orphans every pairing.
-COMPOSE_PROJECT=$(ask "Compose project name (the state volume is named after it) [immich-shared-albums]:" "immich-shared-albums")
+# household's keypair, and losing it orphans every pairing. An existing install's name is the
+# default on a re-run, because accepting a different one would select a different volume and make
+# the install LOOK like it lost its identity.
+EXISTING_PROJECT=$([ -f "$INSTALL_DIR/docker-compose.yml" ] && grep -m1 '^name:' "$INSTALL_DIR/docker-compose.yml" | sed 's/^name:[[:space:]]*//' || true)
+COMPOSE_PROJECT=$(ask "Compose project name (the state volume is named after it)${EXISTING_PROJECT:+ [$EXISTING_PROJECT]}:" "${EXISTING_PROJECT:-immich-shared-albums}")
 
 # The sidecar image builds from the repo root.
 DOCKERFILE="${ISA_DOCKERFILE:-Dockerfile}"
@@ -132,9 +135,14 @@ fi
 # otherwise read as a successful install and surface days later as an empty panel. Ask the sidecar
 # to exercise the exact path it will use forever: container -> Immich, with this key.
 say "Verifying Immich is reachable with this key"
+# /admin/users, not /users/me: the sidecar's first job with this key is creating one account per
+# remote person, which is admin-only. users/me would pass for any valid key, however scoped, and
+# the failure would surface on the first join instead of at install time. The rest of the scoped
+# list (deploy/api-key.md) is checked by the sidecar's own boot diagnostics, whose output this
+# installer tails on a failure.
 if (cd "$INSTALL_DIR" && docker compose exec -T immich-shared-albums \
-      wget -qO- --header="x-api-key: $ISA_API_KEY" "$IMMICH_URL/api/users/me" 2>/dev/null) | grep -q '"id"'; then
-  echo "key verified against $IMMICH_URL"
+      wget -qO- --header="x-api-key: $ISA_API_KEY" "$IMMICH_URL/api/admin/users" 2>/dev/null) | grep -q '"id"'; then
+  echo "key verified against $IMMICH_URL (admin operations reachable)"
 else
   echo "FAIL: the sidecar cannot use this key against $IMMICH_URL."
   echo "  - check the URL is Immich's address as reachable from the docker network you named, and"
