@@ -116,6 +116,7 @@ fi
 docker build -q --target probe -f Dockerfile -t immich-shared-albums:probe-build . >/dev/null \
   || { echo "!! probe build failed — the oracle cannot run" >&2; exit 1; }
 CID=$(docker create immich-shared-albums:probe-build)
+mkdir -p target
 docker cp "$CID":/build/target/release/examples/probe target/probe >/dev/null || exit 1
 docker rm "$CID" >/dev/null
 # Top level, not a subshell: the lane inherits it.
