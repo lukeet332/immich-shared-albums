@@ -140,6 +140,10 @@ see, and clears the key owner's own notifications — so it is built to be **inc
 at anything but its own mocks**, even on a machine where a real Immich (or a real sidecar) is
 listening. Four layers, and all of them are in the repo rather than in anyone's host config:
 
+1. **One build per image, named for what it is.** A run builds `immich-shared-albums:demo` (the
+   sidecar under test) and `immich-shared-albums:probe` (the independent JavaScript oracle, which
+   needs Node and so is built from the root Dockerfile whatever the sidecar uses — a Rust sidecar
+   image has no Node, and a probe that dies with `exec: node: not found` reads as a product failure).
 1. **The address map is one set of variables**, read by the composes, `run-mock-e2e.sh`, the suite
    and the browser lane alike: `PORT_IMMICH_{B,C,D}` (defaults `2284–2286`), `PORT_SIDECAR_{B,C,D}`
    (`8301–8303`) and `RIG_BIND` (`127.0.0.1`). Put a host's map in a file **outside the repo** and
@@ -172,4 +176,37 @@ listening. Four layers, and all of them are in the repo rather than in anyone's 
 Before trusting the rig on such a host: run it once, then confirm the real containers' `StartedAt`
 and `RestartCount` did not change (`docker inspect -f '{{.State.StartedAt}} {{.RestartCount}}'`),
 and try `require_mock` by hand against a real port — it must refuse.
+
+## Clicking through it by hand
+
+The rig is also the fastest place to USE the addon, which is a different question from whether the
+suite passes. Two modes, both ending in a rig a person can sign into; a later normal run purges
+whatever they left.
+
+| Command | What it gives you |
+| --- | --- |
+| `RIG_UP_ONLY=1 bash demo/run-mock-e2e.sh` | The rig's own sidecars on the port map, both households purged and seeded, **C's password login left ON** so you can actually sign in |
+| `bash demo/hand-test-up.sh` | The same mocks with the sidecars INSTALLED by `deploy/install.sh` (B on `:9301`, C on `:9302`) — this is the path an operator takes, so a rig built any other way tests everything except the way it ships |
+
+`hand-test-up.sh` installs all THREE households (B, C, D) and pairs every pair, so the rig is a
+closed mesh — which is what makes a behaviour difference *between* households observable at all. The
+matrix probe (`rust/target/probe-mesh-asymmetry.mjs`, run by hand) walks the same cycle on all six
+ordered pairs.
+
+`RIG_UP_ONLY` implies no suite; `RIG_MOCKS_ONLY=1` stops the rig's own sidecars and leaves just the
+purged Immichs, for a sidecar installed by hand. Neither touches the guards: the purge, the port map
+and `require_mock` are the same code the suite runs, and both exit before the lane.
+
+The seed (`demo/hand-test-seed.mjs`) builds what a person needs to click on rather than a wall of
+test albums: two linked households, an album of the SAME NAME owned on each side (the reunion pair),
+one photo with **identical bytes on both** (the dedupe case), and a second album shared by link for
+the join → store-locally → native-leave path. Its images are generated at seed time — the rig's
+fixtures are flat colour blocks, which are fine as bytes and useless when you are scanning a grid
+for "which one came from the other server".
+
+`deploy/install.sh` writes `name: immich-shared-albums` into the compose it generates, so a SECOND
+install on one host takes over the first project's container. `hand-test-up.sh` separates them with
+`COMPOSE_PROJECT_NAME`, and re-binds each published port to loopback — the installer correctly
+assumes a host of its own, and on a host that also runs a real Immich the mocks would otherwise be
+on the LAN with a known admin password.
 

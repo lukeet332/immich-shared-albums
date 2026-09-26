@@ -77,7 +77,7 @@ export const Settings = () => {
       </label>
       <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>
         Off, they stream from their owner and use no space here. On, they are copied over in the background
-        and use real disk space.
+        and use real disk space. Turning this off does not remove copies already made.
       </p>
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, marginTop: 12 }}>
         Pairing links stay valid for

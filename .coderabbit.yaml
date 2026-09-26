@@ -49,6 +49,14 @@ reviews:
     - '!src/web/accept.bundle.js'
     - '!src/web/share.bundle.js'
     - '!package-lock.json'
+    # Dev-only tooling, on the same principle as the generated files above: these exist to EXERCISE
+    # the sidecar, they are not what ships. The Rust port's PR is 113 files, and a review is skipped
+    # entirely above 100 rather than run over part of the diff — so the budget goes to the code that
+    # ships (rust/src, the harness, the workflow) and to the lanes that test it, not to the probe
+    # binaries and the two benchmark scripts.
+    - '!rust/examples/**'
+    - '!rust/bench.sh'
+    - '!rust/bench-latency.mjs'
 
   pre_merge_checks:
     # This codebase deliberately carries no docstrings (AGENTS.md, "Comments: a paired doc is the

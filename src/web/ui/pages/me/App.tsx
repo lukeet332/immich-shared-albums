@@ -8,7 +8,9 @@ import {
   invite,
   myAlbums,
   myMatches,
+  myPreferences,
   reunite,
+  savePreferences,
   unreunite,
   type ActionableMatch,
   type MyAlbum,
@@ -28,6 +30,9 @@ export const App = () => {
   const [isAdmin, setIsAdmin] = useState(false);
   const [matches, setMatches] = useState<ActionableMatch[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Default ON. The trail exists to be read, and hiding it is a choice this person makes for
+  // themselves — it never changes what anyone else sees.
+  const [auditVisible, setAuditVisible] = useState(true);
   const [reuniting, setReuniting] = useState('');
   const [inviting, setInviting] = useState('');
   const [detaching, setDetaching] = useState('');
@@ -49,6 +54,9 @@ export const App = () => {
     myMatches()
       .then(r => setMatches(r.matches))
       .catch(() => setMatches([]));
+    myPreferences()
+      .then(r => setAuditVisible(r.auditVisibleInComments))
+      .catch(() => {}); // a preference we cannot read leaves the default, which is SHOW
   }, []);
 
   // LIVE, because the other household acts on their own server: an invitation they send, a pair
@@ -86,6 +94,20 @@ export const App = () => {
     const timer = setTimeout(() => setNotice(null), NOTICE_MS);
     return () => clearTimeout(timer);
   }, [notice]);
+
+  /** Optimistic, then corrected by the server's answer: the checkbox must not hang on a round trip,
+   *  and a refusal has to put it back rather than leave the panel claiming a setting it did not save. */
+  const onToggleAudit = async (next: boolean) => {
+    setAuditVisible(next);
+    setNotice(null);
+    try {
+      const saved = await savePreferences({ auditVisibleInComments: next });
+      setAuditVisible(saved.auditVisibleInComments);
+    } catch (e) {
+      setAuditVisible(!next);
+      setNotice({ kind: 'error', text: `Could not change that setting: ${(e as Error).message}` });
+    }
+  };
 
   const onReunite = async (m: ActionableMatch) => {
     if (!m.mappingId) return; // no share to reunite: this pairing has never been shared
@@ -192,23 +214,35 @@ export const App = () => {
                 <div style={s.item} key={a.mappingId}>
                   <div style={s.grow}>
                     <div style={s.title}>{a.name}</div>
-                    <div style={s.sub}>reunited with {a.peer}</div>
+                    <div style={s.sub}>
+                      {a.adoptedByUs === false ? `reunited by ${a.peer}` : 'yours, reunited'}
+                    </div>
                   </div>
-                  <button
-                    style={s.button}
-                    disabled={!!detaching}
-                    onClick={() =>
-                      setAsking({
-                        title: 'Un-reunite?',
-                        body: 'Your album keeps your photos. Only theirs are removed.',
-                        confirm: 'Un-reunite',
-                        danger: true,
-                        onConfirm: () => onUnreunite(a),
-                      })
-                    }
-                  >
-                    {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite'}
-                  </button>
+                  {a.adoptedByUs === false ? (
+                    // They adopted the share this household gave them, so there is no adoption of
+                    // ours to undo — an Un-reunite click here would answer 404. Undoing an
+                    // invitation is withdrawing the share, which is Immich's own album settings.
+                    <div style={s.muted}>
+                      Merged into their album. To undo, remove their access to this album in Immich's sharing
+                      settings.
+                    </div>
+                  ) : (
+                    <button
+                      style={s.button}
+                      disabled={!!detaching}
+                      onClick={() =>
+                        setAsking({
+                          title: 'Un-reunite?',
+                          body: 'Your album keeps your photos. Only theirs are removed.',
+                          confirm: 'Un-reunite',
+                          danger: true,
+                          onConfirm: () => onUnreunite(a),
+                        })
+                      }
+                    >
+                      {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite'}
+                    </button>
+                  )}
                 </div>
               ))}
           </div>
@@ -295,8 +329,15 @@ export const App = () => {
                 <div style={s.sub}>
                   {/* A reunion adopts the person's OWN album, so the mapping's role says how the
                       share arrived, not whose album this is — "shared with you" for an album you
-                      own is the one thing the row must not say. */}
-                  {a.reunified ? 'yours, reunited' : a.role === 'owner' ? 'shared by you' : 'shared with you'}{' '}
+                      own is the one thing the row must not say. A share the PEER adopted was
+                      reunited by them, not by this household. */}
+                  {a.reunified
+                    ? a.adoptedByUs === false
+                      ? 'reunited by them'
+                      : 'yours, reunited'
+                    : a.role === 'owner'
+                      ? 'shared by you'
+                      : 'shared with you'}{' '}
                   · with {a.peer}
                 </div>
               </div>
@@ -304,6 +345,21 @@ export const App = () => {
           ))}
         </div>
       )}
+      <h2 style={s.h2}>Album activity</h2>
+      <div style={s.card}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14 }}>
+          <input
+            id="audit-visible"
+            type="checkbox"
+            checked={auditVisible}
+            onChange={e => void onToggleAudit((e.target as HTMLInputElement).checked)}
+          />
+          Show what immich-shared-albums did to this album
+        </label>
+        <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>
+          Posted in the album as comments. Off hides them from you only — everyone else still sees them.
+        </p>
+      </div>
       <Confirm ask={asking} onClose={() => setAsking(null)} />
     </>
   );

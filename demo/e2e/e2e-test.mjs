@@ -73,6 +73,19 @@ const isBot = (e) => !!e && BOT_DOMAINS.some(d => e.endsWith('@' + d));
 // /immich-shared-albums/join authenticates the caller against that household's own Immich, so the
 // suite has to present a real credential exactly like a signed-in browser would.
 const jAuth = (o, key) => ({ method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key }, body: JSON.stringify(o) });
+// Mint a link on the origin and redeem it on B. The join can 401 needsAuth while Immich is
+// still churning a prior stage's work (a whoami that times out reads as needsAuth), so this
+// retries: the 401 is transient; a real refusal says so in its error text.
+const joinWithRetry = async (mintLink) => {
+  let out = null;
+  for (let attempt = 0; attempt < 4 && !(out && out.album); attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, 10000));
+    const link = await mintLink();
+    const tok = (((await (await fetch(`${ORIGIN_DIRECT}/share/${link.key}`)).text()).match(/data-origin-endpoint="([^"]+)"/) || [])[1]);
+    out = await (await fetch(`${BS}/immich-shared-albums/join`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY }, body: JSON.stringify({ invite: { endpointToken: tok, key: link.key } }) })).json();
+  }
+  return out;
+};
 const albumAssets = async (base, key, albumId) =>
   (await api(base, key, '/search/metadata', j({ albumIds: [albumId], size: 100, withExif: true }))).assets.items;
 import crypto from 'node:crypto';
@@ -155,10 +168,52 @@ const rigOwns = (container, env) => {
 const SQLITE_ROWS_JSON =
   'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db",{readOnly:true});' +
   'process.stdout.write(JSON.stringify(db.prepare(process.argv[1]).all()))';
-const sidecarSql = (stateDir, sql) => {
+// The Rust sidecar's image has no `node` in it, so reading its state must not go through one. Same
+// rule as the shell helper: a throwaway sqlite container on the same Docker host, so the WAL locks
+// are shared exactly as they are for the in-container reader. `-readonly` cannot unlink the WAL.
+const READER_IMAGE = 'immich-shared-albums:sqlite-reader';
+const sidecarDataDir = stateDir => {
   try {
-    return execFileSync('docker', ['exec', containerFor(stateDir), 'node', '-e', SQLITE_ROWS_JSON, sql],
-                        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
+    return execFileSync('docker', ['inspect', '-f',
+      '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}', containerFor(stateDir)],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
+  } catch { return ''; }
+};
+// Probe for the runtime rather than catching a failure: `docker exec` reports a missing binary on
+// STDOUT with status 0, so a catch-based fallback never fires and the error text is parsed as rows.
+// Cached PER CONTAINER: the lane reads several sidecars in one run, and a single global answer would
+// give a Node sidecar's verdict to a Rust sidecar (the port's image has no node).
+const nodeInSidecar = new Map();
+const sidecarHasNode = stateDir => {
+  const container = containerFor(stateDir);
+  if (!nodeInSidecar.has(container)) {
+    try {
+      execFileSync('docker', ['exec', container, 'sh', '-c', 'command -v node >/dev/null 2>&1'],
+                   { stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 });
+      nodeInSidecar.set(container, true);
+    } catch { nodeInSidecar.set(container, false); }
+  }
+  return nodeInSidecar.get(container);
+};
+const sidecarSql = (stateDir, sql) => {
+  const readViaNode = () => {
+    if (!sidecarHasNode(stateDir)) return null;
+    try {
+      return execFileSync('docker', ['exec', containerFor(stateDir), 'node', '-e', SQLITE_ROWS_JSON, sql],
+                          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
+    } catch { return null; }
+  };
+  // The reader is the FALLBACK for any node-path failure, not just a missing node: a probe that says
+  // "this sidecar has node" and a query that still fails must not silently answer null.
+  const viaNode = readViaNode();
+  if (viaNode !== null) return viaNode;
+  const src = sidecarDataDir(stateDir);
+  if (!src) return null;
+  try {
+    const out = execFileSync('docker', ['run', '--rm', '-v', `${src}:/data`, READER_IMAGE,
+      'sqlite3', '-json', '-readonly', '/data/state.db', sql],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
+    return out || null;
   } catch { return null; }
 };
 const readSidecarKv = (stateDir, name) => {
@@ -306,28 +361,32 @@ const endpointOf = async pageBase => {
   return JSON.parse(Buffer.from(invite.endpointToken, 'base64url').toString());
 };
 // One iroh request from INSIDE the rig's network (the host cannot dial container IPs).
-const { execSync } = await import('node:child_process');
 const E2E_DIR = new URL('.', import.meta.url).pathname.replace(/\/$/, '');
 // The probe runs in the sidecar's own image: it already holds the one dependency the probe needs
 // (`@number0/iroh`, pinned by the same lockfile the sidecar runs on), so there is no install step.
 // It used to run `npm ci` inside a bare node image on every call — ~3.5s of pure overhead per
 // probe, seven probes a run — and the rig has already built this image before the suite starts.
 // Only demo/e2e is mounted, read-only, so a probe can see nothing but its own client code.
-const PROBE_IMAGE = process.env.PROBE_IMAGE || 'immich-shared-albums:demo';
+// The INDEPENDENT JavaScript oracle. It must NOT default to the sidecar image: under a Rust sidecar
+// that image has no node, and the probe would fail for a reason that looks like a product bug. The
+// rig builds a Node image under this tag whatever the sidecar is built from.
+const PROBE_IMAGE = process.env.PROBE_IMAGE || 'immich-shared-albums:probe';
 // A probe spawns a container and does a live iroh round trip, so it can fail transiently — the
 // native addon has been seen to exit on SIGBUS (135) mid-run. That used to throw out of execSync
 // and kill the whole suite, hiding every other result behind one flake. Retry once, then report a
 // status the checks can fail on, so a probe problem reads as one red check instead of no output.
 const irohProbe = (keys, endpoint, path, opts = {}) => {
   const job = JSON.stringify({ keys, peerPub: endpoint.pub, addrs: endpoint.addrs, path, ...opts });
-  const cmd =
-    `docker run --rm --network isa-demo -e ISA_ROOT=/app -e RELAY=off ` +
-    `-v "${E2E_DIR}":/probe:ro ${PROBE_IMAGE} ` +
-    `node /probe/probe.mjs '${job.replace(/'/g, String.raw`'\''`)}'`;
+  // ARGV, not a shell string: the job is JSON that no quoting rule survives intact, and a shell is
+  // one more thing between the suite and the oracle that can mangle it.
+  const argv = [
+    'run', '--rm', '--network', 'isa-demo', '-e', 'ISA_ROOT=/app', '-e', 'RELAY=off',
+    '-v', `${E2E_DIR}:/probe:ro`, PROBE_IMAGE, 'node', '/probe/probe.mjs', job,
+  ];
   let last;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const out = execSync(cmd, { timeout: 120000 }).toString().trim().split('\n').pop();
+      const out = execFileSync('docker', argv, { timeout: 120000 }).toString().trim().split('\n').pop();
       return JSON.parse(out);
     } catch (e) {
       last = e;
@@ -480,8 +539,21 @@ if (aAfter) {
   check('contributions NOT owned by origin admin (timeline clean)', contributed.every(a => a.ownerId !== ownerId_A),
         contributed.map(a => a.ownerId.slice(0, 8)).join(','));
   check('contributions owned by the contributor utility user', nanUser && contributed.every(a => a.ownerId === nanUser.id));
-  const credited = contributed.every(a => (a.exifInfo?.description || '').includes('Shared by'));
-  check('uploader credited in photo description', credited, contributed.map(a => a.exifInfo?.description).join(' | ').slice(0,80));
+  // POLLED, not sampled: the credit is written by a PUT after the upload, and this read can land
+  // between the two — the Rust lane in CI lost that race by 10ms against the TypeScript lane, on the
+  // same commit, which is a property of the read and not of either implementation. The assertion is
+  // unchanged: BOTH contributed photos must carry the credit, within the window.
+  const creditIds = contributed.map(a => a.id);
+  const credited = await until(async () => {
+    const now = await albumAssets(A, AKEY, ALBUM_ID);
+    const mine = now.filter(a => creditIds.includes(a.id));
+    return mine.length === creditIds.length &&
+      mine.every(a => (a.exifInfo?.description || '').includes('Shared by'))
+      ? mine
+      : null;
+  }, 30000);
+  check('uploader credited in photo description', !!credited,
+        (credited || contributed).map(a => a.exifInfo?.description || '(none)').join(' | ').slice(0, 80));
   const cDates = contributed.map(a => (a.fileCreatedAt || '').slice(0, 10)).sort();
   check('contribution capture dates preserved', JSON.stringify(cDates) === JSON.stringify(['2026-07-01','2026-07-02']), cDates.join(','));
 
@@ -796,6 +868,10 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
   // leave & purge via the NATIVE gesture: the user leaves the album in the stock app
   // (album settings -> Leave album); the sidecar notices and cleans up everything.
   const stubIds = (await albumAssets(B, BKEY, mirrorD.id)).map(a => a.id);
+  // Captured BEFORE the leave: afterwards the mapping row is gone, so nothing can be found through
+  // `mappings` any more, and a subquery through it reads "0 rows" whatever the sidecar did.
+  const mDId = JSON.parse(sidecarSql('b-sidecar',
+    `SELECT id FROM mappings WHERE albumId='${mirrorD.id}'`) || '[]')[0]?.id;
   await api(B, BKEY, `/albums/${mirrorD.id}/user/me`, { method: 'DELETE' });
   const albumGone = await until(async () =>
     !(await api(B, BKEY, '/albums')).some(a => a.id === mirrorD.id) ? true : null, 90000);
@@ -806,6 +882,34 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
     if (r.ok) { const a = await r.json(); if (!a.isTrashed && !a.deletedAt) stubsGone = false; }
   }
   check('native leave: stubs deleted (space reclaimed)', stubsGone);
+  // The two checks above pass on LOST VISIBILITY alone: once the admin leaves, the mirror is
+  // invisible to them whether or not the sidecar purged anything. The sidecar's own view and its
+  // ledger are the honest answer. RUST-ONLY: the TypeScript's native-leave check sits behind its
+  // `updatedAt` handshake, which Immich does not move when a member leaves, so it never notices this
+  // at all (see rust/PORT.md). The port runs the check before the handshake.
+  if (!sidecarHasNode('b-sidecar')) {
+    const peersGone = await until(async () => {
+      const peers = await (await fetch(`${BS}/immich-shared-albums/peers`, { headers: { 'x-api-key': BKEY } })).json();
+      return !(peers.albums || []).some(a => a.name === 'delete test') ? true : null;
+    }, 900000);
+    check('native leave: the mapping is gone from the sidecar\u2019s own peer view', !!peersGone,
+          peersGone ? '' : 'still in /peers after 15 min');
+    // The ledger read through the sidecar's container confirms the DB rows went too.
+    const readLedger = () => {
+      const state = sidecarSql('b-sidecar',
+        `SELECT (SELECT COUNT(*) FROM mappings WHERE id='${mDId}') AS mappings,
+                (SELECT COUNT(*) FROM seen WHERE mapping='${mDId}') AS seen`);
+      return state ? JSON.parse(state)[0] : { mappings: -1, seen: -1 };
+    };
+    const lcLedger = await until(async () => {
+      const parsed = readLedger();
+      return parsed.mappings === 0 && parsed.seen === 0 ? parsed : null;
+    }, 900000);
+    const last = readLedger();
+    check('native leave: the ledger rows are gone (verified through the sidecar\u2019s container)',
+          !!lcLedger && !!mDId, lcLedger ? 'mapping rows=0, ledger rows=0'
+                                         : `still ${last.mappings} mapping(s), ${last.seen} ledger row(s)`);
+  }
 }
 
 stage('kill test — uncached photos fail closed; cached ones survive from cache');
@@ -816,7 +920,6 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   const cachedSha = sha1(await fetchBytes(`${A}/api/assets/${aIds[0]}/thumbnail?size=preview`, AKEY));
   // an origin-owned photo that has NEVER been viewed through the interceptor
   const uncachedProxy = all.find(a => !a.exifInfo?.latitude && (a.fileCreatedAt || '').startsWith('2026-08-1'));
-  const { execSync } = await import('node:child_process');
   const dockerEnv = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
   // The one name-addressed destructive verb in the suite. On a host that also runs a real
   // sidecar, a stale or mistyped name here would kill THAT — so the container must prove it
@@ -830,11 +933,13 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   // the member can still reach; if either changed, the recovery check's detail says which, so a red
   // run explains itself instead of reading like a transport bug.
   const originWhere = async () => {
-    const sh = cmd => { try { return execSync(cmd, { env: dockerEnv, encoding: 'utf8' }).trim(); } catch (e) { return `? (${String(e.message).split('\n')[0].slice(0, 60)})`; } };
-    const ip = sh(`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' ${ORIGIN_CONTAINER}`);
+    // ARGV, never a shell string: the container name is resolved from this host's compose
+    // project, and passing it as one argument is what keeps a name out of shell syntax.
+    const sh = argv => { try { return execFileSync('docker', argv, { env: dockerEnv, encoding: 'utf8' }).trim(); } catch (e) { return `? (${String(e.message).split('\n')[0].slice(0, 60)})`; } };
+    const ip = sh(['inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}', ORIGIN_CONTAINER]);
     // What the origin holds on disk and what it believes in memory: a restart can only recover if
     // both survived. Sizes of state.db and its WAL, and the origin's own peer list.
-    const files = sh(`docker exec ${ORIGIN_CONTAINER} sh -c 'ls -l /data | grep state | awk "{print \\$5, \\$9}" | tr "\\n" " "'`);
+    const files = sh(['exec', ORIGIN_CONTAINER, 'sh', '-c', 'ls -l /data | grep state | awk "{print \\$5, \\$9}" | tr "\\n" " "']);
     const peers = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/peers`, { headers: { 'x-api-key': AKEY } })
       .then(r => r.json()).then(j => (j.peers || []).map(p => `${p.name}:${p.sharedTo ?? '?'}/${p.sharedFrom ?? '?'}`).join(',') || 'none').catch(e => `? ${e.message}`);
     const ep = await endpointOf(ORIGIN_DIRECT).catch(() => null);
@@ -845,9 +950,9 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   // signal and it returns at once. `stop` would additionally wait out the grace period the sidecar
   // now uses to exit cleanly — a graceful exit is covered by a unit test, and paying for it here
   // would only make the crash simulation slower, not more realistic.
-  if (isRig) execSync(`docker kill ${ORIGIN_CONTAINER}`, { env: dockerEnv, stdio: 'ignore' });
+  if (isRig) execFileSync('docker', ['kill', ORIGIN_CONTAINER], { env: dockerEnv, stdio: 'ignore' });
   await waitFor(() => {
-    try { return execSync(`docker inspect -f {{.State.Running}} ${ORIGIN_CONTAINER}`, { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
+    try { return execFileSync('docker', ['inspect', '-f', '{{.State.Running}}', ORIGIN_CONTAINER], { env: dockerEnv, encoding: 'utf8' }).trim() === 'false'; }
     catch { return true; }
   }, 15000);
   // B may still be tearing down requests to the container we just stopped, so a closed socket
@@ -862,7 +967,7 @@ stage('kill test — uncached photos fail closed; cached ones survive from cache
   const cachedRes = await fetch(`${BS}/api/assets/${cachedProxy.id}/thumbnail`, { headers: { 'x-api-key': BKEY } });
   check('owner offline: recently viewed photo still renders FROM CACHE',
         cachedRes.headers.get('x-cache') === 'HIT' && sha1(await cachedRes.arrayBuffer()) === cachedSha);
-  if (isRig) execSync(`docker start ${ORIGIN_CONTAINER}`, { env: dockerEnv, stdio: 'ignore' });
+  if (isRig) execFileSync('docker', ['start', ORIGIN_CONTAINER], { env: dockerEnv, stdio: 'ignore' });
   // Wait for the thing that restarted — the origin SIDECAR — to answer again, instead of guessing
   // how long a start takes. (This used to ping the origin's Immich, which never went down.)
   await waitFor(async () => (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`).catch(() => ({ ok: false }))).ok, 20000);
@@ -2170,6 +2275,9 @@ stage('panel manages server links (unlink)');
   if (target) {
     const beforeUsers = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('person-'));
     const before = beforeUsers.length;
+    // Rust-only: the ledger cleanup the unlink performs is the port's (see `unlink.rs`).
+    const peerMappingIds = sidecarHasNode('b-sidecar') ? [] : JSON.parse(sidecarSql('b-sidecar',
+      `SELECT id FROM mappings WHERE peer='${target.pub}'`) || '[]').map(r => r.id);
     const res = await fetch(`${BS}/immich-shared-albums/unlink`,
       { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
         body: JSON.stringify({ pub: target.pub }) });
@@ -2183,6 +2291,19 @@ stage('panel manages server links (unlink)');
       return (peers.peers || []).some(p => p.pub === target.pub) ? null : true;
     }, 30000);
     check('the server is gone from the panel after unlinking', !!gone, gone ? '' : 'still listed');
+
+    // The ledger rows go with the assets. `force: true` deleted the accounts that owned them, so a
+    // row left behind claims bytes this household no longer holds — and a stored-FULL copy is one of
+    // those assets, which is why the cleanup has to reach past the leave it just performed.
+    if (!sidecarHasNode('b-sidecar')) {
+      const ids = peerMappingIds.map(id => `'${id}'`).join(',') || "''";
+      const left = sidecarSql('b-sidecar',
+        `SELECT COUNT(*) AS n FROM seen WHERE mapping IN (${ids})`);
+      const leftRows = left ? Number(JSON.parse(left)[0].n) : -1;
+      check('unlink leaves no ledger row claiming bytes it just deleted',
+            peerMappingIds.length > 0 && leftRows === 0,
+            `${peerMappingIds.length} mapping(s) had ${leftRows} row(s) left`);
+    }
 
     // Its people must leave Immich's picker — that is the visible half of unlinking.
     const afterUsers = (await api(B, BKEY, '/admin/users')).filter(u => u.email.startsWith('person-'));
@@ -2249,7 +2370,6 @@ if (DKEY) {
   // Reproduce it exactly: stop D's sidecar, delete ONLY its mapping rows — identity and peers stay,
   // so D still answers C as the same peer — and start it again.
   const dDir = new URL('../household-d', import.meta.url).pathname;
-  const { execSync: dsh } = await import('node:child_process');
   const dockerEnv2 = { ...process.env, PATH: process.env.PATH + ':/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin' };
   const dPub = readSidecarKv('household-d/d-sidecar', 'identity')?.pub;
   const liveMappingsForD = () => {
@@ -2261,10 +2381,16 @@ if (DKEY) {
   check('rig: the origin holds live owner mappings for D', (liveBefore ?? 0) > 0, `live: ${liveBefore}`);
   let wiped = false;
   try {
-    dsh('docker compose stop sidecar-d', { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
-    dsh(`docker compose run --rm --no-deps --entrypoint node sidecar-d -e 'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync("/data/state.db");db.exec("DELETE FROM mappings");console.log("mappings wiped")'`,
-        { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
-    dsh('docker compose start sidecar-d', { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
+    execFileSync('docker', ['compose', 'stop', 'sidecar-d'], { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
+    // A throwaway sqlite container on the same volume, NOT `--entrypoint node`: the sidecar image
+    // is what is under test, and under a Rust sidecar it has no node. The sidecar is STOPPED for
+    // this (above), so nothing holds the database and there is no lock to share.
+    const dVolume = sidecarDataDir('household-d/d-sidecar');
+    if (!dVolume) throw new Error('could not resolve sidecar-d\'s data dir');
+    execFileSync('docker', ['run', '--rm', '-v', `${dVolume}:/data`, READER_IMAGE,
+                            'sqlite3', '/data/state.db', 'DELETE FROM mappings'],
+                 { stdio: ['ignore', 'pipe', 'ignore'], env: dockerEnv2, timeout: 30000 });
+    execFileSync('docker', ['compose', 'start', 'sidecar-d'], { cwd: dDir, env: dockerEnv2, stdio: 'ignore' });
     wiped = true;
   } catch (e) { console.log(`  (could not wipe D's mappings: ${String(e.message).split('\n')[0].slice(0, 100)})`); }
   check("rig: D's sidecar restarted with its mappings wiped and its identity intact", wiped);
@@ -2277,6 +2403,445 @@ if (DKEY) {
     const retired = await until(async () => liveMappingsForD() === 0 ? true : null, 120000);
     check('the origin retires a mapping its peer keeps answering 404 to, instead of retrying forever',
           !!retired, retired ? `${liveBefore} -> 0 live` : `still ${liveMappingsForD()} live after 120s`);
+  }
+}
+
+// The Rust build only: the removal channel, caption propagation and the origin-side leave
+// reclaim are Rust features the TypeScript never had. The runtime probe is the same one the
+// state reader uses - a Rust sidecar's image has no node in it.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: deleted contributions, caption edits and leaves reclaim what they should');
+  {
+    const t = `rust lifecycle ${Date.now()}`;
+    console.log(`  (rust lc env: BKEY=${typeof BKEY}/${(BKEY || '').length} AKEY=${typeof AKEY}/${(AKEY || '').length})`);
+    const originAlbum = await api(A, AKEY, '/albums', j({ albumName: t }));
+    const originPhoto = await upload(A, AKEY, 'rust-lc.jpg', `rl${Date.now() % 10000}`, '2026-08-15T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [originPhoto]);
+    // the caption exists BEFORE the join, so the stub materialises with it (plus the credit line)
+    await api(A, AKEY, `/assets/${originPhoto}`, { ...j({ description: 'caption v1' }), method: 'PUT' });
+    await api(A, AKEY, `/albums/${originAlbum.id}/assets`, { ...j({ ids: [originPhoto] }), method: 'PUT' });
+    // The stage runs at the lane\u2019s tail, where Immich may still be churning the bulk album\u2019s
+    // metadata jobs - a whoami that times out reads as needsAuth. Retry: the 401 is transient.
+    let joinLc = null;
+    for (let attempt = 0; attempt < 4 && !(joinLc && joinLc.album); attempt++) {
+      if (attempt) await new Promise(r => setTimeout(r, 10000));
+      const linkKey = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: originAlbum.id, allowUpload: true }))).key;
+      const init = jAuth(await inviteFor(ORIGIN_DIRECT, linkKey), BKEY);
+      joinLc = await (await fetch(`${BS}/immich-shared-albums/join`, init)).json();
+    }
+    check('rust lc: joined', !!joinLc.album, JSON.stringify(joinLc).slice(0, 90));
+    const mirrorLc = await until(async () => {
+      const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinLc.album && a.assetCount > 0);
+      return found || null;
+    }, 90000);
+    check('rust lc: the mirror holds the stub', !!mirrorLc, mirrorLc ? '' : 'timed out');
+    const meIdLc = (await api(B, BKEY, '/users/me')).id;
+    const stubLc = (await albumAssets(B, BKEY, mirrorLc.id)).find(a => a.ownerId !== meIdLc);
+    const stubDesc = (await api(B, BKEY, `/assets/${stubLc.id}`)).exifInfo?.description || '';
+    check('rust lc: the stub materialised with the origin caption plus the credit line',
+          stubDesc.includes('caption v1') && stubDesc.includes('Shared by'), stubDesc.slice(0, 70));
+
+    // 1. the joiner CONTRIBUTES: their own photo, added to the mirror (the picker\u2019s gesture)
+    const contribution = await upload(B, BKEY, 'rust-contrib.jpg', `rc${Date.now() % 10000}`, '2026-08-16T10:00:00.000Z');
+    await api(B, BKEY, `/albums/${mirrorLc.id}/assets`, { ...j({ ids: [contribution] }), method: 'PUT' });
+    const originGrew = await until(async () =>
+      (await albumAssets(A, AKEY, originAlbum.id)).length >= 2 ? true : null, 120000);
+    check('rust lc: the contribution reached the ORIGIN (as a stub of the joiner\u2019s asset)', !!originGrew,
+          originGrew ? '' : `origin still ${(await albumAssets(A, AKEY, originAlbum.id)).length}`);
+    const meIdA = (await api(A, AKEY, '/users/me')).id;
+    const originAll = await albumAssets(A, AKEY, originAlbum.id);
+    const originStub = originAll.find(a => a.ownerId !== meIdA);
+    check('rust lc: the origin holds the contribution as a stub', !!originStub, originStub ? '' : 'not found');
+
+    // 2. the joiner DELETES their contribution - the removal channel reclaims the origin\u2019s stub
+    await api(B, BKEY, '/assets', { ...j({ ids: [contribution], force: true }), method: 'DELETE' });
+    const originShrunk = await until(async () =>
+      (await albumAssets(A, AKEY, originAlbum.id)).length === 1 ? true : null, 120000);
+    check('rust lc: deleting the contribution reclaims the ORIGIN\u2019s stub (remove channel)', !!originShrunk,
+          originShrunk ? '' : `origin still ${(await albumAssets(A, AKEY, originAlbum.id)).length}`);
+
+    // 3. the origin EDITS THE CAPTION through its own sidecar (the proxy path the trigger fires on)
+    await api(A, AKEY, `/assets/${originPhoto}`, { ...j({ description: 'caption v2' }), method: 'PUT' });
+    const csPing = await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/health`).then(r => r.ok).catch(() => false);
+    check('rust lc: the origin sidecar fronts Immich (the trigger needs the write to pass through it)', csPing, '');
+    if (csPing) {
+      await fetch(`${ORIGIN_DIRECT}/api/assets/${originPhoto}`, { method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': AKEY }, body: JSON.stringify({ description: 'caption v2' }) });
+      const stubFollowed = await until(async () => {
+        const desc = (await api(B, BKEY, `/assets/${stubLc.id}`)).exifInfo?.description || '';
+        return desc.includes('caption v2') ? true : null;
+      }, 120000);
+      const descNow = (await api(B, BKEY, `/assets/${stubLc.id}`)).exifInfo?.description || '';
+      check('rust lc: the caption EDIT reaches the stub through trigger + nudge + forced reconcile',
+            !!stubFollowed, descNow.slice(0, 70));
+    }
+
+    // 4. the joiner LEAVES: the origin reclaims the departed contributor\u2019s remaining stubs
+    await api(B, BKEY, `/albums/${mirrorLc.id}/user/me`, { method: 'DELETE' });
+    const originReclaimed = await until(async () => {
+      const items = await albumAssets(A, AKEY, originAlbum.id);
+      return items.length === 1 && items[0].ownerId === meIdA ? true : null;
+    }, 120000);
+    check('rust lc: the leave reclaims the departed contributor\u2019s stub on the ORIGIN (google-photos semantics)',
+          !!originReclaimed, originReclaimed ? '' : `origin still ${(await albumAssets(A, AKEY, originAlbum.id)).length}`);
+    // The row that MAY remain is one that names no proxy (an empty originAsset — bookkeeping for
+    // the owner\u2019s own photo); what must be gone is any PROXY of the departed member\u2019s content.
+    const lcLedger = sidecarSql('c-sidecar',
+      `SELECT COUNT(*) AS n FROM seen WHERE mapping IN (SELECT id FROM mappings WHERE albumName=${JSON.stringify(t)}) AND originAsset != ''`);
+    const lcRows = lcLedger ? JSON.parse(lcLedger)[0].n : -1;
+    check('rust lc: no proxy of the departed member\u2019s content survives on the origin', lcRows === 0, `proxy rows=${lcRows}`);
+    await api(B, BKEY, `/albums/${mirrorLc.id}`, { method: 'DELETE' }).catch(() => {});
+  }
+}
+
+// Store-shared-locally: the backfill turns stubs into real local copies, and a LEAVE must
+// withdraw the share WITHOUT deleting those copies - the household paid real disk for them.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: store-shared-locally survives a leave');
+  {
+    const t = `rust stored ${Date.now()}`;
+    const originAlbum = await api(A, AKEY, '/albums', j({ albumName: t }));
+    const originPhoto = await upload(A, AKEY, 'rust-stored.jpg', `rs${Date.now() % 10000}`, '2026-08-15T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [originPhoto]);
+    await api(A, AKEY, `/albums/${originAlbum.id}/assets`, { ...j({ ids: [originPhoto] }), method: 'PUT' });
+    const joinSt = await joinWithRetry(() => api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: originAlbum.id, allowUpload: true })));
+    check('stored: joined', !!joinSt.album, JSON.stringify(joinSt).slice(0, 80));
+    const mirrorSt = await until(async () => {
+      const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinSt.album && a.assetCount > 0);
+      return found || null;
+    }, 90000);
+    // The ledger row BEFORE the toggle is the precondition everything below moves from: one proxy
+    // row keyed by (mapping, checksum), and the mapping id that will be gone after the leave.
+    const rowsSt = sidecarSql('b-sidecar',
+      `SELECT id FROM mappings WHERE albumId='${mirrorSt?.id}'`);
+    const mappingIdSt = JSON.parse(rowsSt || '[]')[0]?.id;
+    const ledgerSt = () => JSON.parse(sidecarSql('b-sidecar',
+      `SELECT localAsset, originAsset, storedFull FROM seen WHERE mapping='${mappingIdSt}' AND originAsset IS NOT NULL`) || '[]');
+    const stubRow = mappingIdSt ? ledgerSt()[0] : null;
+    // The credential the household holds for the copy's OWNER — the stand-in standing in for the
+    // origin's album owner, which is the account `uploadAsContributor` uploads as. It is needed
+    // below because Immich scopes `GET /api/assets/:id` by ownership AND album membership: an admin
+    // cannot read a stand-in's asset once the leave has taken it out of every album, while its owner
+    // always can.
+    const copyKey = JSON.parse(sidecarSql('b-sidecar',
+      `SELECT c.apiKey AS k FROM contributors c
+        WHERE c.slug = (SELECT hostSlug FROM mappings WHERE id='${mappingIdSt}')`) || '[]')[0]?.k;
+    // Guarded, not thrown: `requireState` records the missing precondition as a failed check so the
+    // run still reports the stages after this one (README rule 9).
+    if (!mirrorSt || !stubRow) {
+      requireState('the store-locally mirror and its ledger row are readable');
+    } else {
+
+      check('stored: the mirror arrives as a hotlink stub, not a copy',
+            stubRow.storedFull === 0, JSON.stringify(stubRow));
+
+      // Bytes are read through the SIDECAR (`BS`), which is the path a client takes: Immich's own port
+      // (`B`) answers with the local placeholder, so reading there would compare a stub to itself.
+      const originBytes = Buffer.from(await fetchBytes(`${A}/api/assets/${originPhoto}/original`, AKEY));
+      const stubBytes = Buffer.from(await fetchBytes(`${BS}/api/assets/${stubRow.localAsset}/original`, BKEY));
+      check('stored: while it is a stub, the bytes still stream from the owner',
+            sha1(stubBytes) === sha1(originBytes), `${stubBytes.length}B via proxy vs ${originBytes.length}B at origin`);
+
+      // Flip the toggle ON. The route is POST-only: a PUT answers 405 and leaves the mirror a stub for
+      // ever, so the ANSWER is asserted rather than assumed. A setting that silently does not apply is
+      // exactly what this stage exists to catch.
+      const flippedSt = await (await fetch(`${BS}/immich-shared-albums/settings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+        body: JSON.stringify({ storeSharedAssetsLocally: true }),
+      })).json();
+      check('stored: the toggle is ON and the sidecar says so', flippedSt.storeSharedAssetsLocally === true,
+            JSON.stringify(flippedSt).slice(0, 90));
+
+      // The upgrade REPLACES the stub - a fresh upload takes the ledger row and the stub is deleted -
+      // so follow the ORIGIN asset to the new local id rather than the stub's own id.
+      const backfilled = await until(async () => {
+        const row = ledgerSt().find(r => r.originAsset === stubRow.originAsset && r.storedFull === 1);
+        return row || null;
+      }, 600000);
+      check('stored: the backfill upgraded the stub to a full local copy', !!backfilled,
+            backfilled ? `localAsset=${backfilled.localAsset}` : 'still a stub');
+      const copyRes = await fetch(`${BS}/api/assets/${backfilled?.localAsset}/original`, { headers: { 'x-api-key': BKEY } });
+      const copyBytes = Buffer.from(await copyRes.arrayBuffer());
+      check('stored: the copy is a NEW asset holding the owner\u2019s original byte for byte (the stub was replaced)',
+            !!backfilled && backfilled.localAsset !== stubRow.localAsset && sha1(copyBytes) === sha1(originBytes),
+            `${copyBytes.length}B copy vs ${originBytes.length}B origin, replaced=${backfilled?.localAsset !== stubRow.localAsset}`);
+      // The point of the setting: no chain to the owner. A stub answers through the proxy and carries
+      // the interceptor's `x-cache`; a stored copy stands the interceptor down and Immich answers.
+      check('stored: and it is served from THIS server, not chained to the owner',
+            copyRes.ok && copyRes.headers.get('x-cache') === null, `x-cache=${copyRes.headers.get('x-cache')}`);
+
+      // the joiner LEAVES natively - the share is withdrawn, the STORED COPY stays
+      await api(B, BKEY, `/albums/${mirrorSt.id}/user/me`, { method: 'DELETE' });
+      const afterLeave = await until(async () => {
+        // Keyed on the mapping id captured above: after the leave the mapping row is gone, so a
+        // subquery through `mappings` would find nothing and read "nothing was kept" either way.
+        const rows = sidecarSql('b-sidecar',
+          `SELECT (SELECT COUNT(*) FROM mappings WHERE id='${mappingIdSt}') AS mappings,
+                  (SELECT COUNT(*) FROM seen WHERE mapping='${mappingIdSt}' AND storedFull=1) AS kept,
+                  (SELECT COUNT(*) FROM seen WHERE mapping='${mappingIdSt}' AND storedFull=0) AS proxies`);
+        const parsed = rows ? JSON.parse(rows)[0] : { mappings: -1, kept: -1, proxies: -1 };
+        return parsed.mappings === 0 ? parsed : null;
+      }, 480000);
+      check('stored: the leave drops the mapping and every proxy row but KEEPS the stored copy\u2019s ledger row',
+            !!afterLeave && afterLeave.kept >= 1 && afterLeave.proxies === 0,
+            afterLeave ? `mappings=${afterLeave.mappings} kept=${afterLeave.kept} proxies=${afterLeave.proxies}` : 'timed out');
+      check('stored: the mirror album is gone, so the share really was withdrawn',
+            !(await api(B, BKEY, '/albums')).some(a => a.id === mirrorSt.id));
+      // Read as the account that OWNS the copy, straight from Immich: after the leave the asset is
+      // in no album, so Immich answers an admin's read with `400 Not found or no asset.read access`
+      // however healthy the asset is - which is why this is not read with BKEY.
+      const survives = await fetch(`${B}/api/assets/${backfilled?.localAsset}/original`, { headers: { 'x-api-key': copyKey } });
+      const survivedBytes = Buffer.from(await survives.arrayBuffer());
+      check('stored: THE STORED COPY SURVIVES THE LEAVE, byte for byte (the user\u2019s actual requirement)',
+            survives.ok && sha1(survivedBytes) === sha1(originBytes),
+            `${survivedBytes.length}B status=${survives.status} key=${copyKey ? 'stand-in' : 'MISSING'}`);
+
+      // Tidy: the toggle back off. The copy's asset is left to the rig's own purge - it is owned by the
+      // stand-in account, and no credential this lane holds may delete it.
+      await fetch(`${BS}/immich-shared-albums/settings`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+        body: JSON.stringify({ storeSharedAssetsLocally: false }),
+      });
+    }
+  }
+}
+
+// An operator's password-login setting must SURVIVE the addon minting a key. Minting needs a session,
+// and on an OAuth-only instance the addon borrows a password-login window to get one. That borrow used
+// to be decided by a CACHED read of `system-config`, so a stale "disabled" arriving right after an
+// operator (or this lane) enabled it made the addon write "disabled" back over a change it never
+// made — and every sign-in for the next minute answered `Password login has been disabled`. Found by
+// CI on BOTH lanes, which is why the borrow now waits for a refused login as its evidence.
+// RUST-ONLY: the TypeScript has the same up-front read and the same restore.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: minting a key never clobbers the password-login setting');
+  {
+    const readLogin = async () => {
+      const cfg = await (await fetch(`${A}/api/system-config`, { headers: { 'x-api-key': AKEY } })).json();
+      return cfg?.passwordLogin?.enabled;
+    };
+    const writeLogin = async (on) => {
+      const cfg = await (await fetch(`${A}/api/system-config`, { headers: { 'x-api-key': AKEY } })).json();
+      cfg.passwordLogin.enabled = on;
+      return (await fetch(`${A}/api/system-config`, {
+        method: 'PUT', headers: { 'x-api-key': AKEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg),
+      })).ok;
+    };
+
+    check('rig: C starts hardened, so the borrow path is the one under test', (await readLogin()) === false,
+          `passwordLogin=${await readLogin()}`);
+    const enabled = await writeLogin(true);
+    check('rig: an operator turns password login on', enabled && (await readLogin()) === true);
+
+    // Force an ORIGIN-side provisioning: a photo contributed from B becomes a stand-in account on C,
+    // which can only be minted through a login.
+    const albGate = await api(A, AKEY, '/albums', j({ albumName: `rust clobber ${Date.now()}` }));
+    const photoGate = await upload(A, AKEY, 'rust-clobber.jpg', `rb${Date.now() % 10000}`, '2026-08-20T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [photoGate]);
+    await api(A, AKEY, `/albums/${albGate.id}/assets`, { ...j({ ids: [photoGate] }), method: 'PUT' });
+    const linkGate = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albGate.id, allowUpload: true }))).key;
+    const joinedGate = await (await fetch(`${BS}/immich-shared-albums/join`,
+      jAuth(await inviteFor(ORIGIN_DIRECT, linkGate), BKEY))).json();
+    check('rig: B joined the album the provisioning will run for', !!joinedGate.album,
+          JSON.stringify(joinedGate).slice(0, 60));
+    const mirrorGate = await until(async () => {
+      const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinedGate.album && a.assetCount > 0);
+      return found || null;
+    }, 90000);
+    const contributed = await upload(B, BKEY, 'rust-clobber-b.jpg', `rc${Date.now() % 10000}`, '2026-08-21T10:00:00.000Z');
+    await ensurePreviews(B, BKEY, [contributed]);
+    await api(B, BKEY, `/albums/${mirrorGate.id}/assets`, { ...j({ ids: [contributed] }), method: 'PUT' });
+    const provisionedOnC = await until(async () => {
+      const there = (await albumAssets(A, AKEY, albGate.id)).some(a => /^shared-/.test(a.originalFileName || ''));
+      return there ? true : null;
+    }, 240000);
+    check('rig: C provisioned a contributor for the arriving photo', !!provisionedOnC,
+          provisionedOnC ? '' : 'no contributed stub appeared on C within 4 min');
+
+    check('THE OPERATOR\u2019S PASSWORD LOGIN SURVIVES THE PROVISIONING', (await readLogin()) === true,
+          `passwordLogin=${await readLogin()} after minting a key`);
+
+    // Put the hardening back: the rest of the rig (and the browser lane) expects a production-like C.
+    await writeLogin(false);
+  }
+}
+
+// An owner's OWN act, recorded in the album that carries it. A share link's delete passes through
+// the sidecar with their credentials, and that is the one moment our bot can be put on THEIR album to
+// write the line — an admin key cannot touch an album it does not own. This is where a withdrawal's
+// trail comes from, and it is the same request Immich's own UI makes.
+// RUST-ONLY: the TypeScript has no traffic triggers for it.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: deleting a share link is recorded in the album');
+  {
+    const albW = await api(B, BKEY, '/albums', j({ albumName: `rust withdraw ${Date.now()}` }));
+    const linkW = await api(B, BKEY, '/shared-links', j({ type: 'ALBUM', albumId: albW.id, allowUpload: true }));
+    check('rig: the album is shared by a link', !!linkW.key, (linkW.key || '').slice(0, 8));
+    const deleted = await fetch(`${BS}/api/shared-links/${linkW.id}`, {
+      method: 'DELETE', headers: { 'x-api-key': BKEY },
+    });
+    check('rig: the owner deletes it through the sidecar', deleted.ok, `status ${deleted.status}`);
+    const line = await until(async () => {
+      const rows = await api(B, BKEY, `/activities?albumId=${albW.id}`);
+      return (rows || []).find(a => /share link deleted/i.test(a.comment || '')) || null;
+    }, 60000);
+    check('the album records the withdrawal, as a comment from the addon', !!line,
+          line ? `"${line.comment.slice(0, 50)}…" by ${line.user?.name}` : 'no line within 60s');
+  }
+}
+
+// A peer's join is the OWNER's history, and the owner is not there when it happens: our bot can only
+// be put on their album by them. So the event waits in a queue and lands on their next panel visit —
+// the only mechanism that can put "Demo Nan joined your album" on an album we do not own.
+// RUST-ONLY: the TypeScript has no trail queue.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: a peer\'s join and leave reach the owner\'s album on their next visit');
+  {
+    const t = `rust trail ${Date.now()}`;
+    const albT = await api(A, AKEY, '/albums', j({ albumName: t }));
+    const photoT = await upload(A, AKEY, 'rust-trail.jpg', `rt${Date.now() % 10000}`, '2026-08-25T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [photoT]);
+    await api(A, AKEY, `/albums/${albT.id}/assets`, { ...j({ ids: [photoT] }), method: 'PUT' });
+    const linkT = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albT.id, allowUpload: true }))).key;
+    const joinedT = await joinWithRetry(() => api(A, AKEY, '/shared-links',
+      j({ type: 'ALBUM', albumId: albT.id, allowUpload: true })));
+    check('rig: B joined the album the owner is about to hear about', !!joinedT.album,
+          JSON.stringify(joinedT).slice(0, 60));
+
+    // It WAITS: while the owner is away the queue is the only place it can be.
+    const queued = async (event) => {
+      const out = sidecarSql('c-sidecar',
+        `SELECT COUNT(*) AS n FROM trail_pending WHERE event='${event}'`);
+      return out ? Number(JSON.parse(out)[0].n) : -1;
+    };
+    const waited = await until(async () => (await queued('joined')) > 0 ? true : null, 120000);
+    check('the join waits in the owner\'s queue', !!waited, `${await queued('joined')} queued`);
+    check('and is NOT in the album yet',
+          !(await api(A, AKEY, `/activities?albumId=${albT.id}`)).some(a => /joined this album/i.test(a.comment || '')));
+
+    // The owner's own visit writes it — `/me/albums` is what the panel loads, as them.
+    await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/albums`, { headers: { 'x-api-key': AKEY } });
+    const lineT = await until(async () => {
+      const rows = await api(A, AKEY, `/activities?albumId=${albT.id}`);
+      return (rows || []).find(a => /joined this album/i.test(a.comment || '')) || null;
+    }, 60000);
+    check('the owner\'s visit writes the join into the album', !!lineT,
+          lineT ? `"${lineT.comment.slice(0, 50)}…" by ${lineT.user?.name}` : 'no line within 60s');
+
+    // And a LEAVE waits the same way, including the case where the mapping is already dead by then.
+    const mirrorT = (await api(B, BKEY, '/albums')).find(a => a.albumName === t);
+    // Guarded, not thrown: a stage that cannot find its own mirror must report a failed check and let
+    // the run continue (README rule 9). Throwing here took the whole lane down on CI.
+    if (!mirrorT) requireState('the mirror the leave is performed on');
+    if (mirrorT) await api(B, BKEY, `/albums/${mirrorT.id}/user/me`, { method: 'DELETE' });
+    const waitedLeft = await until(async () => (await queued('left')) > 0 ? true : null, 120000);
+    check('a leave waits in the queue too', !!waitedLeft, `${await queued('left')} queued`);
+    await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/albums`, { headers: { 'x-api-key': AKEY } });
+    const lineLeft = await until(async () => {
+      const rows = await api(A, AKEY, `/activities?albumId=${albT.id}`);
+      return (rows || []).find(a => /left this album/i.test(a.comment || '')) || null;
+    }, 60000);
+    check('and the owner\'s next visit writes the leave, even though the mapping is dead by then',
+          !!lineLeft, lineLeft ? `"${lineLeft.comment.slice(0, 50)}…"` : 'no line within 60s');
+  }
+}
+
+// The gesture people actually reach for: taking someone off the album. On an INVITATION album that
+// is a revocation; on a LINK album it revokes nothing, because the link is the grant — and an owner
+// who believes otherwise has been misled by the silence. The album says which.
+// RUST-ONLY: the TypeScript has no traffic triggers for it.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: removing a person from a link album is recorded, and says the link still stands');
+  {
+    const albK = await api(A, AKEY, '/albums', j({ albumName: `rust removal ${Date.now()}` }));
+    // The album needs a photo BEFORE it is shared, or the mirror has nothing to materialise and the
+    // wait below never sees an asset count. (The contribution that matters comes later.)
+    const seededK = await upload(A, AKEY, 'rust-removal-seed.jpg', `rs${Date.now() % 10000}`, '2026-08-27T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [seededK]);
+    await api(A, AKEY, `/albums/${albK.id}/assets`, { ...j({ ids: [seededK] }), method: 'PUT' });
+    const joinedK = await joinWithRetry(() => api(A, AKEY, '/shared-links',
+      j({ type: 'ALBUM', albumId: albK.id, allowUpload: true })));
+    check('rig: B joined the album the removal is about', !!joinedK.album, JSON.stringify(joinedK).slice(0, 60));
+    const mirrorK = await until(async () => {
+      const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinedK.album && a.assetCount > 0);
+      return found || null;
+    }, 90000);
+    if (!mirrorK) requireState('the mirror the removal stage contributes through');
+    // A contribution, because that is what puts an account for the contributor ON the owner's album —
+    // and a person who is not a member cannot be removed.
+    const photoK = await upload(B, BKEY, 'rust-removal.jpg', `rk${Date.now() % 10000}`, '2026-08-28T10:00:00.000Z');
+    await ensurePreviews(B, BKEY, [photoK]);
+    if (mirrorK) {
+      await api(B, BKEY, `/albums/${mirrorK.id}/assets`, { ...j({ ids: [photoK] }), method: 'PUT' });
+    }
+    const standIn = await until(async () => {
+      const album = await api(A, AKEY, `/albums/${albK.id}?withoutAssets=true`);
+      return (album.albumUsers || []).find(u =>
+        (u.user?.email || '').startsWith('person-') && /Demo household/.test(u.user?.name || '')) || null;
+    }, 240000);
+    check('the contributor has an account on the owner\'s album', !!standIn,
+          standIn ? `${standIn.user.name} (${standIn.role})` : 'no contributor membership within 4 min');
+
+    if (!standIn) requireState('a contributor membership on the owner\'s album to remove');
+    const removed = await fetch(`${ORIGIN_DIRECT}/api/albums/${albK.id}/user/${standIn ? standIn.user.id : ''}`,
+      { method: 'DELETE', headers: { 'x-api-key': AKEY } });
+    check('the owner removes them, through the sidecar', removed.status < 300, `status ${removed.status}`);
+    const lineK = await until(async () => {
+      const rows = await api(A, AKEY, `/activities?albumId=${albK.id}`);
+      return (rows || []).find(a => /was removed from this album/i.test(a.comment || '')) || null;
+    }, 60000);
+    check('the album records the removal, naming the person', !!lineK,
+          lineK ? `"${lineK.comment.slice(0, 50)}…"` : 'no line within 60s');
+    // And it is ONE short sentence — the kind-of-share reasoning moved to the docs, where it belongs.
+    check('and it is one short sentence, the person, the act',
+          !!lineK && lineK.comment === `${standIn.user.name} was removed from this album.`,
+          lineK ? `"${lineK.comment}" (${lineK.comment.length} chars)` : 'no line');
+  }
+}
+
+// A LIKE on one server is a like on the other, attributed to the person who made it — the way a
+// local member's like looks. Likes ride the activity payload with a `type`, and both gates (the
+// statistics and the version handshake) count them, or a like that moved would never be pulled.
+// RUST-ONLY: the TypeScript filters activities to comments.
+if (!sidecarHasNode('b-sidecar')) {
+  stage('rust: a like crosses servers and is attributed to the person who made it');
+  {
+    const albL = await api(A, AKEY, '/albums', j({ albumName: `rust like ${Date.now()}` }));
+    // Content BEFORE the share: an empty album's mirror has nothing to materialise, so a wait keyed
+    // on assetCount can never succeed. (Same fix the removal stage needed.)
+    const seededL = await upload(A, AKEY, 'rust-like-seed.jpg', `rl${Date.now() % 10000}`, '2026-08-29T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [seededL]);
+    await api(A, AKEY, `/albums/${albL.id}/assets`, { ...j({ ids: [seededL] }), method: 'PUT' });
+    const linkL = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albL.id, allowUpload: true }))).key;
+    const joinedL = await joinWithRetry(() => api(A, AKEY, '/shared-links',
+      j({ type: 'ALBUM', albumId: albL.id, allowUpload: true })));
+    const mirrorL = await until(async () => {
+      const found = (await api(B, BKEY, '/albums')).find(a => a.albumName === joinedL.album && a.assetCount > 0);
+      return found || null;
+    }, 240000);
+    check('the joiner holds the mirror', !!mirrorL, mirrorL ? `${mirrorL.assetCount} asset(s)` : 'missing in 4 min');
+    if (mirrorL) {
+      // The OWNER of the album likes it, on the ORIGIN: the like must cross to the joiner.
+      await api(A, AKEY, '/activities', j({ albumId: albL.id, type: 'like' }));
+      const onMirror = await until(async () => {
+        const rows = await api(B, BKEY, `/activities?albumId=${mirrorL.id}`);
+        return (rows || []).find(a => a.type === 'like') || null;
+      }, 120000);
+      check('a like by the origin\'s owner appears on the joiner\'s mirror', !!onMirror,
+            onMirror ? `${onMirror.user?.name} liked it` : 'no like within 2 min');
+
+      // And the reverse: the joiner likes their mirror, and the ORIGIN records it.
+      await api(B, BKEY, '/activities', j({ albumId: mirrorL.id, type: 'like' }));
+      const onOrigin = await until(async () => {
+        const rows = await api(A, AKEY, `/activities?albumId=${albL.id}`);
+        return (rows || []).find(a => a.type === 'like' && (a.user?.name || '').includes('Demo household')) || null;
+      }, 120000);
+      check('and a like by the joiner reaches the origin, as them', !!onOrigin,
+            onOrigin ? `${onOrigin.user?.name} liked it` : 'no like within 2 min');
+    } else {
+      requireState('the mirror the like stage reads and likes');
+    }
   }
 }
 

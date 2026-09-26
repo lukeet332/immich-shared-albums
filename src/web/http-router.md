@@ -20,7 +20,7 @@ There are three tiers, and each is enforced server-side:
 | Tier            | Routes                                                                                                                                                                                                                                    | Gate                                                                                                                                                                                                                                                                                                                                                                   |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Public          | `/immich-shared-albums/health`, `/immich-shared-albums/accept`, `/immich-shared-albums/assets/*`, `/share/:key` (the join document; `?native=1` passes through)                                                                           | none — liveness, static pages and their assets. `health` returns `{ok:true}` and nothing else, because the join card probes it cross-origin to discover a sidecar.                                                                                                                                                                                                     |
-| Signed-in human | `/immich-shared-albums/join`, `/leave`, `/peers`, `/pairings`, `/pairings/revoke`, `/pair`, `/settings`, `/unlink`, `/me/albums`, `/me/matches`, `/me/albums/publish`, `/me/reunite`, `/me/unreunite`, `/me/invite`, `/events`, the panel | `auth.ts` against the caller's Immich session. `join` takes the account from the **session**, not the request body; naming a different user requires admin. `/me/invite`, `/me/reunite`, `/me/unreunite` and the panel are caller-scoped, not admin: they act on the caller's own albums. The rest requires admin — server links and settings are admin-owned objects. |
+| Signed-in human | `/immich-shared-albums/join`, `/leave`, `/peers`, `/pairings`, `/pairings/revoke`, `/pair`, `/settings`, `/unlink`, `/me/albums`, `/me/matches`, `/me/preferences`, `/me/albums/publish`, `/me/reunite`, `/me/unreunite`, `/me/invite`, `/events`, the panel | `auth.ts` against the caller's Immich session. `join` takes the account from the **session**, not the request body; naming a different user requires admin. `/me/invite`, `/me/reunite`, `/me/unreunite` and the panel are caller-scoped, not admin: they act on the caller's own albums. The rest requires admin — server links and settings are admin-owned objects. |
 | Peers           | **nothing** — peer operations left HTTP entirely and ride mutually authenticated iroh QUIC; see [`../p2p/wire-protocol.md`](../p2p/wire-protocol.md). The router serves humans and the app, full stop.                                    |
 
 The accept page's client-side `whoami` is UX only — it tells someone to sign in before
@@ -53,6 +53,47 @@ how the browser lane asserts an idle open panel is not doing that.
 session rather than on admin: it asks Immich who is calling (`pages/root/App.tsx`) and either opens
 the personal panel directly (anyone) or offers the two panels (an admin). The admin panel lives at
 `/admin` because a choice has to point somewhere; `/me` is the personal panel.
+
+**And one is acted on after.** `DELETE /api/albums/:id/user/:userId` is the owner taking a person off
+their album, recorded as one short comment naming them (`web/album_member_audit.rs`). `me` is
+excluded, because that is a person LEAVING, which is a different event with its own line.
+
+**Every audit line is one sentence: who, what happened, full stop.** The consequence is not posted —
+whether removing a person revoked anything depends on the kind of share (an invitation's membership
+IS the share; a link's is not — see "bearer grant" above), and that reasoning belongs here rather than
+in somebody's album.
+
+**A share can also end SILENTLY, and the survivor records it.** A peer that unlinks us (or loses its
+sidecar) stops answering, and nothing on this side changes — so the invite loop asks one `/version`
+handshake per live share, and 403/404 answers feed the same retirement counter the push uses
+(`sync/engine.rs::retire_dead_share`). The survivor writes the line into its own album, because this
+side still owns it and can put the bot on it.
+
+**One proxied request is acted on before it is forwarded.** `DELETE /api/shared-links/:id` is the
+only write whose trail needs the state it is about to destroy: the album it granted is read first, as
+the caller, and the withdrawal is written into that album afterwards by the house bot — added on the
+caller's own credential, because the household admin key cannot touch an album it does not own
+(`web/share_link_audit.rs`).
+
+**One proxied answer is rewritten, for one reader.** `GET /api/activities` is the album's comment
+history, and it is the only route where the passthrough looks at the body: a caller who has turned
+`auditVisibleInComments` off (their own row, `/me/preferences`) gets the addon's own lines dropped
+from THEIR answer (`web/activity_filter.rs`). The rows stay in Immich, stay in every other reader's
+view, and stay in the album. The tag written when a line was posted is what the filter matches —
+never the author, because the relay posts another household's comment as a stand-in and falls back to
+our own bot.
+
+**A panel visit also drains the waiting trail.** `GET /me/albums` is the moment a person is in front
+of us with the credential that can authorise a membership on their OWN albums — so it is where audit
+lines queued while they were away (a peer's join, a peer's leave) are finally written
+(`sync/trail.rs`). Detached from the answer, so a panel never waits on the trail.
+
+**The conversation carries likes as well as comments.** `/albums/:id/activity` (the push) and
+`/albums/:id/comments` (the canonical read) both carry a `type` on every row — additive, so an older
+peer that never reads it gets comments exactly as before. Both the statistics gate and the version
+handshake count comments + likes, or a like that moved would never be pulled. Utility accounts'
+activity is excluded at the ORIGIN: our bot's lines are this household's trail, not a person for the
+peer to mirror.
 
 **The per-user routes answer as the caller.** `/me/albums` and `/me/matches` read Immich with the
 caller's own forwarded credential (`immich/access.ts` decides that once), so membership and

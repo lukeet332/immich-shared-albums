@@ -46,8 +46,8 @@ INSTALL:
 2. Either run `bash deploy/install.sh` interactively with me, or replicate what
    it does: build the image, write a compose file joining the sidecar to the
    Immich docker network with env ISA_IMMICH_URL, ISA_IMMICH_API_KEY (in a chmod-600
-   .env file, never in the yml), HOUSEHOLD_NAME, and a ./data
-   volume for /data. Start it with docker compose up -d.
+   .env file, never in the yml), ISA_HOUSEHOLD_NAME, and a NAMED
+   volume (isa-data) for /data. Start it with docker compose up -d.
 3. If I have NO reverse proxy, skip the routes entirely: the sidecar is itself a
    front for Immich — everything that isn't shared-album traffic passes through,
    websockets included. Just tell me to point my Immich apps and browser at the
@@ -67,7 +67,7 @@ VERIFY (all three, report results):
 2. Any Immich share link opened in a browser shows the "Join shared album with
    your server?" card, with the album visible behind it.
 3. <immich-address>/immich-shared-albums/ (signed in as an Immich admin) shows
-   the panel with a "Create pairing link" button.
+   the panel with a "Create a link" button.
 
 ROLLBACK (if anything fails): docker compose down the sidecar, revert the proxy
 diff, reload the proxy — Immich itself is untouched throughout.
@@ -84,11 +84,16 @@ Notes for you, the agent:
 - The sidecar is additive and fail-open: if it dies, only the share-page join card and
   cross-server sync stop; Immich keeps working. Never modify Immich's own
   compose services, database, or upload folders.
-- State lives in the ./data volume (state.db: household keypair, peers, album
-  mappings, ledgers). Losing it breaks existing cross-server links. Back up the WHOLE
-  directory (state.db plus its -wal/-shm files, which carry recent writes), and never open
-  a running sidecar's state.db with a host sqlite3 on macOS — it deletes the WAL under the
-  process. Inspect it through the container instead.
+- State lives on the `isa-data` volume, NOT a ./data directory — it is a named volume so the
+  container's own non-root user owns it (state.db: household keypair, peers, album mappings,
+  ledgers). Losing it breaks existing cross-server links. Back up the volume, not a path:
+  `docker run --rm -v immich-shared-albums_isa-data:/data -v "$PWD":/backup alpine tar czf /backup/isa-data.tgz -C /data .`
+  (the volume name is `<compose project>_isa-data`; `docker volume ls` finds it). Copy state.db
+  WITH its -wal/-shm files, which carry recent writes, and never open a running sidecar's
+  state.db with a host sqlite3 on macOS — it deletes the WAL under the process. Inspect it
+  through a THROWAWAY container instead — the sidecar runs as uid 1000, so `docker compose exec
+  ... apk add` cannot install a client, and a second container mounting the same volume can:
+  `docker run --rm -v immich-shared-albums_isa-data:/data alpine:3.22 sh -c 'apk add --no-cache sqlite >/dev/null && sqlite3 /data/state.db "select name from sqlite_master where type=\'table\';"'`.
 - Server-to-server traffic uses UDP 8300 inside the container (ISA_P2P_PORT). Nothing needs
   opening for it to work; publishing `8300:8300/udp` is optional and only buys a guaranteed
   direct path.

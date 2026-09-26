@@ -40,7 +40,7 @@ Whichever route you take, the step-by-step walkthrough with screenshots-level de
      [Caddyfile.snippet](./Caddyfile.snippet) (they translate 1:1 to nginx/Traefik/NPM).
 
 5. **Verify.** In a web browser, signed in to Immich as an admin, open
-   `https://<your-immich>/immich-shared-albums/` — the admin panel with *Create pairing link*
+   `https://<your-immich>/immich-shared-albums/` — the admin panel with *Create a link*
    means everything works.
 
 Uninstalling is `docker compose down` plus removing whatever proxy lines you added — the

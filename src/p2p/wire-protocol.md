@@ -31,7 +31,7 @@ certificates, and no listening HTTP surface for peers at all.
 | `join.ts`        | The **member side** of joining. Dials the endpoint carried by the invite, redeems the share key, pins the peer (refusing an origin that answers with a different identity than the invite named), creates the local mirror, and kicks off the first reconcile. Idempotent — re-joining adds the user to the existing mirror.                                                                                                                                                                                  |
 | `mirror.ts`      | Creating the local mirror of a remote album — the account-owner, local members as editors, the mapping, and the background fill. Shared by `join.ts` (share link) and `sync/invites.ts` (native invitation): two ways to acquire an album, one way to mirror it.                                                                                                                                                                                                                                              |
 | `entitlement.ts` | What a peer may **read**, as distinct from who it is. Records every asset advertised to a mapping, and answers the byte routes' "is this peer allowed this asset".                                                                                                                                                                                                                                                                                                                                            |
-| `unlink.ts`      | Cutting a server link, from the panel. Tears down mirrors held from that peer (via `sync/leave.ts`, so their stubs go too), drops the mappings and entitlement for albums shared _to_ them, and deletes that peer's per-person accounts with `force: true` — **assets leave with their owner**. Unlinking is destructive by design, and the panel confirms it.                                                                                                                                                |
+| `unlink.ts`      | Cutting a server link, from the panel. Tears down mirrors held from that peer (via `sync/leave.ts`, so their stubs go too), drops the mappings and entitlement for albums shared _to_ them, and deletes that peer's per-person accounts with `force: true` — **assets leave with their owner**, a stored-FULL copy included, because it is one of that account's assets. Its ledger rows go with them (`seenForgetMapping`), so nothing here claims bytes that are gone. Unlinking is destructive by design, and the panel confirms it. |
 
 **The `reunified` category travels with the share.** An album that is part of a reunion carries
 `reunified: true` on both acquisition paths — the redeem answer (`handleRedeem`) and `/invitations` —
@@ -100,7 +100,11 @@ inbound handler keeps them:
   valid grant is not an unbounded state-growth lever.
 
 A share link stays a **bearer** grant for its one album — anyone holding it (and its password) can
-join. Pairing is the non-bearer path, and the panel's `shareLinkJoin` setting can close the
+join, and nobody is named, so there is no membership to remove on the origin. Deleting the link is
+therefore the withdrawal, and `sync/link_grants.rs` (Rust) is what notices: it re-reads the origin's
+own links and retires every grant whose album is no longer shared that way, which answers the member's
+next handshake 410 and reclaims the contributed photos. Until that existed the only lever was
+unlinking the whole household. An EXPIRED link is not treated as a withdrawal. Pairing is the non-bearer path, and the panel's `shareLinkJoin` setting can close the
 share-link door entirely (redeem answers 403).
 
 ## The version handshake
@@ -144,7 +148,13 @@ tightening it later would be a visible cross-server behaviour change.
 
 ## Pushed refs report partial success
 
-The sender re-offers only the failed refs next cycle. Pushes are **chunked** (400 refs per
+The sender re-offers only the failed refs next cycle. A push body carries `add` (refs the peer
+should hold) and, additively, `remove` (origin asset ids the sender no longer holds): the receiver
+purges its own stubs for them, so a joiner deleting their contribution reclaims the origin's tile
+instead of leaving a stub whose source is gone. Both fields are optional — a peer that sends no
+`remove` behaves as before, and a receiver that does not read it ignores it — and a removal is
+idempotent by ledger row, so a retry after a failed push cannot double-delete. Purges stay guarded
+by the receiver's own rules (only utility-owned assets go). Pushes are **chunked** (400 refs per
 frame): the receiver's `ISA_MAX_BODY_KB` caps any one frame, an over-limit frame is answered
 with `413`/`body_too_large` rather than abandoned, and every client read carries a deadline —
 a hung peer costs one timeout, never a wedged loop. Reaching a peer has its own, shorter budget

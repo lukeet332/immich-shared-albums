@@ -16,6 +16,9 @@ export type MyAlbum = {
   peer: string;
   mappingId: string;
   reunified?: boolean;
+  /** This household did the adopting, so Un-reunite here will work. A reunified share the PEER
+   *  adopted reports false: the undo for an invitation is Immich's own album-sharing settings. */
+  adoptedByUs?: boolean;
 };
 
 export type MyPage = { albums: MyAlbum[]; household: string; isAdmin: boolean };
@@ -69,3 +72,16 @@ export const reunite = (mappingId: string, albumName: string) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mappingId, albumName }),
   }) as Promise<{ album: string; seeded: number }>;
+
+/** This person's own settings. One field today: whether the addon's activity is shown to THEM in
+ *  the album's comment history. The route is scoped to the caller server-side, like every other. */
+export type Preferences = { auditVisibleInComments: boolean };
+
+export const myPreferences = () => json('/me/preferences') as Promise<Preferences>;
+
+export const savePreferences = (next: Preferences) =>
+  json('/me/preferences', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(next),
+  }) as Promise<Preferences>;

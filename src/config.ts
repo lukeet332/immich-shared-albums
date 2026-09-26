@@ -98,7 +98,9 @@ export const CFG = {
   // with it off the route does not exist, so it is not a surface a household runs.
   testHooks: envBool('ISA_TEST_HOOKS', false),
 };
-export const log = (...a) => console.log(new Date().toISOString(), ...a);
+/** Newlines are collapsed so text that arrived from a peer cannot forge a second log entry. */
+const oneLine = (v: unknown) => (typeof v === 'string' ? v.replace(/[\r\n\u2028\u2029]+/g, ' ') : v);
+export const log = (...a) => console.log(new Date().toISOString(), ...a.map(oneLine));
 /** Per-stage sync trace, gated by ISA_TRACE_SYNC — see CFG.traceSync. */
 export const trace = (what: string, ...rest: unknown[]): void => {
   if (CFG.traceSync) log(`[trace] ${what}`, ...rest);

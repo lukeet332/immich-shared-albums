@@ -22,5 +22,8 @@ demo/recordings/
 demo/e2e/fixtures/demo-photos/
 demo/e2e/demo-targets.md
 
+# Rust build output (the port; toolchain lives outside the repo)
+rust/target/
+rust/.cargo-home/
 # .github/scripts is Python — bytecode is never committed
 __pycache__/

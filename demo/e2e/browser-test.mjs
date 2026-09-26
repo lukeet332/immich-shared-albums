@@ -189,6 +189,50 @@ check('the admin stays at the root rather than being sent to a panel',
     JSON.stringify(rows));
 }
 
+// 6b. THE SERVER PANEL'S SETTINGS CARD saves the whole object at once, so writing one field can
+//     silently reset the others — and "Store shared photos on this server" is the toggle that
+//     decides whether a mirror is a hotlink stub or a real local copy. The API suite proves the
+//     sidecar honours the setting once it is set; only a loaded page proves the checkbox reaches
+//     the server, and only a reload proves the SAVED row (not the component's own state) is what
+//     the person sees next.
+{
+  await page.goto(`${B_PANEL_WEB}/immich-shared-albums/admin`, { waitUntil: 'networkidle' });
+  const storeLabel = 'Store shared photos on this server';
+  const storeBox = () => page.locator(`label:has-text("${storeLabel}") input[type=checkbox]`);
+  const settingsReady = await storeBox().waitFor({ state: 'visible', timeout: 30000 })
+    .then(() => true).catch(() => false);
+  check('the server panel renders its settings card', settingsReady);
+  if (settingsReady) {
+    const joinBox = page.locator('label:has-text("Allow other Immich users to join albums") input[type=checkbox]');
+    const ttlSelect = page.locator('label:has-text("Pairing links stay valid for") select');
+    const before = { store: await storeBox().isChecked(), join: await joinBox.isChecked(), ttl: await ttlSelect.inputValue() };
+    const savedSettings = () => page.waitForResponse(
+      (r) => r.url().includes('/immich-shared-albums/settings') && r.request().method() === 'POST',
+      { timeout: 30000 }).catch(() => null);
+    const wrote = savedSettings();
+    await storeBox().click();
+    await wrote;
+    const after = await page.evaluate(async () => (await fetch('/immich-shared-albums/settings')).json());
+    check('toggling store-locally reaches the server', after.storeSharedAssetsLocally === !before.store,
+      `clicked to ${!before.store}, server says ${after.storeSharedAssetsLocally}`);
+    check('saving one setting leaves the other two alone',
+      after.shareLinkJoin === before.join && String(after.pairingTtlMinutes) === before.ttl,
+      `before join=${before.join} ttl=${before.ttl}; after join=${after.shareLinkJoin} ttl=${after.pairingTtlMinutes}`);
+    await page.reload({ waitUntil: 'networkidle' });
+    const persisted = await storeBox().waitFor({ state: 'visible', timeout: 20000 })
+      .then(() => storeBox().isChecked()).catch(() => null);
+    check('the toggle survives a reload', persisted === !before.store, `checked=${persisted}`);
+    // Put the household back: every later stage shares it, and a household that stores copies is a
+    // different shape from the one the rest of the lane asserts on.
+    const restored = savedSettings();
+    await storeBox().click();
+    await restored;
+    const ended = await page.evaluate(async () => (await fetch('/immich-shared-albums/settings')).json());
+    check('the lane restores the setting it changed', ended.storeSharedAssetsLocally === before.store,
+      `ended at ${ended.storeSharedAssetsLocally}, started at ${before.store}`);
+  }
+}
+
 // The signed-out pages are the only ones whose stylesheet is built on its own, so they are where an
 // un-inlined token import would show up: the accent button renders as plain black text. Assert the
 // computed colour rather than the markup, because that is what a person sees.
@@ -251,18 +295,68 @@ const seesPair = (t) => new RegExp(panelName).test(candidates(t));
 // lane has ever driven its panel — the panel needs a session, and there was no way to mint one. Open
 // it for this case and put it back, so the hardening the rig exists to prove stays proven.
 const cConfig = await (await fetch(`${C}/api/system-config`, { headers: { 'x-api-key': CKEY } })).json();
-const setPasswordLogin = (enabled) => fetch(`${C}/api/system-config`, { method: 'PUT',
-  headers: { 'x-api-key': CKEY, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ ...cConfig, passwordLogin: { ...cConfig.passwordLogin, enabled } }) });
+const systemConfig = async () => (await fetch(`${C}/api/system-config`, { headers: { 'x-api-key': CKEY } })).json();
+// WAITED FOR, not assumed: Immich answers the PUT before the change is visible to a login, and a
+// lane that assumes otherwise reports "C failed" — which reads like a broken product rather than a
+// setting that had not been applied yet. The previous version checked nothing and slept nowhere.
+const setPasswordLogin = async (enabled) => {
+  const put = await fetch(`${C}/api/system-config`, { method: 'PUT',
+    headers: { 'x-api-key': CKEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...cConfig, passwordLogin: { ...cConfig.passwordLogin, enabled } }) });
+  if (!put.ok) return `PUT answered ${put.status}`;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if ((await systemConfig())?.passwordLogin?.enabled === enabled) return '';
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return `still ${enabled ? 'disabled' : 'enabled'} after 30s`;
+};
 const cWasHardened = cConfig.passwordLogin.enabled === false;
-if (cWasHardened) await setPasswordLogin(true);
+const toggleProblem = cWasHardened ? await setPasswordLogin(true) : '';
 
-const bLogin = await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
-  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json();
-const cLogin = await (await fetch(`${C_PANEL_WEB}/api/auth/login`, { method: 'POST',
-  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) })).json();
+// BOUNDED RETRY, because the toggle above is applied asynchronously: Immich caches its system config,
+// so a login issued the instant the PUT returns can still be refused with password login off. That is
+// a race in the lane's own setup, not a product failure, and it reads as one failed check plus a
+// crash on the missing token — so wait for the sign-in the lane needs rather than for the PUT. The
+// ceiling is generous because a stale config read can outlive a 20s budget on a loaded runner, and the
+// detail names the last answer, because "C failed" with no status is a failure nobody can act on.
+//
+// A SECOND actor can also switch the setting off under us: minting a key for a newly arrived
+// contributor borrows password login, and a build that decides that borrow from a CACHED read
+// restores `disabled` over an enable it never made. The Rust build no longer can (it borrows only on
+// a refused login — see rust/PORT.md), but the TypeScript build still does, and it is kept as the
+// deprecated baseline rather than fixed. The lane's precondition here is "C has password login on",
+// so it RE-ASSERTS that instead of flaking — bounded, because looping would hide a real regression.
+const signIn = async (base) => {
+  let last = 'no attempt completed';
+  let reEnabled = 0;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const answer = await fetch(`${base}/api/auth/login`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: B_EMAIL, password: B_PASS }) });
+    const body = await answer.json().catch(() => ({}));
+    if (body?.accessToken) return body;
+    last = `${answer.status} ${JSON.stringify(body).slice(0, 50)}`;
+    if (reEnabled < 3 && /password login has been disabled/i.test(last)) {
+      reEnabled += 1;
+      await setPasswordLogin(true);
+      last += ` (re-enabled #${reEnabled})`;
+    }
+    await new Promise((res) => setTimeout(res, 1000));
+  }
+  return { failed: last };
+};
+const bLogin = await signIn(B_PANEL_WEB);
+const cLogin = await signIn(C_PANEL_WEB);
 check('the lane can sign in on both households\' panels', !!bLogin.accessToken && !!cLogin.accessToken,
-  `${bLogin.accessToken ? 'B ok' : 'B failed'}, ${cLogin.accessToken ? 'C ok' : 'C failed'}`);
+  `${bLogin.accessToken ? 'B ok' : `B failed (${bLogin.failed})`}, ` +
+  `${cLogin.accessToken ? 'C ok' : `C failed (${cLogin.failed})`}` +
+  (toggleProblem ? ` (C's password login: ${toggleProblem})` : ''));
+// STOP CLEANLY. The rest of this lane drives C's panel, and a missing token used to crash the run on
+// `addCookies` — one bad line, then no output at all for the thirty checks after it. A lane that
+// cannot meet its precondition says so and exits; it does not disappear.
+if (!bLogin.accessToken || !cLogin.accessToken) {
+  console.log(`\n💥 STOPPING: the panels need a session${toggleProblem ? ` — C's password login: ${toggleProblem}` : ''}`);
+  process.exit(1);
+}
 
 const bAlbum = await (await fetch(`${B_PANEL_WEB}/api/albums`, { method: 'POST',
   headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bLogin.accessToken}` },
@@ -620,6 +714,72 @@ if (cWasHardened) {
   const restored = await (await fetch(`${C}/api/system-config`, { headers: { 'x-api-key': CKEY } })).json();
   check("C's password-login hardening is back on after the case", restored.passwordLogin.enabled === false,
     restored.passwordLogin.enabled === false ? '' : 'the rig was left with C\'s password login open');
+}
+
+// RUST-ONLY. The tag that makes hiding exact (`audit-activity:<id>`), the `/me/preferences` route
+// and the passthrough filter are all the port's — the TypeScript build records nothing about which
+// activities are its own, so turning the toggle off there changes nothing. The rig knows which image
+// it is driving (`ISA_DOCKERFILE` is the CI matrix's own answer per lane), so the deprecated build
+// skips this case rather than failing it, and the port keeps the coverage.
+const isRustSidecar = (process.env.ISA_DOCKERFILE || 'rust/Dockerfile').includes('rust');
+if (isRustSidecar) {
+  // THE ALBUM'S OWN TRAIL, and who gets to see it. The invitation just posted a line as our bot, so
+  // this is the moment to test the per-reader control: the checkbox in /me, and the fact that hiding it
+  // is a VIEW, not a deletion — another person in the album keeps seeing everything, and a real
+  // person's comment is never swallowed (the relay posts those as stand-ins, and falls back to our bot).
+  {
+    const auditCtx = await browser.newContext();
+    await auditCtx.addCookies(['immich_access_token', 'immich_auth_type', 'immich_is_authenticated'].map((name) => ({
+      name, url: B_PANEL_WEB,
+      value: name === 'immich_access_token' ? bLogin.accessToken : (name === 'immich_auth_type' ? 'password' : 'true'),
+    })));
+    const auditPage = await auditCtx.newPage();
+    const botLines = (rows) => rows.filter((a) => (a.user?.email || '').includes('bot')).length;
+    const humanLines = (rows) =>
+      rows.filter((a) => a.type === 'comment' && !(a.user?.email || '').includes('bot')).length;
+    const readAs = async (headers) =>
+      (await fetch(`${B_PANEL_WEB}/api/activities?albumId=${bInviteAlbum.id}`, { headers })).json();
+
+    await auditPage.goto(`${B_PANEL_WEB}/immich-shared-albums/me`, { waitUntil: 'networkidle' });
+    check('the album-activity toggle is ON by default', (await auditPage.locator('#audit-visible').isChecked()) === true);
+
+    // A person's own comment beside the addon's line, so "the filter keeps what is not ours" is a real
+    // assertion rather than a hypothetical.
+    await fetch(`${B_PANEL_WEB}/api/activities`, { method: 'POST', headers: { ...bAuthForHooks, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ albumId: bInviteAlbum.id, type: 'comment', comment: `lane note ${Date.now()}` }) });
+    const shown = await readAs(bAuthForHooks);
+    check('the album carries the addon\'s own line', botLines(shown) > 0, `${botLines(shown)} bot line(s)`);
+
+    await auditPage.locator('#audit-visible').click();
+    await new Promise((r) => setTimeout(r, 1500));
+    const hidden = await readAs(bAuthForHooks);
+    check('turning it off hides the addon\'s lines from that reader', botLines(hidden) === 0,
+      `${botLines(hidden)} bot line(s) left`);
+    check('and never swallows a real person\'s comment', humanLines(hidden) > 0, `${humanLines(hidden)} human comment(s)`);
+
+    // "Everyone else" has to be a DIFFERENT reader: the household key resolves to this same person.
+    const otherMe = await (await fetch(`${B_PANEL_WEB}/api/users/me`, {
+      headers: { Authorization: `Bearer ${nonAdminLogin.accessToken}` },
+    })).json();
+    await fetch(`${B_PANEL_WEB}/api/albums/${bInviteAlbum.id}/users`, {
+      method: 'PUT', headers: { ...bAuthForHooks, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ albumUsers: [{ userId: otherMe.id, role: 'editor' }] }),
+    });
+    const other = await (await fetch(`${B_PANEL_WEB}/api/auth/login`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: nonAdminEmail, password: nonAdminPass }) })).json();
+    const asOther = other.accessToken
+      ? await readAs({ Cookie: `immich_access_token=${other.accessToken}` })
+      : [];
+    check('ANOTHER reader still sees the record (it is hidden, not deleted)', botLines(asOther) > 0,
+      `${botLines(asOther)} bot line(s) for the second reader`);
+
+    await auditPage.locator('#audit-visible').click();
+    await new Promise((r) => setTimeout(r, 1500));
+    check('turning it back on restores them', botLines(await readAs(bAuthForHooks)) > 0);
+    await auditCtx.close();
+  }
+
 }
 
 await browser.close();
