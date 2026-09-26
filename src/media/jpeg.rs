@@ -9,7 +9,6 @@
 // Deliberately minimal: mid-grey is sample 128, which level-shifts to 0, so every 8x8 block is
 // all-zero coefficients and encodes as the SAME six bits — DC category 0 (`00`) then AC
 // end-of-block (`1010`) using the standard Annex-K luminance tables. No DCT, no quantiser maths.
-
 /// Long-edge cap for the stub. Small enough to stay ~1KB; the true resolution is never stored here.
 pub const MAX_EDGE: u32 = 256;
 
@@ -44,9 +43,15 @@ pub fn bounded_stub_dims(width: f64, height: f64) -> (u32, u32) {
         return (w, h);
     }
     if w >= h {
-        (MAX_EDGE, 1u32.max(((h as f64 * MAX_EDGE as f64) / w as f64).round() as u32))
+        (
+            MAX_EDGE,
+            1u32.max(((h as f64 * MAX_EDGE as f64) / w as f64).round() as u32),
+        )
     } else {
-        (1u32.max(((w as f64 * MAX_EDGE as f64) / h as f64).round() as u32), MAX_EDGE)
+        (
+            1u32.max(((w as f64 * MAX_EDGE as f64) / h as f64).round() as u32),
+            MAX_EDGE,
+        )
     }
 }
 
@@ -63,8 +68,8 @@ pub fn jpeg_of_size(width: f64, height: f64) -> Vec<u8> {
     out.extend_from_slice(&[0xff, 0xd8]);
     // APP0 / JFIF
     out.extend_from_slice(&[
-        0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01,
-        0x00, 0x00,
+        0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00,
+        0x01, 0x00, 0x00,
     ]);
     // DQT: a flat table. Every coefficient is zero, so the values are irrelevant; flat is
     // order-agnostic.
@@ -154,9 +159,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn sof0_declares_HEIGHT_before_WIDTH_and_the_capped_dims() {
         let jpeg = jpeg_of_size(4000.0, 3000.0);
-        let sof = jpeg.windows(2).position(|w| w == [0xff, 0xc0]).expect("SOF0");
+        let sof = jpeg
+            .windows(2)
+            .position(|w| w == [0xff, 0xc0])
+            .expect("SOF0");
         assert_eq!(jpeg[sof + 2], 0x00, "length high byte");
         assert_eq!(jpeg[sof + 3], 0x0b, "length 11");
         assert_eq!(jpeg[sof + 4], 0x08, "8-bit precision");
@@ -169,21 +178,43 @@ mod tests {
     #[test]
     fn the_dqt_is_flat_and_the_dht_lengths_are_derived_not_hardcoded() {
         let jpeg = jpeg_of_size(1.0, 1.0);
-        let dqt = jpeg.windows(2).position(|w| w == [0xff, 0xdb]).expect("DQT");
-        assert_eq!(&jpeg[dqt + 2..dqt + 5], &[0x00, 0x43, 0x00], "length 67, table 0");
-        assert!(jpeg[dqt + 5..dqt + 69].iter().all(|b| *b == 16), "flat table");
-        let dht = jpeg.windows(2).position(|w| w == [0xff, 0xc4]).expect("DHT");
+        let dqt = jpeg
+            .windows(2)
+            .position(|w| w == [0xff, 0xdb])
+            .expect("DQT");
+        assert_eq!(
+            &jpeg[dqt + 2..dqt + 5],
+            &[0x00, 0x43, 0x00],
+            "length 67, table 0"
+        );
+        assert!(
+            jpeg[dqt + 5..dqt + 69].iter().all(|b| *b == 16),
+            "flat table"
+        );
+        let dht = jpeg
+            .windows(2)
+            .position(|w| w == [0xff, 0xc4])
+            .expect("DHT");
         // 2 + (1 + 16 + 12) + (1 + 16 + 162)
         let declared = u16::from_be_bytes([jpeg[dht + 2], jpeg[dht + 3]]) as usize;
         assert_eq!(declared, 2 + 29 + 179);
         assert_eq!(jpeg[dht + 4], 0x00, "DC table 0");
-        assert_eq!(jpeg[dht + 4 + 1 + 16 + 12], 0x10, "AC table 0 follows the DC table");
+        assert_eq!(
+            jpeg[dht + 4 + 1 + 16 + 12],
+            0x10,
+            "AC table 0 follows the DC table"
+        );
     }
 
     #[test]
     fn a_stub_stays_around_a_kilobyte_whatever_the_original_size() {
         // The point is the RATIO, not the resolution: a 48MP photo and a 0.3MP one both stub small.
-        for (w, h) in [(4000.0, 3000.0), (4032.0, 3024.0), (8000.0, 6000.0), (640.0, 480.0)] {
+        for (w, h) in [
+            (4000.0, 3000.0),
+            (4032.0, 3024.0),
+            (8000.0, 6000.0),
+            (640.0, 480.0),
+        ] {
             let jpeg = jpeg_of_size(w, h);
             assert!(jpeg.len() < 4096, "{w}x{h} produced {} bytes", jpeg.len());
             assert!(jpeg.len() > 300, "{w}x{h} produced {} bytes", jpeg.len());
@@ -192,7 +223,14 @@ mod tests {
 
     #[test]
     fn the_aspect_ratio_survives_the_cap() {
-        for (w, h) in [(4000.0, 3000.0), (3000.0, 4000.0), (1000.0, 1000.0), (4032.0, 3024.0), (100.0, 50.0), (7.0, 13.0)] {
+        for (w, h) in [
+            (4000.0, 3000.0),
+            (3000.0, 4000.0),
+            (1000.0, 1000.0),
+            (4032.0, 3024.0),
+            (100.0, 50.0),
+            (7.0, 13.0),
+        ] {
             let (bw, bh) = bounded_stub_dims(w, h);
             let want = w / h;
             let got = bw as f64 / bh as f64;
@@ -209,11 +247,17 @@ mod tests {
         // everywhere and never produce 0xFF. Asserting it here means a future change that starts
         // emitting real coefficients is noticed rather than silently corrupting the scan.
         let jpeg = jpeg_of_size(64.0, 64.0);
-        let sos = jpeg.windows(2).position(|w| w == [0xff, 0xda]).expect("SOS");
+        let sos = jpeg
+            .windows(2)
+            .position(|w| w == [0xff, 0xda])
+            .expect("SOS");
         // SOS is `FF DA` + a 2-byte length + 6 bytes of payload = 10 bytes, then the scan begins.
         assert_eq!(&jpeg[sos..sos + 4], &[0xff, 0xda, 0x00, 0x08]);
         let scan = &jpeg[sos + 10..jpeg.len() - 2];
-        assert!(scan.iter().all(|b| *b != 0xff), "no stuffing is needed for a flat scan");
+        assert!(
+            scan.iter().all(|b| *b != 0xff),
+            "no stuffing is needed for a flat scan"
+        );
         // 8x8 blocks of 8x8 pixels, six bits each, and 384 bits divides exactly into 48 bytes.
         assert_eq!(scan.len(), (64 / 8) * (64 / 8) * 6 / 8, "6 bits per block");
     }

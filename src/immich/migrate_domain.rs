@@ -37,7 +37,10 @@ pub async fn migrate_utility_domain(client: &Client) {
                         .iter()
                         .any(|domain| email.ends_with(&format!("@{domain}")));
                     on_legacy.then(|| {
-                        (id.to_string(), format!("{local_part}@{UTILITY_EMAIL_DOMAIN}"))
+                        (
+                            id.to_string(),
+                            format!("{local_part}@{UTILITY_EMAIL_DOMAIN}"),
+                        )
                     })
                 })
                 .collect()
@@ -50,7 +53,12 @@ pub async fn migrate_utility_domain(client: &Client) {
     for (id, email) in &stale {
         let body = json!({ "email": email });
         match client
-            .json(reqwest::Method::PUT, &format!("/admin/users/{id}"), &Auth::Admin, Some(&body))
+            .json(
+                reqwest::Method::PUT,
+                &format!("/admin/users/{id}"),
+                &Auth::Admin,
+                Some(&body),
+            )
             .await
         {
             Ok(_) => renamed += 1,
@@ -71,15 +79,23 @@ mod tests {
     #[test]
     fn only_a_legacy_domain_is_the_migrations_business() {
         let on_legacy = |email: &str| {
-            LEGACY_UTILITY_DOMAINS.iter().any(|domain| email.ends_with(&format!("@{domain}")))
+            LEGACY_UTILITY_DOMAINS
+                .iter()
+                .any(|domain| email.ends_with(&format!("@{domain}")))
         };
         // The accounts this exists for: one still on a domain the addon used to write.
-        assert!(on_legacy(&format!("person-abc@{}", LEGACY_UTILITY_DOMAINS[0])));
+        assert!(on_legacy(&format!(
+            "person-abc@{}",
+            LEGACY_UTILITY_DOMAINS[0]
+        )));
         // Already current — re-running must find none.
         assert!(!on_legacy(&format!("person-abc@{UTILITY_EMAIL_DOMAIN}")));
         // A HUMAN's address must never be renamed, whatever else changes.
         assert!(!on_legacy("someone@example.com"));
         // Nothing about a domain match may be a substring match on the local part.
-        assert!(!on_legacy(&format!("{}@example.com", LEGACY_UTILITY_DOMAINS[0])));
+        assert!(!on_legacy(&format!(
+            "{}@example.com",
+            LEGACY_UTILITY_DOMAINS[0]
+        )));
     }
 }

@@ -28,8 +28,15 @@ async fn main() {
     let identity = booted.keys();
     state::install(booted.clone());
 
-    crate::log!("immich-shared-albums v{} on :{}", config::SIDECAR_VERSION, port);
-    crate::log!("identity {}", &identity.public[..identity.public.len().min(10)]);
+    crate::log!(
+        "immich-shared-albums v{} on :{}",
+        config::SIDECAR_VERSION,
+        port
+    );
+    crate::log!(
+        "identity {}",
+        &identity.public[..identity.public.len().min(10)]
+    );
 
     // The transport binds BEFORE the HTTP server, because the share page mints an endpoint token
     // per request and a token it cannot mint is a join card that lies. A failure here is fatal

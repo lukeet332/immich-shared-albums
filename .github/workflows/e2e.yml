@@ -34,7 +34,8 @@ jobs:
   # Worth marking as a required status check in branch protection alongside e2e.
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The Rust suite compiles iroh and reqwest on a cold cache; npm steps take the rest.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm install --silent
@@ -46,6 +47,21 @@ jobs:
         run: npm run typecheck
       - name: Import cycles
         run: npm run cycles
+      # The sidecar is Rust: the unit suite and lints gate here, not only in the Docker build.
+      # Cached, because iroh + reqwest are minutes of cold compile and a rerun of a one-line fix
+      # should not pay them again.
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Rust formatting (rustfmt)
+        run: cargo fmt --check
+      - name: Rust lints (clippy, warnings are errors)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Rust unit tests
+        run: cargo test --locked --lib
   e2e:
     name: e2e
     runs-on: ubuntu-latest

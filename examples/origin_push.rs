@@ -21,7 +21,10 @@ async fn main() {
     let client = Client::new();
 
     // Adopt the identity the member was seeded with, so the connection proves the key it knows.
-    if let (Ok(pub_key), Ok(priv_key)) = (std::env::var("IDENTITY_PUB"), std::env::var("IDENTITY_PRIV")) {
+    if let (Ok(pub_key), Ok(priv_key)) = (
+        std::env::var("IDENTITY_PUB"),
+        std::env::var("IDENTITY_PRIV"),
+    ) {
         st.store.state.lock().unwrap().identity = Some(Identity {
             v: 1,
             alg: "ed25519".into(),
@@ -46,11 +49,14 @@ async fn main() {
     };
     // A REAL jpeg: Immich measures dimensions asynchronously, and an unmeasured photo is held back
     // from every push by design — so a fake byte string would test the hold-back, not the push.
-    let fixture = std::env::var("FIXTURE")
-        .unwrap_or_else(|_| "../demo/e2e/fixtures/fx0.jpg".to_string());
+    let fixture =
+        std::env::var("FIXTURE").unwrap_or_else(|_| "../demo/e2e/fixtures/fx0.jpg".to_string());
     let bytes = std::fs::read(&fixture).expect("fixture photo");
     let form = reqwest::multipart::Form::new()
-        .text("deviceAssetId", format!("origin-push-{}", std::process::id()))
+        .text(
+            "deviceAssetId",
+            format!("origin-push-{}", std::process::id()),
+        )
         .text("deviceId", "origin-push")
         .text("fileCreatedAt", iso_now())
         .text("fileModifiedAt", iso_now())
@@ -63,8 +69,15 @@ async fn main() {
         println!("{}", json!({ "albumId": album }));
         return;
     }
-    let uploaded = client.upload("/assets", &config::cfg().api_key, form).await.expect("upload");
-    let asset_id = uploaded.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let uploaded = client
+        .upload("/assets", &config::cfg().api_key, form)
+        .await
+        .expect("upload");
+    let asset_id = uploaded
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
     let _ = client
         .json(
             reqwest::Method::PUT,
@@ -81,7 +94,10 @@ async fn main() {
             .await
             .ok()
             .flatten()
-            .and_then(|a| a.pointer("/exifInfo/exifImageWidth").and_then(|v| v.as_i64()))
+            .and_then(|a| {
+                a.pointer("/exifInfo/exifImageWidth")
+                    .and_then(|v| v.as_i64())
+            })
             .is_some();
         if measured {
             break;
@@ -143,8 +159,20 @@ async fn main() {
         tokio::signal::ctrl_c().await.ok();
         return;
     }
-    let mapping = st.collections().mappings.iter().find(|m| m.id == "m-origin").cloned().unwrap();
-    let peer = st.collections().peers.iter().find(|p| p.name == "Member household").cloned().unwrap();
+    let mapping = st
+        .collections()
+        .mappings
+        .iter()
+        .find(|m| m.id == "m-origin")
+        .cloned()
+        .unwrap();
+    let peer = st
+        .collections()
+        .peers
+        .iter()
+        .find(|p| p.name == "Member household")
+        .cloned()
+        .unwrap();
     match push_album_refs(st, &client, &mapping, &peer).await {
         Ok(outcome) => println!(
             "{}",

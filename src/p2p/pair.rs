@@ -53,7 +53,10 @@ fn load(store: &Store) -> Vec<PairingCode> {
 }
 
 fn persist(store: &Store, list: &[PairingCode]) {
-    let _ = store.kv_set("pairings", &serde_json::to_value(list).unwrap_or(Value::Array(vec![])));
+    let _ = store.kv_set(
+        "pairings",
+        &serde_json::to_value(list).unwrap_or(Value::Array(vec![])),
+    );
 }
 
 /// Drop anything expired. Called on every read path so stale codes cannot pile up.
@@ -82,7 +85,11 @@ pub fn mint_pairing(transport: &Transport, store: &Store) -> Result<(String, i64
 
     let ttl_ms = Settings::read(store).pairing_ttl_minutes * 60 * 1000;
     let now = now_ms();
-    let entry = PairingCode { code_hash: hash_code(&code), created_at: now, expires_at: now + ttl_ms };
+    let entry = PairingCode {
+        code_hash: hash_code(&code),
+        created_at: now,
+        expires_at: now + ttl_ms,
+    };
     let mut list = live(store);
     list.push(entry.clone());
     persist(store, &list);
@@ -98,7 +105,10 @@ pub fn mint_pairing(transport: &Transport, store: &Store) -> Result<(String, i64
         ticket.addrs = None;
     }
     let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_string(&ticket).unwrap_or_default());
-    crate::log!("minted a pairing code, valid for {} minutes", ttl_ms / 60000);
+    crate::log!(
+        "minted a pairing code, valid for {} minutes",
+        ttl_ms / 60000
+    );
     Ok((format!("isa2-{encoded}"), entry.expires_at))
 }
 
@@ -107,7 +117,11 @@ pub fn mint_pairing(transport: &Transport, store: &Store) -> Result<(String, i64
 pub fn parse_ticket(raw: &str) -> Option<Ticket> {
     let trimmed = raw.trim();
     let body = trimmed.strip_prefix("isa2-")?;
-    if body.is_empty() || !body.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+    if body.is_empty()
+        || !body
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
         return None;
     }
     let decoded = URL_SAFE_NO_PAD.decode(body).ok()?;
@@ -122,7 +136,7 @@ pub fn parse_ticket(raw: &str) -> Option<Ticket> {
 /// What the panel shows: unredeemed codes, newest first — metadata only, never the ticket.
 pub fn pending_pairings(store: &Store) -> Vec<Value> {
     let mut list = live(store);
-    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    list.sort_by_key(|p| std::cmp::Reverse(p.created_at));
     list.iter()
         .map(|p| {
             json!({
@@ -139,7 +153,9 @@ pub fn revoke_pairing(store: &Store, code_or_id: &str) {
     let as_hash = hash_code(code_or_id);
     let kept: Vec<PairingCode> = live(store)
         .into_iter()
-        .filter(|p| p.code_hash != as_hash && &p.code_hash[..12.min(p.code_hash.len())] != code_or_id)
+        .filter(|p| {
+            p.code_hash != as_hash && &p.code_hash[..12.min(p.code_hash.len())] != code_or_id
+        })
         .collect();
     persist(store, &kept);
 }
@@ -147,9 +163,9 @@ pub fn revoke_pairing(store: &Store, code_or_id: &str) {
 /// Hashes are fixed-length, so this stays constant-time without a length dance.
 fn code_matches(store: &Store, candidate: &str) -> Option<PairingCode> {
     let want = hash_code(candidate);
-    live(store).into_iter().find(|p| {
-        p.code_hash.as_bytes().ct_eq(want.as_bytes()).into()
-    })
+    live(store)
+        .into_iter()
+        .find(|p| p.code_hash.as_bytes().ct_eq(want.as_bytes()).into())
 }
 
 /// MINTING side: another server is redeeming a code we issued.
@@ -160,7 +176,10 @@ pub async fn handle_pair(transport: &Transport, caller_pub: &str, body: &[u8]) -
     let Ok(parsed) = serde_json::from_slice::<Value>(body) else {
         return (400, json!({ "error": "malformed request" }));
     };
-    let code = parsed.get("code").and_then(|c| c.as_str()).unwrap_or_default();
+    let code = parsed
+        .get("code")
+        .and_then(|c| c.as_str())
+        .unwrap_or_default();
     let household_name = parsed
         .pointer("/household/name")
         .and_then(|n| n.as_str())
@@ -179,14 +198,23 @@ pub async fn handle_pair(transport: &Transport, caller_pub: &str, body: &[u8]) -
     };
 
     // SINGLE-USE: burn it before doing anything else, so a replay cannot land twice.
-    let remaining: Vec<PairingCode> =
-        live(store).into_iter().filter(|p| p.code_hash != entry.code_hash).collect();
+    let remaining: Vec<PairingCode> = live(store)
+        .into_iter()
+        .filter(|p| p.code_hash != entry.code_hash)
+        .collect();
     persist(store, &remaining);
 
-    let version = parsed.get("version").and_then(|v| v.as_str()).map(str::to_string);
+    let version = parsed
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     {
         let mut collections = state().collections();
-        match collections.peers.iter_mut().find(|p| p.pub_key == caller_pub) {
+        match collections
+            .peers
+            .iter_mut()
+            .find(|p| p.pub_key == caller_pub)
+        {
             Some(existing) => {
                 if !household_name.is_empty() {
                     existing.name = household_name.to_string();
@@ -255,11 +283,20 @@ pub async fn redeem_pairing(transport: Arc<Transport>, raw_ticket: &str) -> Resu
         "household": { "publicKey": transport.public_key(), "name": cfg().name },
     })
     .to_string();
-    let header = crate::p2p::frame::RequestHeader { path: "/pair".to_string(), ..Default::default() };
+    let header = crate::p2p::frame::RequestHeader {
+        path: "/pair".to_string(),
+        ..Default::default()
+    };
     let (head, body) = transport
         .round_trip(&peer, &header, Some(body.as_bytes()))
         .await
-        .map_err(|e| if is_connection_death(&e) { "that server could not be reached".to_string() } else { e })?;
+        .map_err(|e| {
+            if is_connection_death(&e) {
+                "that server could not be reached".to_string()
+            } else {
+                e
+            }
+        })?;
     if head.status != 200 {
         let reason = serde_json::from_slice::<Value>(&body)
             .ok()
@@ -278,10 +315,17 @@ pub async fn redeem_pairing(transport: Arc<Transport>, raw_ticket: &str) -> Resu
     // is what we dialled and what the far end proved it holds.
     {
         let mut collections = state().collections();
-        if !collections.peers.iter().any(|p| p.pub_key == ticket.pub_key) {
+        if !collections
+            .peers
+            .iter()
+            .any(|p| p.pub_key == ticket.pub_key)
+        {
             collections.peers.push(Peer {
                 name: linked.clone(),
-                version: answer.get("version").and_then(|v| v.as_str()).map(str::to_string),
+                version: answer
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
                 protocol: answer.get("protocol").and_then(|p| p.as_i64()),
                 features: None,
                 ..peer.clone()
@@ -322,8 +366,16 @@ mod tests {
         persist(
             &s,
             &[
-                PairingCode { code_hash: hash_code("old"), created_at: 0, expires_at: 1 },
-                PairingCode { code_hash: hash_code("new"), created_at: now_ms(), expires_at: now_ms() + 60_000 },
+                PairingCode {
+                    code_hash: hash_code("old"),
+                    created_at: 0,
+                    expires_at: 1,
+                },
+                PairingCode {
+                    code_hash: hash_code("new"),
+                    created_at: now_ms(),
+                    expires_at: now_ms() + 60_000,
+                },
             ],
         );
         let kept = live(&s);
@@ -338,7 +390,11 @@ mod tests {
         let s = store();
         persist(
             &s,
-            &[PairingCode { code_hash: hash_code("right"), created_at: now_ms(), expires_at: now_ms() + 60_000 }],
+            &[PairingCode {
+                code_hash: hash_code("right"),
+                created_at: now_ms(),
+                expires_at: now_ms() + 60_000,
+            }],
         );
         assert!(code_matches(&s, "right").is_some());
         assert!(code_matches(&s, "wrong").is_none());
@@ -351,7 +407,11 @@ mod tests {
         let code = "revoke-me";
         persist(
             &s,
-            &[PairingCode { code_hash: hash_code(code), created_at: now_ms(), expires_at: now_ms() + 60_000 }],
+            &[PairingCode {
+                code_hash: hash_code(code),
+                created_at: now_ms(),
+                expires_at: now_ms() + 60_000,
+            }],
         );
         // By the ticket itself, as a paste-back.
         revoke_pairing(&s, code);
@@ -360,7 +420,11 @@ mod tests {
         // And by the 12-character id the panel shows.
         persist(
             &s,
-            &[PairingCode { code_hash: hash_code(code), created_at: now_ms(), expires_at: now_ms() + 60_000 }],
+            &[PairingCode {
+                code_hash: hash_code(code),
+                created_at: now_ms(),
+                expires_at: now_ms() + 60_000,
+            }],
         );
         let id = hash_code(code)[..12].to_string();
         revoke_pairing(&s, &id);
@@ -402,9 +466,8 @@ mod tests {
         );
         assert!(parse_ticket(&format!("  isa2-{good}\n")).is_some());
         // A ticket from a future version is not this build's to guess at.
-        let v3 = URL_SAFE_NO_PAD.encode(
-            serde_json::to_string(&json!({"v": 3, "pub": "C", "secret": "s"})).unwrap(),
-        );
+        let v3 = URL_SAFE_NO_PAD
+            .encode(serde_json::to_string(&json!({"v": 3, "pub": "C", "secret": "s"})).unwrap());
         assert!(parse_ticket(&format!("isa2-{v3}")).is_none());
         // Characters outside base64url never reach the decoder.
         assert!(parse_ticket("isa2-abc!def").is_none());
@@ -416,12 +479,19 @@ mod tests {
         let code = "top-secret";
         persist(
             &s,
-            &[PairingCode { code_hash: hash_code(code), created_at: now_ms(), expires_at: now_ms() + 60_000 }],
+            &[PairingCode {
+                code_hash: hash_code(code),
+                created_at: now_ms(),
+                expires_at: now_ms() + 60_000,
+            }],
         );
         let shown = pending_pairings(&s);
         assert_eq!(shown.len(), 1);
         assert_eq!(shown[0]["id"].as_str().unwrap().len(), 12);
         let rendered = serde_json::to_string(&shown).unwrap();
-        assert!(!rendered.contains(code), "the panel is shown the hash prefix, never the ticket");
+        assert!(
+            !rendered.contains(code),
+            "the panel is shown the hash prefix, never the ticket"
+        );
     }
 }

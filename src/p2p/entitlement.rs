@@ -17,7 +17,11 @@ pub fn mappings_facing(state: &State, peer_pub: &str) -> Vec<String> {
 
 /// Record assets we have advertised to a mapping's peer. Safe to call repeatedly.
 pub fn record_offered(state: &State, mapping_id: &str, asset_ids: &[String]) {
-    let ids: Vec<String> = asset_ids.iter().filter(|a| !a.is_empty()).cloned().collect();
+    let ids: Vec<String> = asset_ids
+        .iter()
+        .filter(|a| !a.is_empty())
+        .cloned()
+        .collect();
     if !ids.is_empty() {
         let _ = state.store.offered_add(mapping_id, &ids);
     }
@@ -47,7 +51,10 @@ pub fn peer_may_read(state: &State, peer_pub: &str, asset_id: &str) -> bool {
     if mappings.is_empty() {
         return false;
     }
-    state.store.offered_allows(&mappings, asset_id).unwrap_or(false)
+    state
+        .store
+        .offered_allows(&mappings, asset_id)
+        .unwrap_or(false)
 }
 
 /// Drop a mapping's entitlements — called wherever its ledger is dropped.
@@ -57,7 +64,11 @@ pub fn forget_offered(state: &State, mapping_id: &str) {
 
 /// Does this server know the peer at all?
 pub fn is_enrolled(state: &State, peer_pub: &str) -> bool {
-    state.collections().peers.iter().any(|p| p.pub_key == peer_pub)
+    state
+        .collections()
+        .peers
+        .iter()
+        .any(|p| p.pub_key == peer_pub)
 }
 
 /// Whether any mapping of ours is a live owner share to this peer.
@@ -127,6 +138,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn a_MEMBER_mapping_grants_reads_too_because_it_relays_contributions() {
         // Filtering to owner-only here would break the D <- origin <- contributor chain: the
         // origin's member mapping is what lets it fetch a contributor's photo onward.
@@ -135,6 +147,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn only_an_OFFERED_asset_is_readable_even_when_enrolled() {
         let s = state_with(vec![mapping("peer-a", Role::Owner, false, "m1")]);
         // Enrolled, with a live mapping — and still nothing, because nothing was recorded.
@@ -151,7 +164,9 @@ mod tests {
             mapping("peer-a", Role::Owner, false, "m-a"),
             mapping("peer-b", Role::Owner, false, "m-b"),
         ]);
-        s.store.offered_add("m-a", &["asset-1".to_string()]).unwrap();
+        s.store
+            .offered_add("m-a", &["asset-1".to_string()])
+            .unwrap();
         assert!(peer_may_read(&s, "peer-a", "asset-1"));
         // peer-b is enrolled and has a live mapping, but the asset was offered to peer-a.
         assert!(!peer_may_read(&s, "peer-b", "asset-1"));
@@ -163,10 +178,14 @@ mod tests {
         s.store.offered_add("m1", &["asset-1".to_string()]).unwrap();
         assert!(peer_may_read(&s, "peer-a", "asset-1"));
         s.store.offered_reconcile("m1", &[]).unwrap();
-        assert!(!peer_may_read(&s, "peer-a", "asset-1"), "an asset that left the album loses its row");
+        assert!(
+            !peer_may_read(&s, "peer-a", "asset-1"),
+            "an asset that left the album loses its row"
+        );
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn a_multi_mapping_peer_reads_what_ANY_of_its_mappings_was_offered() {
         // One peer can hold several mappings (two albums); an asset offered through either is
         // readable, which is what makes a re-shared photo work.

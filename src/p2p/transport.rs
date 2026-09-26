@@ -85,8 +85,14 @@ impl Transport {
         });
         builder = builder.alpns(crate::protocol::served_alpns());
 
-        let endpoint = builder.bind().await.map_err(|e| format!("cannot bind endpoint: {e}"))?;
-        let transport = Arc::new(Transport { endpoint, connections: Mutex::new(HashMap::new()) });
+        let endpoint = builder
+            .bind()
+            .await
+            .map_err(|e| format!("cannot bind endpoint: {e}"))?;
+        let transport = Arc::new(Transport {
+            endpoint,
+            connections: Mutex::new(HashMap::new()),
+        });
 
         let accepting = transport.clone();
         tokio::spawn(async move { accept_loop(accepting, handler).await });
@@ -117,7 +123,11 @@ impl Transport {
     }
 
     pub fn relay_url(&self) -> Option<String> {
-        self.endpoint.addr().relay_urls().next().map(|u| u.to_string())
+        self.endpoint
+            .addr()
+            .relay_urls()
+            .next()
+            .map(|u| u.to_string())
     }
 
     /// A connection to a peer, reusing a live one when there is one.
@@ -142,10 +152,17 @@ impl Transport {
                 addr = addr.with_addrs(parsed);
             }
         }
-        let dialled = tokio::time::timeout(DIAL_DEADLINE, self.endpoint.connect(addr, PROTOCOL_ALPN))
-            .await
-            .map_err(|_| format!("dialling {} timed out after {}s", peer.name, DIAL_DEADLINE.as_secs()))?
-            .map_err(|e| format!("dialling {} failed: {e}", peer.name))?;
+        let dialled =
+            tokio::time::timeout(DIAL_DEADLINE, self.endpoint.connect(addr, PROTOCOL_ALPN))
+                .await
+                .map_err(|_| {
+                    format!(
+                        "dialling {} timed out after {}s",
+                        peer.name,
+                        DIAL_DEADLINE.as_secs()
+                    )
+                })?
+                .map_err(|e| format!("dialling {} failed: {e}", peer.name))?;
         self.connections
             .lock()
             .unwrap()
@@ -178,12 +195,9 @@ impl Transport {
         body: Option<&[u8]>,
     ) -> Result<(ResponseHeader, Vec<u8>), String> {
         let conn = self.connection_for(peer).await?;
-        let result = tokio::time::timeout(
-            DEADLINE,
-            self.exchange_json(&conn, header, body),
-        )
-        .await
-        .map_err(|_| format!("{} timed out after {}s", header.path, DEADLINE.as_secs()))?;
+        let result = tokio::time::timeout(DEADLINE, self.exchange_json(&conn, header, body))
+            .await
+            .map_err(|_| format!("{} timed out after {}s", header.path, DEADLINE.as_secs()))?;
         match result {
             Ok(v) => Ok(v),
             Err(e) => {
@@ -219,15 +233,24 @@ impl Transport {
     ) -> Result<(ResponseHeader, Vec<u8>), String> {
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
         let header_json = serde_json::to_vec(header).map_err(|e| e.to_string())?;
-        send.write_all(&frame(&header_json)).await.map_err(|e| e.to_string())?;
+        send.write_all(&frame(&header_json))
+            .await
+            .map_err(|e| e.to_string())?;
         // A bodyless request still sends a four-byte zero: the frame has no presence flag.
-        send.write_all(&frame(body.unwrap_or(&[]))).await.map_err(|e| e.to_string())?;
+        send.write_all(&frame(body.unwrap_or(&[])))
+            .await
+            .map_err(|e| e.to_string())?;
         send.finish().map_err(|e| e.to_string())?;
 
         let head_bytes = read_frame(&mut recv, HEADER_FRAME_LIMIT)
             .await
             .map_err(|e| e.to_string())?
-            .map_err(|over| format!("response header frame of {} bytes is over the limit", over.declared))?;
+            .map_err(|over| {
+                format!(
+                    "response header frame of {} bytes is over the limit",
+                    over.declared
+                )
+            })?;
         let head: ResponseHeader =
             serde_json::from_slice(&head_bytes).map_err(|e| format!("bad response header: {e}"))?;
 
@@ -282,15 +305,32 @@ impl Transport {
         };
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
         let header_json = serde_json::to_vec(&header).map_err(|e| e.to_string())?;
-        send.write_all(&frame(&header_json)).await.map_err(|e| e.to_string())?;
-        send.write_all(&frame(&[])).await.map_err(|e| e.to_string())?;
+        send.write_all(&frame(&header_json))
+            .await
+            .map_err(|e| e.to_string())?;
+        send.write_all(&frame(&[]))
+            .await
+            .map_err(|e| e.to_string())?;
         send.finish().map_err(|e| e.to_string())?;
 
-        let head_bytes = tokio::time::timeout(BYTE_HEAD_DEADLINE, read_frame(&mut recv, HEADER_FRAME_LIMIT))
-            .await
-            .map_err(|_| format!("{path} byte header timed out after {}s", BYTE_HEAD_DEADLINE.as_secs()))?
-            .map_err(|e| e.to_string())?
-            .map_err(|over| format!("byte header frame of {} bytes is over the limit", over.declared))?;
+        let head_bytes = tokio::time::timeout(
+            BYTE_HEAD_DEADLINE,
+            read_frame(&mut recv, HEADER_FRAME_LIMIT),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "{path} byte header timed out after {}s",
+                BYTE_HEAD_DEADLINE.as_secs()
+            )
+        })?
+        .map_err(|e| e.to_string())?
+        .map_err(|over| {
+            format!(
+                "byte header frame of {} bytes is over the limit",
+                over.declared
+            )
+        })?;
         let head: ResponseHeader =
             serde_json::from_slice(&head_bytes).map_err(|e| format!("bad byte header: {e}"))?;
 
@@ -327,11 +367,7 @@ async fn accept_loop(transport: Arc<Transport>, handler: PeerHandler) {
     }
 }
 
-async fn serve_connection(
-    conn: iroh::endpoint::Connection,
-    caller: String,
-    handler: PeerHandler,
-) {
+async fn serve_connection(conn: iroh::endpoint::Connection, caller: String, handler: PeerHandler) {
     // `accept_bi()` THROWS when the connection closes; that throw is the loop's exit.
     while let Ok((send, recv)) = conn.accept_bi().await {
         let caller = caller.clone();
@@ -350,12 +386,17 @@ async fn serve_request(
     caller: String,
     handler: PeerHandler,
 ) -> Result<(), String> {
-    let header_bytes = match read_frame(&mut recv, HEADER_FRAME_LIMIT).await.map_err(|e| e.to_string())? {
+    let header_bytes = match read_frame(&mut recv, HEADER_FRAME_LIMIT)
+        .await
+        .map_err(|e| e.to_string())?
+    {
         Ok(bytes) => bytes,
         Err(_over) => {
             // Over-limit header: answer 431 and leave the body frame UNREAD, as the protocol says.
             let head = ResponseHeader::new(431);
-            let body = serde_json::json!({"code": "header_too_large"}).to_string().into_bytes();
+            let body = serde_json::json!({"code": "header_too_large"})
+                .to_string()
+                .into_bytes();
             write_response(&mut send, &head, PeerBody::Bytes(body)).await?;
             return Ok(());
         }
@@ -364,7 +405,10 @@ async fn serve_request(
         serde_json::from_slice(&header_bytes).map_err(|e| format!("bad request header: {e}"))?;
 
     let body_limit = (cfg().max_body_kb * 1024) as usize;
-    let body = match read_frame(&mut recv, body_limit).await.map_err(|e| e.to_string())? {
+    let body = match read_frame(&mut recv, body_limit)
+        .await
+        .map_err(|e| e.to_string())?
+    {
         Ok(bytes) => bytes,
         Err(over) => {
             // Over-limit body: the frame has been DRAINED, so it is safe to answer.
@@ -373,7 +417,12 @@ async fn serve_request(
                 "error": format!("frame of {} bytes exceeds the {body_limit}-byte limit", over.declared),
                 "code": "body_too_large",
             });
-            write_response(&mut send, &head, PeerBody::Bytes(payload.to_string().into_bytes())).await?;
+            write_response(
+                &mut send,
+                &head,
+                PeerBody::Bytes(payload.to_string().into_bytes()),
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -390,7 +439,9 @@ async fn write_response(
     body: PeerBody,
 ) -> Result<(), String> {
     let head_json = serde_json::to_vec(head).map_err(|e| e.to_string())?;
-    send.write_all(&frame(&head_json)).await.map_err(|e| e.to_string())?;
+    send.write_all(&frame(&head_json))
+        .await
+        .map_err(|e| e.to_string())?;
     match body {
         PeerBody::Bytes(bytes) => send.write_all(&bytes).await.map_err(|e| e.to_string())?,
         PeerBody::Stream(mut stream) => {
@@ -425,7 +476,9 @@ fn secret_key() -> Result<SecretKey, String> {
 
 /// A peer's pub key as an endpoint id.
 pub fn endpoint_id(pub_key: &str) -> Result<EndpointId, String> {
-    let raw = URL_SAFE_NO_PAD.decode(pub_key).map_err(|e| format!("bad peer key: {e}"))?;
+    let raw = URL_SAFE_NO_PAD
+        .decode(pub_key)
+        .map_err(|e| format!("bad peer key: {e}"))?;
     let bytes: [u8; 32] = raw
         .as_slice()
         .try_into()
@@ -485,7 +538,9 @@ mod tests {
     #[test]
     fn a_connection_death_is_distinguished_from_a_timeout() {
         // The redial rule keys on exactly this, so the classification has to be reliable.
-        assert!(is_connection_death("connection closed before /hello: peer gone"));
+        assert!(is_connection_death(
+            "connection closed before /hello: peer gone"
+        ));
         assert!(!is_connection_death("/hello timed out after 120s"));
         assert!(!is_connection_death("dialling B failed: timeout"));
     }

@@ -51,7 +51,9 @@ async fn main() {
             PeerAnswer {
                 status,
                 headers: Some(headers),
-                body: immich_shared_albums::p2p::transport::PeerBody::Bytes(payload.to_string().into_bytes()),
+                body: immich_shared_albums::p2p::transport::PeerBody::Bytes(
+                    payload.to_string().into_bytes(),
+                ),
             }
         })
     });

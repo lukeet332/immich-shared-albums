@@ -6,11 +6,11 @@
 //
 // Prints one JSON line. Nothing is mirrored here: this exercises the HANDSHAKE, so what it proves is
 // that the origin enrolled us, offered the album, and answered with an identity matching the invite.
+use base64::Engine as _;
 use immich_shared_albums::config::{self, Config};
 use immich_shared_albums::p2p::join::{redeem_invite, Invite};
 use immich_shared_albums::p2p::transport::Transport;
 use immich_shared_albums::state;
-use base64::Engine as _;
 use serde_json::json;
 
 #[tokio::main]
@@ -32,13 +32,23 @@ async fn main() {
     let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(token.as_bytes())
         .expect("endpoint token is base64url");
-    let endpoint: serde_json::Value = serde_json::from_slice(&decoded).expect("endpoint token is json");
+    let endpoint: serde_json::Value =
+        serde_json::from_slice(&decoded).expect("endpoint token is json");
 
     let invite = Invite {
-        endpoint_pub: endpoint.get("pub").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        endpoint_relay: endpoint.get("relay").and_then(|v| v.as_str()).map(str::to_string),
+        endpoint_pub: endpoint
+            .get("pub")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        endpoint_relay: endpoint
+            .get("relay")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         endpoint_addrs: endpoint.get("addrs").and_then(|v| v.as_array()).map(|a| {
-            a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
         }),
         key,
     };

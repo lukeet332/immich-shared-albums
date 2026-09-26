@@ -1,9 +1,9 @@
 /** immich/contributors.rs — one Immich account per remote person, and the membership rules. See ARCHITECTURE.md. */
 use crate::config::{bot_prefix, cfg, is_utility_email, UTILITY_EMAIL_DOMAIN, UTILITY_SUFFIX};
-use base64::Engine as _;
 use crate::immich::client::{Auth, Client};
 use crate::state::State;
 use crate::store::Contributor;
+use base64::Engine as _;
 use serde_json::{json, Value};
 
 /// The scopes a per-person stand-in gets. Never admin, never `all`, and deliberately WITHOUT
@@ -69,7 +69,9 @@ pub fn membership_action(
     if !re_add_if_missing {
         return MembershipAction::Revoked;
     }
-    MembershipAction::Add { record_first: !invitation }
+    MembershipAction::Add {
+        record_first: !invitation,
+    }
 }
 
 /// Who a contributor account is, and what it must be keyed on.
@@ -95,7 +97,10 @@ pub fn person_spec(display_name: &str, origin_user_id: &str) -> ContributorSpec 
         // Keyed on the person's id on their OWN server, so the same human resolves to the same
         // account whether we meet them through a directory or a relayed photo.
         state_key: format!("{}{origin_user_id}", bot_prefix::PERSON),
-        email: format!("{}{origin_user_id}@{UTILITY_EMAIL_DOMAIN}", bot_prefix::PERSON),
+        email: format!(
+            "{}{origin_user_id}@{UTILITY_EMAIL_DOMAIN}",
+            bot_prefix::PERSON
+        ),
         full_name: None,
         via_peer: None,
         peer_user_id: Some(origin_user_id.to_string()),
@@ -223,7 +228,11 @@ pub async fn ensure_utility_user(
         .full_name
         .clone()
         .unwrap_or_else(|| format!("{}{UTILITY_SUFFIX}", spec.display_name));
-    let existing = state.collections().contributors.get(&spec.state_key).cloned();
+    let existing = state
+        .collections()
+        .contributors
+        .get(&spec.state_key)
+        .cloned();
 
     if let Some(existing) = existing.as_ref().filter(|c| c.api_key.is_some()) {
         // Already provisioned. Heal the records in ONE save, because a crash must never split
@@ -308,7 +317,9 @@ pub async fn ensure_utility_user(
     let via = spec.home_peer.clone().or(spec.via_peer.clone());
     if let Some(via) = via.as_deref() {
         if !state.peer_is_linked(Some(via)) {
-            return Err(format!("not provisioning \"{wanted_name}\": its server is no longer linked"));
+            return Err(format!(
+                "not provisioning \"{wanted_name}\": its server is no longer linked"
+            ));
         }
     }
 
@@ -319,11 +330,15 @@ pub async fn ensure_utility_user(
         .unwrap_or_else(|| random_secret(18));
 
     let created = client
-        .post("/admin/users", &Auth::Admin, &json!({
-            "email": spec.email,
-            "name": wanted_name,
-            "password": password,
-        }))
+        .post(
+            "/admin/users",
+            &Auth::Admin,
+            &json!({
+                "email": spec.email,
+                "name": wanted_name,
+                "password": password,
+            }),
+        )
         .await;
 
     let user_id = match created {
@@ -331,10 +346,18 @@ pub async fn ensure_utility_user(
         // The account may already exist as a SOFT-DELETED one from a previous teardown.
         _ => match find_user_by_email(client, &spec.email, true).await {
             Some(user) => {
-                let id = user.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let id = user
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 if user.get("deletedAt").map(|d| !d.is_null()).unwrap_or(false) {
                     let _ = client
-                        .post(&format!("/admin/users/{id}/restore"), &Auth::Admin, &json!({}))
+                        .post(
+                            &format!("/admin/users/{id}/restore"),
+                            &Auth::Admin,
+                            &json!({}),
+                        )
                         .await;
                     crate::log!("restored soft-deleted utility user {}", spec.email);
                 }
@@ -353,7 +376,10 @@ pub async fn ensure_utility_user(
         },
     };
     let Some(user_id) = user_id else {
-        return Err(format!("cannot create or find contributor user {}", spec.email));
+        return Err(format!(
+            "cannot create or find contributor user {}",
+            spec.email
+        ));
     };
 
     // Mint the key by signing in as the account, and borrow a password-login window ONLY on
@@ -384,7 +410,11 @@ pub async fn ensure_utility_user(
         }
     };
 
-    let Some(token) = login.as_ref().and_then(|l| l.get("accessToken")).and_then(|v| v.as_str()) else {
+    let Some(token) = login
+        .as_ref()
+        .and_then(|l| l.get("accessToken"))
+        .and_then(|v| v.as_str())
+    else {
         return Err(format!("login failed for {} — will retry", spec.email));
     };
 
@@ -395,8 +425,15 @@ pub async fn ensure_utility_user(
         .unwrap_or_else(|| UTILITY_PERMISSIONS.iter().map(|p| p.to_string()).collect());
     let key_body = json!({ "name": "immich-shared-albums", "permissions": permissions });
     let minted = mint_api_key(client, token, &key_body).await;
-    let Some(secret) = minted.as_ref().and_then(|k| k.get("secret")).and_then(|v| v.as_str()) else {
-        return Err(format!("api-key mint failed for {} — will retry", spec.email));
+    let Some(secret) = minted
+        .as_ref()
+        .and_then(|k| k.get("secret"))
+        .and_then(|v| v.as_str())
+    else {
+        return Err(format!(
+            "api-key mint failed for {} — will retry",
+            spec.email
+        ));
     };
 
     // The password existed ONLY to mint that key. Roll it to a value we never keep, so the account
@@ -413,7 +450,10 @@ pub async fn ensure_utility_user(
         .await
         .is_ok();
     if !password_retired {
-        crate::log!("WARNING: could not retire the login password for {}", spec.email);
+        crate::log!(
+            "WARNING: could not retire the login password for {}",
+            spec.email
+        );
     }
 
     if cfg().bot_quota_mb > 0 {
@@ -431,14 +471,24 @@ pub async fn ensure_utility_user(
         user_id: Some(user_id),
         api_key: Some(secret.to_string()),
         // Keep the password ONLY when the roll failed, so a retry can resume.
-        password: if password_retired { None } else { Some(password) },
+        password: if password_retired {
+            None
+        } else {
+            Some(password)
+        },
         avatar_done: existing.as_ref().map(|c| c.avatar_done).unwrap_or(false),
-        via_peer: spec.via_peer.clone().or_else(|| existing.as_ref().and_then(|c| c.via_peer.clone())),
+        via_peer: spec
+            .via_peer
+            .clone()
+            .or_else(|| existing.as_ref().and_then(|c| c.via_peer.clone())),
         peer_user_id: spec
             .peer_user_id
             .clone()
             .or_else(|| existing.as_ref().and_then(|c| c.peer_user_id.clone())),
-        home_peer: spec.home_peer.clone().or_else(|| existing.as_ref().and_then(|c| c.home_peer.clone())),
+        home_peer: spec
+            .home_peer
+            .clone()
+            .or_else(|| existing.as_ref().and_then(|c| c.home_peer.clone())),
     };
     state
         .collections()
@@ -481,11 +531,17 @@ fn gave_picture() -> &'static std::sync::Mutex<std::collections::HashSet<String>
 /// Best effort by design: the picture is garnish, and the account it decorates has work to do whether
 /// or not it lands.
 async fn give_bot_avatar(client: &Client, contributor: &Contributor) {
-    let (Some(key), Some(user_id)) = (contributor.api_key.as_deref(), contributor.user_id.as_deref())
-    else {
+    let (Some(key), Some(user_id)) = (
+        contributor.api_key.as_deref(),
+        contributor.user_id.as_deref(),
+    ) else {
         return;
     };
-    if gave_picture().lock().map(|g| g.contains(user_id)).unwrap_or(true) {
+    if gave_picture()
+        .lock()
+        .map(|g| g.contains(user_id))
+        .unwrap_or(true)
+    {
         return;
     }
     let png = crate::immich::bot_avatar::bot_avatar_png(128);
@@ -503,14 +559,21 @@ async fn give_bot_avatar(client: &Client, contributor: &Contributor) {
         if let Ok(mut gave) = gave_picture().lock() {
             gave.insert(user_id.to_string());
         }
-        crate::log!("gave \"{}\" the addon's own picture", &user_id[..user_id.len().min(8)]);
+        crate::log!(
+            "gave \"{}\" the addon's own picture",
+            &user_id[..user_id.len().min(8)]
+        );
     }
 }
 
 /// Mint a key with the account's OWN bearer token — never the admin key. The scopes come from the
 /// caller, so a bot key cannot widen itself: `apiKey.create` is not in `UTILITY_PERMISSIONS`.
 async fn mint_api_key(client: &Client, token: &str, body: &Value) -> Option<Value> {
-    client.post_with_bearer("/api-keys", token, body).await.ok().flatten()
+    client
+        .post_with_bearer("/api-keys", token, body)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// The remote person's avatar, fetched from THEIR server and put on their stand-in here.
@@ -525,19 +588,27 @@ pub async fn sync_avatar(
     peer: Option<&crate::store::Peer>,
     origin_user_id: Option<&str>,
 ) {
-    let (Some(peer), Some(origin_user_id)) = (peer, origin_user_id.filter(|id| !id.is_empty())) else {
+    let (Some(peer), Some(origin_user_id)) = (peer, origin_user_id.filter(|id| !id.is_empty()))
+    else {
         return;
     };
     if contributor.avatar_done {
         return;
     }
-    let Some(key) = contributor.api_key.as_deref() else { return };
-    let Some(transport) = crate::p2p::transport::transport() else { return };
+    let Some(key) = contributor.api_key.as_deref() else {
+        return;
+    };
+    let Some(transport) = crate::p2p::transport::transport() else {
+        return;
+    };
     let path = format!("/users/{origin_user_id}/avatar");
     let (head, body) = match transport.byte_request(peer, &path, None, None).await {
         Ok(answer) => answer,
         Err(e) => {
-            crate::log!("could not fetch \"{origin_user_id}\"'s picture from \"{}\": {e}", peer.name);
+            crate::log!(
+                "could not fetch \"{origin_user_id}\"'s picture from \"{}\": {e}",
+                peer.name
+            );
             return;
         }
     };
@@ -553,7 +624,9 @@ pub async fn sync_avatar(
     // An avatar is not 8MB — refuse and stop, rather than retrying a peer that answers with something
     // that is not a picture.
     if body.len() > 8 * 1024 * 1024 {
-        crate::log!("the picture for \"{origin_user_id}\" is over 8MB — not a picture, refusing it");
+        crate::log!(
+            "the picture for \"{origin_user_id}\" is over 8MB — not a picture, refusing it"
+        );
         return;
     }
     let content_type = head
@@ -566,13 +639,20 @@ pub async fn sync_avatar(
         .mime_str(&content_type)
         .unwrap_or_else(|_| reqwest::multipart::Part::bytes(Vec::new()));
     let form = reqwest::multipart::Form::new().part("file", part);
-    match client.post_multipart("/users/profile-image", &Auth::Key(key), form).await {
+    match client
+        .post_multipart("/users/profile-image", &Auth::Key(key), form)
+        .await
+    {
         Ok(()) => {
             // Only stop retrying once an avatar actually landed.
             mark_avatar_done(state, contributor);
-            crate::log!("gave the stand-in of \"{origin_user_id}\" the picture their server has for them");
+            crate::log!(
+                "gave the stand-in of \"{origin_user_id}\" the picture their server has for them"
+            );
         }
-        Err(e) => crate::log!("could not put \"{origin_user_id}\"'s picture on their stand-in: {e}"),
+        Err(e) => {
+            crate::log!("could not put \"{origin_user_id}\"'s picture on their stand-in: {e}")
+        }
     }
 }
 
@@ -591,7 +671,11 @@ fn mark_avatar_done(state: &State, contributor: &crate::store::Contributor) {
 }
 
 async fn find_user_by_email(client: &Client, email: &str, with_deleted: bool) -> Option<Value> {
-    let path = if with_deleted { "/admin/users?withDeleted=true" } else { "/admin/users" };
+    let path = if with_deleted {
+        "/admin/users?withDeleted=true"
+    } else {
+        "/admin/users"
+    };
     let users = client.get(path, &Auth::Admin).await.ok().flatten()?;
     users
         .as_array()?
@@ -630,10 +714,14 @@ pub async fn ensure_contributor(
     spec.via_peer = via_peer.map(str::to_string);
     let contributor = ensure_utility_user(state, client, &spec).await?;
     let Some(user_id) = contributor.user_id.clone() else {
-        return Err(format!("contributor \"{display_name}\" has no user id yet — will retry"));
+        return Err(format!(
+            "contributor \"{display_name}\" has no user id yet — will retry"
+        ));
     };
     if contributor.api_key.is_none() {
-        return Err(format!("contributor \"{display_name}\" has no API key yet — will retry"));
+        return Err(format!(
+            "contributor \"{display_name}\" has no API key yet — will retry"
+        ));
     }
 
     // Read the album AS THE HOST, to learn whether this person is already a member.
@@ -652,7 +740,12 @@ pub async fn ensure_contributor(
         })
         .unwrap_or(false);
 
-    match membership_action(album.is_some(), already_member, re_add_if_missing, invitation) {
+    match membership_action(
+        album.is_some(),
+        already_member,
+        re_add_if_missing,
+        invitation,
+    ) {
         MembershipAction::CannotProve => {
             // Do not add: a blind add here could later be misread as an invitation.
             return Ok(contributor);
@@ -705,8 +798,14 @@ mod tests {
         let first = provision_lock("person-1@immich-shared-albums.internal");
         let again = provision_lock("person-1@immich-shared-albums.internal");
         let other = provision_lock("person-2@immich-shared-albums.internal");
-        assert!(std::sync::Arc::ptr_eq(&first, &again), "one person's email shares one lock");
-        assert!(!std::sync::Arc::ptr_eq(&first, &other), "different people must not serialise each other");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &again),
+            "one person's email shares one lock"
+        );
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &other),
+            "different people must not serialise each other"
+        );
     }
 
     #[test]
@@ -730,6 +829,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn a_missing_member_on_an_invitation_album_is_REVOKED_not_re_added() {
         // A human removed them. Putting them back would undo a deliberate act.
         assert_eq!(
@@ -752,7 +852,9 @@ mod tests {
         );
         assert_eq!(
             membership_action(true, false, true, true),
-            MembershipAction::Add { record_first: false }
+            MembershipAction::Add {
+                record_first: false
+            }
         );
     }
 
@@ -773,7 +875,10 @@ mod tests {
     #[test]
     fn a_person_account_is_keyed_on_their_id_never_their_name() {
         let spec = person_spec("Nan", "8bd40ddf-6f6d-483c-8c1c-9edf1ac74f2d");
-        assert_eq!(spec.state_key, "person-8bd40ddf-6f6d-483c-8c1c-9edf1ac74f2d");
+        assert_eq!(
+            spec.state_key,
+            "person-8bd40ddf-6f6d-483c-8c1c-9edf1ac74f2d"
+        );
         assert_eq!(
             spec.email,
             "person-8bd40ddf-6f6d-483c-8c1c-9edf1ac74f2d@immich-shared-albums.internal"
@@ -786,7 +891,9 @@ mod tests {
 
     #[test]
     fn the_bot_namespace_is_the_documented_one() {
-        assert!(person_spec("x", "id").state_key.starts_with(bot_prefix::PERSON));
+        assert!(person_spec("x", "id")
+            .state_key
+            .starts_with(bot_prefix::PERSON));
         assert!(person_spec("x", "id").state_key.starts_with("person-"));
     }
 

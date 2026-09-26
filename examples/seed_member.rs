@@ -22,7 +22,11 @@ async fn main() {
     let host_key = host.api_key.clone().expect("host key");
     // The mirror is created BY the stand-in, so it owns what is filed into it.
     let album_id = client
-        .post("/albums", &Auth::Key(&host_key), &json!({ "albumName": "Seeded mirror" }))
+        .post(
+            "/albums",
+            &Auth::Key(&host_key),
+            &json!({ "albumName": "Seeded mirror" }),
+        )
         .await
         .expect("create album")
         .and_then(|a| a.get("id").and_then(|v| v.as_str()).map(str::to_string))
@@ -32,7 +36,10 @@ async fn main() {
     // IS the stand-in's state key.
     let host_slug = person_spec("Origin Owner", "origin-owner-id").state_key;
     assert_eq!(
-        st.collections().contributors.get(&host_slug).map(|c| c.user_id.clone()),
+        st.collections()
+            .contributors
+            .get(&host_slug)
+            .map(|c| c.user_id.clone()),
         Some(host.user_id.clone())
     );
 
@@ -80,7 +87,12 @@ async fn main() {
         last_addrs: std::env::var("PEER_ADDR").ok().map(|a| vec![a]),
     });
     st.save().expect("save state");
-    let peer_pub = st.collections().peers.last().map(|p| p.pub_key.clone()).unwrap_or_default();
+    let peer_pub = st
+        .collections()
+        .peers
+        .last()
+        .map(|p| p.pub_key.clone())
+        .unwrap_or_default();
     println!(
         "{}",
         json!({ "albumId": album_id, "mappingId": "m-seeded", "peerPub": peer_pub })

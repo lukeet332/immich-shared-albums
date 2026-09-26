@@ -12,7 +12,10 @@ pub fn cache_dir() -> String {
 /// Files are named by the hash of the ORIGIN asset id — the local stub id differs per household,
 /// so keying on it would miss every viewer but the one that materialised the row.
 pub fn cache_key(origin_asset: &str) -> String {
-    Sha1::digest(origin_asset.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+    Sha1::digest(origin_asset.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// A hit refreshes the LRU slot, so a photo the household keeps looking at is never evicted by
@@ -48,7 +51,10 @@ pub async fn cache_write(origin_asset: &str, bytes: &[u8]) {
     if tokio::fs::create_dir_all(&dir).await.is_err() {
         return;
     }
-    if tokio::fs::write(format!("{dir}/{key}"), bytes).await.is_err() {
+    if tokio::fs::write(format!("{dir}/{key}"), bytes)
+        .await
+        .is_err()
+    {
         return;
     }
     let store = &state().store;

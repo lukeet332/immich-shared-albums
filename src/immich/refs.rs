@@ -24,7 +24,10 @@ impl Ledger<'_> {
     /// A ledger with no history: every checksum is the local one and no bot asset is ours. For
     /// tests and for the first push of a fresh install.
     pub fn empty() -> Ledger<'static> {
-        Ledger { wire_checksum: &|_, local| local.to_string(), has_ledger_row: &|_| false }
+        Ledger {
+            wire_checksum: &|_, local| local.to_string(),
+            has_ledger_row: &|_| false,
+        }
     }
 }
 
@@ -36,7 +39,11 @@ pub struct AssetRef {
     pub origin_asset: String,
     pub checksum: String,
     /// Declared and documented but never produced: an absent value means the default `sha1-b64`.
-    #[serde(rename = "checksumAlg", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "checksumAlg",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub checksum_alg: Option<String>,
     pub contributor: Contributor,
     pub kind: String,
@@ -50,7 +57,11 @@ pub struct AssetRef {
 pub struct Contributor {
     #[serde(rename = "displayName")]
     pub display_name: String,
-    #[serde(rename = "originUserId", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "originUserId",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub origin_user_id: Option<String>,
 }
 
@@ -77,12 +88,25 @@ pub struct RefExif {
 /// Immich's metadata job runs would become a square stub forever if this answered zeroes, so the
 /// push and the manifest both hold such an asset back until it has a real shape.
 pub fn display_dims(exif: Option<&Value>) -> (Option<i64>, Option<i64>) {
-    let Some(exif) = exif else { return (None, None) };
-    let w = exif.get("exifImageWidth").and_then(|v| v.as_i64()).filter(|v| *v > 0);
-    let h = exif.get("exifImageHeight").and_then(|v| v.as_i64()).filter(|v| *v > 0);
-    let (Some(w), Some(h)) = (w, h) else { return (None, None) };
+    let Some(exif) = exif else {
+        return (None, None);
+    };
+    let w = exif
+        .get("exifImageWidth")
+        .and_then(|v| v.as_i64())
+        .filter(|v| *v > 0);
+    let h = exif
+        .get("exifImageHeight")
+        .and_then(|v| v.as_i64())
+        .filter(|v| *v > 0);
+    let (Some(w), Some(h)) = (w, h) else {
+        return (None, None);
+    };
     // Orientations 5-8 transpose the image, so the LAYOUT dims are swapped.
-    let orientation = exif.get("orientation").and_then(|v| v.as_str()).unwrap_or("1");
+    let orientation = exif
+        .get("orientation")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1");
     if matches!(orientation, "5" | "6" | "7" | "8") {
         (Some(h), Some(w))
     } else {
@@ -113,7 +137,10 @@ fn without_credit_line(description: Option<&str>) -> Option<String> {
 /// be the PERSON's — the decoration accumulating one layer per relay hop is exactly what
 /// `person_name` exists to prevent. A human's own name travels verbatim.
 pub fn contributor_for(asset: &Value, users: &USERS) -> Contributor {
-    let origin_user_id = asset.get("ownerId").and_then(|v| v.as_str()).map(str::to_string);
+    let origin_user_id = asset
+        .get("ownerId")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let owner = origin_user_id.as_deref().and_then(|id| users.get(id));
     let display_name = match owner {
         Some(user) if user.utility => {
@@ -127,16 +154,26 @@ pub fn contributor_for(asset: &Value, users: &USERS) -> Contributor {
         Some(user) => user.name.clone(),
         None => cfg().name.clone(),
     };
-    Contributor { display_name, origin_user_id }
+    Contributor {
+        display_name,
+        origin_user_id,
+    }
 }
 
 pub fn asset_to_ref(asset: &Value, users: &USERS, ledger: Ledger<'_>) -> Option<AssetRef> {
     let id = asset.get("id").and_then(|v| v.as_str())?.to_string();
-    let kind = match asset.get("type").and_then(|v| v.as_str()).unwrap_or("IMAGE") {
+    let kind = match asset
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("IMAGE")
+    {
         "VIDEO" => "video",
         _ => "image",
     };
-    let local_checksum = asset.get("checksum").and_then(|v| v.as_str()).unwrap_or_default();
+    let local_checksum = asset
+        .get("checksum")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     // The ledger's SOURCE checksum wins: a materialised proxy was re-encoded locally, and only the
     // origin's own checksum identifies the photo to a peer.
     let checksum = (ledger.wire_checksum)(&id, local_checksum);
@@ -147,10 +184,15 @@ pub fn asset_to_ref(asset: &Value, users: &USERS, ledger: Ledger<'_>) -> Option<
     let exif = asset.get("exifInfo");
     let (width, height) = display_dims(measured_exif(asset));
     let exif_out = RefExif {
-        latitude: exif.and_then(|e| e.get("latitude")).and_then(|v| v.as_f64()),
-        longitude: exif.and_then(|e| e.get("longitude")).and_then(|v| v.as_f64()),
+        latitude: exif
+            .and_then(|e| e.get("latitude"))
+            .and_then(|v| v.as_f64()),
+        longitude: exif
+            .and_then(|e| e.get("longitude"))
+            .and_then(|v| v.as_f64()),
         description: without_credit_line(
-            exif.and_then(|e| e.get("description")).and_then(|v| v.as_str()),
+            exif.and_then(|e| e.get("description"))
+                .and_then(|v| v.as_str()),
         ),
         rating: exif
             .and_then(|e| e.get("rating"))
@@ -179,7 +221,10 @@ pub fn asset_to_ref(asset: &Value, users: &USERS, ledger: Ledger<'_>) -> Option<
 /// Human-owned photos only: a proxy is excluded because it IS a peer's photo, and offering it back
 /// would relay someone their own image under our name.
 pub fn is_offerable(asset: &Value, users: &USERS, ledger: Ledger<'_>) -> bool {
-    let kind = asset.get("type").and_then(|v| v.as_str()).unwrap_or("IMAGE");
+    let kind = asset
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("IMAGE");
     if kind != "IMAGE" && kind != "VIDEO" {
         return false;
     }
@@ -187,7 +232,9 @@ pub fn is_offerable(asset: &Value, users: &USERS, ledger: Ledger<'_>) -> bool {
     // An owner we cannot identify is not one we can attribute; the caller refreshes the user cache
     // and tries once more before giving up on it.
     let Some(owner) = owner else { return false };
-    let Some(user) = users.get(owner) else { return false };
+    let Some(user) = users.get(owner) else {
+        return false;
+    };
     if !user.utility {
         return true;
     }
@@ -211,7 +258,11 @@ pub fn measured_exif(asset: &Value) -> Option<&Value> {
 /// Split what can be offered from what must wait for Immich to measure it. Both sides are ASSETS,
 /// not refs: the caller converts at the end, so a filter that only needs identity (has this mapping
 /// sent it yet?) does not pay for building a ref it may throw away.
-pub fn partition_offerable(assets: &[Value], users: &USERS, ledger: Ledger<'_>) -> (Vec<Value>, Vec<Value>) {
+pub fn partition_offerable(
+    assets: &[Value],
+    users: &USERS,
+    ledger: Ledger<'_>,
+) -> (Vec<Value>, Vec<Value>) {
     let mut offer = Vec::new();
     let mut awaiting = Vec::new();
     for asset in assets {
@@ -252,7 +303,10 @@ pub fn shareable_assets(
     let (offer, awaiting) = partition_offerable(assets, users, ledger);
     let not_sent_yet = |asset: &Value| {
         let id = asset.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-        let local = asset.get("checksum").and_then(|v| v.as_str()).unwrap_or_default();
+        let local = asset
+            .get("checksum")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
         // The SOURCE checksum is what the ledger holds, so the lookup must use the same rule.
         let checksum = (ledger.wire_checksum)(id, local);
         !state.store.seen_has(mapping_id, &checksum).unwrap_or(false)
@@ -282,31 +336,56 @@ mod tests {
 
     #[test]
     fn display_dims_are_the_layout_dims_not_the_stored_ones() {
-        assert_eq!(display_dims(Some(&exif(4000, 3000, "1"))), (Some(4000), Some(3000)));
+        assert_eq!(
+            display_dims(Some(&exif(4000, 3000, "1"))),
+            (Some(4000), Some(3000))
+        );
         // Orientations 5-8 transpose: a photo stored 4000x3000 with orientation 6 LAYS OUT 3000x4000.
         for o in ["5", "6", "7", "8"] {
-            assert_eq!(display_dims(Some(&exif(4000, 3000, o))), (Some(3000), Some(4000)), "orientation {o}");
+            assert_eq!(
+                display_dims(Some(&exif(4000, 3000, o))),
+                (Some(3000), Some(4000)),
+                "orientation {o}"
+            );
         }
         for o in ["1", "2", "3", "4"] {
-            assert_eq!(display_dims(Some(&exif(4000, 3000, o))), (Some(4000), Some(3000)), "orientation {o}");
+            assert_eq!(
+                display_dims(Some(&exif(4000, 3000, o))),
+                (Some(4000), Some(3000)),
+                "orientation {o}"
+            );
         }
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn an_unmeasured_asset_is_UNKNOWN_not_zero_by_zero() {
         // This is the distinction that keeps a mirror from becoming a square stub forever.
         assert_eq!(display_dims(None), (None, None));
         assert_eq!(display_dims(Some(&json!({}))), (None, None));
-        assert_eq!(display_dims(Some(&json!({"exifImageWidth": 0, "exifImageHeight": 0}))), (None, None));
-        assert_eq!(display_dims(Some(&json!({"exifImageWidth": 100}))), (None, None), "one side is not a shape");
+        assert_eq!(
+            display_dims(Some(&json!({"exifImageWidth": 0, "exifImageHeight": 0}))),
+            (None, None)
+        );
+        assert_eq!(
+            display_dims(Some(&json!({"exifImageWidth": 100}))),
+            (None, None),
+            "one side is not a shape"
+        );
         assert!(!shape_is_known(Some(&json!({"exifImageWidth": 100}))));
         assert!(shape_is_known(Some(&exif(1, 1, "1"))), "1x1 IS a shape");
     }
 
     #[test]
     fn the_credit_line_is_stripped_so_it_cannot_stack_per_hop() {
-        assert_eq!(without_credit_line(Some("Holiday\n\nShared by Nan")), Some("Holiday".into()));
-        assert_eq!(without_credit_line(Some("Just a caption")), Some("Just a caption".into()));
+        assert_eq!(
+            without_credit_line(Some("Holiday\n\nShared by Nan")),
+            Some("Holiday".into())
+        );
+        assert_eq!(
+            without_credit_line(Some("Just a caption")),
+            Some("Just a caption".into())
+        );
         assert_eq!(without_credit_line(Some("")), None);
         assert_eq!(without_credit_line(None), None);
     }
@@ -333,9 +412,15 @@ mod tests {
         install_config();
         let users = USERS::default();
         let video = json!({"id": "v1", "type": "VIDEO", "checksum": "s", "ownerId": "u1"});
-        assert_eq!(asset_to_ref(&video, &users, Ledger::empty()).unwrap().kind, "video");
+        assert_eq!(
+            asset_to_ref(&video, &users, Ledger::empty()).unwrap().kind,
+            "video"
+        );
         let image = json!({"id": "i1", "type": "IMAGE", "checksum": "s", "ownerId": "u1"});
-        assert_eq!(asset_to_ref(&image, &users, Ledger::empty()).unwrap().kind, "image");
+        assert_eq!(
+            asset_to_ref(&image, &users, Ledger::empty()).unwrap().kind,
+            "image"
+        );
     }
 
     #[test]

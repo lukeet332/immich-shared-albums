@@ -8,7 +8,9 @@
 // panel would show the wrong person's albums and a mapping the caller cannot see would leak.
 use axum::http::HeaderMap;
 use immich_shared_albums::config::{self, Config};
-use immich_shared_albums::immich::access::{creds_from_headers, read_caller_albums, visible_album_ids};
+use immich_shared_albums::immich::access::{
+    creds_from_headers, read_caller_albums, visible_album_ids,
+};
 use immich_shared_albums::immich::client::{Auth, Client};
 use immich_shared_albums::state;
 use serde_json::json;
@@ -53,13 +55,25 @@ async fn main() {
         .json()
         .await
         .expect("login body");
-    let token = login.get("accessToken").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-    let other_id = login.get("userId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let token = login
+        .get("accessToken")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let other_id = login
+        .get("userId")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
 
     // The admin's album, and one belonging to the other person. The second is created with THAT
     // person's own token, because only they can own an album.
     let admin_album = client
-        .post("/albums", &Auth::Admin, &json!({ "albumName": "Admin only" }))
+        .post(
+            "/albums",
+            &Auth::Admin,
+            &json!({ "albumName": "Admin only" }),
+        )
         .await
         .expect("create the admin's album")
         .and_then(|a| a.get("id").and_then(|v| v.as_str()).map(str::to_string))
@@ -90,7 +104,9 @@ async fn main() {
     // An invalid credential is a REFUSED read, not an empty one. The panel depends on telling
     // "this person owns nothing" from "we could not ask".
     let refused = read_caller_albums(&client, &creds_with("x-api-key", "not-a-real-key")).await;
-    let visible = visible_album_ids(&client, &admin_creds).await.unwrap_or_default();
+    let visible = visible_album_ids(&client, &admin_creds)
+        .await
+        .unwrap_or_default();
 
     println!(
         "{}",

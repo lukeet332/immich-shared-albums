@@ -373,104 +373,6 @@ pub fn share_link_joining_enabled() -> bool {
     Settings::read(&state().store).share_link_join
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn secrets_compare_equal_only_when_identical() {
-        assert!(secret_equals("hunter2", "hunter2"));
-        assert!(!secret_equals("hunter2", "hunter3"));
-        assert!(!secret_equals("", "x"));
-        assert!(secret_equals("", ""));
-    }
-
-    #[test]
-    fn a_length_mismatch_does_not_leak_through_an_early_return() {
-        // The compare must not simply return on the first difference in length: it performs one
-        // equal-length comparison so the work does not reveal which branch ran.
-        assert!(!secret_equals("short", "a-much-longer-secret"));
-        assert!(!secret_equals("a-much-longer-secret", "short"));
-        // A prefix must not match.
-        assert!(!secret_equals("hunter2", "hunter22"));
-        assert!(!secret_equals("hunter22", "hunter2"));
-    }
-
-    #[test]
-    fn a_uuid_has_the_v4_shape_the_typescript_mints() {
-        let id = new_uuid();
-        assert_eq!(id.len(), 36);
-        let parts: Vec<&str> = id.split('-').collect();
-        assert_eq!(
-            parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
-            vec![8, 4, 4, 4, 12]
-        );
-        assert!(id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
-        // Version 4 and the RFC variant bits, so ids sort and parse as UUIDs.
-        assert_eq!(&id[14..15], "4");
-        assert!(matches!(&id[19..20], "8" | "9" | "a" | "b"));
-        assert_ne!(id, new_uuid(), "each id is fresh");
-    }
-
-    #[test]
-    fn an_iso_expiry_parses_to_the_right_instant() {
-        // 2026-01-01T00:00:00.000Z
-        assert_eq!(
-            chrono_parse_ms("2026-01-01T00:00:00.000Z").unwrap(),
-            1_767_225_600_000
-        );
-        // The epoch itself, and a time with no fractional part.
-        assert_eq!(chrono_parse_ms("1970-01-01T00:00:00Z").unwrap(), 0);
-        assert!(chrono_parse_ms("not a date").is_err());
-        assert!(chrono_parse_ms("").is_err());
-    }
-
-    #[test]
-    fn date_arithmetic_matches_known_days() {
-        assert_eq!(days_from_civil(1970, 1, 1), 0);
-        assert_eq!(days_from_civil(1970, 1, 2), 1);
-        assert_eq!(days_from_civil(1969, 12, 31), -1, "before the epoch");
-        assert_eq!(days_from_civil(2000, 3, 1), 11017);
-    }
-
-    #[test]
-    fn the_majority_owner_is_the_most_common_and_none_when_no_asset_has_one() {
-        let assets = vec![
-            json!({"ownerId": "a"}),
-            json!({"ownerId": "b"}),
-            json!({"ownerId": "b"}),
-        ];
-        assert_eq!(majority_owner(&assets).as_deref(), Some("b"));
-        assert_eq!(majority_owner(&[]).as_deref(), None);
-        assert_eq!(majority_owner(&[json!({})]).as_deref(), None);
-    }
-
-    #[test]
-    fn removal_targets_name_only_rows_the_sender_actually_sourced() {
-        // Only rows that name a source matching the sender's list may be purged. The caller
-        // scopes the rows to the push's mapping, so a peer can only ever withdraw stubs its own
-        // share created; a row without a known source names nothing removable.
-        let row = |checksum: &str, local: &str, origin: Option<&str>| crate::store::SeenEntry {
-            mapping: "m1".into(),
-            checksum: checksum.into(),
-            local_asset: local.into(),
-            origin_asset: origin.map(str::to_string),
-            stored_full: false,
-        };
-        let rows = vec![
-            row("c1", "local-1", Some("asset-1")),
-            row("c2", "local-2", None),
-            row("c3", "local-3", Some("asset-3")),
-        ];
-        assert_eq!(
-            removal_targets(&rows, &["asset-1".into(), "asset-9".into()]),
-            vec![("c1".to_string(), "local-1".to_string())]
-        );
-        assert!(removal_targets(&rows, &[]).is_empty());
-        assert!(removal_targets(&[], &["asset-1".into()]).is_empty());
-    }
-}
-
 /// Find one of THIS peer's mappings by id, album id or remote album id.
 ///
 /// Always filtered on the calling peer's key: a valid connection can never select someone else's
@@ -581,13 +483,11 @@ pub async fn handle_version(caller_pub: &str, album_mapping_id: &str) -> (u16, V
         .await
         .ok()
         .flatten()
-        .and_then(|v| {
+        .map(|v| {
             // Comments AND likes: a like must move the version, or the canonical pull that would
             // carry it to the joiner never fires.
-            Some(
-                v.get("comments").and_then(|c| c.as_i64()).unwrap_or(0)
-                    + v.get("likes").and_then(|c| c.as_i64()).unwrap_or(0),
-            )
+            v.get("comments").and_then(|c| c.as_i64()).unwrap_or(0)
+                + v.get("likes").and_then(|c| c.as_i64()).unwrap_or(0)
         });
     // `version` is an OPAQUE equality token. The packed shape is kept for protocol-2 compatibility
     // (updatedAt alone misses cascade deletions), but receivers read the structured fields and
@@ -1106,4 +1006,102 @@ pub async fn handle_refs(caller_pub: &str, album_mapping_id: &str, body: &[u8]) 
         200,
         json!({ "ok": failed.is_empty(), "failed": failed, "removed": removed }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secrets_compare_equal_only_when_identical() {
+        assert!(secret_equals("hunter2", "hunter2"));
+        assert!(!secret_equals("hunter2", "hunter3"));
+        assert!(!secret_equals("", "x"));
+        assert!(secret_equals("", ""));
+    }
+
+    #[test]
+    fn a_length_mismatch_does_not_leak_through_an_early_return() {
+        // The compare must not simply return on the first difference in length: it performs one
+        // equal-length comparison so the work does not reveal which branch ran.
+        assert!(!secret_equals("short", "a-much-longer-secret"));
+        assert!(!secret_equals("a-much-longer-secret", "short"));
+        // A prefix must not match.
+        assert!(!secret_equals("hunter2", "hunter22"));
+        assert!(!secret_equals("hunter22", "hunter2"));
+    }
+
+    #[test]
+    fn a_uuid_has_the_v4_shape_the_typescript_mints() {
+        let id = new_uuid();
+        assert_eq!(id.len(), 36);
+        let parts: Vec<&str> = id.split('-').collect();
+        assert_eq!(
+            parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
+            vec![8, 4, 4, 4, 12]
+        );
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
+        // Version 4 and the RFC variant bits, so ids sort and parse as UUIDs.
+        assert_eq!(&id[14..15], "4");
+        assert!(matches!(&id[19..20], "8" | "9" | "a" | "b"));
+        assert_ne!(id, new_uuid(), "each id is fresh");
+    }
+
+    #[test]
+    fn an_iso_expiry_parses_to_the_right_instant() {
+        // 2026-01-01T00:00:00.000Z
+        assert_eq!(
+            chrono_parse_ms("2026-01-01T00:00:00.000Z").unwrap(),
+            1_767_225_600_000
+        );
+        // The epoch itself, and a time with no fractional part.
+        assert_eq!(chrono_parse_ms("1970-01-01T00:00:00Z").unwrap(), 0);
+        assert!(chrono_parse_ms("not a date").is_err());
+        assert!(chrono_parse_ms("").is_err());
+    }
+
+    #[test]
+    fn date_arithmetic_matches_known_days() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(1970, 1, 2), 1);
+        assert_eq!(days_from_civil(1969, 12, 31), -1, "before the epoch");
+        assert_eq!(days_from_civil(2000, 3, 1), 11017);
+    }
+
+    #[test]
+    fn the_majority_owner_is_the_most_common_and_none_when_no_asset_has_one() {
+        let assets = vec![
+            json!({"ownerId": "a"}),
+            json!({"ownerId": "b"}),
+            json!({"ownerId": "b"}),
+        ];
+        assert_eq!(majority_owner(&assets).as_deref(), Some("b"));
+        assert_eq!(majority_owner(&[]).as_deref(), None);
+        assert_eq!(majority_owner(&[json!({})]).as_deref(), None);
+    }
+
+    #[test]
+    fn removal_targets_name_only_rows_the_sender_actually_sourced() {
+        // Only rows that name a source matching the sender's list may be purged. The caller
+        // scopes the rows to the push's mapping, so a peer can only ever withdraw stubs its own
+        // share created; a row without a known source names nothing removable.
+        let row = |checksum: &str, local: &str, origin: Option<&str>| crate::store::SeenEntry {
+            mapping: "m1".into(),
+            checksum: checksum.into(),
+            local_asset: local.into(),
+            origin_asset: origin.map(str::to_string),
+            stored_full: false,
+        };
+        let rows = vec![
+            row("c1", "local-1", Some("asset-1")),
+            row("c2", "local-2", None),
+            row("c3", "local-3", Some("asset-3")),
+        ];
+        assert_eq!(
+            removal_targets(&rows, &["asset-1".into(), "asset-9".into()]),
+            vec![("c1".to_string(), "local-1".to_string())]
+        );
+        assert!(removal_targets(&rows, &[]).is_empty());
+        assert!(removal_targets(&[], &["asset-1".into()]).is_empty());
+    }
 }
