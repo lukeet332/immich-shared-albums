@@ -117,7 +117,10 @@ fi
 # (CI pre-builds the sidecar image in the background) still needs an oracle to ask anything at all.
 # Always built rather than `docker image inspect`-guarded: the layer cache makes an unchanged build
 # about a second, and a probe image left over from an older lockfile would answer for the wrong code.
-( cd "$DIR" && docker build -q -f demo/e2e/probe.Dockerfile -t immich-shared-albums:probe . >/dev/null ) \
+( mkdir -p rust/target/probe-context/demo-e2e \
+    && cp package.json package-lock.json rust/target/probe-context/ \
+    && cp demo/e2e/*.mjs rust/target/probe-context/demo-e2e/ \
+    && cd "$DIR" && docker build -q -f demo/e2e/probe.Dockerfile -t immich-shared-albums:probe rust/target/probe-context >/dev/null ) \
   || { echo "!! probe image build failed — the independent oracle cannot run" >&2; exit 1; }
 export PROBE_IMAGE=immich-shared-albums:probe
 

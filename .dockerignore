@@ -6,7 +6,13 @@
 !package.json
 !package-lock.json
 !src/
-# The lane's protocol oracle is its own image and needs the JS iroh client.
+# The lane's protocol oracle is its own image and needs the JS iroh client. The nested whitelist
+# un-ignores demo/ only to descend into demo/e2e, and never into the rig's root-owned data dirs
+# (demo/b-pg and friends break a non-root `docker build .` merely by being statted).
+!demo/
+demo/*
+!demo/e2e/
+demo/e2e/*
 !demo/e2e/*.mjs
 # The Rust image build needs the crate and the COMMITTED UI it embeds at compile time
 # (rust/src/web/assets.rs include_str!s ../../../src/web/dist/). Both target/ and .cargo-home/
