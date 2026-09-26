@@ -1492,11 +1492,12 @@ stage('native album invitations, per person (no share link)');
           return r.ok ? (await r.json()).ticks : null;
         };
         const CYCLES_TO_SURVIVE = 2;
-        // The sweep gate is ONE background lane at a time, and a lane may hold it through a peer
-        // round trip bounded by the transport's 120s DEADLINE — so both other loops can be frozen
-        // by a single slow cycle without being wedged. The window must outlast that worst case,
-        // or this check measures one slow cycle as if the loops had stopped.
-        const CYCLE_WAIT_MS = 200000;
+        // The sweep gate runs ONE background lane at a time, and a lane may hold it across peer
+        // round trips — measured on CI: a single watcher pass can exceed 200s under load, freezing
+        // the other loops' tick counters without anything being wedged. So the window cannot be
+        // sized from one pass's duration; it is sized to fail only on a REAL wedge (ticks never
+        // advancing), and `until` still returns the moment both loops have looked twice.
+        const CYCLE_WAIT_MS = 600000;
         const ticksBefore = await ticksOn();
         const ticksAfter = ticksBefore && await until(async () => {
           const t = await ticksOn();
@@ -1575,7 +1576,7 @@ stage('native album invitations, per person (no share link)');
         const survivors = await until(async () => {
           const h = await humansOn(mirrored);
           return h && h.length === 1 && h[0] === 'Second Human' ? h : null;
-        }, 30000);
+        }, 120000);
         check('a non-admin-only invitation keeps one live mirror across watcher cycles',
               mirrorAlbumIds.size === 1 && !!survivors && !!ticksAfter,
               JSON.stringify({ albumIds: [...mirrorAlbumIds], humans: survivors, cyclesSurvived: ticksAfter ? CYCLES_TO_SURVIVE : 'unproven' }));
