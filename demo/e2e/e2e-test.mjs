@@ -342,7 +342,6 @@ const E2E_DIR = new URL('.', import.meta.url).pathname.replace(/\/$/, '');
 // The INDEPENDENT JavaScript oracle. It must NOT default to the sidecar image: under a Rust sidecar
 // that image has no node, and the probe would fail for a reason that looks like a product bug. The
 // rig builds a Node image under this tag whatever the sidecar is built from.
-const PROBE_IMAGE = process.env.PROBE_IMAGE || 'immich-shared-albums:probe';
 // A probe spawns a container and does a live iroh round trip, so it can fail transiently — the
 // native addon has been seen to exit on SIGBUS (135) mid-run. That used to throw out of execSync
 // and kill the whole suite, hiding every other result behind one flake. Retry once, then report a
@@ -351,9 +350,12 @@ const irohProbe = (keys, endpoint, path, opts = {}) => {
   const job = JSON.stringify({ keys, peerPub: endpoint.pub, addrs: endpoint.addrs, path, ...opts });
   // ARGV, not a shell string: the job is JSON that no quoting rule survives intact, and a shell is
   // one more thing between the suite and the oracle that can mangle it.
+  // The conventional path is the default; PROBE_BIN overrides it for runs from elsewhere.
+  const probeBin = process.env.PROBE_BIN || new URL('../../target/probe', import.meta.url).pathname;
   const argv = [
-    'run', '--rm', '--network', 'isa-demo', '-e', 'ISA_ROOT=/app', '-e', 'RELAY=off',
-    '-v', `${E2E_DIR}:/probe:ro`, PROBE_IMAGE, 'node', '/probe/probe.mjs', job,
+    'run', '--rm', '--network', 'isa-demo', '-e', 'RELAY=off',
+    '-v', `${probeBin}:/probe:ro`, 'alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8',
+    '/probe', job,
   ];
   let last;
   for (let attempt = 0; attempt < 2; attempt++) {

@@ -6,6 +6,7 @@
 !package.json
 !package-lock.json
 !src/
+!examples/
 !Cargo.toml
 !Cargo.lock
 # The lane's oracle image does NOT build from this context: run-mock-e2e.sh stages its own

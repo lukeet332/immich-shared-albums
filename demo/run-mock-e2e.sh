@@ -109,20 +109,17 @@ else
   [ "$built" = "$COMMIT" ] || echo "  !! that image is NOT built from HEAD — the results describe ${built:-something else}, not this checkout"
 fi
 
-# The iroh probe is the INDEPENDENT JavaScript oracle, and it is NOT the image under test: under
-# ISA_DOCKERFILE=Dockerfile the sidecar image has no node at all, and every probe would die with
-# "exec: node: not found", which reads as a product failure. So the oracle has its own image
-# (demo/e2e/probe.Dockerfile)
-# whatever the sidecar uses — and it is built OUTSIDE the branch above, because a SKIP_BUILD run
-# (CI pre-builds the sidecar image in the background) still needs an oracle to ask anything at all.
-# Always built rather than `docker image inspect`-guarded: the layer cache makes an unchanged build
-# about a second, and a probe image left over from an older lockfile would answer for the wrong code.
-( mkdir -p target/probe-context/demo-e2e \
-    && cp package.json package-lock.json target/probe-context/ \
-    && cp demo/e2e/*.mjs target/probe-context/demo-e2e/ \
-    && cd "$DIR" && docker build -q -f demo/e2e/probe.Dockerfile -t immich-shared-albums:probe target/probe-context >/dev/null ) \
-  || { echo "!! probe image build failed — the independent oracle cannot run" >&2; exit 1; }
-export PROBE_IMAGE=immich-shared-albums:probe
+# The wire oracle is an example binary of the SAME crate, so its framing is the product's framing
+# by construction (the alternative — a second JS implementation — was the port-era check, when two
+# implementations existed to cross-test). Built from the probe stage, whose dependency layers are
+# shared with the sidecar build, and extracted for the lane to mount into the rig network.
+docker build -q --target probe -f Dockerfile -t immich-shared-albums:probe-build . >/dev/null \
+  || { echo "!! probe build failed — the oracle cannot run" >&2; exit 1; }
+CID=$(docker create immich-shared-albums:probe-build)
+docker cp "$CID":/build/target/release/examples/probe target/probe >/dev/null || exit 1
+docker rm "$CID" >/dev/null
+# Top level, not a subshell: the lane inherits it.
+export PROBE_BIN="$PWD/target/probe"
 
 # Delete a sidecar's state as ROOT, but only while the container is stopped.
 #
