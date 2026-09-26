@@ -159,10 +159,13 @@ pub struct Peer {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Contributor {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub user_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub api_key: Option<String>,
+    /// Both are `NOT NULL` in SQLite, so the empty string IS "not provisioned yet" — reachable
+    /// when a mid-provisioning crash persisted the row — and every gate must read
+    /// `!x.is_empty()`, never assume a non-empty-looking record is usable.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub password: Option<String>,
     pub avatar_done: bool,
@@ -210,7 +213,15 @@ impl std::fmt::Debug for Contributor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Contributor")
             .field("user_id", &self.user_id)
-            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            // Empty = no key, so there is nothing to redact; a real key is never printed.
+            .field(
+                "api_key",
+                if self.api_key.is_empty() {
+                    &""
+                } else {
+                    &"[REDACTED]"
+                },
+            )
             .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
             .field("avatar_done", &self.avatar_done)
             .field("via_peer", &self.via_peer)
@@ -438,6 +449,20 @@ impl Store {
             [mapping],
             |r| r.get::<_, i64>(0).map(|n| n as usize),
         )?)
+    }
+
+    /// Every row that names a SOURCE — the stub half, across all mappings. The orphan reclaimer
+    /// walks these to collect stubs whose mapping is gone; the index on `originAsset`-bearing
+    /// lookups is the mapping index, so this is a full scan of one table, bounded by the reclaimer's
+    /// batch and its interval.
+    pub fn seen_origin_rows(&self) -> Result<Vec<SeenEntry>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT mapping, checksum, localAsset, originAsset, storedFull FROM seen
+             WHERE originAsset IS NOT NULL ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], row_to_seen)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     pub fn seen_for_checksum(&self, checksum: &str) -> Result<Vec<SeenEntry>, StoreError> {
@@ -1021,8 +1046,8 @@ impl Store {
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
                 rusqlite::params![
                     slug,
-                    c.user_id.clone().unwrap_or_default(),
-                    c.api_key.clone().unwrap_or_default(),
+                    c.user_id.clone(),
+                    c.api_key.clone(),
                     c.password, c.avatar_done as i64, c.via_peer, c.peer_user_id, c.home_peer,
                 ],
             )?;
@@ -1488,8 +1513,8 @@ mod tests {
         };
         assert!(!format!("{identity:?}").contains("SECRET-SEED"));
         let contributor = Contributor {
-            user_id: Some("u".into()),
-            api_key: Some("SECRET-KEY".into()),
+            user_id: "u".into(),
+            api_key: "SECRET-KEY".into(),
             password: Some("SECRET-PASSWORD".into()),
             avatar_done: false,
             via_peer: None,
@@ -1499,6 +1524,14 @@ mod tests {
         let printed = format!("{contributor:?}");
         assert!(!printed.contains("SECRET-KEY"));
         assert!(!printed.contains("SECRET-PASSWORD"));
+        // Empty IS "not provisioned", so there is nothing to redact — and nothing printed.
+        let keyless = Contributor {
+            api_key: String::new(),
+            ..contributor
+        };
+        let keyless_printed = format!("{keyless:?}");
+        assert!(keyless_printed.contains("api_key: \"\""));
+        assert!(!keyless_printed.contains("SECRET-KEY"));
     }
 
     #[test]
@@ -1794,8 +1827,8 @@ mod contributor_persistence_tests {
 
     fn contributor(name: &str) -> Contributor {
         Contributor {
-            user_id: Some(format!("uid-{name}")),
-            api_key: Some(format!("key-{name}")),
+            user_id: format!("uid-{name}"),
+            api_key: format!("key-{name}"),
             password: None,
             avatar_done: true,
             via_peer: Some("peer-a".into()),
@@ -1839,9 +1872,59 @@ mod contributor_persistence_tests {
         assert!(collections.contributors.contains_key("person-a"));
         assert!(collections.contributors.contains_key("person-b"));
         assert_eq!(
-            collections.contributors["person-b"].api_key.as_deref(),
-            Some("key-b")
+            collections.contributors["person-b"].api_key.as_str(),
+            "key-b"
         );
+        drop(collections);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_contributors_with_no_keys_yet_both_persist() {
+        // userId and apiKey are `NOT NULL` and userId is UNIQUE, so an empty id is not a placeholder
+        // that can be written twice: two mid-provisioning records must each survive a save, where
+        // the old `unwrap_or_default()` wrote `userId=""` for both and the UNIQUE index failed the
+        // WHOLE save.
+        let dir = std::env::temp_dir().join(format!("isa-contrib-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_str().unwrap().to_string();
+
+        let mid_provision = Contributor {
+            user_id: String::new(),
+            api_key: String::new(),
+            // The stored password of a mid-provisioning crash: the record resumes from it.
+            password: Some("resumed-password".into()),
+            avatar_done: false,
+            via_peer: Some("peer-a".into()),
+            peer_user_id: Some("origin-1".into()),
+            home_peer: None,
+        };
+        {
+            let s = Store::open(&path).unwrap();
+            s.state
+                .lock()
+                .unwrap()
+                .contributors
+                .insert("person-a".into(), mid_provision.clone());
+            s.state
+                .lock()
+                .unwrap()
+                .contributors
+                .insert("person-b".into(), mid_provision);
+            s.save().unwrap();
+            s.save().unwrap();
+        }
+
+        let reloaded = Store::open(&path).unwrap();
+        let collections = reloaded.state.lock().unwrap();
+        assert_eq!(
+            collections.contributors.len(),
+            2,
+            "both mid-provisioning records must persist"
+        );
+        assert_eq!(collections.contributors["person-a"].user_id, "");
+        assert_eq!(collections.contributors["person-a"].api_key, "");
         drop(collections);
         let _ = std::fs::remove_dir_all(&dir);
     }
