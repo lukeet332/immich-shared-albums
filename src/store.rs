@@ -913,7 +913,14 @@ impl Store {
                     remote_comment_count: r.get(22)?,
                 })
             })?;
-            rows.filter_map(|r| r.ok()).collect()
+            // A row that failed to classify (or decode) must FAIL THE LOAD, never silently
+            // vanish: the row is absent from memory, and the next `save()` rewrites this table
+            // from memory — a dropped row here would be DELETED there, and a mapping the
+            // sidecar can no longer see is a live share nobody can withdraw. Same doctrine as
+            // the version refusal: migrated or refused, never guessed at.
+            rows.collect::<Result<Vec<Mapping>, _>>().map_err(|e| {
+                StoreError::Corrupt(format!("a mappings row could not be loaded ({e})"))
+            })?
         };
 
         let contributors: std::collections::HashMap<String, Contributor> = {
@@ -1235,6 +1242,7 @@ pub enum StoreError {
     Sqlite(String),
     Io(String),
     PreV1,
+    Corrupt(String),
     SchemaVersion { found: i64, expected: i64 },
 }
 
@@ -1278,6 +1286,11 @@ impl std::fmt::Display for StoreError {
                 f,
                 "state.db is from a pre-v1 build. Stop the container, delete the data volume, \
                  and pair the servers again — pre-v1 state is not migrated."
+            ),
+            StoreError::Corrupt(e) => write!(
+                f,
+                "state.db holds a row this build refuses to load ({e}) — it will not be rewritten \
+                 behind your back. Restore the volume or delete it and pair the servers again."
             ),
             StoreError::SchemaVersion { found, expected } => write!(
                 f,
@@ -1371,6 +1384,31 @@ mod tests {
                 expected: 4,
             }) => {}
             other => panic!("expected a v99 refusal, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_mappings_row_that_cannot_be_classified_refuses_the_store_instead_of_vanishing() {
+        // A dropped row would be DELETED by the next save()'s wholesale rewrite: a mapping the
+        // sidecar can no longer see is a live share nobody can withdraw. Refuse, like PreV1.
+        let dir = std::env::temp_dir().join(format!("isa-role-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let store = Store::open(dir.to_str().unwrap()).unwrap();
+            drop(store);
+            let c = Connection::open(dir.join("state.db")).unwrap();
+            c.execute(
+                "INSERT INTO mappings (id, role, albumId, albumName, peer, permissions, via)
+                 VALUES ('m-corrupt', 'admin', 'a1', 'A', 'peer-1', 'view', 'invite')",
+                [],
+            )
+            .unwrap();
+        }
+        match Store::open(dir.to_str().unwrap()).err() {
+            Some(StoreError::Corrupt(_)) => {}
+            other => panic!("expected a Corrupt refusal, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

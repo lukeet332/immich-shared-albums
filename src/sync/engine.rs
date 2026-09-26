@@ -366,11 +366,13 @@ pub async fn reconcile_mapping(
     peer: &Peer,
     force: bool,
 ) -> Result<(), String> {
-    {
-        let Some(_reconciling) = SetEntryGuard::claim(reconciling(), &mapping.id) else {
-            return Ok(());
-        };
-    }
+    // HELD ACROSS the whole body, deliberately: bound inside a block that closed before the work,
+    // the guard released the id before `reconcile_inner` even started and the overlap guard
+    // covered nothing. Holding it across this `.await` is safe — the guard carries no std lock
+    // here, it re-locks on drop.
+    let Some(_reconciling) = SetEntryGuard::claim(reconciling(), &mapping.id) else {
+        return Ok(());
+    };
     reconcile_inner(state, client, mapping, peer, force).await
 }
 

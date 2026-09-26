@@ -640,9 +640,15 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
                     Ok(_) => crate::log!(
                         "replaced the dead mirror of \"{album_name}\" before re-mirroring it"
                     ),
-                    Err(e) => crate::log!(
-                        "could not remove the dead mirror of \"{album_name}\": {e} — mirroring alongside it"
-                    ),
+                    Err(e) => {
+                        // Teardown failed: re-mirroring NOW would create the very second mirror
+                        // this exists to prevent. The origin keeps offering the share, so the
+                        // next pull retries the teardown and then the mirror.
+                        crate::log!(
+                            "could not remove the dead mirror of \"{album_name}\": {e} — deferring re-mirroring to the next pull"
+                        );
+                        continue;
+                    }
                 }
             }
             let permissions = invitation
