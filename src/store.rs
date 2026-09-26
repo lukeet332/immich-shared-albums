@@ -456,17 +456,24 @@ impl Store {
         )?)
     }
 
-    /// Every row that names a SOURCE — the stub half, across all mappings. The orphan reclaimer
-    /// walks these to collect stubs whose mapping is gone; the index on `originAsset`-bearing
-    /// lookups is the mapping index, so this is a full scan of one table, bounded by the reclaimer's
-    /// batch and its interval.
-    pub fn seen_origin_rows(&self) -> Result<Vec<SeenEntry>, StoreError> {
+    /// The reclaimer's window into the ledger: rows that name a SOURCE and are not stored copies,
+    /// starting after `after_id`, at most `limit`. Keyset pagination, not a whole-table load: `seen`
+    /// grows without bound, so a pass reads a bounded slice and the caller's cursor decides which
+    /// one. Returns `(id, row)` because the id IS the cursor.
+    pub fn orphan_scan(
+        &self,
+        after_id: i64,
+        limit: usize,
+    ) -> Result<Vec<(i64, SeenEntry)>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT mapping, checksum, localAsset, originAsset, storedFull FROM seen
-             WHERE originAsset IS NOT NULL ORDER BY id",
+            "SELECT id, mapping, checksum, localAsset, originAsset, storedFull FROM seen
+             WHERE id > ?1 AND originAsset IS NOT NULL AND storedFull = 0
+             ORDER BY id LIMIT ?2",
         )?;
-        let rows = stmt.query_map([], row_to_seen)?;
+        let rows = stmt.query_map(rusqlite::params![after_id, limit as i64], |r| {
+            Ok((r.get::<_, i64>(0)?, row_to_seen(r)?))
+        })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 

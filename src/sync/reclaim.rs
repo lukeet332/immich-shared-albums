@@ -2,11 +2,10 @@
 use crate::immich::materialise::{delete_proxy_asset, PurgeOutcome};
 use crate::state::State;
 use crate::store::SeenEntry;
-use std::collections::HashSet;
 
-/// Reclaim at most this many stubs per pass. A leave that could not purge leaves its rows behind
-/// as the only handle on the orphaned bytes (see `leave.rs`), so the backlog is normally a handful;
-/// the bound keeps a pathological store from turning one directory cycle into a deletion spree.
+/// How many orphans one pass may delete, and how many rows one pass may READ: both are bounded, so
+/// neither a pathological ledger nor a stuck row can turn a directory cycle into a deletion spree —
+/// and the pass's cost does not grow with the ledger (`orphan_scan` is keyset-paginated).
 const ORPHAN_BATCH: usize = 50;
 
 /// What may be done about one orphan row — a ledger row whose mapping no longer exists.
@@ -23,7 +22,8 @@ enum OrphanRow {
 /// The decision for one row, as a pure function so the accounting is testable. `row_mapping_live`
 /// says the row's own mapping still exists (dead ones included — their teardown paths own them);
 /// `authoritative_owner_live` is `ledger_by_asset`'s answer for the row's local asset, mapped to
-/// whether THAT mapping is live. `None` rows are not this module's business.
+/// whether THAT mapping is live — computed ONLY from a successful read, never from a failed one.
+/// `None` rows are not this module's business.
 fn decide(row_mapping_live: bool, authoritative_owner_live: Option<bool>) -> Option<OrphanRow> {
     if row_mapping_live {
         // Not an orphan: its own teardown path owns it, and this module must never race it.
@@ -40,21 +40,26 @@ fn decide(row_mapping_live: bool, authoritative_owner_live: Option<bool>) -> Opt
 /// purpose (the row is the only handle on the orphaned bytes), and this is what eventually collects
 /// them — "withdrawal reclaims the space" is a promise, so a failed purge cannot mean for ever.
 pub async fn reclaim_orphaned_stubs(state: &State, client: &crate::immich::client::Client) {
-    let Some(work) = candidates(state) else {
-        return;
-    };
     let mut settled = 0usize;
     let mut still_stuck = 0usize;
-    for (entry, action) in work.iter().take(ORPHAN_BATCH) {
+    let mut skipped = 0usize;
+    let mut attempted = 0usize;
+    for (id, entry, action) in candidates(state) {
+        // The cursor advances past every row the pass READ, whichever way it was decided: a row
+        // this pass could not settle must not pin the window, or later orphans would never be
+        // attempted while the stuck ones were retried for ever.
+        advance_cursor(id);
+        attempted += 1;
         match action {
-            OrphanRow::ServesAnother => {
+            None => skipped += 1,
+            Some(OrphanRow::ServesAnother) => {
                 // The stub is a live share's photo. Drop only the stale pointer.
                 let _ = state
                     .store
                     .seen_remove_entry(&entry.mapping, &entry.checksum);
                 settled += 1;
             }
-            OrphanRow::Reclaim => {
+            Some(OrphanRow::Reclaim) => {
                 match delete_proxy_asset(state, client, &entry.local_asset).await {
                     Ok(PurgeOutcome::Purged) | Ok(PurgeOutcome::AlreadyGone) => {
                         let _ = state
@@ -67,41 +72,60 @@ pub async fn reclaim_orphaned_stubs(state: &State, client: &crate::immich::clien
             }
         }
     }
-    if settled > 0 || still_stuck > 0 {
+    if settled > 0 || still_stuck > 0 || skipped > 0 {
         crate::log!(
-            "orphan reclaim: {settled} ledger row(s) settled, {still_stuck} stub(s) still un-reclaimable — kept for the next pass"
+            "orphan reclaim: {settled} ledger row(s) settled, {still_stuck} stub(s) still un-reclaimable, {skipped} row(s) deferred with an unreadable ledger — {attempted} looked at, kept for the next pass"
         );
     }
 }
 
+/// Where the last pass stopped in the ledger. A pass that reads a FULL window continues from here;
+/// a short one means the ledger was walked to its end and the next pass wraps to the beginning, so
+/// a row is never skipped for ever — kept rows (the un-reclaimable ones) simply come round again.
+fn last_cursor() -> i64 {
+    CURSOR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .to_owned()
+}
+
+fn advance_cursor(id: i64) {
+    *CURSOR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = id;
+}
+
+static CURSOR: std::sync::Mutex<i64> = std::sync::Mutex::new(0);
+
 /// The rows this module acts on, with their decision resolved BEFORE any await: the mapping's
 /// liveness and the asset's authoritative owner are both read from the store and the in-memory
 /// collections, and neither must be re-asked across the deletion awaits below.
-fn candidates(state: &State) -> Option<Vec<(SeenEntry, OrphanRow)>> {
-    let rows = state.store.seen_origin_rows().ok()?;
+///
+/// A FAILED ledger read defers the row rather than deciding from it: `.ok()` would read "could not
+/// ask" as "claimed by nobody", and a live mapping's photo would be deleted on a database hiccup.
+fn candidates(state: &State) -> Vec<(i64, SeenEntry, Option<OrphanRow>)> {
     // The guard binds in its own statement (see `collections()`): never inside the expression that
     // uses it.
+    let Ok(rows) = state.store.orphan_scan(last_cursor(), ORPHAN_BATCH) else {
+        return Vec::new();
+    };
     let collections = state.collections();
-    let live: HashSet<&str> = collections.mappings.iter().map(|m| m.id.as_str()).collect();
+    let live: std::collections::HashSet<&str> =
+        collections.mappings.iter().map(|m| m.id.as_str()).collect();
     let mut out = Vec::new();
-    for entry in rows {
-        if entry.stored_full {
-            // A stored copy is the household's own paid-for bytes; its mapping's absence does not
-            // make them orphans. The leave that kept the row said so.
-            continue;
-        }
+    for (id, entry) in rows {
         let row_mapping_live = live.contains(entry.mapping.as_str());
-        let authoritative_owner_live = state
-            .store
-            .ledger_by_asset(&entry.local_asset)
-            .ok()
-            .flatten()
-            .map(|owner| live.contains(owner.mapping.as_str()));
-        if let Some(action) = decide(row_mapping_live, authoritative_owner_live) {
-            out.push((entry, action));
-        }
+        let authoritative_owner_live = match state.store.ledger_by_asset(&entry.local_asset) {
+            Ok(owner) => owner.map(|owner| live.contains(owner.mapping.as_str())),
+            Err(_) => {
+                out.push((id, entry, None));
+                continue;
+            }
+        };
+        let action = decide(row_mapping_live, authoritative_owner_live);
+        out.push((id, entry, action));
     }
-    Some(out)
+    out
 }
 
 /// Throttle: run at most once per interval, from the directory lane (the cheapest one), after its
@@ -111,7 +135,11 @@ pub async fn reclaim_when_due(state: &State, client: &crate::immich::client::Cli
     static LAST_RUN: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
     let now = std::time::Instant::now();
     let due = {
-        let mut last = LAST_RUN.lock().unwrap();
+        // A poisoned lock here means a task panicked while deciding to run; the value it held is
+        // still the truth about the last run, so recover and go on (the standard remedy).
+        let mut last = LAST_RUN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match *last {
             Some(last) if now.duration_since(last) < ORPHAN_RECLAIM_INTERVAL => false,
             _ => {

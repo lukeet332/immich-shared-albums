@@ -299,13 +299,18 @@ pub async fn redeem_pairing(
         .await
         .map_err(|e| RouteError::unavailable(e.to_string()))?;
     if head.status != 200 {
-        // The PEER refused the ticket — wrong code, already redeemed, expired. That is the
-        // caller's own paste being wrong, not a dead dependency.
+        // The peer's OWN refusal of the ticket — wrong code, already redeemed, expired — is the
+        // caller's paste being wrong (400). But a peer answering 5xx could not do its own work:
+        // that is its dependency failing, not the ticket, so the caller gets 502 and a retry.
         let reason = serde_json::from_slice::<Value>(&body)
             .ok()
             .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
             .unwrap_or_else(|| format!("status {}", head.status));
-        return Err(RouteError::bad_input(reason));
+        return Err(if head.status >= 500 {
+            RouteError::unavailable(format!("the other server could not answer: {reason}"))
+        } else {
+            RouteError::bad_input(reason)
+        });
     }
     let answer: Value = serde_json::from_slice(&body).map_err(|e| {
         RouteError::unavailable(format!("the other server's answer was unreadable: {e}"))
