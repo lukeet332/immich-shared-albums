@@ -46,7 +46,9 @@ async fn main() {
     let host_key = slug
         .as_ref()
         .and_then(|s| st.collections().contributors.get(s).cloned())
-        .and_then(|c| c.api_key.clone())
+        .map(|c| c.api_key.clone())
+        // Empty = not provisioned; the probe asked for a provisioned stand-in.
+        .filter(|key| !key.is_empty())
         .expect("the mapping names a host stand-in, and we hold its key");
 
     // Self-contained: leave is only meaningful over a stub we actually created, so make one when
@@ -122,7 +124,8 @@ async fn main() {
             .collections()
             .contributors
             .iter()
-            .filter_map(|(slug, c)| c.api_key.clone().map(|key| (slug.clone(), key)))
+            .filter(|(_, c)| !c.api_key.is_empty())
+            .map(|(slug, c)| (slug.clone(), c.api_key.clone()))
             .collect();
         for (slug, key) in keys {
             if client

@@ -25,9 +25,11 @@ pub async fn audit_line(
     let Ok(bot) = crate::sync::house_bot::ensure_house_bot(state, client).await else {
         return false;
     };
-    let Some(key) = bot.api_key.clone() else {
+    // Empty = the bot has no key yet; the line waits for the next attempt.
+    let key = bot.api_key.clone();
+    if key.is_empty() {
         return false;
-    };
+    }
     let Ok(posted) = crate::sync::comments::post_comment(
         client,
         album_id,
@@ -50,10 +52,7 @@ pub async fn audit_line(
             .store
             .seen_act_add(&format!("{AUDIT_ACTIVITY_TAG}{id}"), mapping_id);
     }
-    crate::log!(
-        "audit on \"{}\": {text}",
-        crate::sync::peer_mapping_id::short_id(album_id)
-    );
+    crate::log!("audit on \"{}\": {text}", crate::config::short_id(album_id));
     true
 }
 

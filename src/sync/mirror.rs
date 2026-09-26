@@ -552,10 +552,11 @@ pub async fn ensure_mirror(
         permissions: None,
     };
     let host = ensure_utility_user(state, client, &spec).await?;
-    let host_key = host
-        .api_key
-        .clone()
-        .ok_or("the stand-in has no key after provisioning")?;
+    // Empty = not provisioned yet, even though provisioning just ran.
+    let host_key = host.api_key.clone();
+    if host_key.is_empty() {
+        return Err("the stand-in has no key after provisioning".to_string());
+    }
     // Their own face, if their server offers one — best effort, and it stops retrying once it lands.
     crate::immich::contributors::sync_avatar(
         state,

@@ -103,8 +103,10 @@ async fn unlink_peer_now(
             .collections()
             .contributors
             .get(&slug)
-            .and_then(|c| c.user_id.clone());
-        if let Some(user_id) = user_id {
+            .map(|c| c.user_id.clone())
+            .unwrap_or_default();
+        // Empty = never provisioned, so there is no account on Immich to delete.
+        if !user_id.is_empty() {
             let body = serde_json::json!({ "force": true });
             if let Err(e) = client
                 .json(
@@ -364,8 +366,8 @@ mod tests {
 
     fn contributor_with(home: Option<&str>, via: Option<&str>) -> Contributor {
         Contributor {
-            user_id: Some("u1".into()),
-            api_key: Some("key".into()),
+            user_id: "u1".into(),
+            api_key: "key".into(),
             password: None,
             avatar_done: true,
             via_peer: via.map(|s| s.to_string()),

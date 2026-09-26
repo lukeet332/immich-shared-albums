@@ -44,16 +44,6 @@ pub fn peer_of(state: &State, pub_key: &str) -> Option<Peer> {
         .cloned()
 }
 
-/// The head of an id for a log line — one width, cut on a CHAR boundary so a log line cannot panic
-/// on a multi-byte id.
-pub fn short_id(id: &str) -> &str {
-    const SHORT_ID_CHARS: usize = 8;
-    match id.char_indices().nth(SHORT_ID_CHARS) {
-        Some((byte_index, _)) => &id[..byte_index],
-        None => id,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,15 +166,6 @@ mod tests {
             None,
             "an unknown key is not a peer"
         );
-    }
-
-    #[test]
-    fn short_id_cuts_to_one_width_on_a_char_boundary() {
-        assert_eq!(short_id("0123456789abcdef"), "01234567");
-        assert_eq!(short_id("short"), "short", "a shorter id is itself");
-        // The cut is on a CHAR boundary, so a log line cannot panic on a multi-byte id.
-        let multibyte = "ßßßßßßßßßß";
-        assert_eq!(short_id(multibyte).chars().count(), 8);
     }
 
     fn fixture_peer(pub_key: &str) -> Peer {

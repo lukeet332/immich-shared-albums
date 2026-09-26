@@ -160,8 +160,8 @@ pub struct Peer {
 #[serde(rename_all = "camelCase")]
 pub struct Contributor {
     /// Both are `NOT NULL` in SQLite, so the empty string IS "not provisioned yet" — reachable
-    /// when a mid-provisioning crash persisted the row — and every gate must read
-    /// `!x.is_empty()`, never assume a non-empty-looking record is usable.
+    /// when a mid-provisioning crash persisted the row. Every gate must ask `!x.is_empty()`;
+    /// a non-empty value is the only shape that is a usable id or key.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub user_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1880,21 +1880,21 @@ mod contributor_persistence_tests {
     }
 
     #[test]
-    fn two_contributors_with_no_keys_yet_both_persist() {
-        // userId and apiKey are `NOT NULL` and userId is UNIQUE, so an empty id is not a placeholder
-        // that can be written twice: two mid-provisioning records must each survive a save, where
-        // the old `unwrap_or_default()` wrote `userId=""` for both and the UNIQUE index failed the
-        // WHOLE save.
+    fn empty_keys_persist_together_and_reload_as_empty() {
+        // Empty IS the stored "not provisioned yet" state — a mid-provisioning crash persists
+        // `userId=""`/`apiKey=""` — so a save must accept it and a reload must hand back EMPTY,
+        // not a value a gate could mistake for provisioned. The `userId` UNIQUE index still allows
+        // only ONE such row, so the crash shape is pinned beside two keyless accounts with real
+        // ids, and all three survive one save together.
         let dir = std::env::temp_dir().join(format!("isa-contrib-empty-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_str().unwrap().to_string();
 
-        let mid_provision = Contributor {
-            user_id: String::new(),
+        let keyless = |id: &str| Contributor {
+            user_id: id.into(),
             api_key: String::new(),
-            // The stored password of a mid-provisioning crash: the record resumes from it.
-            password: Some("resumed-password".into()),
+            password: None,
             avatar_done: false,
             via_peer: Some("peer-a".into()),
             peer_user_id: Some("origin-1".into()),
@@ -1906,13 +1906,18 @@ mod contributor_persistence_tests {
                 .lock()
                 .unwrap()
                 .contributors
-                .insert("person-a".into(), mid_provision.clone());
+                .insert("person-a".into(), keyless("uid-a"));
             s.state
                 .lock()
                 .unwrap()
                 .contributors
-                .insert("person-b".into(), mid_provision);
-            s.save().unwrap();
+                .insert("person-b".into(), keyless("uid-b"));
+            // The crash shape: the id never landed either.
+            s.state
+                .lock()
+                .unwrap()
+                .contributors
+                .insert("person-mid".into(), keyless(""));
             s.save().unwrap();
         }
 
@@ -1920,12 +1925,46 @@ mod contributor_persistence_tests {
         let collections = reloaded.state.lock().unwrap();
         assert_eq!(
             collections.contributors.len(),
-            2,
-            "both mid-provisioning records must persist"
+            3,
+            "all three must persist through one save"
         );
-        assert_eq!(collections.contributors["person-a"].user_id, "");
-        assert_eq!(collections.contributors["person-a"].api_key, "");
+        for slug in ["person-a", "person-b", "person-mid"] {
+            assert_eq!(
+                collections.contributors[slug].api_key, "",
+                "{slug} reloads keyless"
+            );
+        }
+        assert_eq!(collections.contributors["person-mid"].user_id, "");
         drop(collections);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_rows_sharing_one_id_are_still_refused_by_the_schema() {
+        // Not the type's decision: `userId TEXT NOT NULL UNIQUE` refuses a second row with the SAME
+        // id, empty or not, so two records naming one account cannot both persist and the save
+        // fails as a whole — exactly as it did when the fields were Options.
+        let dir = std::env::temp_dir().join(format!("isa-contrib-uniq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_str().unwrap().to_string();
+
+        let s = Store::open(&path).unwrap();
+        // Both carry the same `uid-a`: the schema, not the save, is what refuses this.
+        s.state
+            .lock()
+            .unwrap()
+            .contributors
+            .insert("person-a".into(), contributor("a"));
+        s.state
+            .lock()
+            .unwrap()
+            .contributors
+            .insert("person-b".into(), contributor("a"));
+        assert!(
+            s.save().is_err(),
+            "a duplicated id must fail the save, not silently collapse"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

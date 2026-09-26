@@ -103,7 +103,8 @@ pub async fn sync_peer_directory(state: &State, client: &Client, peer: &Peer) ->
         people_seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match ensure_utility_user(state, client, &spec).await {
             Ok(existing) => {
-                if existing.api_key.is_none() {
+                // Empty = not provisioned yet; the retry that mints the key is the creation.
+                if existing.api_key.is_empty() {
                     created += 1;
                 }
             }
@@ -299,9 +300,12 @@ pub async fn invite_targets_for(
         .contributors
         .iter()
         .filter(|(_, c)| {
-            c.home_peer.as_deref() == Some(peer_pub) && c.api_key.is_some() && c.user_id.is_some()
+            // Empty = not provisioned: no id to invite by, no key to read their albums with.
+            c.home_peer.as_deref() == Some(peer_pub)
+                && !c.api_key.is_empty()
+                && !c.user_id.is_empty()
         })
-        .map(|(slug, c)| (slug.clone(), c.user_id.clone().unwrap_or_default()))
+        .map(|(slug, c)| (slug.clone(), c.user_id.clone()))
         .collect();
     // The NAME lives in Immich, not in our record: a picker shows the account's own name, and the
     // stored slug is a key rather than a label.

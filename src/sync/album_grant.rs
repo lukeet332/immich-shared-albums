@@ -122,7 +122,7 @@ pub async fn grant_album_writers(
             Err(e) => crate::log!(
                 "could not grant \"{}\" access to album {}: {e}",
                 contributor.display_name,
-                crate::sync::peer_mapping_id::short_id(album_id)
+                crate::config::short_id(album_id)
             ),
         }
     }
@@ -254,7 +254,7 @@ pub async fn strip_album_bots(
                 Err(e) => {
                     crate::log!(
                         "  could not take our account off \"{}\" (attempt {attempt}): {e}",
-                        crate::sync::peer_mapping_id::short_id(album_id)
+                        crate::config::short_id(album_id)
                     );
                 }
             }

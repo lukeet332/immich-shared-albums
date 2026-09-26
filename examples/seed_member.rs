@@ -19,7 +19,8 @@ async fn main() {
     let host = ensure_utility_user(st, &client, &person_spec("Origin Owner", "origin-owner-id"))
         .await
         .expect("host stand-in");
-    let host_key = host.api_key.clone().expect("host key");
+    let host_key = host.api_key.clone();
+    assert!(!host_key.is_empty(), "host key");
     // The mirror is created BY the stand-in, so it owns what is filed into it.
     let album_id = client
         .post(

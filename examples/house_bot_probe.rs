@@ -32,7 +32,8 @@ async fn main() {
     let second = ensure_house_bot(st, &client)
         .await
         .expect("provision again");
-    let bot_id = first.user_id.clone().expect("bot user id");
+    let bot_id = first.user_id.clone();
+    assert!(!bot_id.is_empty(), "bot user id");
 
     // The name as IMMICH holds it, not as we asked for it — a rename elsewhere would be invisible
     // to a check that only read our own record.
@@ -100,10 +101,7 @@ async fn main() {
 
     // The bot reads the album with ITS OWN key — the whole reason it was added.
     let readable = client
-        .get_album(
-            &album,
-            &Auth::Key(first.api_key.as_deref().unwrap_or_default()),
-        )
+        .get_album(&album, &Auth::Key(first.api_key.as_str()))
         .await
         .ok()
         .flatten()
@@ -112,7 +110,7 @@ async fn main() {
     // The bot must NOT be able to enumerate its own keys: `apiKey.read` is deliberately absent, and
     // a scope list you can read back is one you could also widen. This is the strongest statement
     // available from outside — Immich has no endpoint that shows one account another's key scopes.
-    let bot_key = first.api_key.as_deref().unwrap_or_default();
+    let bot_key = first.api_key.as_str();
     let can_list_own_keys = client
         .get("/api-keys", &Auth::Key(bot_key))
         .await

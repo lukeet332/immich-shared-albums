@@ -255,7 +255,8 @@ pub async fn invite_peer_to_reunite(
                 .and_then(|u| u.as_array())
                 .map(|users| {
                     users.iter().any(|au| {
-                        au.pointer("/user/id").and_then(|v| v.as_str()) == person.user_id.as_deref()
+                        au.pointer("/user/id").and_then(|v| v.as_str())
+                            == Some(person.user_id.as_str())
                     })
                 })
         })
