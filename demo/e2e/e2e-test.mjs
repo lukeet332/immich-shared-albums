@@ -181,24 +181,32 @@ const sidecarDataDir = stateDir => {
 };
 // Probe for the runtime rather than catching a failure: `docker exec` reports a missing binary on
 // STDOUT with status 0, so a catch-based fallback never fires and the error text is parsed as rows.
-let nodeInSidecar = null;
+// Cached PER CONTAINER: the lane reads several sidecars in one run, and a single global answer would
+// give a Node sidecar's verdict to a Rust sidecar (the port's image has no node).
+const nodeInSidecar = new Map();
 const sidecarHasNode = stateDir => {
-  if (nodeInSidecar === null) {
+  const container = containerFor(stateDir);
+  if (!nodeInSidecar.has(container)) {
     try {
-      execFileSync('docker', ['exec', containerFor(stateDir), 'sh', '-c', 'command -v node >/dev/null 2>&1'],
+      execFileSync('docker', ['exec', container, 'sh', '-c', 'command -v node >/dev/null 2>&1'],
                    { stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 });
-      nodeInSidecar = true;
-    } catch { nodeInSidecar = false; }
+      nodeInSidecar.set(container, true);
+    } catch { nodeInSidecar.set(container, false); }
   }
-  return nodeInSidecar;
+  return nodeInSidecar.get(container);
 };
 const sidecarSql = (stateDir, sql) => {
-  if (sidecarHasNode(stateDir)) {
+  const readViaNode = () => {
+    if (!sidecarHasNode(stateDir)) return null;
     try {
       return execFileSync('docker', ['exec', containerFor(stateDir), 'node', '-e', SQLITE_ROWS_JSON, sql],
                           { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: DOCKER_ENV, timeout: 20000 }).trim();
     } catch { return null; }
-  }
+  };
+  // The reader is the FALLBACK for any node-path failure, not just a missing node: a probe that says
+  // "this sidecar has node" and a query that still fails must not silently answer null.
+  const viaNode = readViaNode();
+  if (viaNode !== null) return viaNode;
   const src = sidecarDataDir(stateDir);
   if (!src) return null;
   try {

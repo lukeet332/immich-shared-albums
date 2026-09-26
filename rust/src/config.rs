@@ -6,7 +6,7 @@ pub const SIDECAR_VERSION: &str = "1.1.1"; // x-release-please-version
 /// Every setting here comes from an `ISA_`-prefixed variable, for the reason given in PORT.md
 /// ("Why ISA_"). Parsing is strict and fails loudly at boot: a typo'd boolean must never fail
 /// open, and a bad cadence must never become a zero-length interval.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub immich_url: String,
     pub api_key: String,
@@ -26,6 +26,33 @@ pub struct Config {
     pub relay: bool,
     pub reconcile_debug: bool,
     pub test_hooks: bool,
+}
+
+/// The API key is a secret: a struct that holds one must not print it just because somebody
+/// wrote `{cfg:?}`. Everything else stays inspectable.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("immich_url", &self.immich_url)
+            .field("api_key", &"[REDACTED]")
+            .field("name", &self.name)
+            .field("port", &self.port)
+            .field("p2p_port", &self.p2p_port)
+            .field("data_dir", &self.data_dir)
+            .field("sync_poll_ms", &self.sync_poll_ms)
+            .field("comment_poll_ms", &self.comment_poll_ms)
+            .field("mirror_album_template", &self.mirror_album_template)
+            .field("cache_max_mb", &self.cache_max_mb)
+            .field("max_body_kb", &self.max_body_kb)
+            .field("link_join_requires_password", &self.link_join_requires_password)
+            .field("bot_quota_mb", &self.bot_quota_mb)
+            .field("trace_sync", &self.trace_sync)
+            .field("publish_user_directory", &self.publish_user_directory)
+            .field("relay", &self.relay)
+            .field("reconcile_debug", &self.reconcile_debug)
+            .field("test_hooks", &self.test_hooks)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
