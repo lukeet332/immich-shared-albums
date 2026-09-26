@@ -6,7 +6,7 @@ use crate::config::{cfg, ROUTE_PREFIX};
 /// dependency, so editing a page rebuilds the binary.
 macro_rules! dist {
     ($($name:literal),* $(,)?) => {
-        pub static DIST: &[(&str, &str)] = &[$(($name, include_str!(concat!("../../../src/web/dist/", $name)))),*];
+        pub static DIST: &[(&str, &str)] = &[$(($name, include_str!(concat!("../../src/web/dist/", $name)))),*];
     };
 }
 
@@ -24,12 +24,12 @@ dist!(
     "sign-in.css",
 );
 
-static PANEL_HTML: &str = include_str!("../../../src/web/dist/panel.html");
-static ACCEPT_HTML: &str = include_str!("../../../src/web/dist/accept.html");
-static SHARE_HTML: &str = include_str!("../../../src/web/dist/share.html");
-static ME_HTML: &str = include_str!("../../../src/web/dist/me.html");
-static ROOT_HTML: &str = include_str!("../../../src/web/dist/root.html");
-static SIGN_IN_HTML: &str = include_str!("../../../src/web/dist/sign-in.html");
+static PANEL_HTML: &str = include_str!("../../src/web/dist/panel.html");
+static ACCEPT_HTML: &str = include_str!("../../src/web/dist/accept.html");
+static SHARE_HTML: &str = include_str!("../../src/web/dist/share.html");
+static ME_HTML: &str = include_str!("../../src/web/dist/me.html");
+static ROOT_HTML: &str = include_str!("../../src/web/dist/root.html");
+static SIGN_IN_HTML: &str = include_str!("../../src/web/dist/sign-in.html");
 
 pub fn dist_asset(name: &str) -> Option<&'static str> {
     DIST.iter().find(|(n, _)| *n == name).map(|(_, c)| *c)

@@ -6,13 +6,13 @@
 !package.json
 !package-lock.json
 !src/
+!Cargo.toml
+!Cargo.lock
 # The lane's oracle image does NOT build from this context: run-mock-e2e.sh stages its own
-# (rust/target/probe-context), so the walk here never descends into demo/ — whose root-owned rig
+# (target/probe-context), so the walk here never descends into demo/ — whose root-owned rig
 # data dirs break a non-root `docker build .` merely by being statted.
 # The Rust image build needs the crate and the COMMITTED UI it embeds at compile time
 # (rust/src/web/assets.rs include_str!s ../../../src/web/dist/). Both target/ and .cargo-home/
 # live under rust/ and are gigabytes, so they are re-excluded explicitly.
-!rust/
-rust/target/
-rust/.cargo-home/
+
 src/web/ui/

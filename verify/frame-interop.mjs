@@ -1,4 +1,4 @@
-// rust/frame-interop.mjs — prove the Rust isa/2 frame codec interoperates with the INDEPENDENT
+// verify/frame-interop.mjs — prove the Rust isa/2 frame codec interoperates with the INDEPENDENT
 // implementation in demo/e2e/iroh-client.mjs, over a real socket. If these two disagree, a Rust
 // peer cannot talk to a Node peer, whatever our own round-trip tests say.
 //

@@ -1,4 +1,4 @@
-// rust/peer-interop.mjs — dial the RUST iroh endpoint from the INDEPENDENT JavaScript peer used by
+// verify/peer-interop.mjs — dial the RUST iroh endpoint from the INDEPENDENT JavaScript peer used by
 // the e2e suite (demo/e2e/iroh-client.mjs). Two real endpoints, two implementations, one wire.
 //
 // Run:

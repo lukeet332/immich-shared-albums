@@ -1,6 +1,6 @@
 // verify-share-browser.mjs — INSTALL-AI.md's VERIFY step 2, in a real browser.
 //
-//   node rust/verify-share-browser.mjs [SIDECAR_URL]
+//   node verify/verify-share-browser.mjs [SIDECAR_URL]
 //
 // "Any Immich share link opened in a browser shows the 'Join shared album with your server?' card."
 // The shell the sidecar serves is ~770 bytes with no card in it — the card is rendered by share.js,
@@ -17,11 +17,11 @@ const IMMICH = `http://localhost:${PORT('PORT_IMMICH_B', 2284)}`;
 const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 // The key comes from the ENVIRONMENT, exactly as the e2e suite takes it (the rig exports BKEY):
 // a lane has no business reading a credential off disk and putting it in a request header.
-//   BKEY=$(grep -m1 '^B_API_KEY=' demo/.env | cut -d= -f2-) node rust/<this lane>.mjs
+//   BKEY=$(grep -m1 '^B_API_KEY=' demo/.env | cut -d= -f2-) node <this lane>.mjs
 const BKEY = process.env.BKEY || process.env.B_SIDECAR_API_KEY;
 if (!BKEY) {
   console.error('BKEY is required — export the rig\'s household-B key first:');
-  console.error("  BKEY=$(grep -m1 '^B_API_KEY=' demo/.env | cut -d= -f2-) node rust/<lane>");
+  console.error("  BKEY=$(grep -m1 '^B_API_KEY=' demo/.env | cut -d= -f2-) node <lane>");
   process.exit(2);
 }
 

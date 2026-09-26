@@ -102,7 +102,7 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
     outright — `POST /immich-shared-albums/test/pause-sweeps` with `{"paused":true}`, released with
     `false` — and a held loop records no tick at all: that is how the browser lane proves an
     invitation, an accept and **both** halves of a union arrived over the wire rather than on a
-    timer. `sync/sweeps.rs` holds the flag; `rust/docs/sync-loops.md` says which loops read it.
+    timer. `sync/sweeps.rs` holds the flag; `docs/sync-loops.md` says which loops read it.
     `POST /immich-shared-albums/test/hide-dimensions` with `{"assetId":…,"hidden":true}` is the
     other half of that idea: it makes one photo look as it does in the window between an upload and
     Immich's metadata job, so the suite can assert the photo is HELD BACK rather than mirrored as a
@@ -190,7 +190,7 @@ whatever they left.
 
 `hand-test-up.sh` installs all THREE households (B, C, D) and pairs every pair, so the rig is a
 closed mesh — which is what makes a behaviour difference *between* households observable at all. The
-matrix probe (`rust/target/probe-mesh-asymmetry.mjs`, run by hand) walks the same cycle on all six
+matrix probe (`target/probe-mesh-asymmetry.mjs`, run by hand) walks the same cycle on all six
 ordered pairs.
 
 `RIG_UP_ONLY` implies no suite; `RIG_MOCKS_ONLY=1` stops the rig's own sidecars and leaves just the

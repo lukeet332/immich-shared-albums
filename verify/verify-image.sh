@@ -6,7 +6,7 @@
 # uid 1000 to be able to write it, and linked peers redial a FIXED udp port. Each of those is
 # asserted below, because each fails silently in a different way if it regresses.
 #
-#   bash rust/verify-image.sh [IMAGE]
+#   bash verify/verify-image.sh [IMAGE]
 set -euo pipefail
 
 IMAGE="${1:-immich-shared-albums:rust}"

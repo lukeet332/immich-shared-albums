@@ -95,9 +95,9 @@ docker network inspect isa-demo >/dev/null 2>&1 || docker network create isa-dem
 COMMIT=$(git -C "$DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)
 if [ -z "${SKIP_BUILD:-}" ]; then
   echo "== build image (commit $COMMIT) =="
-  # ISA_DOCKERFILE names WHICH Dockerfile builds the rig's sidecar, so the port's replacement can be
+  # ISA_DOCKERFILE names which Dockerfile builds the rig's sidecar.
   # run through this whole suite before it becomes the default. Every normal run uses the default.
-  IMAGE_DOCKERFILE="${ISA_DOCKERFILE:-rust/Dockerfile}"
+  IMAGE_DOCKERFILE="${ISA_DOCKERFILE:-Dockerfile}"
   echo "   (from $IMAGE_DOCKERFILE)"
   # ISA_BUILD_ARGS exists so a build can carry extra --build-arg flags, e.g. debug symbols for a
   # hang that has to be diagnosed with gdb. Every normal run passes none.
@@ -110,17 +110,17 @@ else
 fi
 
 # The iroh probe is the INDEPENDENT JavaScript oracle, and it is NOT the image under test: under
-# ISA_DOCKERFILE=rust/Dockerfile the sidecar image has no node at all, and every probe would die with
+# ISA_DOCKERFILE=Dockerfile the sidecar image has no node at all, and every probe would die with
 # "exec: node: not found", which reads as a product failure. So the oracle has its own image
 # (demo/e2e/probe.Dockerfile)
 # whatever the sidecar uses — and it is built OUTSIDE the branch above, because a SKIP_BUILD run
 # (CI pre-builds the sidecar image in the background) still needs an oracle to ask anything at all.
 # Always built rather than `docker image inspect`-guarded: the layer cache makes an unchanged build
 # about a second, and a probe image left over from an older lockfile would answer for the wrong code.
-( mkdir -p rust/target/probe-context/demo-e2e \
-    && cp package.json package-lock.json rust/target/probe-context/ \
-    && cp demo/e2e/*.mjs rust/target/probe-context/demo-e2e/ \
-    && cd "$DIR" && docker build -q -f demo/e2e/probe.Dockerfile -t immich-shared-albums:probe rust/target/probe-context >/dev/null ) \
+( mkdir -p target/probe-context/demo-e2e \
+    && cp package.json package-lock.json target/probe-context/ \
+    && cp demo/e2e/*.mjs target/probe-context/demo-e2e/ \
+    && cd "$DIR" && docker build -q -f demo/e2e/probe.Dockerfile -t immich-shared-albums:probe target/probe-context >/dev/null ) \
   || { echo "!! probe image build failed — the independent oracle cannot run" >&2; exit 1; }
 export PROBE_IMAGE=immich-shared-albums:probe
 
@@ -162,7 +162,7 @@ sidecar_data_dir() { # the host path behind a sidecar's /data
 sidecar_col() { # sidecar_col <service> <sql> — run from that household's compose dir
   # -readonly matters: it cannot checkpoint or unlink the WAL, so it is safe even where the locks
   # do not reach (the macOS bind-mount case this comment block exists for).
-  # The sidecar image has no runtime to exec into (rust/ARCHITECTURE.md), so reads go through the
+  # The sidecar image has no runtime to exec into (ARCHITECTURE.md), so reads go through the
   # reader container, which shares the WAL locks exactly as an in-container reader would.
   local src; src=$(sidecar_data_dir "$1") || return 1
   [ -n "$src" ] || return 1

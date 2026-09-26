@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # verify-panel.sh — spin up the Rust sidecar against the mock rig and load its panel in a browser.
 #
-#   bash rust/verify-panel.sh
+#   bash verify/verify-panel.sh
 #
 # The sidecar is a FRONT for Immich: the browser signs in and reads the panel through ONE origin,
 # which is both how a real install is reached and the only arrangement where the Immich session
@@ -38,4 +38,4 @@ done
 curl -fsS -H "x-api-key: $API_KEY" "http://127.0.0.1:$PORT/immich-shared-albums/peers" >/dev/null \
   || { echo "FAIL: the sidecar could not authenticate a caller against Immich"; docker logs "$NAME" 2>&1 | tail -20; exit 1; }
 
-node rust/verify-panel-browser.mjs "http://127.0.0.1:$PORT"
+node verify/verify-panel-browser.mjs "http://127.0.0.1:$PORT"

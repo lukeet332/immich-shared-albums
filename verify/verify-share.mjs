@@ -1,4 +1,4 @@
-// rust/verify-share.mjs — the join card over the native album, served by the Rust sidecar.
+// verify/verify-share.mjs — the join card over the native album, served by the Rust sidecar.
 // Mirrors the banner half of demo/e2e/browser-test.mjs.
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -17,7 +17,7 @@ if (!SHARE_KEY) {
   console.error('  SHARE_KEY=$(curl -s -X POST http://localhost:2384/api/shared-links -H "x-api-key: $KEY" \\');
   console.error("    -H 'Content-Type: application/json' \\");
   console.error("    -d '{\"type\":\"ALBUM\",\"albumId\":\"<album id>\",\"allowUpload\":true}' | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"key\"])')");
-  console.error('  BASE=http://localhost:9400 SHARE_KEY=$SHARE_KEY node rust/verify-share.mjs');
+  console.error('  BASE=http://localhost:9400 SHARE_KEY=$SHARE_KEY node verify/verify-share.mjs');
   process.exit(2);
 }
 // The album's NAME is the caller's as well, for the same reason the key is: this check used to assert
@@ -64,11 +64,11 @@ page.on('response', r => {
 
 await page.goto(SHARE_URL, { waitUntil: 'networkidle' });
 await page.waitForTimeout(2000);
-// Under rust/target/, which exists and is gitignored: /tmp/explore was a scratch directory nothing
+// Under target/, which exists and is gitignored: /tmp/explore was a scratch directory nothing
 // creates, so the screenshot was silently lost behind the `.catch`.
-fs.mkdirSync(`${REPO}/rust/target`, { recursive: true });
+fs.mkdirSync(`${REPO}/target`, { recursive: true });
 await page
-  .screenshot({ path: `${REPO}/rust/target/rust-share-banner.png`, fullPage: true })
+  .screenshot({ path: `${REPO}/target/rust-share-banner.png`, fullPage: true })
   .catch((e) => console.log(`  (screenshot not written: ${e.message})`));
 
 // The DOM contract the browser lane drives.

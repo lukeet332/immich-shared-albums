@@ -52,7 +52,7 @@ jobs:
     timeout-minutes: 60
     env:
       # The sidecar under test is the Rust build; there is no other.
-      ISA_DOCKERFILE: rust/Dockerfile
+      ISA_DOCKERFILE: Dockerfile
       # push/PR runs pin the known-good Immich BY DIGEST (upstream mutates even version
       # tags — observed live 2026-08-16); the weekly cron chases :release as a canary
       IMMICH_REF: ${{ github.event_name == 'schedule' && ':release' || '@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb' }}

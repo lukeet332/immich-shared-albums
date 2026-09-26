@@ -55,7 +55,7 @@ INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
 # The image is built from the repo root either way; ISA_DOCKERFILE names WHICH one, and the default
 # is the Rust build — the port is what ships. Set ISA_DOCKERFILE=Dockerfile to install the
 # TypeScript sidecar instead, which is kept as the reference implementation and the e2e baseline.
-DOCKERFILE="${ISA_DOCKERFILE:-rust/Dockerfile}"
+DOCKERFILE="${ISA_DOCKERFILE:-Dockerfile}"
 [ -f "$REPO_DIR/$DOCKERFILE" ] || { echo "no $DOCKERFILE in $REPO_DIR"; exit 1; }
 say "Building image from source ($DOCKERFILE)"
 docker build -q -t immich-shared-albums:live -f "$REPO_DIR/$DOCKERFILE" "$REPO_DIR"

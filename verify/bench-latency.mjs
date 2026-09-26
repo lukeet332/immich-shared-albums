@@ -1,7 +1,7 @@
 // bench-latency.mjs — server latency with a KEEP-ALIVE client, so what is measured is the sidecar
 // and not the cost of spawning a `curl` process per request.
 //
-//   node rust/bench-latency.mjs <nodePort> <rustPort>
+//   node verify/bench-latency.mjs <nodePort> <rustPort>
 //
 // Reports mean/p50/p95 per endpoint and concurrent throughput. Both sidecars are driven identically:
 // same endpoints, same request count, same warm-up, same single connection pool.

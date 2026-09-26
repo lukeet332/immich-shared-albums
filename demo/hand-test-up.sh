@@ -29,7 +29,7 @@ DIR_D=${HAND_DIR_D:-/tmp/isa-hand-d}
 PROJECT_B=${HAND_PROJECT_B:-isa-hand-b}
 PROJECT_C=${HAND_PROJECT_C:-isa-hand-c}
 PROJECT_D=${HAND_PROJECT_D:-isa-hand-d}
-DOCKERFILE=${ISA_DOCKERFILE:-rust/Dockerfile}
+DOCKERFILE=${ISA_DOCKERFILE:-Dockerfile}
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 fail() { echo "FAIL: $1" >&2; exit 1; }
