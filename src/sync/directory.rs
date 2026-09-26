@@ -213,8 +213,19 @@ pub fn start_directory_loop(state: std::sync::Arc<State>) {
                 // 404 is "no such album here"; 403 is "I don't know this peer any more" — which is
                 // what an unlink produces, because it removes the peer before anything else. Both
                 // mean the share is over from that side, and both must count.
+                // 404 is "no such album here"; 403 is "I don't know this peer any more" — which is
+                // what an unlink produces, because it removes the peer before anything else. Both
+                // mean the share is over from that side, and both must count. Anything else RESETS
+                // the count: these must be CONSECUTIVE failures, because the peer's own invite churn
+                // (a mirror torn down and re-created under a fresh id) legitimately answers 404 for
+                // a tick or two while the re-join lands — and a counter that carried those forward
+                // retired a live share the next time the album so much as changed.
                 let counts = match answered {
                     Ok(Ok((head, _))) if head.status == 404 || head.status == 403 => true,
+                    Ok(Ok((head, _))) if head.status < 400 => {
+                        crate::sync::engine::push_failures().lock().unwrap().remove(&mapping.id);
+                        false
+                    }
                     _ => false,
                 };
                 if !counts {
