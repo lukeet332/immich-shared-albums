@@ -443,6 +443,18 @@ if (mirrorAssets) {
   check('repeat view is a cache HIT (byte-identical)',
         thumbRes2.headers.get('x-cache') === 'HIT' && sha1(await thumbRes2.arrayBuffer()) === sha1(originThumb),
         `x-cache: ${thumbRes2.headers.get('x-cache')}`);
+  // THE AUTH INVARIANT behind the hotlink path: a caller with NO credential and NO share key must
+  // get Immich's own refusal, never the true bytes. The interceptor once probed as the ADMIN key
+  // when nobody was signed in — it can read the bot accounts' stubs, so the probe never failed and
+  // any caller who could name a stub id streamed the photo without Immich's 401.
+  const anonymousOriginal = await fetch(`${BS}/api/assets/${gpsProxy.id}/original`);
+  check("an anonymous original answers Immich's own refusal, not the bytes",
+        anonymousOriginal.status === 401,
+        `status: ${anonymousOriginal.status}`);
+  const anonymousThumb = await fetch(`${BS}/api/assets/${gpsProxy.id}/thumbnail`);
+  check("an anonymous thumbnail answers Immich's own refusal, not the bytes",
+        anonymousThumb.status === 401,
+        `status: ${anonymousThumb.status}`);
 }
 
 stage('a photo Immich has not measured is held back, then arrives shaped');

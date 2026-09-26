@@ -45,7 +45,12 @@ anywhere else. The two entry points authorise in completely different ways:
 
 - **`web/interceptor.rs` serves the household's own app**, so it authorises with the _caller's
   own_ Immich credentials: it probes `/assets/:id` with their cookie or API key and serves
-  bytes only if Immich itself would have. The sidecar never grants access Immich wouldn't.
+  bytes only if Immich itself would have. A public share link's `?key=` is forwarded and probed
+  with NO credential header — the link is the authority, and its expiry and password are
+  Immich's to judge. A request with neither is refused before any probe (`probe_authority`
+  answers `None`) and the passthrough delivers Immich's own 401: the admin key can read the bot
+  accounts' stubs, so probing as it could never fail and would serve bytes Immich refuses. The
+  sidecar never grants access Immich wouldn't.
 - **`media/proxy.rs` serves other households**, so it needs both halves: the connection's proven
   identity (mutual TLS on the household keys — the transport hands `servePeerBytes` the
   caller) _and_ entitlement (`p2p/entitlement.peerMayRead`). Identity says which peer;
