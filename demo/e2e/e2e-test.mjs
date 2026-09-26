@@ -2800,6 +2800,11 @@ if (!sidecarHasNode('b-sidecar')) {
   stage('rust: a like crosses servers and is attributed to the person who made it');
   {
     const albL = await api(A, AKEY, '/albums', j({ albumName: `rust like ${Date.now()}` }));
+    // Content BEFORE the share: an empty album's mirror has nothing to materialise, so a wait keyed
+    // on assetCount can never succeed. (Same fix the removal stage needed.)
+    const seededL = await upload(A, AKEY, 'rust-like-seed.jpg', `rl${Date.now() % 10000}`, '2026-08-29T10:00:00.000Z');
+    await ensurePreviews(A, AKEY, [seededL]);
+    await api(A, AKEY, `/albums/${albL.id}/assets`, { ...j({ ids: [seededL] }), method: 'PUT' });
     const linkL = (await api(A, AKEY, '/shared-links', j({ type: 'ALBUM', albumId: albL.id, allowUpload: true }))).key;
     const joinedL = await joinWithRetry(() => api(A, AKEY, '/shared-links',
       j({ type: 'ALBUM', albumId: albL.id, allowUpload: true })));
