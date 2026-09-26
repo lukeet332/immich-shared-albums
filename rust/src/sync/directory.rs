@@ -210,8 +210,11 @@ pub fn start_directory_loop(state: std::sync::Arc<State>) {
                     mesh_transport.round_trip(&peer, &header, None),
                 )
                 .await;
+                // 404 is "no such album here"; 403 is "I don't know this peer any more" — which is
+                // what an unlink produces, because it removes the peer before anything else. Both
+                // mean the share is over from that side, and both must count.
                 let counts = match answered {
-                    Ok(Ok((head, _))) if head.status == 404 => true,
+                    Ok(Ok((head, _))) if head.status == 404 || head.status == 403 => true,
                     _ => false,
                 };
                 if !counts {
