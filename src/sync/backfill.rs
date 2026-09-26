@@ -72,7 +72,7 @@ pub async fn backfill_full_copies(
             Ok(false) => {}
             Err(e) => crate::log!(
                 "backfill failed ({}): {e}",
-                crate::sync::peer_mapping_id::short_id(&reference.checksum)
+                crate::config::short_id(&reference.checksum)
             ),
         }
     }

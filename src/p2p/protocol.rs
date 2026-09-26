@@ -459,6 +459,13 @@ pub async fn handle_version(caller_pub: &str, album_mapping_id: &str) -> (u16, V
     // Demanding Owner here answered 404 to every healthy share, which retired live albums one
     // handshake window after they were created. `dead` below still answers gone.
     let Some(mapping) = mapping_for(state, caller_pub, album_mapping_id, None) else {
+        // Loud, because this 404 is what a peer's 20-strike retirement counts: a mapping that
+        // cannot be found by the address the peer asked with is either churn (a re-created mirror
+        // under a fresh id) or a real miss, and telling them apart needs the address in the log.
+        crate::log!(
+            "version check 404: peer asked for \"{}\", which matches no live mapping here",
+            album_mapping_id
+        );
         return gone_or_404(state, caller_pub, album_mapping_id);
     };
     if mapping.dead {

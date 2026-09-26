@@ -44,7 +44,8 @@ async fn main() {
     let stand_in = ensure_utility_user(st, &client, &person)
         .await
         .expect("stand-in");
-    let key = stand_in.api_key.clone().expect("stand-in key");
+    let key = stand_in.api_key.clone();
+    assert!(!key.is_empty(), "stand-in key");
 
     let album_id = client
         .post(

@@ -76,6 +76,7 @@ picker, for the same reason. Known costs; do not make either worse without sayin
 | `sync/matches.rs` | possible reunions, each with its `step` |
 | `sync/mirror.rs` | the mirror: a member's view of an origin's album |
 | `sync/peer_mapping_id.rs` | how one album's id is named on the other side |
+| `sync/reclaim.rs` | stubs whose mapping is gone: the failed-purge backlog the directory lane collects |
 | `sync/status.rs` | the tick/nudge/hint status the panel reads |
 | `sync/sweeps.rs` | the sweep gate: one background lane at a time |
 | `sync/trail.rs` | audit lines that wait for the album's owner |

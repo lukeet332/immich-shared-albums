@@ -1,4 +1,5 @@
 /** sync/invites.rs — native album invitations, per person. See ARCHITECTURE.md. */
+use crate::config::short_id;
 use crate::immich::access::{read_caller_albums, Creds};
 use crate::immich::client::Client;
 use crate::p2p::frame::RequestHeader;
@@ -7,7 +8,7 @@ use crate::state::State;
 use crate::store::{Mapping, Peer, Role};
 use crate::sync::host_keys::host_key_of;
 use crate::sync::invitees::{diff_invitees, invitation_mirror_was_withdrawn};
-use crate::sync::peer_mapping_id::{peer_of, short_id};
+use crate::sync::peer_mapping_id::peer_of;
 use serde_json::{json, Value};
 
 /// Immich album roles map onto the permission a share link would have carried.
@@ -174,9 +175,11 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
             let Some(candidate) = state.collections().contributors.get(slug).cloned() else {
                 continue;
             };
-            let Some(key) = candidate.api_key.clone() else {
+            // Empty = no key minted yet; this marker is not readable as them.
+            let key = candidate.api_key.clone();
+            if key.is_empty() {
                 continue;
-            };
+            }
             let creds = key_creds(state, &key);
             match albums_as_marker(state, client, &creds, user_id).await {
                 Some(part) => {

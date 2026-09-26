@@ -22,7 +22,7 @@ pub async fn unlink_peer(
     state: &State,
     client: &Client,
     pub_key: &str,
-) -> Result<UnlinkResult, String> {
+) -> Result<UnlinkResult, crate::web::route_error::RouteError> {
     // The window closes on drop, so a panic mid-teardown cannot leave the peer refused work.
     let _unlinking = state.unlinking_guard(pub_key);
     unlink_peer_now(state, client, pub_key).await
@@ -32,7 +32,7 @@ async fn unlink_peer_now(
     state: &State,
     client: &Client,
     pub_key: &str,
-) -> Result<UnlinkResult, String> {
+) -> Result<UnlinkResult, crate::web::route_error::RouteError> {
     let Some(peer) = state
         .collections()
         .peers
@@ -40,7 +40,9 @@ async fn unlink_peer_now(
         .find(|p| p.pub_key == pub_key)
         .cloned()
     else {
-        return Err("unknown household".to_string());
+        return Err(crate::web::route_error::RouteError::bad_input(
+            "unknown household",
+        ));
     };
     let household = peer.name.clone();
     let mut mirrors_removed = 0usize;
@@ -103,8 +105,10 @@ async fn unlink_peer_now(
             .collections()
             .contributors
             .get(&slug)
-            .and_then(|c| c.user_id.clone());
-        if let Some(user_id) = user_id {
+            .map(|c| c.user_id.clone())
+            .unwrap_or_default();
+        // Empty = never provisioned, so there is no account on Immich to delete.
+        if !user_id.is_empty() {
             let body = serde_json::json!({ "force": true });
             if let Err(e) = client
                 .json(
@@ -152,7 +156,9 @@ async fn unlink_peer_now(
     }
 
     state.collections().peers.retain(|p| p.pub_key != pub_key);
-    state.save().map_err(|e| e.to_string())?;
+    state
+        .save()
+        .map_err(|e| crate::web::route_error::RouteError::unavailable(e.to_string()))?;
     crate::log!(
         "unlinked \"{household}\" — {mirrors_removed} mirror(s) removed, {shares_revoked} share(s) revoked, {markers_removed} account(s) removed with their proxied photos"
     );
@@ -364,8 +370,8 @@ mod tests {
 
     fn contributor_with(home: Option<&str>, via: Option<&str>) -> Contributor {
         Contributor {
-            user_id: Some("u1".into()),
-            api_key: Some("key".into()),
+            user_id: "u1".into(),
+            api_key: "key".into(),
             password: None,
             avatar_done: true,
             via_peer: via.map(|s| s.to_string()),

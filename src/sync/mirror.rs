@@ -306,13 +306,16 @@ pub async fn unify_own_album(
     requested_album_name: &str,
     owner_creds: &Creds,
     owner_user_id: &str,
-) -> Result<(String, usize), String> {
+) -> Result<(String, usize), crate::web::route_error::RouteError> {
     // BOUND FIRST, in its own statement. As an argument, the `collections()` temporary would live
     // until the end of the statement — which includes the `.await` — holding the state lock across
     // a suspension point. The compiler refuses it (the future stops being `Send`); at runtime it
     // would be a deadlock of exactly the kind this port has hit three times.
-    let peer =
-        peer_of(state, &mapping.peer).ok_or("the share names a server that is not linked")?;
+    let peer = peer_of(state, &mapping.peer).ok_or_else(|| {
+        crate::web::route_error::RouteError::bad_input(
+            "the share names a server that is not linked",
+        )
+    })?;
     let held = peer_held_checksums(
         &peer,
         crate::sync::peer_mapping_id::remote_target(mapping).as_deref(),
@@ -321,7 +324,9 @@ pub async fn unify_own_album(
 
     let caller_albums = crate::immich::access::read_caller_albums(client, owner_creds)
         .await
-        .ok_or("could not read your albums")?;
+        .ok_or_else(|| {
+            crate::web::route_error::RouteError::unavailable("could not read your albums")
+        })?;
     let own = crate::sync::adoption::can_unify_own_album(
         &mapping.album_id,
         &mapping.album_name,
@@ -330,21 +335,26 @@ pub async fn unify_own_album(
         owner_user_id,
     )
     .ok_or_else(|| {
-        format!(
+        crate::web::route_error::RouteError::bad_input(format!(
             "\"{}\" cannot be reunited with that album",
             mapping.album_name
-        )
+        ))
     })?;
 
     // 2. The sidecar reads the album as the house bot, so the bot must be a member first — added on
     //    the owner's own credential, from their own request: the membership is their act.
     crate::sync::house_bot::add_house_bot_to_album(state, client, &own.album_id, owner_creds)
-        .await?;
+        .await
+        .map_err(|e| crate::web::route_error::RouteError::unavailable(e.to_string()))?;
     let house_bot_key = crate::sync::host_keys::contributor_api_key(
         state,
         &crate::sync::house_bot::house_bot_slug(),
     )
-    .ok_or("house bot has no key after provisioning — cannot read the album")?;
+    .ok_or_else(|| {
+        crate::web::route_error::RouteError::unavailable(
+            "house bot has no key after provisioning — cannot read the album",
+        )
+    })?;
     let assets = crate::immich::access::read_album_assets_as(
         client,
         &own.album_id,
@@ -370,7 +380,9 @@ pub async fn unify_own_album(
             live.reunified = Some(true);
         }
     }
-    state.save().map_err(|e| e.to_string())?;
+    state
+        .save()
+        .map_err(|e| crate::web::route_error::RouteError::unavailable(e.to_string()))?;
     crate::log!(
         "reunited \"{}\" — {} photo(s) were already here; {seeded} the peer already holds, {} to offer them{}",
         own.name,
@@ -552,10 +564,11 @@ pub async fn ensure_mirror(
         permissions: None,
     };
     let host = ensure_utility_user(state, client, &spec).await?;
-    let host_key = host
-        .api_key
-        .clone()
-        .ok_or("the stand-in has no key after provisioning")?;
+    // Empty = not provisioned yet, even though provisioning just ran.
+    let host_key = host.api_key.clone();
+    if host_key.is_empty() {
+        return Err("the stand-in has no key after provisioning".to_string());
+    }
     // Their own face, if their server offers one — best effort, and it stops retrying once it lands.
     crate::immich::contributors::sync_avatar(
         state,

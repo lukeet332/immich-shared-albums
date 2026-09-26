@@ -314,13 +314,18 @@ pub(crate) async fn upload_as_contributor(
     // `None` is legitimate and means the HOUSEHOLD key: `hostSlug` names a stand-in only on a
     // MIRROR, so an owner mapping — this household's own album, owned by a human — has none. The
     // TypeScript treats a missing host key the same way, by letting its default (admin) key apply.
-    let host_key = mapping.host_slug.as_ref().and_then(|slug| {
-        state
-            .collections()
-            .contributors
-            .get(slug)
-            .and_then(|c| c.api_key.clone())
-    });
+    let host_key = mapping
+        .host_slug
+        .as_ref()
+        .and_then(|slug| {
+            state
+                .collections()
+                .contributors
+                .get(slug)
+                .map(|c| c.api_key.clone())
+        })
+        // Empty = the stand-in's key was never minted; that is not a key.
+        .filter(|key| !key.is_empty());
 
     // On an INVITATION album a human already added the people they chose — their membership IS the
     // share. So for an invited person we must never add them: if they are missing, that absence is
@@ -355,11 +360,12 @@ pub(crate) async fn upload_as_contributor(
         false,
     )
     .await?;
-    let Some(contributor_key) = contributor.api_key.clone() else {
+    let contributor_key = contributor.api_key.clone();
+    if contributor_key.is_empty() {
         return Err(format!(
             "contributor \"{display_name}\" has no API key yet — will retry"
         ));
-    };
+    }
 
     // Base64 checksums contain `/` and `+` — never let them into filenames.
     let slug: String = reference
@@ -453,7 +459,11 @@ pub async fn upgrade_stub_to_full(
 pub enum PurgeOutcome {
     /// It was there and we deleted it. The space came back.
     Purged,
-    /// No credential this household holds can see it: absent, or absent to us. Either way there is
+    /// No credential this household holds can see it — THE ADMIN FIRST, and on this Immich the
+    /// admin reads every account's assets (measured on the rig: an admin key answers 200 for a
+    /// stand-in's stub), so "the admin cannot see it" means the asset does not exist here. A stub
+    /// that exists but whose stored key went stale does NOT reach here: the admin still sees it,
+    /// the owner is named, and the failing delete lands in `Err`/`NotOurs` instead. There is
     /// nothing left to collect.
     AlreadyGone,
     /// It exists and belongs to an account we hold no key for. Refused, rather than reaching for
@@ -500,7 +510,9 @@ pub async fn delete_proxy_asset(
         .collections()
         .contributors
         .values()
-        .filter_map(|c| Some((c.user_id.clone()?, c.api_key.clone()?)))
+        // Empty = not provisioned; a stand-in with no id or no key cannot own anything here.
+        .filter(|c| !c.user_id.is_empty() && !c.api_key.is_empty())
+        .map(|c| (c.user_id.clone(), c.api_key.clone()))
         .collect();
 
     if !seen_by_admin {

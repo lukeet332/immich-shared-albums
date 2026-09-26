@@ -35,7 +35,8 @@ async fn main() {
     // instead leaves the stand-in unable to file anything into it (`no albumAsset.create access`),
     // which is exactly the failure this probe hit first.
     let album_id = if album_id_arg.is_empty() {
-        let host_key = host.api_key.clone().expect("host key");
+        let host_key = host.api_key.clone();
+        assert!(!host_key.is_empty(), "host key");
         client
             .post(
                 "/albums",

@@ -116,11 +116,32 @@ pub fn published_albums_for(state: &State, peer: &str) -> Vec<OwnedAlbum> {
 /// index simply stands. Best-effort throughout: a failure keeps the last good snapshot rather than
 /// clearing an index the panel is about to read.
 pub async fn refresh_peer_albums(state: &State, peer: &Peer) -> Vec<OwnedAlbum> {
+    refresh_peer_albums_outcome(state, peer).await.0
+}
+
+/// Whether a refresh answered, or the caller is reading the CACHED index because the peer could not
+/// be asked. A panel offer over a stale index is fine — the next sweep catches up. An INVITATION
+/// over a stale index is not: refusing an act because a peer was unreachable must read as "try
+/// again", not as "that pairing does not exist", which is why the invite path asks which it got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexFreshness {
+    Fresh,
+    Stale,
+}
+
+/// `refresh_peer_albums`, plus which half the answer came from.
+pub async fn refresh_peer_albums_outcome(
+    state: &State,
+    peer: &Peer,
+) -> (Vec<OwnedAlbum>, IndexFreshness) {
     let keep = || {
-        state
-            .store
-            .published_albums_for(&peer.pub_key, Direction::FromThem)
-            .unwrap_or_default()
+        (
+            state
+                .store
+                .published_albums_for(&peer.pub_key, Direction::FromThem)
+                .unwrap_or_default(),
+            IndexFreshness::Stale,
+        )
     };
     let Some(transport) = crate::p2p::transport::transport() else {
         return keep();
@@ -154,15 +175,15 @@ pub async fn refresh_peer_albums(state: &State, peer: &Peer) -> Vec<OwnedAlbum> 
     // index, so an owner missing from it has withdrawn everything and must stop being matched
     // against — which a per-owner write cannot express, because it is only ever called FOR an owner
     // the answer still mentions.
-    let before = keep();
+    let (before, _) = keep();
     if state
         .store
         .published_albums_replace_peer(&peer.pub_key, Direction::FromThem, &incoming)
         .is_err()
     {
-        return before;
+        return keep();
     }
-    let after = keep();
+    let (after, _) = keep();
     // Only on a real change: a panel's own match read lands here, and an unconditional hint would
     // tell the page that asked to ask again, forever, never landing a fresh answer.
     if before != after {
@@ -173,7 +194,7 @@ pub async fn refresh_peer_albums(state: &State, peer: &Peer) -> Vec<OwnedAlbum> 
         );
         crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Index);
     }
-    after
+    (after, IndexFreshness::Fresh)
 }
 
 /// The panel's Invite: share the caller's OWN album with the person on the peer who owns the other
@@ -195,32 +216,45 @@ pub async fn invite_peer_to_reunite(
     peer: &Peer,
     album_name: &str,
     owner_user_id: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), crate::web::route_error::RouteError> {
     // What the peer published, read NOW. A panel's rows come from the index the loop keeps, which
     // may not have pulled this peer since they published — and an invitation is an explicit act, so
-    // it may wait briefly for the truth where a page load must not.
-    refresh_peer_albums(state, peer).await;
+    // it may wait briefly for the truth where a page load must not. WHICH half the answer came from
+    // decides the refusal: a pairing missing from a FRESH index is a caller mistake (400), while
+    // one missing because the PEER could not be asked is a dead dependency (502) — refusing on the
+    // peer's silence would tell a person their panel row is a lie.
+    let (index, freshness) = refresh_peer_albums_outcome(state, peer).await;
     let wanted = crate::sync::matches::normalise_album_name(album_name);
-    let theirs = state
-        .store
-        .published_albums_for(&peer.pub_key, Direction::FromThem)
-        .unwrap_or_default()
+    let theirs = index
         .into_iter()
         .find(|a| {
             a.owner_user_id.as_deref() == Some(owner_user_id)
                 && crate::sync::matches::normalise_album_name(&a.name) == wanted
         })
-        .ok_or_else(|| {
-            "that pairing is not in this server's index — open the panel again and retry"
-                .to_string()
+        .ok_or_else(|| match freshness {
+            crate::sync::album_index::IndexFreshness::Fresh => {
+                crate::web::route_error::RouteError::bad_input(
+                    "that pairing is not in this server's index — open the panel again and retry",
+                )
+            }
+            crate::sync::album_index::IndexFreshness::Stale => {
+                crate::web::route_error::RouteError::unavailable(format!(
+                    "could not read \"{}\"'s album index — try again",
+                    peer.name
+                ))
+            }
         })?;
 
-    let caller_albums = read_caller_albums(client, creds)
-        .await
-        .ok_or_else(|| "could not read your albums".to_string())?;
+    let caller_albums = read_caller_albums(client, creds).await.ok_or_else(|| {
+        crate::web::route_error::RouteError::unavailable("could not read your albums")
+    })?;
     let mine =
         crate::sync::adoption::find_adoptable_album(album_name, &caller_albums, caller_user_id)
-            .ok_or_else(|| format!("you have no album called \"{album_name}\""))?;
+            .ok_or_else(|| {
+                crate::web::route_error::RouteError::bad_input(format!(
+                    "you have no album called \"{album_name}\""
+                ))
+            })?;
 
     // THE MEMBERSHIP IS THE INVITATION, so it is added the way a human's would be and the ordinary
     // scanner turns it into one — the same path, the same mapping, the same everything. Two things
@@ -238,33 +272,46 @@ pub async fn invite_peer_to_reunite(
         true,
         true,
     )
-    .await?;
+    .await
+    .map_err(|e| crate::web::route_error::RouteError::unavailable(e.to_string()))?;
 
     // READ IT BACK rather than trust the call. `ensure_contributor` deliberately swallows a failed
     // add — attribution can retry — but a panel that says "Invited" for someone who is not on the
     // album is a lie the person cannot see through, and the peer is never told either.
+    // A FAILED READ is not a refused membership: the add may have landed and the readback be the
+    // thing that failed, so "nothing was changed" would be a guess. 502 and let a retry confirm.
     let after = client
         .get_album(&mine.album_id, &crate::immich::client::Auth::Creds(creds))
         .await;
-    let is_member = after
-        .ok()
-        .flatten()
+    let album = match after {
+        Ok(album) => album,
+        Err(e) => {
+            return Err(crate::web::route_error::RouteError::unavailable(format!(
+                "shared \"{}\" with {}, but the album could not be read back to confirm it: {}",
+                mine.name,
+                theirs.owner_name,
+                e.message()
+            )))
+        }
+    };
+    let is_member = album
         .and_then(|album| {
             album
                 .get("albumUsers")
                 .and_then(|u| u.as_array())
                 .map(|users| {
                     users.iter().any(|au| {
-                        au.pointer("/user/id").and_then(|v| v.as_str()) == person.user_id.as_deref()
+                        au.pointer("/user/id").and_then(|v| v.as_str())
+                            == Some(person.user_id.as_str())
                     })
                 })
         })
         .unwrap_or(false);
     if !is_member {
-        return Err(format!(
+        return Err(crate::web::route_error::RouteError::bad_input(format!(
             "could not share \"{}\" with {} — nothing was changed",
             mine.name, theirs.owner_name
-        ));
+        )));
     }
 
     // Run the scanner NOW rather than on its next tick: the mapping it records is what turns the row
@@ -288,10 +335,10 @@ pub async fn invite_peer_to_reunite(
     // No mapping means the peer is never told, and the inviter's row would sit on "Invite" for ever
     // after a success notice. That IS a failure, and it has to read as one.
     let Some(mapping) = mapping else {
-        return Err(format!(
+        return Err(crate::web::route_error::RouteError::unavailable(format!(
             "\"{}\" is shared with {}, but the invitation was not recorded — open the panel again",
             mine.name, theirs.owner_name
-        ));
+        )));
     };
     if let Err(e) =
         crate::sync::house_bot::add_house_bot_to_album(state, client, &mine.album_id, creds).await

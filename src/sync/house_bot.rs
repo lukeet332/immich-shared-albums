@@ -89,9 +89,11 @@ pub async fn add_house_bot_to_album_as(
     auth: &Auth<'_>,
 ) -> Result<(), String> {
     let bot = ensure_house_bot(state, client).await?;
-    let Some(bot_id) = bot.user_id.clone() else {
+    // Empty = not provisioned yet; there is no account to add.
+    let bot_id = bot.user_id.clone();
+    if bot_id.is_empty() {
         return Err("the house bot has no user id after provisioning".to_string());
-    };
+    }
     let album = client
         .get_album(album_id, auth)
         .await

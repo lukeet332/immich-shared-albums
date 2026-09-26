@@ -35,7 +35,8 @@ pub async fn leave_album(
     client: &Client,
     mapping_id: &str,
     notify_origin: bool,
-) -> Result<LeaveOutcome, String> {
+) -> Result<LeaveOutcome, crate::web::route_error::RouteError> {
+    use crate::web::route_error::RouteError;
     let Some(mapping) = state
         .collections()
         .mappings
@@ -43,10 +44,14 @@ pub async fn leave_album(
         .find(|m| m.id == mapping_id)
         .cloned()
     else {
-        return Err("unknown mapping (only joined albums can be left)".to_string());
+        return Err(RouteError::bad_input(
+            "unknown mapping (only joined albums can be left)",
+        ));
     };
     if mapping.role != Role::Member {
-        return Err("unknown mapping (only joined albums can be left)".to_string());
+        return Err(RouteError::bad_input(
+            "unknown mapping (only joined albums can be left)",
+        ));
     }
     let plan = album_teardown(TeardownMapping::from(&mapping));
 
@@ -104,7 +109,8 @@ pub async fn leave_album(
         // The local side is deleted with the credential that can see it — a member mirror is owned by
         // the origin owner's stand-in, not by this household's admin. A member mapping with no key is
         // REFUSED rather than deleted as the household (`MappingAuth::for_mapping`).
-        let creds = crate::immich::access::MappingAuth::for_mapping(state, &mapping)?;
+        let creds = crate::immich::access::MappingAuth::for_mapping(state, &mapping)
+            .map_err(|e| RouteError::unavailable(e.to_string()))?;
         let auth = creds.auth();
         if let Err(e) = client
             .json(

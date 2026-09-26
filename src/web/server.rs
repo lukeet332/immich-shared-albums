@@ -392,13 +392,11 @@ async fn pairing_mint(headers: &HeaderMap) -> Response {
             json!({ "error": "the peer transport is not running" }),
         );
     };
-    match crate::p2p::pair::mint_pairing(transport, &state().store) {
-        Ok((link, expires_at)) => json_response(
-            StatusCode::OK,
-            json!({ "link": link, "expiresAt": expires_at }),
-        ),
-        Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
-    }
+    let (link, expires_at) = crate::p2p::pair::mint_pairing(transport, &state().store);
+    json_response(
+        StatusCode::OK,
+        json!({ "link": link, "expiresAt": expires_at }),
+    )
 }
 
 /// `POST /pairings/revoke` — withdraw a code that has not been used. Revoking one that is already
@@ -467,7 +465,7 @@ async fn pairing_redeem(headers: &HeaderMap, body: HttpBody) -> Response {
             });
             json_response(StatusCode::OK, value)
         }
-        Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -509,7 +507,7 @@ async fn leave(headers: &HeaderMap, body: HttpBody) -> Response {
                 "failed": outcome.failed,
             }),
         ),
-        Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -656,7 +654,7 @@ async fn unlink(headers: &HeaderMap, body: HttpBody) -> Response {
                 "markersRemoved": outcome.markers_removed,
             }),
         ),
-        Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -746,7 +744,7 @@ async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
     // then take those accounts off — only the owner can, and the caller IS the owner here.
     let outcome = match crate::sync::leave::leave_album(state(), client, mapping_id, false).await {
         Ok(outcome) => outcome,
-        Err(e) => return json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
+        Err(e) => return e.into_response(),
     };
     // The trail's withdrawal line, written HERE: `leave_album` has already purged the peer's stubs, so
     // the line describes the finished state, and `strip_album_bots` is about to take our accounts off
@@ -859,7 +857,7 @@ async fn reunite(headers: &HeaderMap, body: HttpBody) -> Response {
         Ok((album, seeded)) => {
             json_response(StatusCode::OK, json!({ "album": album, "seeded": seeded }))
         }
-        Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -921,7 +919,7 @@ async fn invite_to_reunite(headers: &HeaderMap, body: HttpBody) -> Response {
                 json!({ "album": album, "invited": invited }),
             )
         }
-        Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -1162,10 +1160,13 @@ async fn join(headers: &HeaderMap, body: HttpBody) -> Response {
     let redeemed = match crate::p2p::join::redeem_invite(state(), &invite, password).await {
         Ok(redeemed) => redeemed,
         Err(refused) => {
-            // A password prompt is a 401 the panel turns into a FIELD; everything else is a 400
-            // it turns into an error. Collapsing them would show a message where a field belongs.
+            // A password prompt is a 401 the panel turns into a FIELD; a dead dependency is a 502
+            // the panel reads as "try again"; everything else is a 400 it turns into an error.
+            // Collapsing them would show a message where a field belongs.
             let status = if refused.password_required {
                 StatusCode::UNAUTHORIZED
+            } else if refused.retryable {
+                StatusCode::BAD_GATEWAY
             } else {
                 StatusCode::BAD_REQUEST
             };
@@ -1259,7 +1260,7 @@ async fn join(headers: &HeaderMap, body: HttpBody) -> Response {
                 }),
             )
         }
-        Err(e) => json_response(StatusCode::BAD_REQUEST, json!({ "error": e })),
+        Err(e) => e.into_response(),
     }
 }
 

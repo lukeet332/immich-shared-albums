@@ -20,6 +20,7 @@ pub mod link_grants;
 pub mod matches;
 pub mod mirror;
 pub mod peer_mapping_id;
+pub mod reclaim;
 pub mod status;
 pub mod sweeps;
 pub mod traffic_triggers;

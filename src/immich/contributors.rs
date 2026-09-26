@@ -1,5 +1,7 @@
 /** immich/contributors.rs — one Immich account per remote person, and the membership rules. See ARCHITECTURE.md. */
-use crate::config::{bot_prefix, cfg, is_utility_email, UTILITY_EMAIL_DOMAIN, UTILITY_SUFFIX};
+use crate::config::{
+    bot_prefix, cfg, is_utility_email, short_id, UTILITY_EMAIL_DOMAIN, UTILITY_SUFFIX,
+};
 use crate::immich::client::{Auth, Client};
 use crate::state::State;
 use crate::store::Contributor;
@@ -234,7 +236,8 @@ pub async fn ensure_utility_user(
         .get(&spec.state_key)
         .cloned();
 
-    if let Some(existing) = existing.as_ref().filter(|c| c.api_key.is_some()) {
+    // Empty = not provisioned yet; a mid-provisioning crash persists a row without a key.
+    if let Some(existing) = existing.as_ref().filter(|c| !c.api_key.is_empty()) {
         // Already provisioned. Heal the records in ONE save, because a crash must never split
         // `homePeer` from the rest of the account.
         let needs_write = (spec.home_peer.is_some() && existing.home_peer != spec.home_peer)
@@ -275,12 +278,13 @@ pub async fn ensure_utility_user(
         // generic suffix, or the two overwrite each other on every poll. (`fullName` is how the
         // directory states a name outright; it belongs to the invites feature, so until that lands
         // the guard is simply "a directory has placed them".)
-        // An account with a key but no id is mid-provision; the retry that finishes it heals the
-        // name too, so there is nothing to do here.
         // A directory that PLACED this person and named them outright owns that name; an
         // attribution ref must not rename them back to the generic suffix on every poll.
         let directory_owns_name = existing.home_peer.is_some() && spec.full_name.is_none();
-        if let (false, Some(user_id)) = (directory_owns_name, existing.user_id.clone()) {
+        // An account with a key but an EMPTY id is mid-provision; the retry that finishes it heals
+        // the name too, so there is nothing to do here.
+        let mid_provision = existing.user_id.is_empty();
+        if !directory_owns_name && !mid_provision {
             // A SHORT ttl, because this is a correction and correcting from a stale read is a
             // contradiction. With the 10s attribution TTL, a rename made between two materialises
             // is invisible to the next one: the cache still holds the old name, it compares equal to
@@ -288,6 +292,7 @@ pub async fn ensure_utility_user(
             // happens to fall outside the window. Measured on the rig: a heal that should have run
             // within seconds fired 160 s later, only because that was the next ref for that person.
             let users = crate::immich::client::users_by_id(client, 1_000).await;
+            let user_id = existing.user_id.clone();
             let current = users.get(&user_id).map(|u| u.name.clone());
             if let Some(current) = current.filter(|n| !n.is_empty() && *n != wanted_name) {
                 let body = json!({ "name": wanted_name });
@@ -468,8 +473,8 @@ pub async fn ensure_utility_user(
     }
 
     let contributor = Contributor {
-        user_id: Some(user_id),
-        api_key: Some(secret.to_string()),
+        user_id,
+        api_key: secret.to_string(),
         // Keep the password ONLY when the roll failed, so a retry can resume.
         password: if password_retired {
             None
@@ -531,12 +536,11 @@ fn gave_picture() -> &'static std::sync::Mutex<std::collections::HashSet<String>
 /// Best effort by design: the picture is garnish, and the account it decorates has work to do whether
 /// or not it lands.
 async fn give_bot_avatar(client: &Client, contributor: &Contributor) {
-    let (Some(key), Some(user_id)) = (
-        contributor.api_key.as_deref(),
-        contributor.user_id.as_deref(),
-    ) else {
+    // Empty = not provisioned — an account without an id or a key has nothing to upload as.
+    let (key, user_id) = (&contributor.api_key, &contributor.user_id);
+    if key.is_empty() || user_id.is_empty() {
         return;
-    };
+    }
     if gave_picture()
         .lock()
         .map(|g| g.contains(user_id))
@@ -559,10 +563,7 @@ async fn give_bot_avatar(client: &Client, contributor: &Contributor) {
         if let Ok(mut gave) = gave_picture().lock() {
             gave.insert(user_id.to_string());
         }
-        crate::log!(
-            "gave \"{}\" the addon's own picture",
-            &user_id[..user_id.len().min(8)]
-        );
+        crate::log!("gave \"{}\" the addon's own picture", short_id(user_id));
     }
 }
 
@@ -595,9 +596,11 @@ pub async fn sync_avatar(
     if contributor.avatar_done {
         return;
     }
-    let Some(key) = contributor.api_key.as_deref() else {
+    // Empty = no key minted yet; the avatar waits for the retry that mints it.
+    let key = contributor.api_key.as_str();
+    if key.is_empty() {
         return;
-    };
+    }
     let Some(transport) = crate::p2p::transport::transport() else {
         return;
     };
@@ -713,12 +716,14 @@ pub async fn ensure_contributor(
     let mut spec = person_spec(display_name, origin_user_id);
     spec.via_peer = via_peer.map(str::to_string);
     let contributor = ensure_utility_user(state, client, &spec).await?;
-    let Some(user_id) = contributor.user_id.clone() else {
+    // Empty = not provisioned yet; both are minted later, so the caller retries.
+    let user_id = contributor.user_id.clone();
+    if user_id.is_empty() {
         return Err(format!(
             "contributor \"{display_name}\" has no user id yet — will retry"
         ));
-    };
-    if contributor.api_key.is_none() {
+    }
+    if contributor.api_key.is_empty() {
         return Err(format!(
             "contributor \"{display_name}\" has no API key yet — will retry"
         ));

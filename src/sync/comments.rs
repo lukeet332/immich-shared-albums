@@ -149,13 +149,15 @@ pub async fn materialise_comments(
         .await
         {
             Ok(contributor) => {
-                let key = contributor.api_key.clone().unwrap_or_default();
+                // Empty = not provisioned; the post then fails as an unusable key and the
+                // fallback to our bot below is what records the line.
+                let key = contributor.api_key.clone();
                 match post_activity(client, &mapping.album_id, &kind, text, &Auth::Key(&key)).await
                 {
                     Ok(posted) => posted,
                     Err(e) if cannot_succeed(&e) => {
                         let bot = ensure_house_bot(state, client).await?;
-                        let bot_key = bot.api_key.clone().unwrap_or_default();
+                        let bot_key = bot.api_key.clone();
                         post_activity(client, &mapping.album_id, &kind, text, &Auth::Key(&bot_key))
                             .await
                             .map_err(|e| e.to_string())?
@@ -167,7 +169,7 @@ pub async fn materialise_comments(
             }
             Err(e) if cannot_succeed(&e) => {
                 let bot = ensure_house_bot(state, client).await?;
-                let bot_key = bot.api_key.clone().unwrap_or_default();
+                let bot_key = bot.api_key.clone();
                 post_activity(client, &mapping.album_id, &kind, text, &Auth::Key(&bot_key))
                     .await
                     .map_err(|e| e.to_string())?
@@ -316,11 +318,13 @@ pub async fn handle_comments(
     let users = users_by_id(client, crate::sync::engine::USER_MAP_MAX_AGE_FAST_MS).await;
     // Our own bot's id, bound before anything else: the canonical list keeps OUR trail here, but a
     // person stand-in is also a utility account and its rows are a human's relayed words.
+    // Empty = the bot has not been provisioned yet; no row is then ours to keep.
     let house_bot_id = state
         .collections()
         .contributors
         .get(&crate::sync::house_bot::house_bot_slug())
-        .and_then(|c| c.user_id.clone());
+        .map(|c| c.user_id.clone())
+        .unwrap_or_default();
     // An owner mapping reads as the household; a member mapping reads as the stand-in that owns the
     // mirror, and is refused when this household holds no key for it.
     let Ok(creds) = album_reader_auth(state, &mapping) else {
@@ -357,12 +361,8 @@ pub async fn handle_comments(
             // THE HOUSE BOT ONLY. A person stand-in is ALSO a utility account, but its activity is a
             // human's relayed words: excluding every utility account here is what stopped one
             // household's comments from ever reaching a third household that joined later.
-            let author_is_our_bot = house_bot_id
-                .as_ref()
-                .map(|bot_id| {
-                    a.pointer("/user/id").and_then(|v| v.as_str()) == Some(bot_id.as_str())
-                })
-                .unwrap_or(false);
+            let author_is_our_bot = !house_bot_id.is_empty()
+                && a.pointer("/user/id").and_then(|v| v.as_str()) == Some(house_bot_id.as_str());
             !author_is_our_bot
         })
         .map(|a| {
@@ -469,7 +469,9 @@ async fn sync_one_album(
         .collections()
         .contributors
         .values()
-        .filter_map(|c| c.user_id.clone())
+        // Empty = not provisioned; such an id matches nothing in Immich anyway.
+        .filter(|c| !c.user_id.is_empty())
+        .map(|c| c.user_id.clone())
         .collect();
     let activities = get_comments(client, &mapping.album_id, &auth).await?;
     let fresh: Vec<Value> = activities
