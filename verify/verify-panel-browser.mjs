@@ -1,6 +1,6 @@
 // verify-panel-browser.mjs — load the Rust sidecar's admin panel in a REAL browser, signed in.
 //
-//   node rust/verify-panel-browser.mjs [SIDECAR_URL] [EMAIL] [PASSWORD]
+//   node verify/verify-panel-browser.mjs [SIDECAR_URL] [EMAIL] [PASSWORD]
 //
 // The sidecar is a FRONT for Immich, so everything goes through one origin — that is what makes the
 // Immich session cookie apply to the panel, and it is how a real install is reached. Pointing the

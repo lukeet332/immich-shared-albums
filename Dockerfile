@@ -1,7 +1,7 @@
-# The Rust sidecar image. The build context is the REPO ROOT, not rust/, because the binary embeds
-# the committed Preact UI at compile time (rust/src/web/assets.rs include_str!s the repo layout):
+# The sidecar image. The build context is the REPO ROOT, because the binary embeds the committed
+# Preact UI at compile time (src/web/assets.rs include_str!s the repo layout):
 #
-#   docker build -t immich-shared-albums:live -f rust/Dockerfile .
+#   docker build -t immich-shared-albums:live .
 #
 # Pinned by digest: the tag is mutable and this image ships to ghcr, so an unpinned base would let
 # the published artefact change with no commit here. Dependabot's docker ecosystem moves the digest.
@@ -18,18 +18,17 @@ ENV CARGO_PROFILE_RELEASE_DEBUG=${CARGO_PROFILE_RELEASE_DEBUG}
 # rusqlite builds the bundled SQLite from C, and ring assembles its own crypto: both need a
 # toolchain. Alpine's rust image ships rustc but not cc.
 RUN apk add --no-cache build-base
-WORKDIR /build/rust
+WORKDIR /build
 # Dependencies are resolved from the lockfile and compiled on their own layer. The stub sources name
 # no items, but cargo still builds every dependency in Cargo.toml, so editing src/ does not
 # recompile iroh and reqwest.
-COPY rust/Cargo.toml rust/Cargo.lock ./
+COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && touch src/lib.rs && echo 'fn main() {}' > src/main.rs \
  && cargo build --release --locked --bin isa \
  && rm -rf src
-# The UI is committed build output, so no Node stage is needed. It must sit where include_str!
-# resolves it: <root>/src/web/dist, one level ABOVE the crate at <root>/rust/.
-COPY src/web/dist /build/src/web/dist
-COPY rust/src ./src
+# The UI is committed build output, so no Node stage is needed. It sits where include_str! resolves
+# it: <root>/src/web/dist, inside the crate's own src/.
+COPY src ./src
 # HAZARD: COPY stamps the context's mtimes, which are older than the stub build's artefacts, so
 # cargo reads every source as unchanged and "succeeds" in 0.3s while leaving the STUB binary in
 # place. Touching forces a real rebuild; without it the image silently ships `fn main() {}`.
@@ -41,7 +40,7 @@ FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9
 RUN apk add --no-cache ca-certificates wget \
  && addgroup -g 1000 isa \
  && adduser -D -u 1000 -G isa -h /home/isa isa
-COPY --from=builder /build/rust/target/release/isa /usr/local/bin/isa
+COPY --from=builder /build/target/release/isa /usr/local/bin/isa
 # /data holds the identity key and every bot API key. Created here so uid 1000 owns it even when the
 # volume is anonymous; a bind-mount install must be writable by uid 1000.
 RUN mkdir -p /data && chown 1000:1000 /data

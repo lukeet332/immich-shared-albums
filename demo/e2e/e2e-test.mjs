@@ -177,7 +177,7 @@ const sidecarDataDir = stateDir => {
   } catch { return ''; }
 };
 // State reads go through the sqlite-reader container: the sidecar image has no runtime to exec into
-// (rust/ARCHITECTURE.md), so there is nothing to probe for and exactly one way to read.
+// (ARCHITECTURE.md), so there is nothing to probe for and exactly one way to read.
 const sidecarSql = (stateDir, sql) => {
   const src = sidecarDataDir(stateDir);
   if (!src) return null;
@@ -858,7 +858,7 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
   // invisible to them whether or not the sidecar purged anything. The sidecar's own view and its
   // ledger are the honest answer. RUST-ONLY: the TypeScript's native-leave check sits behind its
   // `updatedAt` handshake, which Immich does not move when a member leaves, so it never notices this
-  // at all (see rust/PORT.md). The port runs the check before the handshake.
+  // at all (see PORT.md). The port runs the check before the handshake.
   const peersGone = await until(async () => {
     const peers = await (await fetch(`${BS}/immich-shared-albums/peers`, { headers: { 'x-api-key': BKEY } })).json();
     return !(peers.albums || []).some(a => a.name === 'delete test') ? true : null;

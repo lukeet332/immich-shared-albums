@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # verify-leave-route.sh — the `POST /leave` HTTP route, over real HTTP, against live Immich.
 #
-#   bash rust/verify-leave-route.sh
+#   bash verify/verify-leave-route.sh
 #
 # The engine (`leave_album`) already has its own proof in verify-leave.sh; what is checked HERE is
 # that the route reaches it, and that the gate in front of it holds. The gate is the part worth
@@ -20,13 +20,12 @@ BKEY=$(grep -m1 '^B_API_KEY=' "$RIG_ENV" | cut -d= -f2-)
 [ -n "$BKEY" ] || { echo "no B_API_KEY in $RIG_ENV"; exit 1; }
 
 export PATH=/usr/local/cargo/bin:$PATH
-export RUSTUP_HOME=/usr/local/rustup CARGO_HOME="$PWD/rust/.cargo-home"
+export RUSTUP_HOME=/usr/local/rustup CARGO_HOME="$PWD/.cargo-home"
 
 cleanup() { pkill -x isa 2>/dev/null || true; }
 trap cleanup EXIT
 cleanup
 
-cd rust
 # A fresh data dir every run: the seeder provisions a stand-in, and `contributors.userId` is UNIQUE,
 # so a reused directory fails on the second run and `set -e` reports it as a bare non-zero exit.
 rm -rf "$DATA"

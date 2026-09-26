@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # verify-join.sh — the MEMBER side of the isa/2 handshake, against a real origin over iroh.
 #
-#   bash rust/verify-join.sh
+#   bash verify/verify-join.sh
 #
 # Everything else in the suite drives the origin's handlers. This drives the OTHER half: a Rust
 # member dialling an origin it has never met, redeeming a share link, and pinning what answered.
@@ -21,7 +21,7 @@ BKEY=$(grep -m1 '^B_API_KEY=' "$RIG_ENV" | cut -d= -f2-)
 [ -n "$BKEY" ] || { echo "no B_API_KEY in $RIG_ENV"; exit 1; }
 
 export PATH=/usr/local/cargo/bin:$PATH
-export RUSTUP_HOME=/usr/local/rustup CARGO_HOME="$PWD/rust/.cargo-home"
+export RUSTUP_HOME=/usr/local/rustup CARGO_HOME="$PWD/.cargo-home"
 
 fails=0
 check() { if [ "$2" = "$3" ]; then echo "  ok   $1 — $2"; else echo "  FAIL $1 — got $2, expected $3"; fails=$((fails+1)); fi; }
@@ -43,7 +43,7 @@ echo "origin album $ALBUM, share link ${LINK:0:10}…"
 rm -rf "$ORIGIN_DIR"
 ISA_IMMICH_API_KEY="$BKEY" ISA_IMMICH_URL="$IMG" ISA_DATA_DIR="$ORIGIN_DIR" \
   ISA_HOUSEHOLD_NAME="Join Origin" ISA_PORT=$ORIGIN_PORT ISA_P2P_PORT=$ORIGIN_P2P ISA_RELAY=off \
-  ./rust/target/debug/isa > /tmp/isa-join-origin.log 2>&1 &
+  ./target/debug/isa > /tmp/isa-join-origin.log 2>&1 &
 ORIGIN_PID=$!
 for _ in $(seq 1 40); do curl -fsS "http://127.0.0.1:$ORIGIN_PORT/immich-shared-albums/health" >/dev/null 2>&1 && break; sleep 1; done
 
@@ -57,7 +57,7 @@ probe() { # probe <token> <key> [password]
   rm -rf "$PROBE_DIR"
   ISA_IMMICH_API_KEY="$BKEY" ISA_IMMICH_URL="$IMG" ISA_DATA_DIR="$PROBE_DIR" \
     ISA_HOUSEHOLD_NAME="Join Member" ISA_PORT=9452 ISA_P2P_PORT=9453 ISA_RELAY=off \
-    timeout 120 ./rust/target/debug/examples/redeem_probe "$1" "$2" "${3:-}" 2>/dev/null | tail -1
+    timeout 120 ./target/debug/examples/redeem_probe "$1" "$2" "${3:-}" 2>/dev/null | tail -1
 }
 
 # ---- a wrong key is refused, and in OUR words ----
@@ -91,7 +91,7 @@ rm -rf "$ORIGIN_DIR"
 ISA_IMMICH_API_KEY="$BKEY" ISA_IMMICH_URL="$IMG" ISA_DATA_DIR="$ORIGIN_DIR" \
   ISA_HOUSEHOLD_NAME="Join Origin" ISA_PORT=$ORIGIN_PORT ISA_P2P_PORT=$ORIGIN_P2P ISA_RELAY=off \
   ISA_LINK_JOIN_REQUIRES_PASSWORD=true \
-  ./rust/target/debug/isa > /tmp/isa-join-origin2.log 2>&1 &
+  ./target/debug/isa > /tmp/isa-join-origin2.log 2>&1 &
 ORIGIN_PID=$!
 for _ in $(seq 1 40); do curl -fsS "http://127.0.0.1:$ORIGIN_PORT/immich-shared-albums/health" >/dev/null 2>&1 && break; sleep 1; done
 TOKEN2=$(curl -s "http://127.0.0.1:$ORIGIN_PORT/share/$LINK" \

@@ -1,6 +1,6 @@
 # Architecture — the sidecar in Rust
 
-`rust/` is the sidecar: the addon that fronts Immich, pairs households, and moves albums between
+`` is the sidecar: the addon that fronts Immich, pairs households, and moves albums between
 servers. `src/lib.rs` is the crate root, `src/main.rs` is the composition root (the `isa` binary),
 `src/config.rs` holds every setting, and `src/web/assets.rs` embeds the built UI. `examples/` holds
 the probes used against the rig.
@@ -214,11 +214,11 @@ connection can never address someone else's album.
 - **A guard must not live across an `.await`.** The compiler refuses it as a non-`Send` future;
   `clippy::await_holding_lock` names the line. Bind what you need from the guard, drop it, then
   await.
-- **The Docker build context is the REPO ROOT**, not `rust/`: `web/assets.rs` embeds the built UI
-  with `include_str!("../../../src/web/dist/…")`. Build with `docker build -f rust/Dockerfile .`.
+- **The Docker build context is the REPO ROOT**, not ``: `web/assets.rs` embeds the built UI
+  with `include_str!("../../../src/web/dist/…")`. Build with `docker build -f Dockerfile .`.
 - **`/tmp` is not shared with the Docker daemon.** A file a container writes to a bind-mounted `/tmp`
   lands in the daemon's `/tmp` while this shell reads its own — so a state database "copied to /tmp"
-  reads as empty and the failure looks like a compatibility bug. Keep rig state under `rust/target/`.
+  reads as empty and the failure looks like a compatibility bug. Keep rig state under `target/`.
 - **The sidecar image has no Node.** Nothing in it may shell out to `node`, and no test harness may
   assume it can: the rig runs its probes from a separate Node image (`immich-shared-albums:probe`).
 - **A nudge is not a sweep, and must not be gated like one.** `handle_invitations_nudge` starts
@@ -234,14 +234,14 @@ connection can never address someone else's album.
 | --- | --- | --- | --- |
 | Unit | pure logic, exactly | `cd rust && cargo test --lib` | `255 passed; 0 failed; 1 ignored` |
 | Lint | the guard rules above | `cd rust && cargo clippy --all-targets` | no errors |
-| Image | the container contract: uid 1000, `/data` writable and owned by it, `HEALTHCHECK` healthy, the identity survives a restart | `bash rust/verify-image.sh` | `PASS — image contract holds` |
-| Panel | the sidecar's own panel signs in and renders, with the sidecar fronting Immich on one origin | `bash rust/verify-panel.sh` | `5/5 checks passed` (incl. the "Create a link" button the install docs name) |
-| Rig | cross-household behaviour against live mock Immich stacks | `ISA_DOCKERFILE=rust/Dockerfile bash demo/run-mock-e2e.sh` | `ALL PASS (273 checks)` |
+| Image | the container contract: uid 1000, `/data` writable and owned by it, `HEALTHCHECK` healthy, the identity survives a restart | `bash verify/verify-image.sh` | `PASS — image contract holds` |
+| Panel | the sidecar's own panel signs in and renders, with the sidecar fronting Immich on one origin | `bash verify/verify-panel.sh` | `5/5 checks passed` (incl. the "Create a link" button the install docs name) |
+| Rig | cross-household behaviour against live mock Immich stacks | `ISA_DOCKERFILE=Dockerfile bash demo/run-mock-e2e.sh` | `ALL PASS (273 checks)` |
 | Browser | the banner, the accept page, the chooser, the settings card and the panel's live flows in Chromium | `cd demo/e2e && CKEY=… B_EMAIL=admin@e2e.local B_PASS=… node browser-test.mjs` | `BROWSER PASS (61 checks)` |
-| Install | `deploy/install.sh` runs end to end and produces a working install | `bash rust/verify-install.sh` | `PASS — install.sh installed rust/Dockerfile end to end` |
-| Mesh | SYMMETRY: the same join/contribute/comment/trail/leave cycle on every ordered pair of a three-household mesh, both directions | `HAND_BIND=<host> bash demo/hand-test-up.sh`, then `node rust/target/probe-mesh-asymmetry.mjs` | `48/48`, and no pair failing where its reverse passes |
+| Install | `deploy/install.sh` runs end to end and produces a working install | `bash verify/verify-install.sh` | `PASS — install.sh installed Dockerfile end to end` |
+| Mesh | SYMMETRY: the same join/contribute/comment/trail/leave cycle on every ordered pair of a three-household mesh, both directions | `HAND_BIND=<host> bash demo/hand-test-up.sh`, then `node target/probe-mesh-asymmetry.mjs` | `48/48`, and no pair failing where its reverse passes |
 
-Focused lanes in `rust/`, one flow each. The counts are from a run against the live rig; the
+Focused lanes in ``, one flow each. The counts are from a run against the live rig; the
 container-based ones start their own sidecar unless they say otherwise.
 
 | Lane | Checks | What it pins | Needs |
@@ -254,7 +254,7 @@ container-based ones start their own sidecar unless they say otherwise.
 | `verify-redeem.mjs` | 25/25 | the enrolment path and every gate that can refuse it: a reused link, an unknown key, a password-gated link with no password or the wrong one, a malformed body, and the setting that turns link joining off at the PEER route as well as on the page | a sidecar on `:9410`, `BKEY` exported |
 | `verify-pairing.mjs` | 17/17 | two sidecars pairing over the real wire: single-use links, replay refused, stale refused, both sides listed, the protocol the peer advertised | two sidecars on `:9410`/`:9420` |
 | `verify-interceptor.mjs` | 10/10 | `/api/assets/:id/thumbnail` across two servers: a MISS comes from the owner byte for byte, a repeat is a cache HIT | self-hosting, `BKEY` exported |
-| `verify-share.mjs` | 13/13 | the join card in Chromium over the framed native album, `?native=1` untouched, dismissal handing over to Immich | a sidecar on `:9400`, `SHARE_KEY` and `SHARE_ALBUM` exported, a screenshot path under `rust/target/` |
+| `verify-share.mjs` | 13/13 | the join card in Chromium over the framed native album, `?native=1` untouched, dismissal handing over to Immich | a sidecar on `:9400`, `SHARE_KEY` and `SHARE_ALBUM` exported, a screenshot path under `target/` |
 | `verify-share-browser.mjs` | 7/7 | `deploy/INSTALL-AI.md`'s VERIFY step 2 on its own: the card only exists once `share.js` has mounted, so a browser is the only thing that can answer it | a sidecar on `:8391`, `BKEY` exported |
 | `verify-join.sh` | pass | the MEMBER half of the handshake against a real origin: a refused join pins no peer, a re-dial does not enrol twice, a password-gated album asks for a password | the rig |
 | `verify-leave.sh` | pass | the purge reclaims the space: the stand-in's stub is gone, the mapping is gone, and the admin key could never have seen it | the rig |
@@ -266,8 +266,8 @@ container-based ones start their own sidecar unless they say otherwise.
 ## Performance
 
 Measured as the artefact that ships: one container, against the same mock Immich, with a keep-alive
-client (`rust/bench-latency.mjs` — 2000 sequential requests and 2000 concurrent, 50 in flight, per
-endpoint). `rust/bench.sh` spawns a `curl` per request, so its latency means are dominated by process
+client (`verify/bench-latency.mjs` — 2000 sequential requests and 2000 concurrent, 50 in flight, per
+endpoint). `verify/bench.sh` spawns a `curl` per request, so its latency means are dominated by process
 spawn and are not quoted here.
 
 | Metric | Value |

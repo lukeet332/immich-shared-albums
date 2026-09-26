@@ -111,7 +111,7 @@ actually changed something.
 `split_into_chunks` takes its exclusions from `.coderabbit.yaml`'s `path_filters` rather than a list
 of its own (`excluded_patterns`), matched with `is_excluded`. That config already encodes which files
 are not worth review budget — generated bundles, the lockfile, and on the Rust port's branch
-`rust/examples/**` and the two benchmark scripts — so both reviewers spend their file budget on the
+`examples/**` and the two benchmark scripts — so both reviewers spend their file budget on the
 same files, and the rule has one home. An include-list form of `path_filters` excludes nothing, which
 is also what an unreadable config falls back to (`EXCLUDED_FALLBACK`).
 
@@ -177,7 +177,7 @@ What the parent guarantees:
   are reported unreviewed, rather than the job hanging until `timeout-minutes`.
 - **A fallback.** No `os.fork` on the platform means a warning and one process, never a lost review.
 
-A whole Rust port — 182 chunks of `rust/src` — is 8 workers reading ~23 chunks each, about 20 minutes:
+A whole Rust port — 182 chunks of `src` — is 8 workers reading ~23 chunks each, about 20 minutes:
 
 ```
 gh workflow run review.yml -f pr=131 -f max_chunks=182 -f max_requests=200 -f parallel=8 -f deadline_seconds=2400
@@ -265,7 +265,7 @@ handled separately — see the token budget below.
 ## The token budget is a reasoning budget
 
 `MAX_OUTPUT_TOKENS` was 3,000, which suited the fast code model the chain used to open on and fails
-every reasoning model in it now. Measured on `rust/src/config.rs` of the Rust port, a 6,451-token
+every reasoning model in it now. Measured on `src/config.rs` of the Rust port, a 6,451-token
 prompt against a reasoning model:
 
 | `max_tokens` | `finish_reason` | completion | of which reasoning | content |

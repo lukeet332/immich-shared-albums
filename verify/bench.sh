@@ -2,10 +2,10 @@
 # bench.sh — measure the Rust port against the TypeScript sidecar it replaces, on the same box,
 # against the same mock Immich, with the same work asked of each.
 #
-#   bash rust/bench.sh
+#   bash verify/bench.sh
 #
 # Both run as containers from their own image, so what is compared is the ARTEFACT that ships, not a
-# debug binary, built from rust/Dockerfile. Every number is taken the same way: the same curl, the
+# debug binary, built from Dockerfile. Every number is taken the same way: the same curl, the
 # same request
 # count, the same warm-up.
 set -uo pipefail
@@ -39,7 +39,7 @@ stop() { docker rm -f "$1" >/dev/null 2>&1; }
 
 # ---- image size (the artefact itself) ----
 echo "=== image ===" | tee -a "$OUT"
-for spec in "immich-shared-albums:rust|Rust|rust/Dockerfile"; do
+for spec in "immich-shared-albums:rust|Rust|Dockerfile"; do
   img=${spec%%|*}; rest=${spec#*|}; label=${rest%%|*}
   docker image inspect "$img" >/dev/null 2>&1 || { echo "building $img"; docker build -q -t "$img" -f "${rest##*|}" . >/dev/null 2>&1; }
   size=$(docker image inspect "$img" --format '{{.Size}}' 2>/dev/null)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # verify-install.sh — run deploy/install.sh END TO END and check what it actually produced.
 #
-#   bash rust/verify-install.sh [DOCKERFILE]      # default rust/Dockerfile
+#   bash verify/verify-install.sh [DOCKERFILE]      # default Dockerfile
 #
 # install.sh is the thing an operator runs, so testing it means running it: through the prompts,
 # through the build, through `docker compose up`, and through its own health check. A sidecar that
@@ -13,7 +13,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DOCKERFILE="${1:-rust/Dockerfile}"
+DOCKERFILE="${1:-Dockerfile}"
 INSTALL_DIR=/tmp/isa-install-check
 HOST_PORT=8390
 NET=household-b_default

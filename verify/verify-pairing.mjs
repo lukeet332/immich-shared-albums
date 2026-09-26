@@ -1,4 +1,4 @@
-// rust/verify-pairing.mjs — two RUST sidecars pairing with each other, over the real wire.
+// verify/verify-pairing.mjs — two RUST sidecars pairing with each other, over the real wire.
 import { createRequire } from 'node:module';
 const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const require = createRequire(REPO + '/package.json');

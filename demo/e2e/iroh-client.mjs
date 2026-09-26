@@ -1,5 +1,5 @@
 // e2e/iroh-client.mjs — a minimal iroh peer client for the assertion suite. Speaks the isa/2
-// framing from rust/src/p2p/transport.rs so security checks (F-05/F-06) stay real wire tests.
+// framing from src/p2p/transport.rs so security checks (F-05/F-06) stay real wire tests.
 import { createRequire } from 'node:module';
 // From /app, NOT from this file: the lane mounts the scripts at /probe:ro, so anything installed
 // beside them is invisible. /app is the oracle image's own runtime, and ISA_ROOT names it.
