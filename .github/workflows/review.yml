@@ -17,6 +17,30 @@ on:
       pr:
         description: Pull request number to review
         required: true
+      # Both default to the script's own constants rather than repeating them here, and exist for one
+      # case: a pull request so large that four chunks is not a review.
+      max_chunks:
+        description: Chunks to review (blank = the script's default)
+        required: false
+      max_requests:
+        description: Model requests this run may spend (blank = the script's default)
+        required: false
+      chunk_offset:
+        description: Chunk to start at (blank = 0), which is how the next slice of a huge diff is read
+        required: false
+      deadline_seconds:
+        description: Wall clock this run may take (blank = 300; keep it under the 45-minute job cap)
+        required: false
+      parallel:
+        description: Worker processes (blank = 1); max_requests is split between them
+        required: false
+      # For comparing models on one pull request: the same chunks, the same prompt, one chain each.
+      models:
+        description: 'JSON replacing the chain for this run, e.g. {"review":[{"provider":"groq","model":"openai/gpt-oss-120b"}]}'
+        required: false
+      dry_run:
+        description: 'Print the findings instead of posting them, so a comparison leaves no comments'
+        required: false
 
 permissions:
   contents: read
@@ -37,7 +61,10 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     # Above the script's own DEADLINE_SECONDS, so the pipeline always reaches the code that posts.
-    timeout-minutes: 8
+    # A dispatch may ask for a longer slice, so it gets the higher ceiling and DEADLINE_SECONDS is
+    # what actually governs: a deadline past this ceiling would be killed before it could post.
+    # 20 minutes, not 8, because a reasoning model spends minutes on a chunk rather than seconds.
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 45 || 20 }}
     permissions:
       contents: read
       pull-requests: write
@@ -73,12 +100,32 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The reviewer is not the reviewed. The checkout above is the pull request's tree, so a branch
+      # cut before a fix runs the old review.py, and a change to review.py would be deciding how it
+      # is itself reviewed. Both come from the default branch; `--root` still reads the pull request.
+      - name: Take the reviewer from the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          set -uo pipefail
+          mkdir -p .review-tool
+          if git fetch --depth 1 origin "$DEFAULT_BRANCH" &&
+             git show FETCH_HEAD:.github/scripts/review.py > .review-tool/review.py &&
+             git show FETCH_HEAD:.github/review_models.json > .review-tool/review_models.json; then
+            echo "reviewer taken from $DEFAULT_BRANCH"
+          else
+            # Never red: an advisory reviewer that cannot find its own script still must not block.
+            rm -rf .review-tool
+            echo "::warning::no reviewer on $DEFAULT_BRANCH; using the pull request's own copy"
+          fi
+
       - name: Review
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_ID: ${{ github.event.comment.id }}
           COMMENT_KIND: ${{ steps.pr.outputs.kind }}
+          MODELS: ${{ inputs.models }}
           # Only the keys that exist are used: a stage skips providers without one and falls through
           # its candidate list. With no key at all the pipeline prints a notice and does nothing.
           # Which provider serves which stage is .github/review_models.json, not this file.
@@ -90,6 +137,39 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SAMBANOVA_API_KEY: ${{ secrets.SAMBANOVA_API_KEY }}
         run: |
-          python .github/scripts/review.py \
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.max_chunks }}" ]; then
+            extra+=(--max-chunks "${{ inputs.max_chunks }}")
+          fi
+          if [ -n "${{ inputs.max_requests }}" ]; then
+            extra+=(--max-requests "${{ inputs.max_requests }}")
+          fi
+          if [ -n "${{ inputs.chunk_offset }}" ]; then
+            extra+=(--chunk-offset "${{ inputs.chunk_offset }}")
+          fi
+          if [ -n "${{ inputs.deadline_seconds }}" ]; then
+            extra+=(--deadline-seconds "${{ inputs.deadline_seconds }}")
+          fi
+          if [ -n "${{ inputs.parallel }}" ]; then
+            extra+=(--parallel "${{ inputs.parallel }}")
+          fi
+          script=.github/scripts/review.py
+          config=.github/review_models.json
+          if [ -f .review-tool/review.py ]; then
+            script=.review-tool/review.py
+            config=.review-tool/review_models.json
+          fi
+          if [ -n "${{ inputs.dry_run }}" ]; then
+            extra+=(--dry-run)
+          fi
+          # Last, so a per-run chain wins over the repository's own.
+          if [ -n "$MODELS" ]; then
+            printf '%s' "$MODELS" > "$RUNNER_TEMP/models.json"
+            config="$RUNNER_TEMP/models.json"
+          fi
+          python "$script" \
             --repo "$GITHUB_REPOSITORY" \
-            --pr "${{ steps.pr.outputs.number }}"
+            --pr "${{ steps.pr.outputs.number }}" \
+            --config "$config" \
+            "${extra[@]}"

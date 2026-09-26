@@ -1,22 +1,62 @@
 # .github/scripts/review.py — a free re-implementation of the CodeRabbit review pipeline. See review.md.
 
 import argparse
+import fnmatch
 import json
 import os
 import random
 import re
 import signal
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 
 API = "https://api.github.com"
 MARKER = "<!-- isa-review-pipeline -->"
+# Above this many lines GitHub serves no unified diff at all, and answers the request with 406.
+GITHUB_DIFF_LINE_LIMIT = 20000
+FILES_PER_PAGE = 100
+MAX_DIFF_FILES = 300
 MAX_CHUNK_DIFF_LINES = 120
-MAX_FILE_CHARS = 12000
+# The declaration a chunk sits inside, rather than the first N characters of the file. A window is
+# capped by this many lines; an unclosed block (SQL, prose) becomes a labelled window of the same size.
+MAX_ITEM_LINES = 150
+# An unclosed block means the heuristic failed — prose, SQL in a string — so show a modest window
+# rather than 150 lines of markdown. MAX_SPAN_CHARS is the real guard: the point is a prompt that
+# fits Groq's 8,000-token minute, and the head of a 900-line file never did.
+MAX_WINDOW_LINES = 40
+MAX_SPAN_CHARS = 6000
+# A file this small is shown whole: the declarations are not a summary of it, they are a worse copy.
+MAX_WHOLE_FILE_CHARS = 8000
+# A chunk that is this much additions already IS the code — a slice of a new file — so pasting a
+# declaration beside it adds nothing. Measured on the Rust port: the span picked lines 1-29 of a
+# 362-line new file while the diff carried the changed lines.
+SELF_CONTAINED_ADDED_RATIO = 0.6
+MAX_DOC_CHARS = 3000
+# Groq rejects above ~8,000 tokens, and a token measured ~2.4 characters on this content, so this is
+# roughly 6,600 tokens — inside the minute with room for the answer. Context is added only while it
+# fits, in priority order, and the diff is never trimmed: it is what is being reviewed.
+MAX_PROMPT_CHARS = 16000
+MAX_DOC_WINDOW = 6
+ITEM_LOOKBACK = 200
+MAX_VERIFY_CHARS = 1200
+MAX_VERIFY_WITH_CODE = 8
 MAX_RULES_CHARS = 4000
 SOURCE_SUFFIXES = (".ts", ".tsx", ".rs", ".mjs", ".js")
+# AGENTS.md: every source file opens with `path — description. See <doc>.md.`, and says why that
+# pointer is machine-followable. Following it is how a reviewer learns a behaviour is deliberate.
+DOC_POINTER = re.compile(r"See ([A-Za-z0-9_./-]+\.md)")
+# What opens a block worth showing in full. Deliberately shallow: it only has to be right about the
+# declaration ABOVE a changed line, and `_enclosing_end` closes the span on braces.
+ITEM_OPENERS = (
+    "fn ", "pub fn ", "pub(crate) fn ", "pub(super) fn ", "async fn ", "pub async fn ",
+    "impl ", "struct ", "enum ", "trait ", "mod ", "union ",
+    "function ", "export function ", "export async function ", "async function ",
+    "class ", "interface ", "def ", "async def ",
+    "describe(", "it(", "test(",
+)
 MAX_DIFF_CHARS = 20000
 DEFAULT_MENTION = "@isa"
 COMMANDS = ("review", "summary", "ask", "help")
@@ -30,27 +70,45 @@ HELP_TEXT = f"""{MARKER}
 | `/ask <question>` | answer a question about this pull request |
 | `/help` | this list |
 
-`{DEFAULT_MENTION} <anything>` also works and is treated as `/ask`, so a plain question reads
-naturally. Replies to an inline comment arrive in that comment's own thread.
+`{DEFAULT_MENTION} <anything>` also works and is treated as `/ask`, but `{DEFAULT_MENTION}` is a
+local alias rather than an account — GitHub links it to an unrelated user — so the slash commands are
+the ones to use. Replies to an inline comment arrive in that comment's own thread.
 
 The automatic review runs on `opened`, `reopened`, `ready_for_review` and every push to the branch."""
 MAX_COMMENTS = 12
 SEVERITIES = ("high", "medium")
 STAGES = ("summarise", "review", "verify")
-# The same generated output .coderabbit.yaml excludes: reviewing compiled bytes wastes a request.
-EXCLUDED_PATHS = (
+# Read from .coderabbit.yaml's `path_filters`, so both reviewers spend the file budget on the same
+# files. These are the same exclusions in glob form, used only when that file cannot be read.
+EXCLUDED_FALLBACK = (
     "package-lock.json",
-    "src/web/dist/",
+    "src/web/dist/**",
     "src/web/panel.bundle.js",
     "src/web/accept.bundle.js",
     "src/web/share.bundle.js",
 )
-DEADLINE_SECONDS = 300
-MAX_REQUESTS = 4
-MAX_CHUNKS = 2
-CALL_TIMEOUT_SECONDS = 60
+DEADLINE_SECONDS = 900
+# Outer bounds rather than targets: DEADLINE_SECONDS is what actually stops a large pull request,
+# and both are overridable per run for one that is too big to cover in four chunks.
+MAX_REQUESTS = 8
+MAX_CHUNKS = 4
+# Workers, not threads: `http` bounds each request with a process-global SIGALRM. See review.md.
+# One: Groq's tokens-per-minute is per organization, so a second worker waits behind the first rather
+# than overlapping it. Raise it per run when the model is one with per-minute room to spare.
+PARALLEL = 1
+CALL_TIMEOUT_SECONDS = 240
 CALL_ATTEMPTS = 1
-MAX_OUTPUT_TOKENS = 3000
+# Sized for a reasoning model, which thinks for thousands of tokens before it writes a word: a 6,451
+# token prompt cost one 9,398 reasoning tokens to answer, so a 3,000 cap came back
+# `finish_reason=length` with empty content — a wasted request that read as a model with nothing to say.
+MAX_OUTPUT_TOKENS = 16000
+# The most room a retry may ask for: a chunk that cannot answer in this much has not been cut off.
+MAX_OUTPUT_ROOM = 32000
+# A per-minute limit is a pause, not a retirement. Groq's is 8,000 tokens a minute against a ~6,500
+# token prompt, so the same model answers again ~45 seconds later — and until this existed the first
+# 429 retired the model for the whole run, which came out as one chunk reviewed out of twelve.
+RATE_LIMIT_MAX_WAIT = 120
+MAX_RATE_LIMIT_WAITS = 3
 DEAD_KEY_STATUS_CODES = (401, 402, 403)
 DEAD_MODEL_STATUS_CODES = (404, 429)
 
@@ -63,6 +121,10 @@ class Budget:
         self.deadline = time.monotonic() + deadline_seconds
         self.dead_providers = set()
         self.dead_candidates = set()
+        # Whichever providers actually answered. `verify` avoids them, because a model that has just
+        # written a finding is the worst possible judge of it — on #130 the verifier was the same
+        # model as the reviewer and confirmed all three of its own false positives.
+        self.answered_by = set()
 
     def exhausted(self):
         return self.requests_left <= 0 or time.monotonic() >= self.deadline
@@ -84,7 +146,13 @@ SYSTEM_REVIEW = """You are a code reviewer for a repository whose conventions li
 Return ONLY JSON. Report a finding only when you can name the concrete failure it causes.
 Rules:
 - Obey the repository rules given to you; they override your defaults.
-- Do NOT report anything CI already catches: formatting, lint, types, import cycles, test failures.
+- Do NOT repeat what CI already enforces: Prettier formatting, ESLint, `tsc`, the import-cycle check,
+  the unit tests, and both e2e lanes. Nothing lints Rust — no clippy runs anywhere — so a narrowing
+  cast, an unchecked `unwrap`, or any Rust defect CI cannot see IS yours to report, provided you can
+  name the failure it causes. "A linter would say this" is not a reason to stay quiet when no linter runs.
+- The enclosing code shown is one declaration, and sometimes only a window that ends mid-file: code
+  continues outside it. Absence from it proves nothing, so never report a missing definition, an
+  unclosed block, or an "incomplete" implementation on that basis.
 - Do NOT report style, naming preferences, or missing tests unless a rule says otherwise.
 - Prefer few high-confidence findings over many speculative ones. Reporting nothing is correct when
   the change is sound.
@@ -96,8 +164,10 @@ Return ONLY JSON: {"intent":str,"what_changed":[str],"risk_areas":[str],"rules_t
 Be terse and factual. Do not review, judge, or suggest anything."""
 
 SYSTEM_VERIFY = """You are an adversarial verifier. For each candidate finding, decide independently
-whether it is a real defect in the code shown. Refute anything speculative, stylistic, already caught
-by CI, or unsupported by the diff. Return ONLY JSON:
+whether it is a real defect in the code shown. Each candidate may carry the enclosing code at its own
+line — when it does, decide against that code. Refute anything speculative, stylistic, already
+enforced by CI, contradicted by the code, or claiming a missing or incomplete definition the code
+plainly contains. Return ONLY JSON:
 {"verdicts":[{"index":int,"verdict":"confirm"|"refute","reason":str}]}"""
 
 SYSTEM_ASK = """You are answering a question about a pull request, for the person who opened it.
@@ -119,6 +189,20 @@ def notice(message):
 
 def request_timed_out(signum, frame):
     raise TimeoutError("wall-clock deadline reached")
+
+
+def retry_after(error, body):
+    """Seconds to wait, or None when this is not a short limit. Groq states it in a header and in the
+    message; anything longer than RATE_LIMIT_MAX_WAIT is a daily cap wearing a per-minute's clothes."""
+    header = (error.headers.get("retry-after") if error.headers else None) or ""
+    try:
+        seconds = float(header)
+    except ValueError:
+        found = re.search(r"try again in (\d+(?:\.\d+)?)s", body)
+        if not found:
+            return None
+        seconds = float(found.group(1))
+    return seconds if 0 < seconds <= RATE_LIMIT_MAX_WAIT else None
 
 
 def http(method, url, token, body=None, accept="application/vnd.github+json", timeout=60):
@@ -160,6 +244,35 @@ def rotate(candidates, offset):
     return candidates[offset:] + candidates[:offset]
 
 
+def review_providers(path):
+    """The providers the `review` stage names, so a missing reviewer can be named rather than guessed."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            configured = json.load(handle)
+    except (OSError, ValueError):
+        return set()
+    return {
+        candidate["provider"]
+        for candidate in (configured.get("review") or [])
+        if isinstance(candidate, dict) and "provider" in candidate
+    }
+
+
+def configured_providers(path):
+    """Every provider the file names, keyed or not, so the notice can name the one that is missing."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            configured = json.load(handle)
+    except (OSError, ValueError):
+        return set()
+    return {
+        candidate["provider"]
+        for stage in STAGES
+        for candidate in (configured.get(stage) or [])
+        if isinstance(candidate, dict) and "provider" in candidate
+    }
+
+
 def stage_models_for(path, seed):
     with open(path, encoding="utf-8") as handle:
         configured = json.load(handle)
@@ -175,10 +288,16 @@ def stage_models_for(path, seed):
     return usable
 
 
-def complete(stage, candidates, system, user, budget, max_tokens=MAX_OUTPUT_TOKENS):
-    """First candidate that answers wins; a provider failing is not an error, it is a fallback."""
+def complete(stage, candidates, system, user, budget, max_tokens=MAX_OUTPUT_TOKENS, avoid=()):
+    """First candidate that answers wins; a provider failing is not an error, it is a fallback.
+
+    `avoid` is pushed to the back of the queue, not dropped: if it is all there is, it still answers.
+    """
     last_error = None
-    for candidate in candidates:
+    order = [c for c in candidates if c["provider"] not in avoid] + [
+        c for c in candidates if c["provider"] in avoid
+    ]
+    for candidate in order:
         provider, model = candidate["provider"], candidate["model"]
         identifier = f"{provider}/{model}"
         if provider in budget.dead_providers or identifier in budget.dead_candidates:
@@ -187,52 +306,83 @@ def complete(stage, candidates, system, user, budget, max_tokens=MAX_OUTPUT_TOKE
             warn(f"{stage}: skipped — this run's budget is spent")
             return None
         base_url, env_name = PROVIDERS[provider]
-        body = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": 0,
-            "max_tokens": max_tokens,
-        }
-        for attempt in range(CALL_ATTEMPTS):
+        room = max_tokens
+        attempt, waits = 0, 0
+        while True:
             try:
-                budget.spend()
-                payload = http(
-                    "POST",
-                    f"{base_url}/chat/completions",
-                    os.environ.get(env_name, ""),
-                    body=body,
-                    timeout=CALL_TIMEOUT_SECONDS,
-                )
-                if not isinstance(payload, dict) or "choices" not in payload:
-                    # Print the provider's own body: a bare KeyError hides what it actually said.
-                    raise RuntimeError(f"unexpected response: {str(payload)[:300]}")
-                content = payload["choices"][0].get("message", {}).get("content")
-                if not content:
-                    choice = payload["choices"][0]
-                    raise RuntimeError(
-                        f"no content (finish_reason={choice.get('finish_reason')}): {str(payload)[:200]}"
+                while True:
+                    budget.spend()
+                    payload = http(
+                        "POST",
+                        f"{base_url}/chat/completions",
+                        os.environ.get(env_name, ""),
+                        body={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": system},
+                                {"role": "user", "content": user},
+                            ],
+                            "temperature": 0,
+                            "max_tokens": room,
+                        },
+                        timeout=CALL_TIMEOUT_SECONDS,
                     )
-                log(f"  {stage}: {identifier} answered ({len(content)} chars)")
-                return content
+                    if not isinstance(payload, dict) or "choices" not in payload:
+                        # Print the provider's own body: a bare KeyError hides what it actually said.
+                        raise RuntimeError(f"unexpected response: {str(payload)[:300]}")
+                    choice = payload["choices"][0]
+                    content = choice.get("message", {}).get("content")
+                    if content:
+                        log(f"  {stage}: {identifier} answered ({len(content)} chars)")
+                        budget.answered_by.add(provider)
+                        return content
+                    last_error = (
+                        f"{identifier} no content (finish_reason={choice.get('finish_reason')}, "
+                        f"usage={payload.get('usage') or {}})"
+                    )
+                    if not (choice.get("finish_reason") == "length" and room < MAX_OUTPUT_ROOM):
+                        break
+                    # A reasoning model that ran out of room has not failed — it was cut off mid
+                    # thought, before it wrote a word. The same request with more room answers.
+                    room = min(room * 2, MAX_OUTPUT_ROOM)
+                    warn(f"{stage}: {identifier} was cut off; retrying with max_tokens={room}")
+                    if budget.exhausted():
+                        break
+                raise RuntimeError(last_error)
             except urllib.error.HTTPError as error:
-                detail = error.read().decode("utf-8", "replace")[:300]
+                body = error.read().decode("utf-8", "replace")
+                detail = body[:300]
                 last_error = f"{identifier} HTTP {error.code}: {detail}"
                 if error.code in DEAD_KEY_STATUS_CODES:
                     # The key is dead, so no model behind this provider can answer either.
                     budget.dead_providers.add(provider)
                     warn(f"{stage}: {provider} unusable this run (HTTP {error.code}) — {detail[:120]}")
                     break
+                if error.code == 429:
+                    wait = retry_after(error, body)
+                    if (
+                        wait is not None
+                        and waits < MAX_RATE_LIMIT_WAITS
+                        and time.monotonic() + wait < budget.deadline
+                    ):
+                        waits += 1
+                        warn(f"{stage}: {identifier} is rate limited; waiting {wait:.0f}s for it")
+                        time.sleep(wait)
+                        continue
                 if error.code in DEAD_MODEL_STATUS_CODES:
                     # Only this model is saturated or gone; the next candidate may be fine.
                     budget.dead_candidates.add(identifier)
                     warn(f"{stage}: {identifier} unavailable this run (HTTP {error.code})")
                     break
+                attempt += 1
+                if attempt >= CALL_ATTEMPTS:
+                    break
                 time.sleep(2**attempt + random.random())
             except Exception as error:
                 last_error = f"{identifier}: {error}"
+                attempt += 1
+                if attempt >= CALL_ATTEMPTS:
+                    break
                 time.sleep(2**attempt + random.random())
         warn(f"{stage}: falling back past {identifier} — {last_error}")
     warn(f"{stage}: no provider answered ({last_error})")
@@ -253,6 +403,42 @@ def parse_json_object(raw):
         return json.loads(text[start : end + 1])
     except json.JSONDecodeError:
         return None
+
+
+def diff_via_files(repo, pr, token):
+    """Rebuild a unified diff from the files API, for a pull request too large to serve one."""
+    parts, unpatched, page = [], 0, 1
+    while page <= MAX_DIFF_FILES // FILES_PER_PAGE:
+        batch = api(repo, f"/pulls/{pr}/files?per_page={FILES_PER_PAGE}&page={page}", token)
+        if not isinstance(batch, list) or not batch:
+            break
+        for entry in batch:
+            patch = entry.get("patch")
+            if not patch:
+                # Binary, or changed too much for GitHub to inline a patch: not reviewable input.
+                unpatched += 1
+                continue
+            parts.append(f"+++ b/{entry['filename']}\n{patch}\n")
+        if len(batch) < FILES_PER_PAGE:
+            break
+        page += 1
+    if unpatched:
+        warn(f"{unpatched} file(s) carry no patch (binary or oversized) and were not reviewable")
+    return "\n".join(parts)
+
+
+def fetch_diff(repo, pr, token):
+    """The unified diff, or one rebuilt from the files API when GitHub refuses to serve it."""
+    try:
+        return api(repo, f"/pulls/{pr}", token, accept="application/vnd.github.v3.diff")
+    except urllib.error.HTTPError as error:
+        if error.code != 406:
+            raise
+        warn(
+            f"#{pr} has no unified diff (HTTP 406: over {GITHUB_DIFF_LINE_LIMIT} lines) "
+            "— rebuilding it from the files API"
+        )
+        return diff_via_files(repo, pr, token)
 
 
 def changed_lines_by_file(diff_text):
@@ -302,11 +488,29 @@ def split_hunk(hunk, limit):
     return slices
 
 
-def split_into_chunks(files):
+def excluded_patterns(root):
+    """The `!` patterns under .coderabbit.yaml's path_filters, so one config decides what is reviewed."""
+    try:
+        with open(os.path.join(root, ".coderabbit.yaml"), encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return EXCLUDED_FALLBACK
+    block = re.search(r"^ {2}path_filters:\n((?: {4}.*\n|\n)*)", text, re.M)
+    found = tuple(re.findall(r"^ {4}- '(![^']+)'", block.group(1), re.M)) if block else ()
+    # An include-list form carries no `!`, so there is nothing to exclude and the fallback holds.
+    return found or EXCLUDED_FALLBACK
+
+
+def is_excluded(path, patterns):
+    """fnmatch, not a prefix test: `rust/examples/**` is a pattern, and `**` spans separators here."""
+    return any(fnmatch.fnmatch(path, pattern.lstrip("!").replace("**", "*")) for pattern in patterns)
+
+
+def split_into_chunks(files, patterns):
     """Keep each chunk near MAX_CHUNK_DIFF_LINES: review quality collapses as diffs grow."""
     chunks = []
     for path, data in files.items():
-        if path.startswith(EXCLUDED_PATHS):
+        if is_excluded(path, patterns):
             continue
         pending, added = [], 0
         for hunk in data["hunks"]:
@@ -348,24 +552,312 @@ def rules_for(path, root):
     return "\n\n".join(collected)
 
 
-def file_excerpt(path, root):
-    full = os.path.join(root, path)
-    if not os.path.isfile(full):
+def _without_literals(text):
+    """The line with string and comment bodies removed, so braces inside them cannot close a span."""
+    out, quote, escaped, index = [], None, False, 0
+    while index < len(text):
+        char = text[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in "\"'`":
+            quote = char
+        elif char == "/" and index + 1 < len(text) and text[index + 1] == "/":
+            break
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _enclosing_start(lines, focus):
+    """Walk up to the line that opens the block the focus sits in, or to the nearest blank line."""
+    indent = len(lines[focus]) - len(lines[focus].lstrip())
+    for index in range(focus, max(-1, focus - ITEM_LOOKBACK), -1):
+        if lines[index].strip().startswith(ITEM_OPENERS):
+            if len(lines[index]) - len(lines[index].lstrip()) <= indent:
+                return index
+    for index in range(focus, max(-1, focus - 6), -1):
+        if not lines[index].strip():
+            return index + 1
+    return max(0, focus - 5)
+
+
+def _enclosing_end(lines, start):
+    """The matching closing brace, or a bounded window when the block never closes."""
+    depth, opened = 0, False
+    last = min(len(lines) - 1, start + MAX_ITEM_LINES)
+    for index in range(start, last + 1):
+        clean = _without_literals(lines[index])
+        delta = clean.count("{") - clean.count("}")
+        if delta:
+            depth += delta
+            opened = opened or delta > 0
+            if opened and depth <= 0:
+                return index, True
+    return min(last, start + MAX_WINDOW_LINES), False
+
+
+def code_span(path, root, focus):
+    """The declaration the changed lines sit inside.
+
+    The head of the file was a poor proxy: a changed line 900 lines in never saw its own function, so
+    a model reported missing definitions and unclosed blocks that were simply not in front of it.
+    """
+    focus = [line for line in focus if line]
+    try:
+        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return {"text": "", "first": 0, "last": 0, "complete": False}
+    if not lines or not focus:
+        return {"text": "", "first": 0, "last": 0, "complete": False}
+    start = _enclosing_start(lines, min(len(lines) - 1, max(0, min(focus) - 1)))
+    end, complete = _enclosing_end(lines, start)
+    return {
+        "text": "\n".join(lines[start : end + 1]),
+        "first": start + 1,
+        "last": end + 1,
+        "complete": complete,
+    }
+
+
+def _read_lines(path, root):
+    try:
+        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as handle:
+            return handle.read().splitlines()
+    except OSError:
+        return []
+
+
+def _hunk_focus(lines):
+    """Per hunk, the line numbers a span anchors on: the added ones, or any if it only deletes."""
+    groups, current = [], {"added": [], "any": []}
+    for number, text in lines:
+        if text.startswith("@@"):
+            if current["any"]:
+                groups.append(current)
+            current = {"added": [], "any": []}
+            continue
+        if number is None:
+            continue
+        current["any"].append(number)
+        if text.startswith("+"):
+            current["added"].append(number)
+    if current["any"]:
+        groups.append(current)
+    return [group["added"] or group["any"] for group in groups]
+
+
+def doc_for(path, root):
+    """What the file's own header points at, near where that doc mentions this file.
+
+    The header is a wrapped comment, so the pointer is not always on the first physical line, and a
+    doc's mention of a file can sit inside one enormous table row — hence the window inside the line.
+    """
+    lines = _read_lines(path, root)
+    if not lines:
         return ""
-    with open(full, encoding="utf-8", errors="replace") as handle:
-        return handle.read()[:MAX_FILE_CHARS]
+    pointer = DOC_POINTER.search("\n".join(lines[:12]))
+    folder = os.path.dirname(path)
+    if pointer:
+        candidates = (f"{folder}/{pointer.group(1)}", f"src/{pointer.group(1)}", pointer.group(1))
+    else:
+        # No pointer in the header — the convention allows a folder doc instead, and a folder with
+        # exactly one markdown file has an unambiguous one. `src/sync/` is the case that needs it.
+        siblings = sorted(
+            name for name in os.listdir(os.path.join(root, folder)) if name.endswith(".md")
+        ) if os.path.isdir(os.path.join(root, folder)) else []
+        if len(siblings) != 1:
+            return ""
+        candidates = (f"{folder}/{siblings[0]}",)
+    for candidate in (item.lstrip("/") for item in candidates):
+        if not os.path.isfile(os.path.join(root, candidate)):
+            continue
+        doc = _read_lines(candidate, root)
+        base = os.path.basename(path)
+        windows = []
+        for line in doc:
+            at = line.find(base)
+            if at < 0:
+                continue
+            windows.append(line[max(0, at - 700) : at + 700])
+            if len(windows) == 2:
+                break
+        if not windows:
+            return f"{candidate} (head):\n" + "\n".join(doc)[:MAX_DOC_CHARS]
+        body = "\n…\n".join(windows)[:MAX_DOC_CHARS]
+        return f"{candidate}, where it describes {base}:\n{body}"
+    return ""
+
+
+def code_context(path, root, lines):
+    """The whole file when it is small, the declarations behind each hunk when it is not, and nothing
+    when the chunk is mostly additions — a slice of a new file already shows the code itself."""
+    source = _read_lines(path, root)
+    if not source:
+        return ""
+    body = [text for number, text in lines if number is not None]
+    added = sum(1 for text in body if text.startswith("+"))
+    if body and added / len(body) >= SELF_CONTAINED_ADDED_RATIO:
+        return ""
+    whole = "\n".join(source)
+    if len(whole) <= MAX_WHOLE_FILE_CHARS:
+        return f"Whole file at head ({len(source)} lines):\n{whole}"
+    parts, spent = [], 0
+    for focus in _hunk_focus(lines):
+        start = _enclosing_start(source, min(len(source) - 1, max(0, min(focus) - 1)))
+        end, complete = _enclosing_end(source, start)
+        shape = "complete declaration" if complete else "window, code continues below"
+        piece = f"Lines {start + 1}-{end + 1} ({shape}):\n" + "\n".join(source[start : end + 1])
+        if spent + len(piece) > MAX_SPAN_CHARS:
+            room = MAX_SPAN_CHARS - spent
+            if room > 400:
+                parts.append(piece[:room] + "\n… context truncated here")
+            break
+        parts.append(piece)
+        spent += len(piece)
+    return "Declarations around the changed lines:\n" + "\n\n".join(parts) if parts else ""
 
 
 def chunk_prompt(chunk, root, extra=""):
-    diff = render_chunk_lines(chunk["lines"])
-    rules = rules_for(chunk["path"], root)
-    excerpt = file_excerpt(chunk["path"], root)
-    return (
-        f"Repository rules:\n{rules}\n\n"
-        f"File: {chunk['path']}\n\n"
-        f"Diff (left column is the line number in the new file; use it verbatim as `line`):\n{diff}\n\n"
-        f"Full file at head (truncated):\n{excerpt}\n{extra}"
+    sections = [
+        f"Repository rules:\n{rules_for(chunk['path'], root)}",
+        f"File: {chunk['path']}",
+        f"Diff (left column is the line number in the new file; use it verbatim as `line`):\n"
+        f"{render_chunk_lines(chunk['lines'])}",
+    ]
+    room = MAX_PROMPT_CHARS - len("\n\n".join(sections)) - len(extra)
+    code = code_context(chunk["path"], root, chunk["lines"])
+    if code and len(code) <= room:
+        sections.append(f"Code at head:\n{code}")
+        room -= len(code) + 20
+    doc = doc_for(chunk["path"], root)
+    if doc and len(doc) <= room:
+        sections.append(f"Why this behaves as it does — {doc}")
+    return "\n\n".join(sections) + extra
+
+
+def review_chunk(chunk, allowed, stages, root, budget, label):
+    """One chunk's model calls. Splitting these out is what lets a slice run in another process."""
+    log(f"chunk {label}: {chunk['path']}")
+    summary = None
+    if "summarise" in stages:
+        summary = parse_json_object(
+            complete(
+                "summarise", stages["summarise"], SYSTEM_SUMMARISE, chunk_prompt(chunk, root), budget
+            )
+        )
+    extra = f"\nSummary of this change:\n{json.dumps(summary)}\n" if summary else ""
+    raw = complete(
+        "review", stages["review"], SYSTEM_REVIEW, chunk_prompt(chunk, root, extra), budget
     )
+    found = []
+    for finding in (parse_json_object(raw) or {}).get("findings", []):
+        if isinstance(finding.get("line"), int) and finding["line"] in allowed:
+            finding["path"] = chunk["path"]
+            found.append(finding)
+    # None means no candidate answered at all, which is not the same as a clean chunk.
+    return found, raw is not None
+
+
+def review_slice(work, stages, root, budget, total):
+    """A contiguous slice of `work` sharing one budget: a sequential run is the slice of everything.
+
+    `read` counts the chunks a model actually answered, which is not the same as the chunks handed to
+    it: a run that is rate limited out reads one of twelve and must not report twelve.
+    """
+    findings, answered, read = [], False, 0
+    for done, (position, chunk, allowed) in enumerate(work):
+        if budget.exhausted():
+            warn(f"stopping after {done} of {len(work)} assigned chunks — budget spent")
+            break
+        chunk_findings, chunk_answered = [], False
+        try:
+            chunk_findings, chunk_answered = review_chunk(
+                chunk, set(allowed), stages, root, budget, f"{position + 1}/{total}"
+            )
+        except Exception as error:
+            # One unbuildable prompt must not cost the chunks either side of it their review.
+            warn(f"chunk {position + 1} failed: {type(error).__name__}: {error}")
+        findings.extend(chunk_findings)
+        answered = answered or chunk_answered
+        read += 1 if chunk_answered else 0
+    return findings, answered, read
+
+
+def review_in_parallel(work, stages, root, workers, max_requests, deadline_seconds, total):
+    """One child process per slice of the work, or None if this platform cannot fork.
+
+    Not threads: `http` bounds a request with SIGALRM, which is process-global and settable only from
+    a main thread, so a thread would either lose that bound or refuse to start. Not a process pool
+    either, because a pool's queue needs a semaphore and a container can refuse `sem_open` — here,
+    that is a fallback to one process rather than a lost review.
+    """
+    if not hasattr(os, "fork"):
+        warn("this platform cannot fork, so the chunks are reviewed one at a time")
+        return None
+    share = max(1, max_requests // workers)
+    size = max(1, (len(work) + workers - 1) // workers)
+    slices = [work[at : at + size] for at in range(0, len(work), size)]
+    log(f"{len(work)} chunks → {len(slices)} workers, {share} request(s) and one budget each")
+    children = []
+    for order, piece in enumerate(slices):
+        handle, path = tempfile.mkstemp(prefix=f"isa-review-{order}-", suffix=".json")
+        os.close(handle)
+        pid = os.fork()
+        if pid == 0:
+            try:
+                worker = Budget(share, deadline_seconds)
+                found, heard, read = review_slice(piece, stages, root, worker, total)
+                with open(path, "w", encoding="utf-8") as result:
+                    json.dump(
+                        {
+                            "findings": found,
+                            "answered": heard,
+                            "read": read,
+                            "answered_by": sorted(worker.answered_by),
+                        },
+                        result,
+                    )
+                log(f"worker {order + 1} read {len(piece)} chunk(s), {len(found)} finding(s)")
+            except BaseException as error:
+                # A worker must never take the run down: `os._exit` skips the parent's own cleanup.
+                warn(f"worker {order + 1} failed: {type(error).__name__}: {error}")
+            os._exit(0)
+        children.append((order, pid, path))
+    finish_by = time.monotonic() + deadline_seconds + 60
+    for order, pid, _ in children:
+        reaped = 0
+        while not reaped and time.monotonic() < finish_by:
+            reaped = os.waitpid(pid, os.WNOHANG)[0]
+            time.sleep(0.2)
+        if not reaped:
+            warn(f"worker {order + 1} ran past the deadline; its chunks are unreviewed")
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+    findings, answered, read, reviewed_by = [], False, 0, set()
+    for _, _, path in children:
+        try:
+            with open(path, encoding="utf-8") as result:
+                piece = json.load(result)
+        except (OSError, ValueError):
+            continue
+        finally:
+            # The child is reaped, so its result is complete or was never written.
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        findings.extend(piece["findings"])
+        answered = answered or piece["answered"]
+        read += piece["read"]
+        reviewed_by.update(piece.get("answered_by", []))
+    return findings, answered, read, reviewed_by
 
 
 def read_trigger():
@@ -396,6 +888,28 @@ def parse_command(body, mention=DEFAULT_MENTION):
     return None, ""
 
 
+def already_commented(repo, pr, token):
+    """The (path, line, title) triples this account has already commented on.
+
+    Inline comments are not rewritten in place the way the summary is, so without this a re-run of the
+    same slice posts the same finding again — which is what the Rust port's first two runs did.
+    """
+    try:
+        login = (http("GET", f"{API}/user", token) or {}).get("login", "")
+    except Exception:
+        return set()
+    if not login:
+        return set()
+    existing = api(repo, f"/pulls/{pr}/comments?per_page=100", token)
+    posted = set()
+    for comment in existing if isinstance(existing, list) else []:
+        if (comment.get("user") or {}).get("login") != login:
+            continue
+        title = comment.get("body", "").split("\n", 1)[0].strip("* ").strip()
+        posted.add((comment.get("path"), comment.get("line") or comment.get("original_line"), title))
+    return posted
+
+
 def post_comment(repo, pr, token, body, marker=MARKER):
     """Update our own comment rather than stacking one per reply."""
     existing = api(repo, f"/issues/{pr}/comments?per_page=100", token)
@@ -403,6 +917,25 @@ def post_comment(repo, pr, token, body, marker=MARKER):
     if mine:
         return api(repo, f"/issues/comments/{mine['id']}", token, method="PATCH", body={"body": body})
     return api(repo, f"/issues/{pr}/comments", token, method="POST", body={"body": body})
+
+
+def report_failure(args, failure):
+    """A run that posted nothing reads as a clean pull request, so say it failed instead."""
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token or args.dry_run:
+        return
+    reason = f"{type(failure).__name__}: {failure}"[:300].replace("\n", " ")
+    body = (
+        f"{MARKER}\n### Review\n\n"
+        f"The review did not complete — `{reason}`.\n\n"
+        "**Nothing here has been reviewed**, and no findings were produced. The job log carries the "
+        "full warning."
+    )
+    try:
+        post_comment(args.repo, args.pr, token, body)
+    except Exception as error:
+        # The exit code must not change: a reviewer never decides whether a merge happens.
+        warn(f"could not report the failure on the pull request: {type(error).__name__}: {error}")
 
 
 def reply_to_trigger(repo, pr, token, trigger, body):
@@ -451,8 +984,26 @@ def main():
     parser.add_argument("--max-requests", type=int, default=MAX_REQUESTS)
     parser.add_argument("--deadline-seconds", type=int, default=DEADLINE_SECONDS)
     parser.add_argument("--max-chunks", type=int, default=MAX_CHUNKS)
-    args = parser.parse_args()
+    parser.add_argument("--chunk-offset", type=int, default=0)
+    parser.add_argument("--parallel", type=int, default=PARALLEL)
+    try:
+        args = parser.parse_args()
+    except SystemExit as failure:
+        # The workflow comes from the dispatch ref but the reviewer comes from the default branch, so
+        # a flag can arrive before the script that understands it. Warn; never fail the job.
+        if failure.code:
+            warn(f"unusable arguments ({failure}) — is the reviewer older than this workflow?")
+        return 0
+    try:
+        return run(args)
+    except Exception as failure:
+        # A reviewer must never decide whether a merge happens. See AGENTS.md ("How changes land").
+        warn(f"review pipeline failed open: {type(failure).__name__}: {failure}")
+        report_failure(args, failure)
+        return 0
 
+
+def run(args):
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     stages = stage_models_for(args.config, args.pr)
     ready = {name for name, candidates in stages.items() if candidates}
@@ -462,7 +1013,16 @@ def main():
 
     log(f"stages configured: {sorted(ready) or 'none'}")
     if not ready:
-        notice("No model key is configured; add one (e.g. OPENROUTER_API_KEY) to enable reviews.")
+        missing = sorted(p for p in configured_providers(args.config) if not key_for(p))
+        notice(
+            f"No model key is configured; reviews here need one of {', '.join(missing) or 'the configured providers'}."
+        )
+        return 0
+    if "review" not in ready:
+        # A keyed verifier with no keyed reviewer would only judge findings nobody produced, and every
+        # chunk would fail on a missing stage rather than saying so once.
+        need = ", ".join(sorted(review_providers(args.config)))
+        notice(f"No key for the review stage; it needs one of {need or 'the configured providers'}.")
         return 0
 
     pull = api(args.repo, f"/pulls/{args.pr}", token)
@@ -485,7 +1045,7 @@ def main():
             reply_to_trigger(args.repo, args.pr, token, trigger, HELP_TEXT)
             return 0
 
-    diff_text = api(args.repo, f"/pulls/{args.pr}", token, accept="application/vnd.github.v3.diff")
+    diff_text = fetch_diff(args.repo, args.pr, token)
     if command == "ask":
         answer = answer_question(argument, pull, diff_text, args.root, stages, budget)
         reply_to_trigger(
@@ -498,66 +1058,88 @@ def main():
         return 0
 
     files = changed_lines_by_file(diff_text)
-    chunks = split_into_chunks(files)
-    if len(chunks) > args.max_chunks:
+    chunks = split_into_chunks(files, excluded_patterns(args.root))
+    total_chunks = len(chunks)
+    start, end = args.chunk_offset, args.chunk_offset + args.max_chunks
+    if end < total_chunks:
         notice(
-            f"{len(chunks)} chunks, reviewing the first {args.max_chunks}: each chunk costs up to two "
-            "requests against the providers' free daily allowances."
+            f"{total_chunks} chunks, reviewing {start + 1}-{min(end, total_chunks)}: each chunk costs "
+            "a request against the providers' free daily allowances."
         )
-        chunks = chunks[: args.max_chunks]
-    log(f"{len(files)} files → {len(chunks)} chunks, budget {args.max_requests} requests")
+    chunks = chunks[start:end]
+    if not chunks:
+        warn(f"No chunks at offset {start}: this pull request has {total_chunks}.")
+    log(
+        f"{len(files)} files → {len(chunks)} chunks from offset {start} of {total_chunks}, "
+        f"budget {args.max_requests} requests"
+    )
 
-    findings = []
-    for index, chunk in enumerate(chunks, start=1):
-        if budget.exhausted():
-            warn(f"stopping after {index - 1} of {len(chunks)} chunks — budget spent")
-            break
-        log(f"chunk {index}/{len(chunks)}: {chunk['path']}")
-        summary = None
-        if "summarise" in stages:
-            summary = parse_json_object(
-                complete(
-                    "summarise",
-                    stages["summarise"],
-                    SYSTEM_SUMMARISE,
-                    chunk_prompt(chunk, args.root),
-                    budget,
-                )
-            )
-        extra = f"\nSummary of this change:\n{json.dumps(summary)}\n" if summary else ""
-        reviewed = parse_json_object(
-            complete(
-                "review",
-                stages["review"],
-                SYSTEM_REVIEW,
-                chunk_prompt(chunk, args.root, extra),
-                budget,
-            )
+    work = [
+        (start + offset, chunk, sorted(files[chunk["path"]]["added"]))
+        for offset, chunk in enumerate(chunks)
+    ]
+    findings, answered, read, parallel = [], False, 0, None
+    if args.parallel > 1 and len(work) > 1:
+        parallel = review_in_parallel(
+            work,
+            stages,
+            args.root,
+            args.parallel,
+            args.max_requests,
+            args.deadline_seconds,
+            total_chunks,
         )
-        allowed = set(files[chunk["path"]]["added"])
-        for finding in (reviewed or {}).get("findings", []):
-            if isinstance(finding.get("line"), int) and finding["line"] in allowed:
-                finding["path"] = chunk["path"]
-                findings.append(finding)
+    if parallel is None:
+        findings, answered, read = review_slice(work, stages, args.root, budget, total_chunks)
+        reviewed_by = budget.answered_by
+    else:
+        findings, answered, read, reviewed_by = parallel
     log(f"{len(findings)} candidate findings")
 
+    verified = False
     if findings and "verify" in stages:
-        payload = json.dumps([{k: f.get(k) for k in ("path", "line", "severity", "title", "body")} for f in findings])
-        verdicts = parse_json_object(
-            complete("verify", stages["verify"], SYSTEM_VERIFY, f"Candidates:\n{payload}", budget)
+        payload = json.dumps(
+            [
+                {
+                    **{k: finding.get(k) for k in ("path", "line", "severity", "title", "body")},
+                    **(
+                        {"code": code_span(finding["path"], args.root, [finding["line"]])["text"][:MAX_VERIFY_CHARS]}
+                        if order < MAX_VERIFY_WITH_CODE
+                        else {}
+                    ),
+                }
+                for order, finding in enumerate(findings)
+            ]
         )
-        confirmed = []
-        for verdict in (verdicts or {}).get("verdicts", []):
-            index = verdict.get("index")
-            if (
-                isinstance(index, int)
-                and 0 <= index < len(findings)
-                and verdict.get("verdict") == "confirm"
-            ):
-                findings[index]["verification"] = verdict.get("reason", "")
-                confirmed.append(findings[index])
-        log(f"{len(confirmed)} of {len(findings)} survived verification")
-        findings = confirmed
+        verdicts = parse_json_object(
+            complete(
+                "verify",
+                stages["verify"],
+                SYSTEM_VERIFY,
+                f"Candidates:\n{payload}",
+                budget,
+                avoid=reviewed_by,
+            )
+        )
+        if verdicts is None:
+            # A verifier that answered nothing must not read as one that refuted everything: dropping
+            # the findings here turns an outage into "no issues found", which is the same false clean
+            # the review stage avoids by tracking whether anything answered at all.
+            warn("verification did not run, so the findings are posted unverified")
+        else:
+            verified = True
+            confirmed = []
+            for verdict in verdicts.get("verdicts", []):
+                index = verdict.get("index")
+                if (
+                    isinstance(index, int)
+                    and 0 <= index < len(findings)
+                    and verdict.get("verdict") == "confirm"
+                ):
+                    findings[index]["verification"] = verdict.get("reason", "")
+                    confirmed.append(findings[index])
+            log(f"{len(confirmed)} of {len(findings)} survived verification")
+            findings = confirmed
 
     findings = [f for f in findings if f.get("severity") in SEVERITIES][: args.max_comments]
     log(f"{len(findings)} findings to post")
@@ -567,12 +1149,33 @@ def main():
 
     lines = [MARKER, "### Review", ""]
     if not findings:
-        lines.append("No high-confidence issues found in the changed lines.")
+        if answered:
+            lines.append("No high-confidence issues found in the changed lines.")
+        else:
+            lines.append(
+                "**No model answered, so nothing on this pull request was reviewed.** See the job warnings."
+            )
     for finding in findings:
         lines.append(
             f"- **{finding.get('severity', 'medium')}** `{finding['path']}:{finding['line']}` — "
             f"{finding.get('title', '')}"
         )
+    if read < total_chunks:
+        lines.append("")
+        given = (
+            f"chunks {start + 1}-{start + len(chunks)}" if chunks else f"no chunks, at offset {start}"
+        )
+        lines.append(
+            f"**{total_chunks - read} of {total_chunks} chunks were not reviewed.** This run was given "
+            f"{given} and a model read {read} of them, across {len(files)} changed files."
+        )
+        if end < total_chunks:
+            lines.append(
+                f"_Next slice: `gh workflow run review.yml -f pr={args.pr} -f chunk_offset={end}`_"
+            )
+    if findings and not verified:
+        lines.append("")
+        lines.append("_The verification stage did not answer, so these findings are unverified._")
     body = "\n".join(lines)[:60000]
     post_comment(args.repo, args.pr, token, body)
 
@@ -589,6 +1192,16 @@ def main():
             }
             for finding in findings
         ]
+        already = already_commented(args.repo, args.pr, token) if comments else set()
+        fresh = [
+            comment
+            for comment in comments
+            if (comment["path"], comment["line"], comment["body"].split("\n", 1)[0].strip("* ").strip())
+            not in already
+        ]
+        if len(fresh) < len(comments):
+            log(f"{len(comments) - len(fresh)} finding(s) already have a comment; not repeating them")
+        comments = fresh
         if comments:
             posted = False
             try:
@@ -617,13 +1230,12 @@ def main():
                         warn(f"could not anchor {comment['path']}:{comment['line']} ({error.code})")
 
     if trigger["kind"]:
-        reply_to_trigger(
-            args.repo,
-            args.pr,
-            token,
-            trigger,
-            f"Reviewed {len(chunks)} chunk(s) and found {len(findings)} issue(s) — see the summary comment.",
+        outcome = (
+            f"Reviewed {len(chunks)} chunk(s) and found {len(findings)} issue(s)"
+            if answered
+            else "No model answered, so nothing was reviewed"
         )
+        reply_to_trigger(args.repo, args.pr, token, trigger, f"{outcome} — see the summary comment.")
     log("posted")
     return 0
 
@@ -632,6 +1244,7 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as failure:
-        # A reviewer must never decide whether a merge happens. See AGENTS.md ("How changes land").
-        warn(f"review pipeline failed open: {type(failure).__name__}: {failure}")
+        # Last resort: `main` reports its own failures, so this covers what it cannot — a bad
+        # invocation, or the reporting itself throwing. A review must never turn the job red.
+        warn(f"review pipeline could not run: {type(failure).__name__}: {failure}")
         sys.exit(0)

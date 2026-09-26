@@ -33,9 +33,24 @@ broken. `reply_to_trigger` answers a review comment **inside its own thread** �
 that, and a top-level comment cannot be resolved against a line. Replies to ordinary PR comments are
 posted as new comments rather than through `post_comment`, whose marker belongs to the summary.
 
+`DEFAULT_MENTION` is `@isa`, and there is a real GitHub account by that name — so a mention is a local
+alias that GitHub renders as a link to a stranger, and `HELP_TEXT` says so rather than recommending
+it. The slash commands are the interface to use; the mention stays because it reads naturally in a
+question and `parse_command` treats it as `/ask`.
+
 For a comment event the pull request is not in the payload, so the workflow resolves its number and
-head SHA from the API in a step before `actions/checkout`. That SHA is what `file_excerpt` and
+head SHA from the API in a step before `actions/checkout`. That SHA is what `code_context` and
 `rules_for` read, so a command reviews the tree it was issued against.
+
+`review.py` and `review_models.json` are the exception, and they come from the **default branch**: a
+step fetches them into `.review-tool` and the run uses those, while `--root` still points at the pull
+request's tree. Two reasons, one of which cost a review of the Rust port — that branch was cut before
+`fetch_diff` existed, so the dispatch that was meant to review it ran the old script and hit the same
+406 the fix had already handled. The other is that a pull request editing `review.py` would otherwise
+be choosing how it is reviewed, with the provider keys in scope. If the default branch cannot be read
+the run falls back to the pull request's copy and warns rather than going red. The same split is why
+`main` catches a rejected argument list: a flag can arrive before the script that understands it, and
+a warning is the right answer to that rather than a failed job.
 
 `concurrency` sits on the job, not the workflow, and its group carries the event name: a comment the
 job's own condition skips must not take the group at all, or a bot's comment cancels the review it
@@ -57,9 +72,11 @@ allowance added up across the chain is what buys per-push review — 500 request
 against this repo's ~10 pull requests a day averaging 4 commits, at up to two requests per push.
 
 A run does not split one review across providers: `complete` walks its list and stops at the first
-answer, so rotation spreads load between pull requests, not inside one. The per-run caps stay small
-for that reason — the median pull request here changes 92 lines, which is one chunk, so a larger
-`MAX_CHUNKS` would buy wall-clock risk and no extra coverage.
+answer, so rotation spreads load between pull requests, not inside one. For the same reason
+`MAX_REQUESTS` and `MAX_CHUNKS` are outer bounds rather than targets — `DEADLINE_SECONDS` is what
+actually stops a large pull request — and `workflow_dispatch` takes `max_chunks`, `max_requests`,
+`chunk_offset` and `deadline_seconds` overrides, because four chunks is not a review of a 225-chunk
+diff and the caps should not have to move for one.
 
 A queued free endpoint streams keep-alive whitespace, which resets `urlopen`'s per-socket timeout
 indefinitely — a request was observed running past every bound. `http` therefore bounds each request
@@ -67,7 +84,7 @@ with `signal.setitimer` and `CALL_TIMEOUT_SECONDS`, because only an alarm measur
 
 `MAX_CHUNKS` caps work on a large pull request, and the workflow runs on `opened`, `reopened`,
 `ready_for_review` and `synchronize`, so a push is reviewed without anyone asking for it;
-`workflow_dispatch` re-runs on demand.
+`workflow_dispatch` re-runs on demand, and takes the slice and budget it should use.
 
 ## Stages
 
@@ -91,7 +108,121 @@ A 2026 evaluation of five models on 150 samples found F1 falls from **0.657 on d
 `changed_lines_by_file` keeps the added-line set so a finding can only be anchored where the diff
 actually changed something.
 
+`split_into_chunks` takes its exclusions from `.coderabbit.yaml`'s `path_filters` rather than a list
+of its own (`excluded_patterns`), matched with `is_excluded`. That config already encodes which files
+are not worth review budget — generated bundles, the lockfile, and on the Rust port's branch
+`rust/examples/**` and the two benchmark scripts — so both reviewers spend their file budget on the
+same files, and the rule has one home. An include-list form of `path_filters` excludes nothing, which
+is also what an unreadable config falls back to (`EXCLUDED_FALLBACK`).
+
+## A pull request too large to have a diff
+
+GitHub serves no unified diff over `GITHUB_DIFF_LINE_LIMIT` (20,000) lines: the request comes back
+**406**, which is not a review of zero findings but no review at all. `fetch_diff` catches that one
+status and rebuilds a diff from `GET /pulls/{n}/files` (`diff_via_files`), which has no line limit —
+`FILES_PER_PAGE` per page, `MAX_DIFF_FILES` in total, warning about files that carry no patch at all
+because they are binary or too large. The rebuilt text uses the same `+++`/`@@` shape
+`changed_lines_by_file` already parses, and the two forms are equivalent: the added-line sets and hunk
+headers are identical to the ones the real diff produces.
+
+The Rust port's pull request is the case that found this — 25,629 added lines, 118 files, 248 chunks.
+
+## Reading a diff larger than one run
+
+Rebuilding the diff removes GitHub's ceiling but not the wall clock: 225 chunks at roughly 50 seconds
+each is three hours of model calls, and the free endpoints start answering 429 long before that.
+`chunk_offset` is what makes such a diff reviewable at all — a dispatch reads `max_chunks` chunks
+starting there, and the summary states the slice and prints the next command to run:
+
+```
+gh workflow run review.yml -f pr=131 -f chunk_offset=4
+```
+
+`deadline_seconds` is exposed for the same reason and raises the job's ceiling to 45 minutes; the
+automatic 900 seconds still governs every push, because a review that has not posted by then is worth
+less than the next push starting.
+
+Two things to know before slicing. The order is deterministic for one head SHA — `split_into_chunks`
+sorts by `chunk_priority`, ties broken by the diff's own file order — but a push renumbers the
+offsets, so slices are only coherent against a fixed head. And an offset past the end reviews nothing
+and says so: the summary reports `0 of 12 chunks from offset 12` rather than a clean pull request.
+
+## Workers, because the free endpoints are the slow part
+
+A chunk spends most of its time waiting on a queued free endpoint, so `--parallel` divides the run's
+chunks between child processes: `review_in_parallel` forks one child per contiguous slice, each with
+its own `Budget`, and `max_requests` is **divided** between them (`max(1, max_requests // parallel)`
+each). Parallelism therefore spends the same budget in less wall clock rather than spending more —
+which is the only lever that matters, since the request allowances were never the binding constraint.
+
+`PARALLEL` is 2 by default — an automatic four-chunk review is two chunks per worker, which is what
+fits inside `DEADLINE_SECONDS` now that a chunk takes minutes rather than seconds. At 1 `run` calls
+`review_slice` in its own process, which is exactly what it did before there was a worker path at all.
+
+Processes rather than threads, for a specific reason: `http` bounds a request with
+`signal.setitimer(SIGALRM)`, and a signal is process-global and can only be installed from a main
+thread. A thread pool would either lose that bound — the bug that once let a queued endpoint run for
+ten minutes — or refuse to start. `os.fork` rather than `ProcessPoolExecutor` for a second reason: a
+pool's queue needs a semaphore, `sem_open` can be refused inside a container, and a review that
+degrades to one process is worth more than one that fails to start.
+
+What the parent guarantees:
+
+- **Order.** Results are collected in slice order, so the summary lists findings by `chunk_priority`
+  however the workers happened to finish.
+- **Isolation.** `review_slice` catches per chunk, so one unbuildable prompt costs its own chunk and
+  not the chunks either side of it — in the sequential path too, where such an error used to end the
+  run before anything posted. A child that still fails warns and contributes nothing.
+- **A bound.** A child that outlives `deadline_seconds + 60` is killed with `SIGKILL` and its chunks
+  are reported unreviewed, rather than the job hanging until `timeout-minutes`.
+- **A fallback.** No `os.fork` on the platform means a warning and one process, never a lost review.
+
+A whole Rust port — 182 chunks of `rust/src` — is 8 workers reading ~23 chunks each, about 20 minutes:
+
+```
+gh workflow run review.yml -f pr=131 -f max_chunks=182 -f max_requests=200 -f parallel=8 -f deadline_seconds=2400
+```
+
+## Comparing models on one pull request
+
+`workflow_dispatch` takes `models` — a JSON chain that replaces the repository's own for that run —
+and `dry_run`, which prints the findings instead of posting them. Together they compare two models on
+the *same* chunks with the same prompt and no comment left behind:
+
+```
+gh workflow run review.yml --ref main -f pr=130 -f dry_run=true -f max_chunks=10 -f parallel=1 \
+  -f models='{"review":[{"provider":"groq","model":"openai/gpt-oss-120b"}],"verify":[{"provider":"gemini","model":"gemini-3.1-flash-lite"}]}'
+```
+
+A comparison is only worth reading if its findings are checked against the code afterwards; counted
+findings measure how much a model says, not how much of it is true.
+
 ## Model choice
+
+**Groq `openai/gpt-oss-120b` reviews everything.** It is the only entry in `review`, so the rotation
+is a no-op there and every review comes from the same model. What settles it is the prompt size
+against Groq's 8,000-tokens-per-minute free tier, measured on real pull requests:
+
+| Pull request | Prompt per chunk |
+| --- | --- |
+| #125 (6 chunks) | 1,885 – 5,354 tokens |
+| #130 (10 chunks) | 1,601 – 7,802 tokens |
+
+Every chunk of a normal pull request fits, so nothing is rejected, and 1,000 requests a day is far
+more than ~200 needed. The cost is pacing: roughly a request every 40–60 seconds, so a median
+four-chunk review takes about three minutes and a thirteen-chunk one around eight. Bursts queue,
+because tokens-per-minute is per organization and extra workers only queue behind each other — which
+is why `PARALLEL` is 1.
+
+The wall is real, though, and the Rust port is where it shows: four of sixteen chunks there carried
+prompts of 8,900–10,700 tokens and Groq rejected them outright (HTTP 413) rather than waiting. A
+chunk over the limit is reported as unreviewed, not as clean. If that starts happening on ordinary
+pull requests, add a candidate with more room rather than shrinking the file excerpt.
+
+`verify` is the exception: it names Gemini first and Groq last, because a model that has just written
+a finding is the worst available judge of it. With only the Groq key present it falls back to Groq and
+the run says so.
+
 
 Review opens on `gemini-3.1-flash-lite` — a code model on a 500-requests-a-day free allowance — then
 `openai/gpt-oss-120b` through Groq (1,000 a day), then `gemma-3-27b-it` (14,400 a day), then
@@ -124,18 +255,82 @@ reaches `integrate.api.nvidia.com`, `api.mistral.ai` and `api.sambanova.ai`, so 
 is added to `review_models.json` without touching the script; the order inside that file is what
 decides which allowance is spent first.
 
-`chunk_priority` puts source before config before prose, so with `MAX_CHUNKS` at 2 the files
-reviewed are the consequential ones rather than whichever sorted first.
+`chunk_priority` puts source before config before prose, so with `MAX_CHUNKS` at 4 the files reviewed
+are the consequential ones rather than whichever sorted first.
 
 `CALL_ATTEMPTS` is 1: a queued free endpoint does not answer faster on retry, and each retry is
-another request against the daily allowance.
+another request against the daily allowance. The one retry that does pay is a different shape and is
+handled separately — see the token budget below.
+
+## The token budget is a reasoning budget
+
+`MAX_OUTPUT_TOKENS` was 3,000, which suited the fast code model the chain used to open on and fails
+every reasoning model in it now. Measured on `rust/src/config.rs` of the Rust port, a 6,451-token
+prompt against a reasoning model:
+
+| `max_tokens` | `finish_reason` | completion | of which reasoning | content |
+| --- | --- | --- | --- | --- |
+| 3,000 | `length` | 3,000 | 3,000 | **0 chars** |
+| 16,000 | `stop` | 9,516 | 9,398 | 480 chars |
+
+`length` with empty content is not a model with nothing to say; it is a model cut off mid-thought
+before it wrote a word, and it used to read as "no provider answered" and spend a request. So
+`complete` doubles the room once when it sees exactly that (`MAX_OUTPUT_ROOM` caps the doubling at
+32,000, and a chunk that still cannot answer stops there), and `CALL_TIMEOUT_SECONDS` is 240 because
+those 9,398 reasoning tokens take minutes, not the 60 seconds a non-reasoning model needed.
+
+The chain is affected unevenly: `gemma-3-27b-it` writes content immediately, `gemini-3.1-flash-lite`
+and `openai/gpt-oss-120b` think first, and OpenRouter's free router lands on whatever reasoner is
+free — observed: `inclusionai/ling-3.0-flash-vl`, `nex-agi/nex-n2.5-mini`. Groq's 8,000 tokens per
+minute also means a reasoning model there will 429 on a large chunk and fall through to the next
+candidate, which is the chain doing its job rather than a fault.
+
+`usage` is in the warning for exactly this reason: `finish_reason` alone once cost an afternoon.
+
+## A per-minute limit is a pause, not a retirement
+
+Groq's free tier allows 8,000 tokens a minute and the prompt alone is about 6,500, so a chunk is
+answered there roughly once a minute. `retry_after` reads the `retry-after` header, or Groq's own
+"try again in 44.5s", and `complete` waits that long — up to `MAX_RATE_LIMIT_WAITS` times — before it
+retires the model. A limit longer than `RATE_LIMIT_MAX_WAIT`, or a 429 carrying no hint at all, is a
+daily cap wearing a per-minute's clothes and still retires it for the run.
+
+Measured on the Rust port before this existed: twelve chunks, the first answered, the second 429 with
+"try again in 44.5s", and the remaining ten skipped in two seconds because one 429 had retired the
+model for the whole run. One chunk in twelve is not a rate limit, it is a silent outage.
 
 ## Context given to the review stage
 
 - every `AGENTS.md` from the repository root down to the changed file's directory (`rules_for`)
-- the changed file at head, truncated to `MAX_FILE_CHARS`
-- the chunk's diff, with the new file's line number in the left column (`render_chunk_lines`) so no
-  model has to compute an anchor
+- the diff, with the new file's line number in the left column (`render_chunk_lines`) so no model has
+  to compute an anchor
+- **the code the change sits in** (`code_context`: whole file under `MAX_WHOLE_FILE_CHARS`, otherwise
+  the declaration behind each hunk; nothing when the chunk is mostly additions, because a slice of a
+  new file already is the code)
+- **the doc the file's header points at** (`doc_for`), windowed to where that doc describes this file
+
+The old version was `file_excerpt`: the first 12,000 characters of the file. A changed line 900 lines
+in never saw its own function, so models reported *missing* definitions and *unclosed* blocks that
+were merely absent from what they were shown — six verified false positives on the Rust port came
+from exactly that. `MAX_PROMPT_CHARS` keeps the added context from pushing a prompt past a free
+tier's per-minute allowance: context is added only while it fits, in priority order, and the diff is
+never trimmed because it is the thing under review.
+
+Following the header pointer is what refutes the port's worst finding: `local-immich-api.md` says
+plainly that a photo Immich has not measured is held back from every offer set on purpose, which is
+the behaviour the reviewer had reported as a bug. AGENTS.md states that the header exists to be
+machine-followable; `doc_for` is that reader, with a folder's single markdown file as the fallback
+when a header names no doc at all.
+
+`SYSTEM_REVIEW` used to forbid reporting "what CI already catches: formatting, lint, types". Nothing
+lints Rust — no clippy runs anywhere in this repository — so that rule suppressed a class of defect
+no linter reports. It now names what CI actually enforces (Prettier, ESLint, `tsc`, the cycle check,
+the unit tests, both e2e lanes) and says that a Rust defect CI cannot see is the reviewer's to report
+when it can name the failure. It also states what the code block is — one declaration, sometimes a
+window — so an absence is never read as evidence.
+
+`verify` receives the same code per candidate (`MAX_VERIFY_CHARS`, first `MAX_VERIFY_WITH_CODE`), so it
+judges against the code rather than the reviewer's description of it.
 
 `SYSTEM_REVIEW` forbids reporting what CI already catches, matching `.coderabbit.yaml`'s
 `path_instructions`, and keeps only `high` and `medium` severities (`SEVERITIES`).
@@ -156,10 +351,30 @@ blacklist exists for.
 
 ## Fail-open, deliberately
 
-`main` is wrapped so any exception prints a warning and exits 0: a reviewer must never decide whether
-a merge happens, and the gates stay the fast checks and the two e2e lanes (AGENTS.md, "How changes
-land"). The cost is that a broken run looks like a green job, so the pipeline warns loudly and
-`--dry-run` exists for local checking.
+`main` parses the arguments and hands them to `run`; any exception from `run` prints a warning, calls
+`report_failure` and returns 0. A reviewer must never decide whether a merge happens, and the gates
+stay the fast checks and the two e2e lanes (AGENTS.md, "How changes land").
+
+The summary states coverage in the same weight as the findings — **"N of M chunks were not
+reviewed"** — because a partial read presented as a review is the same lie as silence. `read` counts
+the chunks a model actually answered, not the chunks handed to it: a run rate limited out after one
+chunk has read one of twelve, however many it was given. Inline comments are de-duplicated across
+runs by `already_commented`, which skips a `(path, line, title)` this account has already posted on,
+since unlike the summary an inline comment is never rewritten in place.
+
+Silence is the failure mode that matters here, because a run that posted nothing is indistinguishable
+from a clean pull request — which is how a 406 on the Rust port's pull request produced no review at
+all and nobody noticed. So `report_failure` writes the reason into the same summary comment
+`post_comment` maintains, and the summary distinguishes three outcomes: findings, a clean result
+(`answered`), and **no model answered, so nothing was reviewed**. When `total_chunks` exceeded
+`MAX_CHUNKS` the summary also states the scope it did read, because "no findings" over four of 248
+chunks is not the same claim as no findings.
+
+`verify` is held to the same rule, one stage further in. `verdicts is None` means the verifier
+answered nothing, which is not the same as refuting everything — dropping the candidates there turns
+an outage into "no issues found" — so the findings are kept and the summary says they are unverified.
+An answered `{"verdicts": []}` is the verifier working and finding nothing worth confirming, and that
+does drop them.
 
 ## Known limits
 
