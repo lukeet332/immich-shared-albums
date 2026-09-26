@@ -1045,7 +1045,14 @@ stage('native album invitations, per person (no share link)');
       return null;
     }, timeout);
     const humansOn = async (found) => {
-      const full = await api(B, found.key, `/albums/${found.album.id}?withoutAssets=true`);
+      // The mirror can stop being readable mid-check: the de-invite this stage performs removes the
+      // ADMIN's own membership as it narrows, and a mirror the reunions retired is simply gone.
+      // Read that as null and let the CHECK fail with its detail — a throw here aborted the whole
+      // lane and hid every stage after it.
+      const album = await fetch(`${B}/api/albums/${found.album.id}?withoutAssets=true`,
+                                { headers: { 'x-api-key': found.key } }).catch(() => null);
+      if (!album || !album.ok) return null;
+      const full = await album.json();
       return (full.albumUsers || []).filter(au => !isBot(au.user?.email)).map(au => au.user?.name).sort();
     };
 
@@ -1448,7 +1455,7 @@ stage('native album invitations, per person (no share link)');
           const h = await humansOn(mirrored); return h.length === 2 ? h : null;
         }, 120000);
         check('inviting a second person widens the existing mirror', !!widened,
-              widened ? widened.join(', ') : (await humansOn(mirrored)).join(', ') || 'timed out');
+              widened ? widened.join(', ') : ((await humansOn(mirrored)) || ['unreadable']).join(', ') || 'timed out');
 
         // Dropping ONE person while another remains is a revocation for that person only. Without
         // member-side narrowing the sender's action appears to work and silently does nothing.
@@ -1458,7 +1465,7 @@ stage('native album invitations, per person (no share link)');
           return h.length === 1 && h[0] === 'Second Human' ? h : null;
         }, 150000);
         check('de-inviting one person removes only them, and keeps the album for the rest',
-              !!narrowed, narrowed ? narrowed.join(', ') : (await humansOn(mirrored)).join(', ') || 'timed out');
+              !!narrowed, narrowed ? narrowed.join(', ') : ((await humansOn(mirrored)) || ['unreadable']).join(', ') || 'timed out');
         // Across several watcher cycles the mirror must stay exactly one album owned by a
         // stand-in — not a second copy, and not gone. "Several cycles" is a COUNT: the member
         // sidecar counts every evaluation of its watcher and invite loops — at the top of the tick,
@@ -1550,7 +1557,7 @@ stage('native album invitations, per person (no share link)');
         const mirrorAlbumIds = await standInOwnedAlbumIds('natively invited album');
         const survivors = await until(async () => {
           const h = await humansOn(mirrored);
-          return h.length === 1 && h[0] === 'Second Human' ? h : null;
+          return h && h.length === 1 && h[0] === 'Second Human' ? h : null;
         }, 30000);
         check('a non-admin-only invitation keeps one live mirror across watcher cycles',
               mirrorAlbumIds.size === 1 && !!survivors && !!ticksAfter,
