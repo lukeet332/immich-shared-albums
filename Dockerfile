@@ -29,10 +29,17 @@ RUN mkdir -p src && touch src/lib.rs && echo 'fn main() {}' > src/main.rs \
 # The UI is committed build output, so no Node stage is needed. It sits where include_str! resolves
 # it: <root>/src/web/dist, inside the crate's own src/.
 COPY src ./src
+# The assertion suite's wire oracle is an example binary, built from the same locked tree so its
+# framing cannot drift from the product's (run-mock-e2e.sh extracts it from the probe stage).
+COPY examples ./examples
 # HAZARD: COPY stamps the context's mtimes, which are older than the stub build's artefacts, so
 # cargo reads every source as unchanged and "succeeds" in 0.3s while leaving the STUB binary in
 # place. Touching forces a real rebuild; without it the image silently ships `fn main() {}`.
 RUN find src -name '*.rs' -exec touch {} + && cargo build --release --locked --bin isa
+
+# The oracle binary, on its own stage: the sidecar image must never carry test tooling.
+FROM builder AS probe
+RUN cargo build --release --locked --example probe
 
 FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 # wget is not decoration: install.sh probes the health endpoint with `docker compose exec … wget`.

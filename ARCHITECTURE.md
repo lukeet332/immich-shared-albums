@@ -2,8 +2,9 @@
 
 `` is the sidecar: the addon that fronts Immich, pairs households, and moves albums between
 servers. `src/lib.rs` is the crate root, `src/main.rs` is the composition root (the `isa` binary),
-`src/config.rs` holds every setting, and `src/web/assets.rs` embeds the built UI. `examples/` holds
-the probes used against the rig.
+`src/config.rs` holds every setting, and `src/web/assets.rs` embeds the built UI. `examples/` holds the
+probes used against the rig, including `probe.rs` — the assertion suite's wire oracle, one
+JSON job in, one `{status, json|bytesLength}` answer out, speaking the crate's own framing.
 
 ## Iron rules
 
