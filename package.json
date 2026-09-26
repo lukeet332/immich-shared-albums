@@ -15,14 +15,14 @@
     "build:web": "node scripts/build-web.mjs"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.6.2",
     "esbuild": "^0.28.2",
-    "eslint": "^10.8.1",
+    "eslint": "^10.11.0",
     "preact": "^10.29.8",
     "preact-render-to-string": "^6.7.0",
-    "prettier": "^3.9.6",
-    "typescript": "^5.6.0",
-    "typescript-eslint": "^8.67.0",
+    "prettier": "^3.9.9",
+    "typescript": "^7.0.2",
+    "typescript-eslint": "^8.70.1",
     "@number0/iroh": "1.1.0"
   },
   "dependencies": {}
