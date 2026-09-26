@@ -5,6 +5,7 @@ use crate::immich::client::{Auth, Client};
 use crate::immich::contributors::{ensure_utility_user, ContributorSpec};
 use crate::state::State;
 use crate::store::{Mapping, Peer, Role};
+use crate::sync::peer_mapping_id::peer_of;
 use serde_json::{json, Value};
 
 /// What a mirror is asked to become. Only the facts the origin supplied.
@@ -56,7 +57,10 @@ fn existing_mirror(state: &State, peer_pub: &str, remote_album_id: &str) -> Opti
 /// Immich's own vocabulary for a share's permission. A view-only share makes local people VIEWERS,
 /// exactly as Immich's own no-upload links do: an editor role on a view-only mirror lets them add
 /// photos that silently go nowhere, because a view-only mirror never pushes.
-fn member_role(permissions: &str) -> &'static str {
+///
+/// Shared with the invite lane's mirror-widening (`sync_mirror_members`), which maps the same
+/// share permission the same way.
+pub(crate) fn member_role(permissions: &str) -> &'static str {
     if permissions == "contribute" {
         "editor"
     } else {
@@ -217,9 +221,10 @@ async fn retire_mirror(state: &State, client: &Client, mirror: &Mapping) -> usiz
             // Gone already is the outcome the caller wanted: absent to every credential we hold.
             Ok(PurgeOutcome::Purged) | Ok(PurgeOutcome::AlreadyGone) => removed += 1,
             Ok(PurgeOutcome::NotOurs) | Err(_) => {
-                crate::log!(
-                    "could not remove the replaced copy of one photo — the loops will retry"
-                );
+                // The row is ALREADY forgotten, so there is no retry of this delete: the photo will
+                // re-materialise into the album the mapping now points at, and the un-removed copy
+                // is a stray in the mirror album deleted below — not something the loops retry.
+                crate::log!("could not remove one replaced photo copy — a stray may remain in the mirror album until it is deleted");
             }
         }
     }
@@ -231,13 +236,9 @@ async fn retire_mirror(state: &State, client: &Client, mirror: &Mapping) -> usiz
             adopted: None,
             album_name: &mirror.album_name,
         });
-    let host_key = mirror.host_slug.as_ref().and_then(|slug| {
-        state
-            .collections()
-            .contributors
-            .get(slug)
-            .and_then(|c| c.api_key.clone())
-    });
+    // SILENT SKIP, deliberately: with no key for the account that owns the replaced mirror, the
+    // album cannot be deleted by us and is left in place rather than reached for with another key.
+    let host_key = crate::sync::host_keys::host_key_of(state, mirror);
     if plan.delete_album {
         if let Some(key) = host_key {
             if let Err(e) = client
@@ -265,12 +266,7 @@ async fn retire_mirror(state: &State, client: &Client, mirror: &Mapping) -> usiz
 /// pairing from the inviter's "possible reunions" list, and a page already open is told the same way
 /// it is told everything else.
 pub async fn tell_origin_reunited(mapping: &Mapping, peer: &Peer) {
-    let Some(remote_id) = mapping
-        .remote_mapping_id
-        .clone()
-        .or_else(|| mapping.remote_album_id.clone())
-        .filter(|id| !id.is_empty())
-    else {
+    let Some(remote_id) = crate::sync::peer_mapping_id::remote_target(mapping) else {
         return;
     };
     let Some(transport) = crate::p2p::transport::transport() else {
@@ -315,19 +311,11 @@ pub async fn unify_own_album(
     // until the end of the statement — which includes the `.await` — holding the state lock across
     // a suspension point. The compiler refuses it (the future stops being `Send`); at runtime it
     // would be a deadlock of exactly the kind this port has hit three times.
-    let peer = state
-        .collections()
-        .peers
-        .iter()
-        .find(|p| p.pub_key == mapping.peer)
-        .cloned()
-        .ok_or("the share names a server that is not linked")?;
+    let peer =
+        peer_of(state, &mapping.peer).ok_or("the share names a server that is not linked")?;
     let held = peer_held_checksums(
         &peer,
-        mapping
-            .remote_mapping_id
-            .as_deref()
-            .or(mapping.remote_album_id.as_deref()),
+        crate::sync::peer_mapping_id::remote_target(mapping).as_deref(),
     )
     .await;
 
@@ -352,12 +340,11 @@ pub async fn unify_own_album(
     //    the owner's own credential, from their own request: the membership is their act.
     crate::sync::house_bot::add_house_bot_to_album(state, client, &own.album_id, owner_creds)
         .await?;
-    let house_bot_key = state
-        .collections()
-        .contributors
-        .get(&crate::sync::house_bot::house_bot_slug())
-        .and_then(|c| c.api_key.clone())
-        .ok_or("house bot has no key after provisioning — cannot read the album")?;
+    let house_bot_key = crate::sync::host_keys::contributor_api_key(
+        state,
+        &crate::sync::house_bot::house_bot_slug(),
+    )
+    .ok_or("house bot has no key after provisioning — cannot read the album")?;
     let assets = crate::immich::access::read_album_assets_as(
         client,
         &own.album_id,
@@ -393,7 +380,7 @@ pub async fn unify_own_album(
     );
 
     // 5. Only now remove what the mirror held.
-    retire_mirror(state, client, &mapping).await;
+    retire_mirror(state, client, mapping).await;
     // RE-SEED, and it has to be after the retire: `seen_add` ignores a row the mirror already wrote,
     // so in the co-owned case this feature exists for — the peer and the owner both hold the photo —
     // the owner's own asset got no row, and `retire_mirror` has just dropped the mirror's. Without
@@ -403,12 +390,7 @@ pub async fn unify_own_album(
 
     // The trail, left once the move is done and the bot is a member — the grant above is the only
     // moment an album belonging to a human can gain it.
-    let peer_name = state
-        .collections()
-        .peers
-        .iter()
-        .find(|p| p.pub_key == mapping.peer)
-        .map(|p| p.name.clone());
+    let peer_name = peer_of(state, &mapping.peer).map(|p| p.name);
     crate::sync::audit::audit_line(
         state,
         client,
@@ -422,12 +404,7 @@ pub async fn unify_own_album(
     )
     .await;
 
-    let peer = state
-        .collections()
-        .peers
-        .iter()
-        .find(|p| p.pub_key == mapping.peer)
-        .cloned();
+    let peer = peer_of(state, &mapping.peer);
     if let Some(peer) = peer {
         // Same grant as acquisition-time adoption, and for the same reason: the contributor accounts
         // that will own this album's stubs can only be given a membership by its owner, who is
@@ -435,10 +412,7 @@ pub async fn unify_own_album(
         // not fail the reunion — `peer_contributors` returns empty instead.
         let contributors = crate::sync::album_grant::peer_contributors(
             &peer,
-            mapping
-                .remote_mapping_id
-                .as_deref()
-                .or(mapping.remote_album_id.as_deref()),
+            crate::sync::peer_mapping_id::remote_target(mapping).as_deref(),
         )
         .await;
         crate::sync::album_grant::grant_album_writers(
@@ -455,11 +429,7 @@ pub async fn unify_own_album(
             &own.album_id,
             owner_creds,
             &mapping.for_peer_user_ids.clone().unwrap_or_default(),
-            if mapping.permissions == "contribute" {
-                "editor"
-            } else {
-                "viewer"
-            },
+            member_role(&mapping.permissions),
         )
         .await;
         {

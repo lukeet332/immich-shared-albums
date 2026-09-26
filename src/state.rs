@@ -59,7 +59,10 @@ impl State {
         warn_if_not_a_volume(&data_dir);
 
         let store = Store::open(&data_dir)?;
-        let state = Arc::new(State { store, unlinking: RwLock::new(HashSet::new()) });
+        let state = Arc::new(State {
+            store,
+            unlinking: RwLock::new(HashSet::new()),
+        });
         state.ensure_identity()?;
         // Persist immediately, so a first boot leaves a usable store even if nothing else runs.
         state.save()?;
@@ -89,7 +92,10 @@ impl State {
     /// A State over a caller-supplied store, for tests that do not want a temp directory.
     #[cfg(test)]
     pub fn for_test(store: Store) -> Self {
-        State { store, unlinking: RwLock::new(HashSet::new()) }
+        State {
+            store,
+            unlinking: RwLock::new(HashSet::new()),
+        }
     }
 
     pub fn identity(&self) -> Option<Identity> {
@@ -121,12 +127,14 @@ impl State {
             }
             holding.set(true);
         });
-        CollectionsGuard { inner: self.store.state.lock().unwrap() }
+        CollectionsGuard {
+            inner: self.store.state.lock().unwrap(),
+        }
     }
 
-    /// Close the re-provision window for a peer an unlink is working on.
-    /// Close the re-provision window again once a teardown has finished, so the peer can be
-    /// re-linked without the sidecar refusing work for a link that no longer exists.
+    /// Close the re-provision window once an unlink has finished, so the peer can be re-linked
+    /// without the sidecar refusing work for a link that no longer exists. Paired with
+    /// `mark_unlinking`; prefer `UnlinkingGuard`, which clears on drop even on a panic.
     pub fn clear_unlinking(&self, pub_key: &str) {
         self.unlinking.write().unwrap().remove(pub_key);
     }
@@ -135,8 +143,12 @@ impl State {
         self.unlinking.write().unwrap().insert(pub_key.to_string());
     }
 
-    pub fn unmark_unlinking(&self, pub_key: &str) {
-        self.unlinking.write().unwrap().remove(pub_key);
+    /// Marks a peer as unlinking for the guard's lifetime, and closes the re-provision window on
+    /// drop — including a panic's, which a plain mark/clear pair would leave open for ever: a
+    /// peer stuck in `unlinking` is refused every materialisation and directory read until
+    /// restart.
+    pub fn unlinking_guard(&self, pub_key: &str) -> UnlinkingGuard<'_> {
+        UnlinkingGuard::new(self, pub_key)
     }
 
     pub fn peer_is_linked(&self, pub_key: Option<&str>) -> bool {
@@ -144,30 +156,35 @@ impl State {
         if self.unlinking.read().unwrap().contains(pub_key) {
             return false;
         }
-        self.collections().peers.iter().any(|p| p.pub_key == pub_key)
+        self.collections()
+            .peers
+            .iter()
+            .any(|p| p.pub_key == pub_key)
     }
 
     /// Admin setting (default OFF): store mirrored photos as full local copies instead of hotlink
     /// stubs, so an album survives the owner going offline.
+    ///
+    /// A DELIBERATE pass-through: `settings.rs` is the one owner of the `settings` row, and a
+    /// second reader of the raw JSON would drift from it.
     pub fn store_shared_assets_locally(&self) -> bool {
-        self.store
-            .kv("settings")
-            .ok()
-            .flatten()
-            .and_then(|v| v.get("storeSharedAssetsLocally").and_then(|b| b.as_bool()))
-            .unwrap_or(false)
+        crate::settings::Settings::read(&self.store).store_shared_assets_locally
     }
 
     /// The checksum that travels on the wire. A materialised proxy keeps its SOURCE photo's
     /// checksum in the ledger — that identity, not the local file's checksum (a re-encoded
-    /// preview), is what a peer must see.
+    /// preview), is what a peer must see. A ledger READ failure falls back to the local checksum
+    /// (a peer then misses one dedupe) but says so: silently shipping the wrong identity would
+    /// materialise duplicate stubs with nothing in the log to explain them.
     pub fn wire_checksum(&self, asset_id: &str, fallback: &str) -> String {
-        self.store
-            .ledger_by_asset(asset_id)
-            .ok()
-            .flatten()
-            .map(|entry| entry.checksum)
-            .unwrap_or_else(|| fallback.to_string())
+        match self.store.ledger_by_asset(asset_id) {
+            Ok(Some(entry)) => entry.checksum,
+            Ok(None) => fallback.to_string(),
+            Err(e) => {
+                crate::log!("wire_checksum({asset_id}): ledger read failed ({e}) — falling back to the local checksum");
+                fallback.to_string()
+            }
+        }
     }
 }
 
@@ -204,6 +221,28 @@ fn warn_if_not_a_volume(data_dir: &str) {
 
 pub fn install(state: Arc<State>) {
     let _ = STATE.set(state);
+}
+
+/// The mark half of an unlink, as a type: the window closes on drop, whatever the outcome.
+pub struct UnlinkingGuard<'a> {
+    state: &'a State,
+    pub_key: String,
+}
+
+impl UnlinkingGuard<'_> {
+    fn new<'a>(state: &'a State, pub_key: &str) -> UnlinkingGuard<'a> {
+        state.mark_unlinking(pub_key);
+        UnlinkingGuard {
+            state,
+            pub_key: pub_key.to_string(),
+        }
+    }
+}
+
+impl Drop for UnlinkingGuard<'_> {
+    fn drop(&mut self) {
+        self.state.clear_unlinking(&self.pub_key);
+    }
 }
 
 /// The process-wide state. Panics if read before `install` — a wiring bug, not a runtime condition.
@@ -247,7 +286,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
         std::fs::create_dir_all(dir).unwrap();
         let store = Store::open(dir).unwrap();
-        let state = Arc::new(State { store, unlinking: RwLock::new(HashSet::new()) });
+        let state = Arc::new(State {
+            store,
+            unlinking: RwLock::new(HashSet::new()),
+        });
         state.ensure_identity().unwrap();
         state.save().unwrap();
         state
@@ -262,7 +304,10 @@ mod tests {
         // Both sides are RAW 32-byte keys, unpadded base64url — never a DER envelope.
         assert_eq!(URL_SAFE_NO_PAD.decode(&keys.public).unwrap().len(), 32);
         assert_eq!(URL_SAFE_NO_PAD.decode(&keys.private).unwrap().len(), 32);
-        assert!(!keys.public.contains('='), "unpadded, like Node's JWK export");
+        assert!(
+            !keys.public.contains('='),
+            "unpadded, like Node's JWK export"
+        );
         assert!(keys.created_at.ends_with('Z'), "ISO-8601 UTC with millis");
     }
 
@@ -272,7 +317,10 @@ mod tests {
         let original = first.keys().public;
         // Re-open the same directory, as a container restart does.
         let store = Store::open("/tmp/isa-state-restart").unwrap();
-        let second = Arc::new(State { store, unlinking: RwLock::new(HashSet::new()) });
+        let second = Arc::new(State {
+            store,
+            unlinking: RwLock::new(HashSet::new()),
+        });
         let reloaded = second.ensure_identity().unwrap();
         assert_eq!(reloaded.public, original, "the identity key IS this server");
     }
@@ -300,7 +348,14 @@ mod tests {
         // a bot account for a server that is being removed.
         s.mark_unlinking("peer-1");
         assert!(!s.peer_is_linked(Some("peer-1")));
-        s.unmark_unlinking("peer-1");
+        s.clear_unlinking("peer-1");
+        assert!(s.peer_is_linked(Some("peer-1")));
+
+        // The guard closes the window on drop, whatever the unlink's outcome.
+        {
+            let _guard = s.unlinking_guard("peer-1");
+            assert!(!s.peer_is_linked(Some("peer-1")));
+        }
         assert!(s.peer_is_linked(Some("peer-1")));
     }
 
@@ -310,15 +365,25 @@ mod tests {
         // No ledger row: the local checksum stands.
         assert_eq!(s.wire_checksum("asset-1", "local-sum"), "local-sum");
         // A materialised proxy records its SOURCE photo's checksum; that is what travels.
-        s.store.seen_add("m1", "source-sum", "asset-1", Some("origin-1"), false).unwrap();
+        s.store
+            .seen_add("m1", "source-sum", "asset-1", Some("origin-1"), false)
+            .unwrap();
         assert_eq!(s.wire_checksum("asset-1", "local-sum"), "source-sum");
     }
 
     #[test]
     fn store_shared_assets_locally_defaults_off() {
         let s = boot("/tmp/isa-state-settings");
-        assert!(!s.store_shared_assets_locally(), "the admin setting defaults OFF");
-        s.store.kv_set("settings", &serde_json::json!({"storeSharedAssetsLocally": true})).unwrap();
+        assert!(
+            !s.store_shared_assets_locally(),
+            "the admin setting defaults OFF"
+        );
+        s.store
+            .kv_set(
+                "settings",
+                &serde_json::json!({"storeSharedAssetsLocally": true}),
+            )
+            .unwrap();
         assert!(s.store_shared_assets_locally());
     }
 
@@ -333,7 +398,10 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o700, "the identity key and every bot API key live here");
+            assert_eq!(
+                mode, 0o700,
+                "the identity key and every bot API key live here"
+            );
         }
         let keys = booted.keys();
         assert_eq!(URL_SAFE_NO_PAD.decode(&keys.public).unwrap().len(), 32);

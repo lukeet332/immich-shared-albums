@@ -41,14 +41,22 @@ pub fn find_adoptable_album(
         .iter()
         .find(|album| {
             album.get("id").and_then(|v| v.as_str()).is_some()
-                && normalise_album_name(album.get("albumName").and_then(|v| v.as_str()).unwrap_or(""))
-                    == wanted
+                && normalise_album_name(
+                    album
+                        .get("albumName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                ) == wanted
                 && owns_it(album, caller_user_id)
         })
         .and_then(|album| {
             Some(AdoptableAlbum {
                 album_id: album.get("id").and_then(|v| v.as_str())?.to_string(),
-                name: album.get("albumName").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                name: album
+                    .get("albumName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             })
         })
 }
@@ -92,10 +100,14 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn only_an_album_the_caller_OWNS_may_be_adopted() {
         // The unsafe direction: adopting an album the caller can merely see would merge someone
         // else's album into a share.
-        let albums = vec![album("a", "Holidays", "viewer", "me"), album("b", "Holidays", "owner", "someone-else")];
+        let albums = vec![
+            album("a", "Holidays", "viewer", "me"),
+            album("b", "Holidays", "owner", "someone-else"),
+        ];
         assert!(find_adoptable_album("Holidays", &albums, "me").is_none());
 
         let owned = vec![album("c", "Holidays", "owner", "me")];
@@ -117,8 +129,10 @@ mod tests {
         // The unsafe direction: reuniting a share with any album the caller happens to own.
         let albums = vec![album("mine", "Holidays", "owner", "me")];
         assert!(can_unify_own_album("mirror", "Holidays", "Birthdays", &albums, "me").is_none());
-        assert!(can_unify_own_album("mirror", "Holidays", "holidays", &albums, "me").is_some(),
-                "the name is compared the way the pairing compares it");
+        assert!(
+            can_unify_own_album("mirror", "Holidays", "holidays", &albums, "me").is_some(),
+            "the name is compared the way the pairing compares it"
+        );
     }
 
     #[test]

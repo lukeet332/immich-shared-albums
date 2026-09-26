@@ -9,6 +9,7 @@ pub mod backfill;
 pub mod comments;
 pub mod directory;
 pub mod engine;
+pub mod host_keys;
 pub mod house_bot;
 pub mod index_freshness;
 pub mod index_offer;

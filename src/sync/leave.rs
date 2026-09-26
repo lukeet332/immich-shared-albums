@@ -6,6 +6,7 @@ use crate::p2p::transport::transport;
 use crate::state::State;
 use crate::store::Role;
 use crate::sync::album_teardown::{album_teardown, TeardownMapping};
+use crate::sync::peer_mapping_id::{peer_of, remote_target};
 
 /// Leave and purge: the reverse of joining.
 ///
@@ -53,11 +54,12 @@ pub async fn leave_album(
     let mut refused = 0usize;
     let mut failed = 0usize;
     let mut kept = 0usize;
-    for entry in state
+    let mut unpurged: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let entries = state
         .store
         .seen_for_mapping(&mapping.id)
-        .unwrap_or_default()
-    {
+        .unwrap_or_default();
+    for entry in &entries {
         if entry.origin_asset.is_none() {
             continue;
         }
@@ -86,10 +88,14 @@ pub async fn leave_album(
             // Absent to every credential we hold is the outcome the caller wanted, but it is not
             // evidence of a deletion and must not be counted as one.
             Ok(crate::immich::materialise::PurgeOutcome::AlreadyGone) => {}
-            Ok(crate::immich::materialise::PurgeOutcome::NotOurs) => refused += 1,
+            Ok(crate::immich::materialise::PurgeOutcome::NotOurs) => {
+                refused += 1;
+                unpurged.insert(entry.checksum.clone());
+            }
             Err(e) => {
                 crate::log!("could not purge {}: {e}", entry.local_asset);
                 failed += 1;
+                unpurged.insert(entry.checksum.clone());
             }
         }
     }
@@ -116,7 +122,25 @@ pub async fn leave_album(
     }
 
     crate::sync::status::forget_watcher_cycles(&mapping.id);
-    let _ = state.store.seen_forget_proxies(&mapping.id);
+    // Forget only the rows whose purge SETTLED (or whose asset another mapping still serves, or
+    // which never had an origin at all). A row whose stub could NOT be deleted is the only record
+    // that the stub exists — forgetting it would orphan the stub in Immich for ever, unreachable by
+    // any later reclaim — so it is kept and the failure is logged instead.
+    if unpurged.is_empty() {
+        let _ = state.store.seen_forget_proxies(&mapping.id);
+    } else {
+        for entry in &entries {
+            if unpurged.contains(&entry.checksum) || entry.stored_full {
+                continue;
+            }
+            let _ = state.store.seen_remove_entry(&mapping.id, &entry.checksum);
+        }
+        crate::log!(
+            "left {} stub ledger row(s) of \"{}\" un-purged — kept so a retry can reclaim them",
+            unpurged.len(),
+            mapping.album_name
+        );
+    }
     let _ = state.store.seen_act_remove_mapping(&mapping.id);
     forget_offered(state, &mapping.id);
     // SPLICE, never reassign. Loops run concurrently (watch, comments, invites), and replacing the
@@ -128,16 +152,8 @@ pub async fn leave_album(
     // Courtesy signal so the origin stops pushing to a household that left. Best-effort and
     // unawaited: leaving must NEVER block on the origin being reachable, and a peer too old to know
     // the route just 404s.
-    let origin = state
-        .collections()
-        .peers
-        .iter()
-        .find(|p| p.pub_key == mapping.peer)
-        .cloned();
-    let target = mapping
-        .remote_mapping_id
-        .clone()
-        .or_else(|| mapping.remote_album_id.clone());
+    let origin = peer_of(state, &mapping.peer);
+    let target = remote_target(&mapping);
     if notify_origin {
         if let (Some(origin), Some(target), Some(transport)) = (origin, target, transport()) {
             let transport = transport.clone();

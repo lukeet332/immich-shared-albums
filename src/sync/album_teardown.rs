@@ -39,12 +39,21 @@ pub fn album_teardown(mapping: TeardownMapping<'_>) -> TeardownPlan {
     // ever ours to delete, so a caller that forgets to record adoption still cannot delete a real
     // album. The two facts answer different questions and must not be folded into one check.
     if mapping.role != Role::Member {
-        return TeardownPlan { delete_album: false, reason: "owner mapping — this household's own album" };
+        return TeardownPlan {
+            delete_album: false,
+            reason: "owner mapping — this household's own album",
+        };
     }
     if mapping.adopted == Some(true) {
-        return TeardownPlan { delete_album: false, reason: "adopted album belongs to its owner" };
+        return TeardownPlan {
+            delete_album: false,
+            reason: "adopted album belongs to its owner",
+        };
     }
-    TeardownPlan { delete_album: true, reason: "mirror created by this sidecar" }
+    TeardownPlan {
+        delete_album: true,
+        reason: "mirror created by this sidecar",
+    }
 }
 
 #[cfg(test)]
@@ -52,7 +61,11 @@ mod tests {
     use super::*;
 
     fn plan(role: Role, adopted: Option<bool>) -> TeardownPlan {
-        album_teardown(TeardownMapping { role, adopted, album_name: "Holidays" })
+        album_teardown(TeardownMapping {
+            role,
+            adopted,
+            album_name: "Holidays",
+        })
     }
 
     #[test]
@@ -63,6 +76,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn an_ADOPTED_album_is_never_deleted_it_holds_a_persons_own_photos() {
         // It existed before the share, so leaving gives up the mapping and nothing else.
         let p = plan(Role::Member, Some(true));
@@ -71,17 +85,22 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn an_OWNER_mapping_is_never_deleted_however_adoption_reads() {
         // The property that matters: role is checked FIRST and independently, so a caller that
         // forgot to record adoption still cannot delete a real album.
         for adopted in [None, Some(false), Some(true)] {
             let p = plan(Role::Owner, adopted);
-            assert!(!p.delete_album, "owner mapping with adopted={adopted:?} must be spared");
+            assert!(
+                !p.delete_album,
+                "owner mapping with adopted={adopted:?} must be spared"
+            );
             assert_eq!(p.reason, "owner mapping — this household's own album");
         }
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn an_EXPLICIT_false_adoption_still_deletes_because_it_means_not_adopted() {
         // `Some(false)` is "we recorded that this is NOT an adopted album" — a mirror we made.
         assert!(plan(Role::Member, Some(false)).delete_album);

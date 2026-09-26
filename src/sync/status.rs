@@ -31,7 +31,12 @@ pub fn forget_watcher_cycles(mapping_id: &str) {
 }
 
 pub fn watcher_cycles(mapping_id: &str) -> i64 {
-    cycles().lock().unwrap().get(mapping_id).copied().unwrap_or(0)
+    cycles()
+        .lock()
+        .unwrap()
+        .get(mapping_id)
+        .copied()
+        .unwrap_or(0)
 }
 
 fn cycles() -> &'static std::sync::Mutex<std::collections::HashMap<String, i64>> {
@@ -104,11 +109,7 @@ pub fn nudges_received() -> (u64, u64, u64) {
 /// `album_updated_at` is the local album's version as read this cycle; a settled `localVersion`
 /// must equal it. `None` answers from state alone (a status probe off the sync path), where an
 /// absent cursor counts as NOT settled rather than optimistically settled.
-pub fn sync_status(
-    mapping: &Mapping,
-    album_updated_at: Option<&str>,
-    cycles: i64,
-) -> SyncStatus {
+pub fn sync_status(mapping: &Mapping, album_updated_at: Option<&str>, cycles: i64) -> SyncStatus {
     let fail_count = mapping.fail_count.unwrap_or(0);
     // Deferred refs are invisible in the ledger BY DESIGN — they are the ones NOT recorded. What is
     // visible is that `local_version` never advanced to the album's current version, because that
@@ -118,8 +119,18 @@ pub fn sync_status(
         .unwrap_or(false);
     let settled = !mapping.dead
         && fail_count == 0
-        && if album_updated_at.is_some() { pushed } else { mapping.local_version.is_some() };
-    SyncStatus { settled, pending: 0, cycles, fail_count, dead: mapping.dead }
+        && if album_updated_at.is_some() {
+            pushed
+        } else {
+            mapping.local_version.is_some()
+        };
+    SyncStatus {
+        settled,
+        pending: 0,
+        cycles,
+        fail_count,
+        dead: mapping.dead,
+    }
 }
 
 /// A human-readable one-liner for logs: why a mapping is not settled.
@@ -181,7 +192,14 @@ mod tests {
         // The album moved on and the cursor did not follow: there is still work to defer.
         assert!(!sync_status(&m, Some("2026-02-02T00:00:00.000Z"), 1).settled);
         // A mapping that never recorded a cursor at all is not settled either.
-        assert!(!sync_status(&mapping(false, None, None), Some("2026-01-01T00:00:00.000Z"), 0).settled);
+        assert!(
+            !sync_status(
+                &mapping(false, None, None),
+                Some("2026-01-01T00:00:00.000Z"),
+                0
+            )
+            .settled
+        );
     }
 
     #[test]
@@ -197,9 +215,16 @@ mod tests {
         let version = Some("v1");
         assert!(!sync_status(&mapping(false, Some(2), version), Some("v1"), 5).settled);
         assert!(!sync_status(&mapping(true, None, version), Some("v1"), 5).settled);
-        assert_eq!(why_not_settled(&sync_status(&mapping(true, None, version), Some("v1"), 0)), "retired");
         assert_eq!(
-            why_not_settled(&sync_status(&mapping(false, Some(3), version), Some("v1"), 0)),
+            why_not_settled(&sync_status(&mapping(true, None, version), Some("v1"), 0)),
+            "retired"
+        );
+        assert_eq!(
+            why_not_settled(&sync_status(
+                &mapping(false, Some(3), version),
+                Some("v1"),
+                0
+            )),
             "failed cycles"
         );
         assert_eq!(
@@ -211,8 +236,14 @@ mod tests {
     #[test]
     fn the_cursor_never_moves_backwards_in_the_answer() {
         // `failCount` absent and zero mean the same thing on read.
-        assert_eq!(sync_status(&mapping(false, None, Some("v1")), Some("v1"), 0).fail_count, 0);
-        assert_eq!(sync_status(&mapping(false, Some(0), Some("v1")), Some("v1"), 0).fail_count, 0);
+        assert_eq!(
+            sync_status(&mapping(false, None, Some("v1")), Some("v1"), 0).fail_count,
+            0
+        );
+        assert_eq!(
+            sync_status(&mapping(false, Some(0), Some("v1")), Some("v1"), 0).fail_count,
+            0
+        );
     }
 
     #[test]

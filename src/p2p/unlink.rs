@@ -23,10 +23,9 @@ pub async fn unlink_peer(
     client: &Client,
     pub_key: &str,
 ) -> Result<UnlinkResult, String> {
-    state.mark_unlinking(pub_key);
-    let outcome = unlink_peer_now(state, client, pub_key).await;
-    state.clear_unlinking(pub_key);
-    outcome
+    // The window closes on drop, so a panic mid-teardown cannot leave the peer refused work.
+    let _unlinking = state.unlinking_guard(pub_key);
+    unlink_peer_now(state, client, pub_key).await
 }
 
 async fn unlink_peer_now(
@@ -157,7 +156,12 @@ async fn unlink_peer_now(
     crate::log!(
         "unlinked \"{household}\" — {mirrors_removed} mirror(s) removed, {shares_revoked} share(s) revoked, {markers_removed} account(s) removed with their proxied photos"
     );
-    Ok(UnlinkResult { household, mirrors_removed, shares_revoked, markers_removed })
+    Ok(UnlinkResult {
+        household,
+        mirrors_removed,
+        shares_revoked,
+        markers_removed,
+    })
 }
 
 /// What the panel shows: one row per linked server, with what the link is currently carrying.
@@ -181,7 +185,8 @@ pub fn linked_peers(state: &State) -> Vec<Value> {
                 .iter()
                 .filter(|(slug, c)| {
                     slug.starts_with(bot_prefix::PERSON)
-                        && c.home_peer.as_deref().or(c.via_peer.as_deref()) == Some(p.pub_key.as_str())
+                        && c.home_peer.as_deref().or(c.via_peer.as_deref())
+                            == Some(p.pub_key.as_str())
                 })
                 .count();
             json!({
@@ -231,7 +236,11 @@ mod tests {
     use crate::store::{Contributor, Mapping, Peer};
     use std::sync::Arc;
 
-    fn state_with(peers: Vec<Peer>, mappings: Vec<Mapping>, contributors: Vec<(String, Contributor)>) -> Arc<State> {
+    fn state_with(
+        peers: Vec<Peer>,
+        mappings: Vec<Mapping>,
+        contributors: Vec<(String, Contributor)>,
+    ) -> Arc<State> {
         let store = crate::store::Store::open_in_memory().unwrap();
         {
             let mut c = store.state.lock().unwrap();
@@ -303,7 +312,10 @@ mod tests {
         let rows = linked_peers(&s);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["name"], "Household B");
-        assert_eq!(rows[0]["sharedToThem"], 1, "the dead mapping is not a live share");
+        assert_eq!(
+            rows[0]["sharedToThem"], 1,
+            "the dead mapping is not a live share"
+        );
         assert_eq!(rows[0]["sharedToUs"], 1);
     }
 
@@ -317,18 +329,37 @@ mod tests {
             vec![peer("peer-b", "B"), peer("peer-c", "C")],
             vec![],
             vec![
-                ("person-1".into(), contributor_with(Some("peer-c"), Some("peer-b"))),
+                (
+                    "person-1".into(),
+                    contributor_with(Some("peer-c"), Some("peer-b")),
+                ),
                 // Known only through a relay: no proven home, so the peer we met them through stands.
                 ("person-2".into(), contributor_with(None, Some("peer-b"))),
                 // Not a per-person account, so it is never counted as a person.
-                ("house-bot".into(), contributor_with(Some("peer-b"), Some("peer-b"))),
+                (
+                    "house-bot".into(),
+                    contributor_with(Some("peer-b"), Some("peer-b")),
+                ),
             ],
         );
         let rows = linked_peers(&s);
-        let by_name: std::collections::HashMap<_, _> =
-            rows.iter().map(|r| (r["name"].as_str().unwrap().to_string(), r["people"].as_u64().unwrap())).collect();
-        assert_eq!(by_name["C"], 1, "person-1 lives on C even though the photo came via B");
-        assert_eq!(by_name["B"], 1, "person-2 has no proven home, so viaPeer stands");
+        let by_name: std::collections::HashMap<_, _> = rows
+            .iter()
+            .map(|r| {
+                (
+                    r["name"].as_str().unwrap().to_string(),
+                    r["people"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            by_name["C"], 1,
+            "person-1 lives on C even though the photo came via B"
+        );
+        assert_eq!(
+            by_name["B"], 1,
+            "person-2 has no proven home, so viaPeer stands"
+        );
     }
 
     fn contributor_with(home: Option<&str>, via: Option<&str>) -> Contributor {
@@ -359,7 +390,9 @@ mod tests {
         assert_eq!(albums[0]["name"], "Holidays");
         assert_eq!(albums[0]["role"], "member");
         assert_eq!(albums[0]["peer"], "Household B");
-        let _ = Creds { headers: Default::default() };
+        let _ = Creds {
+            headers: Default::default(),
+        };
     }
 
     #[test]

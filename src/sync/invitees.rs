@@ -46,14 +46,25 @@ pub fn invitation_mirror_was_withdrawn(
 ///    would strand the content it holds.
 pub fn diff_invitees(wanted: &[String], current: &[String], local: &[String]) -> InviteeDiff {
     if wanted.is_empty() {
-        return InviteeDiff { add: Vec::new(), remove: Vec::new() };
+        return InviteeDiff {
+            add: Vec::new(),
+            remove: Vec::new(),
+        };
     }
     let want: std::collections::HashSet<&String> = wanted.iter().collect();
     let have: std::collections::HashSet<&String> = current.iter().collect();
     let mine: std::collections::HashSet<&String> = local.iter().collect();
     InviteeDiff {
-        add: local.iter().filter(|id| want.contains(id) && !have.contains(id)).cloned().collect(),
-        remove: current.iter().filter(|id| mine.contains(id) && !want.contains(id)).cloned().collect(),
+        add: local
+            .iter()
+            .filter(|id| want.contains(id) && !have.contains(id))
+            .cloned()
+            .collect(),
+        remove: current
+            .iter()
+            .filter(|id| mine.contains(id) && !want.contains(id))
+            .cloned()
+            .collect(),
     }
 }
 
@@ -72,14 +83,26 @@ mod tests {
             &["nan".to_string()],
             &local,
         );
-        assert_eq!(diff, InviteeDiff { add: vec!["second".into()], remove: vec![] });
+        assert_eq!(
+            diff,
+            InviteeDiff {
+                add: vec!["second".into()],
+                remove: vec![]
+            }
+        );
 
         let diff = diff_invitees(
             &["second".to_string()],
             &["nan".to_string(), "second".to_string()],
             &local,
         );
-        assert_eq!(diff, InviteeDiff { add: vec![], remove: vec!["nan".into()] });
+        assert_eq!(
+            diff,
+            InviteeDiff {
+                add: vec![],
+                remove: vec!["nan".into()]
+            }
+        );
 
         // a utility user holding the mirror is not in `local` and must never be removed
         let diff = diff_invitees(
@@ -87,11 +110,23 @@ mod tests {
             &["nan".to_string(), "bot-owner".to_string()],
             &local,
         );
-        assert_eq!(diff, InviteeDiff { add: vec![], remove: vec![] });
+        assert_eq!(
+            diff,
+            InviteeDiff {
+                add: vec![],
+                remove: vec![]
+            }
+        );
 
         // an invitee we have no local account for is simply skipped
         let diff = diff_invitees(&["ghost".to_string()], &[], &local);
-        assert_eq!(diff, InviteeDiff { add: vec![], remove: vec![] });
+        assert_eq!(
+            diff,
+            InviteeDiff {
+                add: vec![],
+                remove: vec![]
+            }
+        );
     }
 
     #[test]
@@ -99,7 +134,13 @@ mod tests {
         // "Nobody named" means a withdrawal, handled by tearing the mirror down as a whole. If it were
         // treated as a diff, a failed or empty poll would silently strip every member instead.
         let diff = diff_invitees(&[], &["nan".to_string()], &["nan".to_string()]);
-        assert_eq!(diff, InviteeDiff { add: vec![], remove: vec![] });
+        assert_eq!(
+            diff,
+            InviteeDiff {
+                add: vec![],
+                remove: vec![]
+            }
+        );
     }
 
     fn mapping_fixture() -> Mapping {
@@ -119,7 +160,11 @@ mod tests {
 
     #[test]
     fn a_withdrawn_invitation_mirror_is_retired_even_after_it_was_marked_dead() {
-        assert!(invitation_mirror_was_withdrawn(&mapping_fixture(), "origin", &Default::default()));
+        assert!(invitation_mirror_was_withdrawn(
+            &mapping_fixture(),
+            "origin",
+            &Default::default()
+        ));
     }
 
     #[test]
@@ -128,6 +173,10 @@ mod tests {
         // authoritative over it, so it must never be torn down by a poll that omits it.
         let mut mapping = mapping_fixture();
         mapping.via = "link".to_string();
-        assert!(!invitation_mirror_was_withdrawn(&mapping, "origin", &Default::default()));
+        assert!(!invitation_mirror_was_withdrawn(
+            &mapping,
+            "origin",
+            &Default::default()
+        ));
     }
 }

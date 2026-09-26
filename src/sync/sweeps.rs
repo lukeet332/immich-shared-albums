@@ -58,6 +58,64 @@ pub async fn when_sweeps_idle(budget_ms: u64) -> bool {
     sweeps_are_idle()
 }
 
+/// A claimed one-at-a-time flag, cleared when the guard drops — however the work ends, a panic
+/// included. The plain "set true, clear after the work" shape it replaces wedged for ever when the
+/// work panicked, which is why every loop flag clears through one of these.
+pub struct RunningFlagGuard {
+    flag: &'static AtomicBool,
+}
+
+impl RunningFlagGuard {
+    /// Claims the flag, or `None` when it is already held — the overlap guard.
+    pub fn claim(flag: &'static AtomicBool) -> Option<Self> {
+        if flag.swap(true, Ordering::SeqCst) {
+            None
+        } else {
+            Some(Self { flag })
+        }
+    }
+}
+
+impl Drop for RunningFlagGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
+/// One entry of a set of keys whose work is in flight, removed when the guard drops — the set-based
+/// form of `RunningFlagGuard`, for guards keyed per item (one reconcile per mapping at a time).
+pub struct SetEntryGuard {
+    set: &'static Mutex<HashSet<String>>,
+    key: String,
+}
+
+impl SetEntryGuard {
+    /// Claims `key` in `set`, or `None` when it is already claimed. The lock is released BEFORE the
+    /// work: a guard holding a `std` MutexGuard across an await is both non-Send and the deadlock
+    /// class this crate has hit before (see ARCHITECTURE.md's guard rule).
+    pub fn claim(set: &'static Mutex<HashSet<String>>, key: &str) -> Option<Self> {
+        let mut guard = set.lock().unwrap();
+        if guard.contains(key) {
+            return None;
+        }
+        guard.insert(key.to_string());
+        drop(guard);
+        Some(Self {
+            set,
+            key: key.to_string(),
+        })
+    }
+}
+
+impl Drop for SetEntryGuard {
+    fn drop(&mut self) {
+        self.set
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,9 +135,15 @@ mod tests {
         let _guard = exclusive();
         // The first claim wins; a second cycle while the first is running must not start.
         assert!(start_sweep("test-a"));
-        assert!(!start_sweep("test-a"), "a running sweep cannot be claimed twice");
+        assert!(
+            !start_sweep("test-a"),
+            "a running sweep cannot be claimed twice"
+        );
         finish_sweep("test-a");
-        assert!(start_sweep("test-a"), "and is claimable again once finished");
+        assert!(
+            start_sweep("test-a"),
+            "and is claimable again once finished"
+        );
         finish_sweep("test-a");
     }
 
@@ -87,7 +151,10 @@ mod tests {
     fn per_loop_slots_are_independent() {
         let _guard = exclusive();
         assert!(start_sweep("test-b"));
-        assert!(start_sweep("test-c"), "a different loop is a different slot");
+        assert!(
+            start_sweep("test-c"),
+            "a different loop is a different slot"
+        );
         finish_sweep("test-b");
         finish_sweep("test-c");
     }
@@ -110,16 +177,64 @@ mod tests {
         assert!(!sweeps_are_paused());
     }
 
+    #[test]
+    fn a_running_flag_is_claimed_once_and_freed_by_its_guard() {
+        static FLAG: AtomicBool = AtomicBool::new(false);
+        // The first claim wins; a second claimant must not start — the overlap guard.
+        let first = RunningFlagGuard::claim(&FLAG);
+        assert!(first.is_some(), "the first claim succeeds");
+        assert!(
+            RunningFlagGuard::claim(&FLAG).is_none(),
+            "a held flag cannot be claimed twice"
+        );
+        // Dropped however the work ends — including a panic — so one failed cycle can never wedge
+        // the flag shut for ever.
+        drop(first);
+        assert!(
+            RunningFlagGuard::claim(&FLAG).is_some(),
+            "dropping the guard frees the flag"
+        );
+    }
+
+    #[test]
+    fn a_set_entry_is_claimed_once_and_freed_by_its_guard() {
+        fn set() -> &'static Mutex<HashSet<String>> {
+            static SET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+            SET.get_or_init(|| Mutex::new(HashSet::new()))
+        }
+        let first = SetEntryGuard::claim(set(), "m1");
+        assert!(first.is_some(), "the first claim succeeds");
+        assert!(
+            SetEntryGuard::claim(set(), "m1").is_none(),
+            "a claimed key cannot be claimed twice"
+        );
+        assert!(
+            SetEntryGuard::claim(set(), "m2").is_some(),
+            "a different key is a different slot"
+        );
+        drop(first);
+        assert!(
+            SetEntryGuard::claim(set(), "m1").is_some(),
+            "dropping the guard frees the key"
+        );
+    }
+
     // `exclusive()` is deliberately held across the awaits below: it is the test rig that keeps every
     // other test out of the sweep slots, which is the whole claim these two cases make.
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn when_sweeps_idle_returns_at_once_when_nothing_is_running() {
         let _guard = exclusive();
-        assert!(sweeps_are_idle(), "no other test can hold a slot while this one runs");
+        assert!(
+            sweeps_are_idle(),
+            "no other test can hold a slot while this one runs"
+        );
         let started = std::time::Instant::now();
         assert!(when_sweeps_idle(SWEEP_DRAIN_MS).await);
-        assert!(started.elapsed().as_millis() < 100, "an idle rig must not wait out the budget");
+        assert!(
+            started.elapsed().as_millis() < 100,
+            "an idle rig must not wait out the budget"
+        );
     }
 
     #[allow(clippy::await_holding_lock)]
@@ -130,6 +245,9 @@ mod tests {
         let waiter = tokio::spawn(async { when_sweeps_idle(SWEEP_DRAIN_MS).await });
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         finish_sweep("test-d");
-        assert!(waiter.await.unwrap(), "the wait ends when the sweep does, not at the deadline");
+        assert!(
+            waiter.await.unwrap(),
+            "the wait ends when the sweep does, not at the deadline"
+        );
     }
 }

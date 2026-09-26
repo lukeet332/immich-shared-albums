@@ -3,10 +3,10 @@ use crate::config::{bot_prefix, cfg, is_utility_email, marker_name, UTILITY_EMAI
 use crate::immich::client::{Auth, Client};
 use crate::immich::contributors::{ensure_utility_user, ContributorSpec};
 use crate::p2p::frame::RequestHeader;
-use crate::sync::peer_mapping_id::peer_album_mapping_id;
 use crate::p2p::transport::transport;
 use crate::state::State;
 use crate::store::{Peer, Role};
+use crate::sync::peer_mapping_id::{peer_album_mapping_id, peer_of};
 use serde_json::{json, Value};
 
 /// The people THIS household offers a linked server, so that server can offer them as invite
@@ -50,8 +50,13 @@ pub async fn local_directory(client: &Client) -> Vec<Value> {
 pub async fn sync_peer_directory(state: &State, client: &Client, peer: &Peer) -> usize {
     let started = std::time::Instant::now();
     let people_seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let Some(transport) = transport() else { return 0 };
-    let header = RequestHeader { path: "/directory".into(), ..Default::default() };
+    let Some(transport) = transport() else {
+        return 0;
+    };
+    let header = RequestHeader {
+        path: "/directory".into(),
+        ..Default::default()
+    };
     // Bounded: a person is not waiting on this, but the invite loop is, and an unreachable peer must
     // not hold the whole cycle.
     let Ok(Ok((head, body))) = tokio::time::timeout(
@@ -67,7 +72,11 @@ pub async fn sync_peer_directory(state: &State, client: &Client, peer: &Peer) ->
         return 0;
     }
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let people = parsed.get("users").and_then(|u| u.as_array()).cloned().unwrap_or_default();
+    let people = parsed
+        .get("users")
+        .and_then(|u| u.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     let mut created = 0usize;
     for person in people {
@@ -119,22 +128,20 @@ static INDEX_REFRESH_RUNNING: std::sync::atomic::AtomicBool =
 
 /// Refresh every peer's published index once, unless a refresh is already running.
 fn refresh_peer_indexes_once(state: &std::sync::Arc<State>) {
-    use std::sync::atomic::Ordering;
-    if INDEX_REFRESH_RUNNING.swap(true, Ordering::SeqCst) {
+    let Some(_running) = crate::sync::sweeps::RunningFlagGuard::claim(&INDEX_REFRESH_RUNNING)
+    else {
         return;
-    }
+    };
     let state = state.clone();
     tokio::spawn(async move {
-        struct ClearRunning;
-        impl Drop for ClearRunning {
-            fn drop(&mut self) {
-                INDEX_REFRESH_RUNNING.store(false, Ordering::SeqCst);
-            }
-        }
-        let _clear = ClearRunning;
         crate::sync::album_index::refresh_peer_indexes(&state).await;
     });
 }
+
+/// Logged once per stretch without a transport, so a boot ordering gap costs one line rather than
+/// one per cycle.
+static NO_TRANSPORT_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// The directory lane, which is also the invite lane: keep every linked peer's invite targets current,
 /// turn a membership a human made into an invitation, mirror what this household has been invited to,
@@ -172,81 +179,89 @@ pub fn start_directory_loop(state: std::sync::Arc<State>) {
             // withdrawal has to be noticed before anything can be said about it in the album.
             crate::sync::link_grants::retire_withdrawn_link_grants(&state, client).await;
             // ...and a peer can go silent on an album WITHOUT this side changing anything: an unlink
-            // binds the transport for the handshakes below, once per tick.
-            let mesh_transport = transport().expect("the invite loop needs the transport");
-            // ...and a peer can go silent on an album WITHOUT this side changing anything: an unlink
-            // deletes the peer's mappings, so our album sits untouched and the push path never
-            // fires, and the share would look live for ever. One cheap handshake per live share
-            // answers it, and the same retirement counter the push uses does the rest.
-            // The guard is bound in its own statement and dropped before the awaits below: holding
-            // it across an await makes the whole spawned loop non-Send (ARCHITECTURE.md's guard rule).
-            let live_shares: Vec<crate::store::Mapping> = {
-                let collections = state.collections();
-                collections
-                    .mappings
-                    .iter()
-                    .filter(|m| m.role == Role::Owner && !m.dead)
-                    .cloned()
-                    .collect()
-            };
-            for mapping in live_shares {
-                let peer_record = {
+            // binds the transport for the handshakes below. `main` installs the transport before it
+            // starts this loop, so this is normally always Some — but a panic here would stop
+            // directory sync, invite detection, link-grant retirement, index refresh and invitation
+            // pull until restart, so this cycle DEGRADES instead of betting on that ordering.
+            let mesh_transport = transport();
+            match mesh_transport {
+                Some(_) => NO_TRANSPORT_LOGGED.store(false, std::sync::atomic::Ordering::SeqCst),
+                None => {
+                    if !NO_TRANSPORT_LOGGED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        crate::log!(
+                            "no mesh transport yet — skipping this cycle's live-share checks"
+                        );
+                    }
+                }
+            }
+            if let Some(mesh_transport) = mesh_transport {
+                // ...and a peer can go silent on an album WITHOUT this side changing anything: an
+                // unlink deletes the peer's mappings, so our album sits untouched and the push path
+                // never fires, and the share would look live for ever. One cheap handshake per live
+                // share answers it, and the same retirement counter the push uses does the rest.
+                let live_shares: Vec<crate::store::Mapping> = {
                     let collections = state.collections();
                     collections
-                        .peers
+                        .mappings
                         .iter()
-                        .find(|p| p.pub_key == mapping.peer)
+                        .filter(|m| m.role == Role::Owner && !m.dead)
                         .cloned()
+                        .collect()
                 };
-                let Some(peer) = peer_record else {
-                    continue;
-                };
-                let header = RequestHeader {
-                    path: format!("/albums/{}/version", peer_album_mapping_id(&mapping)),
-                    ..Default::default()
-                };
-                let answered = tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
-                    mesh_transport.round_trip(&peer, &header, None),
-                )
-                .await;
-                // 404 is "no such album here"; 403 is "I don't know this peer any more" — which is
-                // what an unlink produces, because it removes the peer before anything else. Both
-                // mean the share is over from that side, and both must count.
-                // 404 is "no such album here"; 403 is "I don't know this peer any more" — which is
-                // what an unlink produces, because it removes the peer before anything else. Both
-                // mean the share is over from that side, and both must count. Anything else RESETS
-                // the count: these must be CONSECUTIVE failures, because the peer's own invite churn
-                // (a mirror torn down and re-created under a fresh id) legitimately answers 404 for
-                // a tick or two while the re-join lands — and a counter that carried those forward
-                // retired a live share the next time the album so much as changed.
-                let counts = match answered {
-                    Ok(Ok((head, _))) if head.status == 404 || head.status == 403 => true,
-                    Ok(Ok((head, _))) if head.status < 400 => {
-                        crate::sync::engine::push_failures().lock().unwrap().remove(&mapping.id);
-                        false
-                    }
-                    _ => false,
-                };
-                if !counts {
-                    continue;
-                }
-                let n = {
-                    let mut counts = crate::sync::engine::push_failures().lock().unwrap();
-                    let n = counts.entry(mapping.id.clone()).or_insert(0);
-                    *n += 1;
-                    *n
-                };
-                if n >= crate::sync::engine::PUSH_404_DEAD_AFTER {
-                    crate::sync::engine::push_failures().lock().unwrap().remove(&mapping.id);
-                    crate::sync::engine::retire_dead_share(
-                        &state,
-                        client,
-                        &mapping,
-                        &peer,
-                        &format!("peer answered 404 to {n} version checks in a row — it no longer has this album"),
+                for mapping in live_shares {
+                    let Some(peer) = peer_of(&state, &mapping.peer) else {
+                        continue;
+                    };
+                    let header = RequestHeader {
+                        path: format!("/albums/{}/version", peer_album_mapping_id(&mapping)),
+                        ..Default::default()
+                    };
+                    let answered = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        mesh_transport.round_trip(&peer, &header, None),
                     )
                     .await;
+                    // 404 is "no such album here"; 403 is "I don't know this peer any more" — which is
+                    // what an unlink produces, because it removes the peer before anything else. Both
+                    // mean the share is over from that side, and both must count. Anything else RESETS
+                    // the count: these must be CONSECUTIVE failures, because the peer's own invite churn
+                    // (a mirror torn down and re-created under a fresh id) legitimately answers 404 for
+                    // a tick or two while the re-join lands — and a counter that carried those forward
+                    // retired a live share the next time the album so much as changed.
+                    let counts = match answered {
+                        Ok(Ok((head, _))) if head.status == 404 || head.status == 403 => true,
+                        Ok(Ok((head, _))) if head.status < 400 => {
+                            crate::sync::engine::push_failures()
+                                .lock()
+                                .unwrap()
+                                .remove(&mapping.id);
+                            false
+                        }
+                        _ => false,
+                    };
+                    if !counts {
+                        continue;
+                    }
+                    let n = {
+                        let mut counts = crate::sync::engine::push_failures().lock().unwrap();
+                        let n = counts.entry(mapping.id.clone()).or_insert(0);
+                        *n += 1;
+                        *n
+                    };
+                    if n >= crate::sync::engine::PUSH_404_DEAD_AFTER {
+                        crate::sync::engine::push_failures()
+                            .lock()
+                            .unwrap()
+                            .remove(&mapping.id);
+                        crate::sync::engine::retire_dead_share(
+                            &state,
+                            client,
+                            &mapping,
+                            &peer,
+                            &format!("peer answered 404 to {n} version checks in a row — it no longer has this album"),
+                        )
+                        .await;
+                    }
                 }
             }
             // Fire-and-forget, with one refresh in flight: the tick must not wait on a peer's dial,
@@ -286,7 +301,9 @@ pub async fn invite_targets_for(
         .collect();
     // The NAME lives in Immich, not in our record: a picker shows the account's own name, and the
     // stored slug is a key rather than a label.
-    let users = crate::immich::client::users_by_id(client, 10_000).await;
+    let users =
+        crate::immich::client::users_by_id(client, crate::sync::engine::USER_MAP_MAX_AGE_FAST_MS)
+            .await;
     candidates
         .into_iter()
         .map(|(slug, user_id)| {
@@ -311,7 +328,10 @@ mod tests {
         assert_eq!(marker, "Nan (via The Smiths server)");
         assert!(!marker.ends_with(crate::config::UTILITY_SUFFIX));
         // A server whose name already ends in "server" does not get it twice.
-        assert_eq!(marker_name::person("Nan", "Demo household (B) server"), "Nan (via Demo household (B) server)");
+        assert_eq!(
+            marker_name::person("Nan", "Demo household (B) server"),
+            "Nan (via Demo household (B) server)"
+        );
     }
 
     #[test]

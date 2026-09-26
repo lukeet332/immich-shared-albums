@@ -4,8 +4,8 @@ use crate::immich::access::Creds;
 use crate::immich::client::Client;
 use crate::state::State;
 use crate::store::{Direction, OwnedAlbum, Peer};
-use crate::sync::index_offer::{index_changed, should_refresh};
 use crate::sync::album_index::albums_i_publish;
+use crate::sync::index_offer::{index_changed, should_refresh};
 
 /// Credentials already seen, keyed by a fingerprint — the credential itself is never retained.
 /// `user_id` is resolved once per session, which is what keeps a refresh down to a single call.
@@ -50,7 +50,12 @@ fn fingerprint(creds: &Creds) -> String {
     names.sort();
     let joined: String = names
         .iter()
-        .map(|name| format!("{name}={}", creds.headers.get(*name).map(String::as_str).unwrap_or("")))
+        .map(|name| {
+            format!(
+                "{name}={}",
+                creds.headers.get(*name).map(String::as_str).unwrap_or("")
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let digest = Sha256::digest(joined.as_bytes());
@@ -78,7 +83,9 @@ pub fn note_index_traffic(
     let key = fingerprint(&creds);
     let now = now_ms();
     {
-        let Ok(mut visits) = visits().lock() else { return };
+        let Ok(mut visits) = visits().lock() else {
+            return;
+        };
         if let Some(seen) = visits.get_mut(&key) {
             if seen.running {
                 if forced {
@@ -86,7 +93,14 @@ pub fn note_index_traffic(
                 }
                 return;
             }
-            if !forced && !should_refresh(seen.last_visit_at, seen.last_refresh_at, seen.refreshes_with_no_change, now) {
+            if !forced
+                && !should_refresh(
+                    seen.last_visit_at,
+                    seen.last_refresh_at,
+                    seen.refreshes_with_no_change,
+                    now,
+                )
+            {
                 seen.last_visit_at = now;
                 return;
             }
@@ -97,7 +111,10 @@ pub fn note_index_traffic(
             Visit {
                 last_visit_at: now,
                 last_refresh_at: now,
-                refreshes_with_no_change: previous.as_ref().map(|v| v.refreshes_with_no_change).unwrap_or(0),
+                refreshes_with_no_change: previous
+                    .as_ref()
+                    .map(|v| v.refreshes_with_no_change)
+                    .unwrap_or(0),
                 user_id: previous.as_ref().and_then(|v| v.user_id.clone()),
                 running: true,
                 again: false,
@@ -109,15 +126,23 @@ pub fn note_index_traffic(
     }
     let owned_state = state.clone();
     tokio::spawn(async move {
-        let known_user_id = visits().lock().ok().and_then(|v| v.get(&key).and_then(|v| v.user_id.clone()));
+        let known_user_id = visits()
+            .lock()
+            .ok()
+            .and_then(|v| v.get(&key).and_then(|v| v.user_id.clone()));
         let changed = offer_albums_from(&owned_state, &creds, known_user_id.as_deref()).await;
-        let Ok(mut open) = visits().lock() else { return };
+        let Ok(mut open) = visits().lock() else {
+            return;
+        };
         let (again, still_there) = match open.get_mut(&key) {
             Some(visit) => {
                 // The window answers to the EVIDENCE: a change means this person is working on their
                 // library and the next look is worth a minute; nothing means the wait doubles.
-                visit.refreshes_with_no_change =
-                    if changed || forced { 0 } else { visit.refreshes_with_no_change + 1 };
+                visit.refreshes_with_no_change = if changed || forced {
+                    0
+                } else {
+                    visit.refreshes_with_no_change + 1
+                };
                 let again = visit.again;
                 visit.running = false;
                 visit.again = false;
@@ -134,8 +159,12 @@ pub fn note_index_traffic(
 
 /// Start a read for this credential because a change arrived mid-flight.
 fn schedule_refresh(state: &std::sync::Arc<State>, key: String, creds: Creds) {
-    let Ok(mut open) = visits().lock() else { return };
-    let Some(visit) = open.get_mut(&key) else { return };
+    let Ok(mut open) = visits().lock() else {
+        return;
+    };
+    let Some(visit) = open.get_mut(&key) else {
+        return;
+    };
     if visit.running {
         visit.again = true;
         return;
@@ -145,11 +174,18 @@ fn schedule_refresh(state: &std::sync::Arc<State>, key: String, creds: Creds) {
     drop(open);
     let owned_state = state.clone();
     tokio::spawn(async move {
-        let known_user_id = visits().lock().ok().and_then(|v| v.get(&key).and_then(|v| v.user_id.clone()));
+        let known_user_id = visits()
+            .lock()
+            .ok()
+            .and_then(|v| v.get(&key).and_then(|v| v.user_id.clone()));
         let changed = offer_albums_from(&owned_state, &creds, known_user_id.as_deref()).await;
         if let Ok(mut open) = visits().lock() {
             if let Some(visit) = open.get_mut(&key) {
-                visit.refreshes_with_no_change = if changed { 0 } else { visit.refreshes_with_no_change + 1 };
+                visit.refreshes_with_no_change = if changed {
+                    0
+                } else {
+                    visit.refreshes_with_no_change + 1
+                };
                 visit.running = false;
             }
         }
@@ -160,14 +196,10 @@ fn schedule_refresh(state: &std::sync::Arc<State>, key: String, creds: Creds) {
 ///
 /// Returns whether a peer was actually told to look again, which is the only evidence the freshness
 /// window is allowed to react to.
-pub async fn offer_albums_from(
-    state: &State,
-    creds: &Creds,
-    known_user_id: Option<&str>,
-) -> bool {
+pub async fn offer_albums_from(state: &State, creds: &Creds, known_user_id: Option<&str>) -> bool {
     let user_id = match known_user_id {
         Some(id) => Some(id.to_string()),
-        None => user_id_for(&crate::immich::client::shared(), creds).await,
+        None => user_id_for(crate::immich::client::shared(), creds).await,
     };
     let Some(user_id) = user_id else {
         return false; // not a person: nothing of ours to offer
@@ -175,7 +207,8 @@ pub async fn offer_albums_from(
     if known_user_id.is_none() {
         remember_user_id(creds, &user_id);
     }
-    let Some(albums) = crate::immich::access::read_caller_albums(&crate::immich::client::shared(), creds).await
+    let Some(albums) =
+        crate::immich::access::read_caller_albums(crate::immich::client::shared(), creds).await
     else {
         return false;
     };
@@ -230,11 +263,17 @@ pub async fn offer_admin_albums(state: &State) -> bool {
     // NO credentials argument: the admin key is the configured one, and passing an empty credential
     // instead reads as `401 Authentication required` — which is how a fresh link ends up with nothing
     // offered on the side that minted it.
-    let Some(albums) = client.get("/albums", &crate::immich::client::Auth::Admin).await.ok().flatten()
+    let Some(albums) = client
+        .get("/albums", &crate::immich::client::Auth::Admin)
+        .await
+        .ok()
+        .flatten()
     else {
         return false;
     };
-    let Some(albums) = albums.as_array().cloned() else { return false };
+    let Some(albums) = albums.as_array().cloned() else {
+        return false;
+    };
     offer_to_every_peer(state, &albums_i_publish(&albums, &user_id), &user_id) > 0
 }
 
@@ -260,7 +299,10 @@ fn offer_to_every_peer(state: &State, mine: &[OwnedAlbum], owner_user_id: &str) 
         nudged += 1;
     }
     if nudged > 0 {
-        crate::log!("offered {} album(s) — told {nudged} peer(s) to look again", mine.len());
+        crate::log!(
+            "offered {} album(s) — told {nudged} peer(s) to look again",
+            mine.len()
+        );
     }
     nudged
 }
@@ -268,10 +310,15 @@ fn offer_to_every_peer(state: &State, mine: &[OwnedAlbum], owner_user_id: &str) 
 /// Tell a peer its view of what we offer may have changed, so it re-reads rather than waiting for its
 /// next sweep. Carries nothing: the peer re-reads what we already publish for it.
 fn nudge_peer_index(peer: &Peer) {
-    let Some(transport) = crate::p2p::transport::transport() else { return };
+    let Some(transport) = crate::p2p::transport::transport() else {
+        return;
+    };
     let peer = peer.clone();
     tokio::spawn(async move {
-        let header = crate::p2p::frame::RequestHeader { path: "/index/nudge".into(), ..Default::default() };
+        let header = crate::p2p::frame::RequestHeader {
+            path: "/index/nudge".into(),
+            ..Default::default()
+        };
         let _ = transport.round_trip(&peer, &header, None).await;
     });
 }

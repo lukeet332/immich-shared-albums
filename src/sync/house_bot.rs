@@ -3,8 +3,8 @@ use crate::config::{bot_prefix, UTILITY_EMAIL_DOMAIN};
 use crate::immich::access::Creds;
 use crate::immich::client::{Auth, Client};
 use crate::immich::contributors::{ensure_utility_user, ContributorSpec};
-use crate::store::Contributor;
 use crate::state::State;
+use crate::store::Contributor;
 use serde_json::json;
 
 /// What the bot may do, and nothing else: read an album and its assets, and comment. Deliberately
@@ -51,7 +51,12 @@ pub async fn ensure_house_bot(state: &State, client: &Client) -> Result<Contribu
             via_peer: None,
             peer_user_id: None,
             home_peer: None,
-            permissions: Some(HOUSE_BOT_PERMISSIONS.iter().map(|p| p.to_string()).collect()),
+            permissions: Some(
+                HOUSE_BOT_PERMISSIONS
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect(),
+            ),
         },
     )
     .await
@@ -96,7 +101,9 @@ pub async fn add_house_bot_to_album_as(
         .get("albumUsers")
         .and_then(|u| u.as_array())
         .map(|users| {
-            users.iter().any(|au| au.pointer("/user/id").and_then(|v| v.as_str()) == Some(&bot_id))
+            users
+                .iter()
+                .any(|au| au.pointer("/user/id").and_then(|v| v.as_str()) == Some(&bot_id))
         })
         .unwrap_or(false);
     if already {
@@ -122,24 +129,42 @@ mod tests {
     fn the_bot_may_read_and_comment_and_nothing_else() {
         // The list is the account's entire authority. Adding a write scope here would let the bot
         // change a library it is only supposed to read, so each absence is deliberate.
-        for forbidden in ["asset.write", "asset.delete", "album.write", "albumAsset.create", "apiKey.create"] {
-            assert!(!HOUSE_BOT_PERMISSIONS.contains(&forbidden), "{forbidden} must not be granted");
+        for forbidden in [
+            "asset.write",
+            "asset.delete",
+            "album.write",
+            "albumAsset.create",
+            "apiKey.create",
+        ] {
+            assert!(
+                !HOUSE_BOT_PERMISSIONS.contains(&forbidden),
+                "{forbidden} must not be granted"
+            );
         }
         assert!(HOUSE_BOT_PERMISSIONS.contains(&"album.read"));
-        assert!(HOUSE_BOT_PERMISSIONS.contains(&"activity.create"), "it has to be able to comment");
+        assert!(
+            HOUSE_BOT_PERMISSIONS.contains(&"activity.create"),
+            "it has to be able to comment"
+        );
     }
 
     #[test]
     fn the_bot_is_named_after_the_addon_not_after_a_person() {
         // No utility suffix: that suffix says "this stands in for a person", and this is not one.
         assert!(!HOUSE_BOT_DISPLAY_NAME.ends_with(crate::config::UTILITY_SUFFIX));
-        assert!(HOUSE_BOT_DISPLAY_NAME.contains("bot"), "a human must be able to tell what it is");
+        assert!(
+            HOUSE_BOT_DISPLAY_NAME.contains("bot"),
+            "a human must be able to tell what it is"
+        );
     }
 
     #[test]
     fn the_slug_is_the_house_namespace_and_cannot_collide_with_a_person() {
         let slug = house_bot_slug();
         assert!(slug.starts_with(bot_prefix::HOUSE));
-        assert!(!slug.starts_with(bot_prefix::PERSON), "namespaces stay disjoint");
+        assert!(
+            !slug.starts_with(bot_prefix::PERSON),
+            "namespaces stay disjoint"
+        );
     }
 }

@@ -105,7 +105,10 @@ mod tests {
         // Leaving is not being removed: the sync records that as a leave.
         assert_eq!(removed_person("DELETE", "/api/albums/alb-1/user/me"), None);
         // Adding is not removing, and neither is a route that only looks like this one.
-        assert_eq!(removed_person("PUT", "/api/albums/alb-1/user/person-9"), None);
+        assert_eq!(
+            removed_person("PUT", "/api/albums/alb-1/user/person-9"),
+            None
+        );
         assert_eq!(removed_person("DELETE", "/api/albums/alb-1/users"), None);
         assert_eq!(removed_person("DELETE", "/api/albums//user/person-9"), None);
         assert_eq!(removed_person("DELETE", "/api/albums/alb-1/user/"), None);

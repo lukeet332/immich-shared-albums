@@ -25,7 +25,9 @@ pub async fn audit_line(
     let Ok(bot) = crate::sync::house_bot::ensure_house_bot(state, client).await else {
         return false;
     };
-    let Some(key) = bot.api_key.clone() else { return false };
+    let Some(key) = bot.api_key.clone() else {
+        return false;
+    };
     let Ok(posted) = crate::sync::comments::post_comment(
         client,
         album_id,
@@ -44,9 +46,14 @@ pub async fn audit_line(
         // And tagged as an AUDIT line, which is what lets a reader hide these: the tag is exact where
         // a text marker would not be, because a RELAYED human comment can also be posted by our bot
         // (the relay falls back to it when the author has no stand-in key here).
-        let _ = state.store.seen_act_add(&format!("{AUDIT_ACTIVITY_TAG}{id}"), mapping_id);
+        let _ = state
+            .store
+            .seen_act_add(&format!("{AUDIT_ACTIVITY_TAG}{id}"), mapping_id);
     }
-    crate::log!("audit on \"{}\": {text}", &album_id[..album_id.len().min(8)]);
+    crate::log!(
+        "audit on \"{}\": {text}",
+        crate::sync::peer_mapping_id::short_id(album_id)
+    );
     true
 }
 

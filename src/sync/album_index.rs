@@ -25,17 +25,33 @@ fn owned_album_from(album: &Value, caller_user_id: &str) -> Option<OwnedAlbum> {
         entry.get("role").and_then(|r| r.as_str()) == Some("owner")
             && entry.pointer("/user/id").and_then(|v| v.as_str()).is_some()
     })?;
-    let owner_id = owner.pointer("/user/id").and_then(|v| v.as_str()).unwrap_or_default();
+    let owner_id = owner
+        .pointer("/user/id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     // The caller must be the OWNER, as IMMICH says. Anything else is an album they can merely see,
     // and offering it would publish someone else's library to a linked server.
     if owner_id != caller_user_id {
         return None;
     }
     Some(OwnedAlbum {
-        name: album.get("albumName").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        asset_count: album.get("assetCount").and_then(|v| v.as_i64()).unwrap_or(0),
-        start_date: album.get("startDate").and_then(|v| v.as_str()).map(str::to_string),
-        end_date: album.get("endDate").and_then(|v| v.as_str()).map(str::to_string),
+        name: album
+            .get("albumName")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        asset_count: album
+            .get("assetCount")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
+        start_date: album
+            .get("startDate")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        end_date: album
+            .get("endDate")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         owner_name: owner
             .pointer("/user/name")
             .and_then(|v| v.as_str())
@@ -51,7 +67,10 @@ pub fn albums_i_publish(albums: &[Value], caller_user_id: &str) -> Vec<OwnedAlbu
     if caller_user_id.is_empty() {
         return Vec::new();
     }
-    albums.iter().filter_map(|a| owned_album_from(a, caller_user_id)).collect()
+    albums
+        .iter()
+        .filter_map(|a| owned_album_from(a, caller_user_id))
+        .collect()
 }
 
 /// Read the caller's OWN albums from Immich and record them for one peer.
@@ -76,23 +95,18 @@ pub async fn publish_owned_albums(
 /// Separate from the read above because a panel ALREADY reads the caller's albums to compute its
 /// matches: offering them is the same fact, and re-reading Immich for it would be a round trip for
 /// nothing.
-pub fn offer_albums_to(
-    state: &State,
-    albums: &[OwnedAlbum],
-    caller_user_id: &str,
-    peer_pub: &str,
-) {
-    let _ = state.store.published_albums_set(
-        peer_pub,
-        Direction::ToThem,
-        caller_user_id,
-        albums,
-    );
+pub fn offer_albums_to(state: &State, albums: &[OwnedAlbum], caller_user_id: &str, peer_pub: &str) {
+    let _ = state
+        .store
+        .published_albums_set(peer_pub, Direction::ToThem, caller_user_id, albums);
 }
 
 /// What this server OFFERS the given peer — the index its `/albums` route answers with.
 pub fn published_albums_for(state: &State, peer: &str) -> Vec<OwnedAlbum> {
-    state.store.published_albums_for(peer, Direction::ToThem).unwrap_or_default()
+    state
+        .store
+        .published_albums_for(peer, Direction::ToThem)
+        .unwrap_or_default()
 }
 
 /// Refresh what a peer offers us, from that peer's own `/albums`.
@@ -102,13 +116,25 @@ pub fn published_albums_for(state: &State, peer: &str) -> Vec<OwnedAlbum> {
 /// index simply stands. Best-effort throughout: a failure keeps the last good snapshot rather than
 /// clearing an index the panel is about to read.
 pub async fn refresh_peer_albums(state: &State, peer: &Peer) -> Vec<OwnedAlbum> {
-    let keep = || state.store.published_albums_for(&peer.pub_key, Direction::FromThem).unwrap_or_default();
-    let Some(transport) = crate::p2p::transport::transport() else { return keep() };
-    let header = crate::p2p::frame::RequestHeader { path: "/albums".into(), ..Default::default() };
+    let keep = || {
+        state
+            .store
+            .published_albums_for(&peer.pub_key, Direction::FromThem)
+            .unwrap_or_default()
+    };
+    let Some(transport) = crate::p2p::transport::transport() else {
+        return keep();
+    };
+    let header = crate::p2p::frame::RequestHeader {
+        path: "/albums".into(),
+        ..Default::default()
+    };
     let exchange = transport.round_trip(peer, &header, None);
-    let Ok(Ok((head, body))) =
-        tokio::time::timeout(std::time::Duration::from_millis(INDEX_REFRESH_DEADLINE_MS), exchange)
-            .await
+    let Ok(Ok((head, body))) = tokio::time::timeout(
+        std::time::Duration::from_millis(INDEX_REFRESH_DEADLINE_MS),
+        exchange,
+    )
+    .await
     else {
         return keep();
     };
@@ -129,14 +155,22 @@ pub async fn refresh_peer_albums(state: &State, peer: &Peer) -> Vec<OwnedAlbum> 
     // against — which a per-owner write cannot express, because it is only ever called FOR an owner
     // the answer still mentions.
     let before = keep();
-    if state.store.published_albums_replace_peer(&peer.pub_key, Direction::FromThem, &incoming).is_err() {
+    if state
+        .store
+        .published_albums_replace_peer(&peer.pub_key, Direction::FromThem, &incoming)
+        .is_err()
+    {
         return before;
     }
     let after = keep();
     // Only on a real change: a panel's own match read lands here, and an unconditional hint would
     // tell the page that asked to ask again, forever, never landing a fresh answer.
     if before != after {
-        crate::log!("album index from \"{}\" changed ({} album(s))", peer.name, after.len());
+        crate::log!(
+            "album index from \"{}\" changed ({} album(s))",
+            peer.name,
+            after.len()
+        );
         crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Index);
     }
     after
@@ -177,14 +211,16 @@ pub async fn invite_peer_to_reunite(
                 && crate::sync::matches::normalise_album_name(&a.name) == wanted
         })
         .ok_or_else(|| {
-            "that pairing is not in this server's index — open the panel again and retry".to_string()
+            "that pairing is not in this server's index — open the panel again and retry"
+                .to_string()
         })?;
 
     let caller_albums = read_caller_albums(client, creds)
         .await
         .ok_or_else(|| "could not read your albums".to_string())?;
-    let mine = crate::sync::adoption::find_adoptable_album(album_name, &caller_albums, caller_user_id)
-        .ok_or_else(|| format!("you have no album called \"{album_name}\""))?;
+    let mine =
+        crate::sync::adoption::find_adoptable_album(album_name, &caller_albums, caller_user_id)
+            .ok_or_else(|| format!("you have no album called \"{album_name}\""))?;
 
     // THE MEMBERSHIP IS THE INVITATION, so it is added the way a human's would be and the ordinary
     // scanner turns it into one — the same path, the same mapping, the same everything. Two things
@@ -207,17 +243,21 @@ pub async fn invite_peer_to_reunite(
     // READ IT BACK rather than trust the call. `ensure_contributor` deliberately swallows a failed
     // add — attribution can retry — but a panel that says "Invited" for someone who is not on the
     // album is a lie the person cannot see through, and the peer is never told either.
-    let after = client.get_album(&mine.album_id, &crate::immich::client::Auth::Creds(creds)).await;
+    let after = client
+        .get_album(&mine.album_id, &crate::immich::client::Auth::Creds(creds))
+        .await;
     let is_member = after
         .ok()
         .flatten()
         .and_then(|album| {
-            album.get("albumUsers").and_then(|u| u.as_array()).map(|users| {
-                users.iter().any(|au| {
-                    au.pointer("/user/id").and_then(|v| v.as_str())
-                        == person.user_id.as_deref()
+            album
+                .get("albumUsers")
+                .and_then(|u| u.as_array())
+                .map(|users| {
+                    users.iter().any(|au| {
+                        au.pointer("/user/id").and_then(|v| v.as_str()) == person.user_id.as_deref()
+                    })
                 })
-            })
         })
         .unwrap_or(false);
     if !is_member {
@@ -256,7 +296,10 @@ pub async fn invite_peer_to_reunite(
     if let Err(e) =
         crate::sync::house_bot::add_house_bot_to_album(state, client, &mine.album_id, creds).await
     {
-        crate::log!("could not put the bot on \"{}\" to record the invite: {e}", mine.name);
+        crate::log!(
+            "could not put the bot on \"{}\" to record the invite: {e}",
+            mine.name
+        );
     }
     crate::sync::audit::audit_line(
         state,
@@ -264,10 +307,7 @@ pub async fn invite_peer_to_reunite(
         &mapping.id,
         &mine.album_id,
         "invited",
-        &format!(
-            "Invited {} to reunite this album.",
-            theirs.owner_name
-        ),
+        &format!("Invited {} to reunite this album.", theirs.owner_name),
     )
     .await;
     Ok((mine.name, theirs.owner_name))
@@ -286,7 +326,7 @@ pub async fn my_matches(
     caller_user_id: &str,
 ) -> Option<Vec<serde_json::Value>> {
     let albums = read_caller_albums(client, creds).await?;
-    let mine = crate::sync::matches::albums_i_publish_from(&albums, caller_user_id);
+    let mine = albums_i_publish(&albums, caller_user_id);
     // OFFER what this person owns, here and now, and offer even when the list is EMPTY: a panel
     // visit is the only moment the sidecar holds their credential, so it is the only moment an
     // offer can be made. An offer of NOTHING is still an offer — it is how a peer learns that every
@@ -330,13 +370,19 @@ pub async fn my_matches(
 ///
 /// `mappingId` is TOP-LEVEL and not only inside `step`: the panel's Reunite button reads the row's
 /// own `mappingId`, so a step that says `accept` without one is a button that does nothing.
-fn match_entry(candidate: &crate::sync::matches::PeerMatch, step: &crate::sync::matches::ReunionStep) -> Value {
+fn match_entry(
+    candidate: &crate::sync::matches::PeerMatch,
+    step: &crate::sync::matches::ReunionStep,
+) -> Value {
     let mut entry = serde_json::to_value(candidate).unwrap_or(Value::Null);
     if let Some(object) = entry.as_object_mut() {
         if let crate::sync::matches::ReunionStep::Accept { mapping_id } = step {
             object.insert("mappingId".into(), json!(mapping_id));
         }
-        object.insert("step".into(), serde_json::to_value(step).unwrap_or_default());
+        object.insert(
+            "step".into(),
+            serde_json::to_value(step).unwrap_or_default(),
+        );
     }
     entry
 }
@@ -377,6 +423,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // the CAPITALS carry the load-bearing word
     fn only_albums_the_caller_OWNS_are_offered() {
         // The unsafe direction: offering an album the caller can merely SEE publishes someone
         // else's library to a linked server.
@@ -443,7 +490,9 @@ mod tests {
             peer: "peer".into(),
             peer_name: "Their household".into(),
         };
-        let accept = crate::sync::matches::ReunionStep::Accept { mapping_id: "m-1".into() };
+        let accept = crate::sync::matches::ReunionStep::Accept {
+            mapping_id: "m-1".into(),
+        };
         let row = match_entry(&candidate, &accept);
         assert_eq!(row["mappingId"], "m-1", "the button reads this");
         assert_eq!(row["step"]["kind"], "accept");
