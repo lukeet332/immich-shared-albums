@@ -1,7 +1,9 @@
 // e2e/iroh-client.mjs — a minimal iroh peer client for the assertion suite. Speaks the isa/2
-// framing from src/p2p/transport.ts so security checks (F-05/F-06) stay real wire tests.
+// framing from rust/src/p2p/transport.rs so security checks (F-05/F-06) stay real wire tests.
 import { createRequire } from 'node:module';
-const require = createRequire(process.env.ISA_ROOT + '/package.json');
+// Resolved from this module, so the oracle runs from any image layout: it needs the iroh package
+// installed beside THIS file, not at some host-specific path.
+const require = createRequire(import.meta.url);
 const { Endpoint, EndpointAddr, EndpointId, RelayMode, presetMinimal } = require('@number0/iroh');
 
 const ALPN = Array.from(Buffer.from('isa/2'));
