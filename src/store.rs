@@ -247,10 +247,38 @@ pub struct Store {
 }
 
 impl Store {
+    /// How many times a boot retries a contended database, and how its failures are recognised.
+    /// A boot overlapping another boot — a restart racing the old sidecar's exit, or the test
+    /// suite racing itself — can hit `database is locked` even with a busy timeout, when the
+    /// loser of a lock race is caught mid-read while the winner writes. The window is
+    /// milliseconds; the boot retries rather than failing the process.
+    const BOOT_RETRIES: u32 = 5;
+
+    fn is_busy(err: &StoreError) -> bool {
+        matches!(err, StoreError::Sqlite(e) if e.contains("locked") || e.contains("busy"))
+    }
+
     pub fn open(data_dir: &str) -> Result<Self, StoreError> {
         if !Path::new(data_dir).exists() {
             std::fs::create_dir_all(data_dir).map_err(|e| StoreError::Io(e.to_string()))?;
         }
+        let mut attempt = 0;
+        loop {
+            match Self::open_once(data_dir) {
+                Ok(store) => return Ok(store),
+                Err(e) if attempt < Self::BOOT_RETRIES && Self::is_busy(&e) => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(200 * attempt as u64));
+                    crate::log!(
+                        "the store is busy (attempt {attempt}) — waiting, then booting again"
+                    );
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    fn open_once(data_dir: &str) -> Result<Self, StoreError> {
         let conn = Connection::open(Path::new(data_dir).join("state.db"))
             .map_err(|e| StoreError::Sqlite(e.to_string()))?;
         let mut store = Store {
@@ -276,12 +304,12 @@ impl Store {
         // ONE lock for the whole of init, handed to free functions that take `&Connection`.
         // Locking per helper instead deadlocks: `std::sync::Mutex` is not reentrant.
         let conn = self.conn.lock().unwrap();
-        conn.execute_batch("PRAGMA journal_mode = WAL;")?;
-        // A second writer (another boot overlapping a restart, a test booting the same directory
-        // concurrently) must WAIT for the lock, not fail the open: `database is locked` here was a
-        // boot failure for a condition that clears in milliseconds. 5s, because a genuine stuck
-        // lock should still surface rather than hang the sidecar.
+        // The busy timeout is installed BEFORE the WAL pragma below: the pragma takes a write
+        // lock, and two concurrent boots — a restart overlapping a boot, a test booting the same
+        // directory — used to fail HERE with `database is locked`, before any timeout existed to
+        // make them wait. 5s, so a genuinely stuck lock still surfaces rather than hanging.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.execute_batch("PRAGMA journal_mode = WAL;")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )?;
@@ -1348,6 +1376,31 @@ impl From<rusqlite::Error> for StoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two boots racing one directory used to fail with `database is locked`: the WAL pragma took
+    /// a write lock before the busy timeout existed. Now every boot waits its turn and all of
+    /// them succeed — which is what a restart overlapping a boot relies on, and what the test
+    /// suite does several times a run.
+    #[test]
+    fn concurrent_boots_of_one_directory_all_succeed() {
+        let dir = std::env::temp_dir().join(format!("isa-store-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_str().unwrap().to_string();
+
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || Store::open(&path).map(|_| ()))
+            })
+            .collect();
+        for (i, handle) in handles.into_iter().enumerate() {
+            let joined = handle.join().expect("thread did not panic");
+            assert!(joined.is_ok(), "boot {i} failed: {:?}", joined.err());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use base64::Engine as _;
 
     fn store() -> Store {
