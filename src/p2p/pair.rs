@@ -78,9 +78,9 @@ fn now_ms() -> i64 {
 }
 
 /// Mint a code and return the ticket to hand to the other admin — the ONE time it is visible.
-/// Infallible: nothing here can fail, so the route never has to answer an error minting cannot
-/// produce.
-pub fn mint_pairing(transport: &Transport, store: &Store) -> (String, i64) {
+/// Infallible: nothing here can fail (an unresolved declared address falls back to the
+/// endpoint's own), so the route never has to answer an error minting cannot produce.
+pub async fn mint_pairing(transport: &Transport, store: &Store) -> (String, i64) {
     let mut secret_bytes = [0u8; 32];
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut secret_bytes);
     let code = URL_SAFE_NO_PAD.encode(secret_bytes);
@@ -100,7 +100,7 @@ pub fn mint_pairing(transport: &Transport, store: &Store) -> (String, i64) {
         v: 2,
         pub_key: transport.public_key(),
         relay: transport.relay_url(),
-        addrs: Some(transport.direct_addresses()),
+        addrs: Some(crate::p2p::advertise::advertised_addresses(transport).await),
         secret: code,
     };
     if ticket.addrs.as_ref().map(|a| a.is_empty()).unwrap_or(true) {

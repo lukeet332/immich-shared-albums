@@ -21,6 +21,11 @@ services:
       #                                    # stubs. They store ~2KB/photo and ~2MB/video,
       #                                    # so size it well above your shared volume —
       #                                    # too low and syncing silently starts failing.
+      #
+      # Running without the public relay: needs a reachable address and a published UDP port.
+      #   ISA_RELAY: "false"
+      #   ISA_ADVERTISE_ADDR: "home.example.com:8300"
+      #   ports: ["8300:8300/udp"]                        # and forward it on your router
     volumes:
       # a named volume, owned by the container's non-root user. The identity key lives
       # here: `docker compose down -v` would delete it and orphan every pairing.

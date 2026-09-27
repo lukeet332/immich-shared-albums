@@ -14,6 +14,12 @@ it apply unchanged:
 - [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy) — hosting the
   share-link gallery, with configs for the common setups
 
+One exception: `ISA_RELAY=false` with `ISA_ADVERTISE_ADDR` set to a forwarded port **does** put a
+UDP port of yours on the internet — that is what makes the servers reachable without the relay.
+The port answers QUIC handshakes from anyone; everything above the handshake still requires a
+paired key (`p2p/routes.rs` checks the caller against a known peer), but a scanner can see the
+port and spend its CPU. Leave the relay on unless running without it is the requirement.
+
 ---
 
 ## 1. Pick a posture

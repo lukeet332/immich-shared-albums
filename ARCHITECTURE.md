@@ -56,6 +56,7 @@ picker, for the same reason. Known costs; do not make either worse without sayin
 | `p2p/join.rs`, `pair.rs`, `unlink.rs` | joining a share, pairing two servers, severing a link |
 | `p2p/protocol.rs` | `PROTOCOL_VERSION`, `PROTOCOL_FEATURES`, `SIDECAR_VERSION`, peer lookups and nudges |
 | `p2p/routes.rs` | the peer routes, in match order |
+| `p2p/advertise.rs` | the addresses a pairing ticket or share token carries: `ISA_ADVERTISE_ADDR` first, then the endpoint's own |
 | `p2p/transport.rs` | the iroh endpoint and dialing |
 | `p2p/upgrade.rs`, `web/upgrade.rs` | protocol upgrades (websockets) piped at the socket level |
 | `sync/album_grant.rs` | the grant a share carries, and its withdrawal |
@@ -256,6 +257,7 @@ container-based ones start their own sidecar unless they say otherwise.
 | `verify-bytes.mjs` | 10/10 | the byte routes and the entitlement gate: an offered asset IS readable, an unshared one is 403, an invented asset id is 403, an unknown peer is 403 | a sidecar on `:9410`, `BKEY` exported |
 | `verify-redeem.mjs` | 25/25 | the enrolment path and every gate that can refuse it: a reused link, an unknown key, a password-gated link with no password or the wrong one, a malformed body, and the setting that turns link joining off at the PEER route as well as on the page | a sidecar on `:9410`, `BKEY` exported |
 | `verify-pairing.mjs` | 17/17 | two sidecars pairing over the real wire: single-use links, replay refused, stale refused, both sides listed, the protocol the peer advertised | two sidecars on `:9410`/`:9420` |
+| `verify-relay-off.sh` | 5/5 | relay-off end to end: the ticket leads with the declared address, a peer behind its own network redeems through it, and without the declared address the same redeem times out | the rig's B and D households up, `immich-shared-albums:demo` built |
 | `verify-interceptor.mjs` | 10/10 | `/api/assets/:id/thumbnail` across two servers: a MISS comes from the owner byte for byte, a repeat is a cache HIT | self-hosting, `BKEY` exported |
 | `verify-share.mjs` | 13/13 | the join card in Chromium over the framed native album, `?native=1` untouched, dismissal handing over to Immich | a sidecar on `:9400`, `SHARE_KEY` and `SHARE_ALBUM` exported, a screenshot path under `target/` |
 | `verify-share-browser.mjs` | 7/7 | `deploy/INSTALL-AI.md`'s VERIFY step 2 on its own: the card only exists once `share.js` has mounted, so a browser is the only thing that can answer it | a sidecar on `:8391`, `BKEY` exported |

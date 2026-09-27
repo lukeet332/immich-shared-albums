@@ -392,7 +392,7 @@ async fn pairing_mint(headers: &HeaderMap) -> Response {
             json!({ "error": "the peer transport is not running" }),
         );
     };
-    let (link, expires_at) = crate::p2p::pair::mint_pairing(transport, &state().store);
+    let (link, expires_at) = crate::p2p::pair::mint_pairing(transport, &state().store).await;
     json_response(
         StatusCode::OK,
         json!({ "link": link, "expiresAt": expires_at }),
@@ -1620,7 +1620,7 @@ async fn share_document(key: &str) -> Response {
         );
     };
     let meta = crate::immich::client::public_share_link_meta(key).await;
-    let token = endpoint_token(transport);
+    let token = endpoint_token(transport).await;
     let cover = meta
         .as_ref()
         .and_then(|m| m.cover_asset_id.as_ref())
@@ -1640,13 +1640,13 @@ async fn share_document(key: &str) -> Response {
 
 /// `{pub, relay?, addrs}` as base64url — the shape `join()` parses and hard-checks against the
 /// identity the origin answers with. Absent members are OMITTED, as `JSON.stringify` does.
-fn endpoint_token(transport: &crate::p2p::transport::Transport) -> String {
+async fn endpoint_token(transport: &crate::p2p::transport::Transport) -> String {
     let mut obj = serde_json::Map::new();
     obj.insert("pub".into(), json!(transport.public_key()));
     if let Some(relay) = transport.relay_url() {
         obj.insert("relay".into(), json!(relay));
     }
-    let addrs = transport.direct_addresses();
+    let addrs = crate::p2p::advertise::advertised_addresses(transport).await;
     if !addrs.is_empty() {
         obj.insert("addrs".into(), json!(addrs));
     }
