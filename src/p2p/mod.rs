@@ -1,4 +1,5 @@
 /** p2p/mod.rs — the cross-server wire protocol and what it leaves behind. See ARCHITECTURE.md. */
+pub mod advertise;
 pub mod entitlement;
 pub mod frame;
 pub mod join;

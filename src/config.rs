@@ -6,6 +6,13 @@ pub const SIDECAR_VERSION: &str = "1.1.1"; // x-release-please-version
 /// Every setting here comes from an `ISA_`-prefixed variable, for the reason given in ARCHITECTURE.md
 /// ("Why ISA_"). Parsing is strict and fails loudly at boot: a typo'd boolean must never fail
 /// open, and a bad cadence must never become a zero-length interval.
+/// An address peers are told to dial: `host:port`, the host an IPv4 literal or a hostname.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdvertiseAddr {
+    pub host: String,
+    pub port: u16,
+}
+
 #[derive(Clone)]
 pub struct Config {
     pub immich_url: String,
@@ -24,6 +31,7 @@ pub struct Config {
     pub trace_sync: bool,
     pub publish_user_directory: bool,
     pub relay: bool,
+    pub advertise_addr: Option<AdvertiseAddr>,
     pub reconcile_debug: bool,
     pub test_hooks: bool,
 }
@@ -52,6 +60,13 @@ impl std::fmt::Debug for Config {
             .field("trace_sync", &self.trace_sync)
             .field("publish_user_directory", &self.publish_user_directory)
             .field("relay", &self.relay)
+            .field(
+                "advertise_addr",
+                &self
+                    .advertise_addr
+                    .as_ref()
+                    .map(|a| format!("{}:{}", a.host, a.port)),
+            )
             .field("reconcile_debug", &self.reconcile_debug)
             .field("test_hooks", &self.test_hooks)
             .finish()
@@ -114,6 +129,29 @@ fn env_str(name: &str, dflt: &str) -> String {
     }
 }
 
+/// Strict `host:port` for `ISA_ADVERTISE_ADDR`. IPv6 is refused because the transport binds
+/// `0.0.0.0:ISA_P2P_PORT` — a peer sent to an IPv6 address would find nothing listening there.
+/// The host may be a hostname: `advertised_addresses` resolves it when a link is minted, so a
+/// dynamic address stays current without a restart.
+pub fn parse_advertise_addr(raw: &str) -> Option<AdvertiseAddr> {
+    let (host, port) = raw.trim().rsplit_once(':')?;
+    if host.is_empty() || host.contains(':') || host.starts_with('[') {
+        return None;
+    }
+    if !host.starts_with(|c: char| c.is_ascii_alphanumeric())
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+    {
+        return None;
+    }
+    let port = port.parse::<u16>().ok()?;
+    (port >= 1).then_some(AdvertiseAddr {
+        host: host.to_string(),
+        port,
+    })
+}
+
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         // Read and check this first: the process cannot run without it, so proving it here once
@@ -143,6 +181,19 @@ impl Config {
             publish_user_directory: env_bool("ISA_PUBLISH_USER_DIRECTORY", true)?,
             // Strictly parsed BECAUSE this is the privacy setting: a typo must halt, never fail open.
             relay: env_bool("ISA_RELAY", true)?,
+            // The address peers should dial when the ones this container can see for itself are
+            // not the ones they can reach — a forwarded UDP port, or a LAN/VPN address. Read by
+            // `advertised_addresses` and carried by pairing tickets and share-page tokens.
+            advertise_addr: match std::env::var("ISA_ADVERTISE_ADDR") {
+                Ok(raw) if !raw.is_empty() => {
+                    Some(parse_advertise_addr(&raw).ok_or_else(|| {
+                        ConfigError(format!(
+                            "{raw} is not <host>:<port> (an IPv4 address or a hostname)"
+                        ))
+                    })?)
+                }
+                _ => None,
+            },
             reconcile_debug: env_bool("ISA_RECONCILE_DEBUG", false)?,
             test_hooks: env_bool("ISA_TEST_HOOKS", false)?,
         })
@@ -348,6 +399,7 @@ pub fn install_test_config() {
             trace_sync: false,
             publish_user_directory: true,
             relay: true,
+            advertise_addr: None,
             reconcile_debug: false,
             test_hooks: false,
         });
@@ -441,5 +493,60 @@ mod tests {
             marker_name::person("Nan", "The Smiths"),
             "Nan (via The Smiths server)"
         );
+    }
+
+    #[test]
+    fn an_advertise_address_parses_as_ipv4_or_hostname_with_its_port() {
+        assert_eq!(
+            parse_advertise_addr("203.0.113.9:8300"),
+            Some(AdvertiseAddr {
+                host: "203.0.113.9".into(),
+                port: 8300
+            })
+        );
+        assert_eq!(
+            parse_advertise_addr("home.example.com:9000"),
+            Some(AdvertiseAddr {
+                host: "home.example.com".into(),
+                port: 9000
+            })
+        );
+        // A paste arrives with padding around it.
+        assert_eq!(
+            parse_advertise_addr("  Home.Example.COM:9000 "),
+            Some(AdvertiseAddr {
+                host: "Home.Example.COM".into(),
+                port: 9000
+            })
+        );
+    }
+
+    #[test]
+    fn an_advertise_address_without_a_usable_port_is_refused_so_boot_can_halt_on_it() {
+        for raw in [
+            "",
+            "example.com",
+            "example.com:",
+            "example.com:0",
+            "example.com:65536",
+            "example.com:not-a-port",
+            ":8300",
+        ] {
+            assert_eq!(parse_advertise_addr(raw), None, "accepted {raw:?}");
+        }
+    }
+
+    #[test]
+    fn an_ipv6_advertise_address_is_refused_because_the_transport_binds_ipv4() {
+        assert_eq!(parse_advertise_addr("[2001:db8::1]:8300"), None);
+        assert_eq!(parse_advertise_addr("2001:db8::1:8300"), None);
+    }
+
+    #[test]
+    fn an_advertise_host_is_a_hostname_not_arbitrary_text() {
+        // A shell metacharacter must never reach a compose comment, a log line, or getaddrinfo.
+        for raw in ["$(rm -rf /):8300", "a b:8300", "host;ls:8300"] {
+            assert_eq!(parse_advertise_addr(raw), None, "accepted {raw:?}");
+        }
     }
 }

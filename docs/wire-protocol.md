@@ -18,9 +18,14 @@ certificates, and no listening HTTP surface for peers at all.
   refs report partial success_). The accept loop hands `p2p/routes.rs` the caller's proven key
   (`remoteId()`), never a header.
 - **Relays**: n0's public map assists hole-punching and carries end-to-end-encrypted traffic when
-  a direct path fails — the one disclosed third party, fallback only; `RELAY=off` runs dark.
-  **Discovery is never enabled** — tickets and tokens carry the address, so no registry learns a
-  server exists.
+  a direct path fails — the one disclosed third party, fallback only. `RELAY=off` removes it,
+  along with the address discovery that came with it, so addresses must then be reachable
+  without it (`ISA_ADVERTISE_ADDR`).
+- **What a ticket or token carries as addresses** comes from `advertised_addresses`
+  (`p2p/advertise.rs`): `ISA_ADVERTISE_ADDR` first when set — a hostname is resolved when the
+  link is minted — then the endpoint's own. The declared one is the only candidate a peer outside
+  this container's networks can dial once the relay is off. **Discovery is never enabled** —
+  tickets and tokens carry the address, so no registry learns a server exists.
 
 | File             | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -10,6 +10,9 @@ const RIG_PROJECTS = (process.env.RIG_PROJECTS || 'household-b household-c house
 const A = process.env.A_URL || `http://localhost:${PORT('PORT_IMMICH_C', 2285)}`;
 const B = process.env.B_URL || `http://localhost:${PORT('PORT_IMMICH_B', 2284)}`;
 const BS = process.env.B_SIDECAR || `http://localhost:${PORT('PORT_SIDECAR_B', 8301)}`;
+// B's declared peer address, as demo/docker-compose.yml sets it: the pairing stage proves the
+// ticket leads with it, because with ISA_RELAY=false nothing else would be dialable.
+const B_ADVERTISE = process.env.ISA_ADVERTISE_ADDR || '203.0.113.9:8300';
 const AKEY = process.env.AKEY, BKEY = process.env.BKEY;
 const ALBUM = process.env.A_ALBUM || '__CREATE__';
 // The sidecar's cadence, as the rig actually runs it. `stable()` holds a value for two of these, so
@@ -2198,6 +2201,18 @@ stage('pairing links two servers on its own (no album)');
     check('the pairing string is a self-contained ticket (endpoint + single-use secret, no URL)',
           !!decoded?.pub && !!decoded?.secret && (decoded?.secret || '').length >= 20,
           minted.link.slice(0, 24) + '…');
+    // The declared address leads, and the endpoint's own follow it: a peer that cannot route to
+    // the container IP (ISA_RELAY=false) has nothing else to dial. An IP-literal override is
+    // compared exactly; a hostname override is resolved by the minting side, so the ticket must
+    // lead with something that is not the hostname itself.
+    const declaredHost = B_ADVERTISE.replace(/:[0-9]+$/, '');
+    const declaredHostIsIPv4 = /^[0-9.]+$/.test(declaredHost);
+    const leads = declaredHostIsIPv4
+      ? decoded?.addrs?.[0] === B_ADVERTISE
+      : !!decoded?.addrs?.[0] && !decoded.addrs[0].includes(declaredHost);
+    check('the ticket leads with the declared address (ISA_ADVERTISE_ADDR)',
+          leads && decoded.addrs.length > 1,
+          `addrs=${JSON.stringify(decoded?.addrs)}`);
     check('the link expires within the hour', minted.expiresAt - Date.now() < 3600000,
           `${Math.round((minted.expiresAt - Date.now()) / 60000)} min`);
     // survives being pasted into a messenger: one line, no spaces

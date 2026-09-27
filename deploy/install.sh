@@ -77,14 +77,18 @@ services:
       ISA_IMMICH_URL: $IMMICH_URL
       ISA_IMMICH_API_KEY: \${ISA_IMMICH_API_KEY}
       ISA_HOUSEHOLD_NAME: "$HOUSEHOLD_NAME"
+      # To run without the public relay, uncomment both and name the address peers should dial
+      # (a hostname is fine — it is resolved each time a link is minted). Also publish 8300/udp
+      # below. See configuration.md.
+      # ISA_RELAY: "off"
+      # ISA_ADVERTISE_ADDR: "home.example.com:8300"
     volumes:
       # a named volume, so the container's own (non-root) user owns it. The identity key
       # lives here: docker compose down -v would delete it and orphan every pairing.
       - isa-data:/data
     ports:
       - $HOST_PORT:8300
-      # Server-to-server traffic uses UDP 8300 (ISA_P2P_PORT). It works without publishing this;
-      # uncomment (and forward it on your router) only for a guaranteed direct path between servers.
+      # Server-to-server traffic uses UDP 8300 (ISA_P2P_PORT). It works without publishing this.
       # - 8300:8300/udp
     networks: [immich]
 EOF

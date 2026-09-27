@@ -30,8 +30,23 @@ Both households install the addon, then:
 
 The two servers now talk to each other directly through their own encrypted tunnel, wherever they
 are, with nothing exposed. (Behind the scenes this is [iroh](https://www.iroh.computer); if the
-homes can't connect directly, traffic falls back through an encrypted public relay — set
-`RELAY=off` if you'd rather it never did.)
+homes can't connect directly, traffic falls back through an encrypted public relay.)
+
+### Running without the relay
+
+`ISA_RELAY=false` removes that fallback **and the address discovery that comes with it**, so the
+servers must already be able to reach each other:
+
+- on a shared LAN or VPN where each sidecar endpoint can reach the other (container addresses
+  are not made reachable by a shared LAN alone) — nothing else is needed; or
+- through a UDP port you forward to the addon (`ISA_P2P_PORT`, 8300 by default). A forward is
+  never discovered on its own, so also set `ISA_ADVERTISE_ADDR` to the address that answers
+  there, e.g. `ISA_ADVERTISE_ADDR=203.0.113.7:8300` (or `home.example.com:9000` when the outside
+  port differs from the inside one; a hostname is resolved each time a link is minted).
+
+With neither, linking times out — the pairing link can only carry addresses the far side is able
+to dial. If your internet provider puts you behind CGNAT, no forward is possible and the relay
+(or a VPN) is the only path between homes.
 
 ## 3. Share like it's normal Immich — because it is
 

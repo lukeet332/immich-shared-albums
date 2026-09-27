@@ -77,7 +77,7 @@ impl Transport {
                 .map_err(|e| format!("cannot bind UDP {}: {e}", cfg().p2p_port))?;
         }
         // Relays assist hole-punching and carry end-to-end-encrypted traffic when a direct path
-        // fails — the one disclosed third party, and only ever a fallback. ISA_RELAY=false runs dark.
+        // fails — the one disclosed third party, and only ever a fallback.
         builder = builder.relay_mode(if cfg().relay {
             RelayMode::Default
         } else {
@@ -93,6 +93,16 @@ impl Transport {
             endpoint,
             connections: Mutex::new(HashMap::new()),
         });
+
+        // Without the relay there is no address discovery either, so the only addresses a peer is
+        // ever given are the ones this endpoint can see for itself — private ones, on any
+        // container network. Say so at boot, rather than leaving it to a decoded ticket.
+        if !cfg().relay && cfg().advertise_addr.is_none() {
+            crate::log!(
+                "ISA_RELAY=off and ISA_ADVERTISE_ADDR is not set — peers will be told only {}, so only a peer on a shared network can reach this server",
+                transport.direct_addresses().join(", ")
+            );
+        }
 
         let accepting = transport.clone();
         tokio::spawn(async move { accept_loop(accepting, handler).await });

@@ -56,6 +56,10 @@ services:
       ISA_TRACE_SYNC: "${ISA_TRACE_SYNC:-false}"
       # Rig only: the reconcile loops log their version/manifest/missing arithmetic.
       ISA_RECONCILE_DEBUG: "${ISA_RECONCILE_DEBUG:-false}"
+      # Rig only: pins the first address a pairing ticket carries, so the suite proves the
+      # declared address reaches the wire. TEST-NET-3 (RFC 5737), so no peer can dial it and
+      # the rig's real addresses still win every connection.
+      ISA_ADVERTISE_ADDR: "${ISA_ADVERTISE_ADDR:-203.0.113.9:8300}"
     networks:
       - default
       - isa-demo

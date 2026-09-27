@@ -100,8 +100,9 @@ Notes for you, the agent:
   ... apk add` cannot install a client, and a second container mounting the same volume can:
   `docker run --rm -v immich-shared-albums_isa-data:/data alpine:3.22 sh -c 'apk add --no-cache sqlite >/dev/null && sqlite3 /data/state.db "select name from sqlite_master where type=\'table\';"'`.
 - Server-to-server traffic uses UDP 8300 inside the container (ISA_P2P_PORT). Nothing needs
-  opening for it to work; publishing `8300:8300/udp` is optional and only buys a guaranteed
-  direct path.
+  opening for it to work while the relay is on. Publishing `8300:8300/udp` only helps if you also
+  set `ISA_ADVERTISE_ADDR` to the address peers should dial — a forward is never discovered on
+  its own — and both become required if I ask for `ISA_RELAY=false` behind a router.
 - The API key is a live credential: keep it out of shell history, logs, and
   world-readable files.
 - The three routes only need to be reachable by this household's own devices; exposing
