@@ -1,6 +1,7 @@
 /** p2p/advertise.rs — the addresses this server tells peers to dial. See docs/wire-protocol.md. */
 use crate::config::{cfg, AdvertiseAddr};
 use crate::p2p::transport::Transport;
+use std::time::Duration;
 
 /// The address list a pairing ticket or share-page token carries, given the DECLARED address
 /// resolved to an IPv4 literal (or not) and the endpoint's own addresses. The declared one leads
@@ -19,21 +20,28 @@ fn assemble(resolved_ip: Option<String>, port: u16, own: &[String]) -> Vec<Strin
     }
 }
 
+/// The DNS deadline. A stalled resolver must not hold a pairing mint or a share page hostage:
+/// the honest answer while DNS is unhealthy is our own addresses, not a hung request.
+pub const RESOLVE_DEADLINE: Duration = Duration::from_secs(3);
+
 /// The declared host, resolved to an IPv4 literal. IPv4 only: the transport binds
-/// `0.0.0.0:ISA_P2P_PORT`, so an AAAA answer would name a port nothing is listening on.
+/// `0.0.0.0:ISA_P2P_PORT`, so an AAAA answer would name a port nothing is listening on. A
+/// resolver still running past the deadline reads as unresolved.
 async fn resolve_ipv4(host: &str, port: u16) -> Option<String> {
     let host = host.to_string();
-    tokio::task::spawn_blocking(move || {
+    let lookup = tokio::task::spawn_blocking(move || {
         use std::net::ToSocketAddrs;
         (host.as_str(), port)
             .to_socket_addrs()
             .ok()
             .and_then(|mut all| all.find(|a| a.is_ipv4()))
             .map(|a| a.ip().to_string())
-    })
-    .await
-    .ok()
-    .flatten()
+    });
+    tokio::time::timeout(RESOLVE_DEADLINE, lookup)
+        .await
+        .ok()
+        .and_then(|done| done.ok())
+        .flatten()
 }
 
 /// What a pairing ticket or share-page token carries. The declared address

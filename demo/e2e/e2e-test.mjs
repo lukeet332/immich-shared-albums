@@ -2202,9 +2202,16 @@ stage('pairing links two servers on its own (no album)');
           !!decoded?.pub && !!decoded?.secret && (decoded?.secret || '').length >= 20,
           minted.link.slice(0, 24) + '…');
     // The declared address leads, and the endpoint's own follow it: a peer that cannot route to
-    // the container IP (ISA_RELAY=false) has nothing else to dial.
+    // the container IP (ISA_RELAY=false) has nothing else to dial. An IP-literal override is
+    // compared exactly; a hostname override is resolved by the minting side, so the ticket must
+    // lead with something that is not the hostname itself.
+    const declaredHost = B_ADVERTISE.replace(/:[0-9]+$/, '');
+    const declaredHostIsIPv4 = /^[0-9.]+$/.test(declaredHost);
+    const leads = declaredHostIsIPv4
+      ? decoded?.addrs?.[0] === B_ADVERTISE
+      : !!decoded?.addrs?.[0] && !decoded.addrs[0].includes(declaredHost);
     check('the ticket leads with the declared address (ISA_ADVERTISE_ADDR)',
-          decoded?.addrs?.[0] === B_ADVERTISE && decoded.addrs.length > 1,
+          leads && decoded.addrs.length > 1,
           `addrs=${JSON.stringify(decoded?.addrs)}`);
     check('the link expires within the hour', minted.expiresAt - Date.now() < 3600000,
           `${Math.round((minted.expiresAt - Date.now()) / 60000)} min`);

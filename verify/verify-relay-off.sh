@@ -23,7 +23,9 @@ JOINER_HTTP=9472
 IMG=http://localhost:${PORT_IMMICH_B:-2284}
 
 DKEY=$(grep -m1 '^D_SIDECAR_API_KEY=' demo/household-d/.env | cut -d= -f2-)
+[ -n "$DKEY" ] || DKEY=$(grep -m1 '^D_API_KEY=' demo/household-d/.env | cut -d= -f2-)
 BKEY=$(grep -m1 '^B_SIDECAR_API_KEY=' demo/.env | cut -d= -f2-)
+[ -n "$BKEY" ] || BKEY=$(grep -m1 '^B_API_KEY=' demo/.env | cut -d= -f2-)
 [ -n "$DKEY" ] && [ -n "$BKEY" ] || { echo "no sidecar API keys in demo/.env — bring the rig up first"; exit 1; }
 docker image inspect immich-shared-albums:demo >/dev/null 2>&1 \
   || { echo "no immich-shared-albums:demo image — build it (docker build -t immich-shared-albums:demo .)"; exit 1; }

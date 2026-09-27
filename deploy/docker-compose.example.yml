@@ -25,11 +25,14 @@ services:
       # Running without the public relay: needs a reachable address and a published UDP port.
       #   ISA_RELAY: "false"
       #   ISA_ADVERTISE_ADDR: "home.example.com:8300"
-      #   ports: ["8300:8300/udp"]                        # and forward it on your router
+      # ...and the service's ports section below publishing 8300/udp.
     volumes:
       # a named volume, owned by the container's non-root user. The identity key lives
       # here: `docker compose down -v` would delete it and orphan every pairing.
       - isa-data:/data
+    # Running without the public relay publishes the transport port, forwarded on the router:
+    # ports:
+    #   - "8300:8300/udp"
     networks: [immich]
 
 # Join the docker network your Immich runs on, so IMMICH_URL resolves.

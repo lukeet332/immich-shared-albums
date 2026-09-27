@@ -37,8 +37,8 @@ homes can't connect directly, traffic falls back through an encrypted public rel
 `ISA_RELAY=false` removes that fallback **and the address discovery that comes with it**, so the
 servers must already be able to reach each other:
 
-- on a network they share — the same LAN, or a VPN such as Tailscale or WireGuard — nothing else
-  is needed; or
+- on a shared LAN or VPN where each sidecar endpoint can reach the other (container addresses
+  are not made reachable by a shared LAN alone) — nothing else is needed; or
 - through a UDP port you forward to the addon (`ISA_P2P_PORT`, 8300 by default). A forward is
   never discovered on its own, so also set `ISA_ADVERTISE_ADDR` to the address that answers
   there, e.g. `ISA_ADVERTISE_ADDR=203.0.113.7:8300` (or `home.example.com:9000` when the outside
