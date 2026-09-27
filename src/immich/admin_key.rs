@@ -24,6 +24,11 @@ pub const REQUIRED_ADMIN_PERMISSIONS: [&str; 16] = [
     "sharedLink.read",
 ];
 
+/// The extra scopes an OAuth-only Immich needs (password login is off, so the addon borrows a
+/// window to mint bot keys — `immich/contributors.rs`). Optional on password-login installs,
+/// which is why they are not in `REQUIRED_ADMIN_PERMISSIONS`.
+pub const OAUTH_ONLY_PERMISSIONS: [&str; 2] = ["systemConfig.read", "systemConfig.update"];
+
 /// The key cannot list its own permissions (`apiKey.read` is excluded on purpose), so verification is
 /// by probe: one required scope and one optional scope, each answered by a cheap GET.
 ///
@@ -46,7 +51,8 @@ pub async fn verify_admin_key_at_boot(client: &Client) {
     let system_config = probe(client, "/system-config").await;
     if system_config == 403 {
         crate::log!(
-            "admin key verified (scoped). Note: no systemConfig scope — fine unless this Immich is OAuth-only, which needs systemConfig.read+update to mint bot keys."
+            "admin key verified (scoped). Note: no {} scope — fine unless this Immich is OAuth-only, which needs it to mint bot keys.",
+            OAUTH_ONLY_PERMISSIONS.join("+")
         );
         return;
     }
@@ -62,5 +68,29 @@ async fn probe(client: &Client, path: &str) -> u16 {
         Ok(_) => 200,
         Err(e) if e.status != 0 => e.status,
         Err(_) => 0,
+    }
+}
+
+/// The two lists are one source of truth for the scoped key the rig provisions
+/// (`demo/ci/provision-mock.sh` sums them), so a scope drifting between them would silently
+/// widen or narrow the rig's key.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_oauth_only_scopes_add_to_the_required_list_rather_than_overlap_it() {
+        assert!(!OAUTH_ONLY_PERMISSIONS.is_empty());
+        for scope in OAUTH_ONLY_PERMISSIONS {
+            assert!(
+                !REQUIRED_ADMIN_PERMISSIONS.contains(&scope),
+                "{scope} belongs in exactly one list"
+            );
+        }
+        // The sum the provisioner mints: every required scope present, plus the optional pair.
+        assert_eq!(
+            REQUIRED_ADMIN_PERMISSIONS.len() + OAUTH_ONLY_PERMISSIONS.len(),
+            18
+        );
     }
 }
