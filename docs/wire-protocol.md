@@ -159,6 +159,17 @@ tightening it later would be a visible cross-server behaviour change.
 
 ## Pushed refs report partial success
 
+**`contributor.originUserId` is the person's id on their OWN server, never a relay's internal
+one.** For a photo this household owns, that is simply the owner's id here; for a photo this
+household RELAYS, the owner here is a stand-in, and the store's home id for that stand-in
+travels instead — a receiving server keys the person's account on it
+(`ensureContributor` -> `person_spec`), so the same human resolves to one account whether they
+arrived through a directory or a relayed photo. `contributor_for` (`immich/refs.rs`) carries it;
+a stand-in with no stored home id (an attribution-only account a directory never proved) falls
+back to the stand-in's local id, exactly as before. Mixed versions: an older sender's relayed
+photo still carries its own stand-in id, so the receiving side keeps its previous behaviour until
+both run this.
+
 The sender re-offers only the failed refs next cycle. A push body carries `add` (refs the peer
 should hold) and, additively, `remove` (origin asset ids the sender no longer holds): the receiver
 purges its own stubs for them, so a joiner deleting their contribution reclaims the origin's tile
