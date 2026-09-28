@@ -7,10 +7,6 @@ name: release-please
 # merging that PR creates the GitHub Release and its tag, and the tag triggers the suite-gated
 # build (release.yml). If the tag is missing afterwards, push it by hand: `git tag vX.Y.Z
 # <release-sha> && git push origin vX.Y.Z` — the image ships on the tag, not on the merge.
-# `last-release-sha` in release-please-config.json pins the commit release-please measures from:
-# the merged-but-reverted `chore(main): release 1.0.0` PR (#30) cannot be deleted, so without it
-# every run re-derives that release and fails on the reserved tag. Remove the pin once a release
-# PR created by it has merged.
 on:
   push:
     branches: [main]
