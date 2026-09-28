@@ -177,8 +177,15 @@ jobs:
       - name: Dump sidecar logs on failure
         if: failure()
         run: |
-          (cd demo && docker compose logs sidecar-b --tail 1500) || true
-          (cd demo/household-c && docker compose logs sidecar-c --tail 1500) || true
-          (cd demo/household-d && docker compose logs sidecar-d --tail 1500) || true
-          (cd demo && docker compose logs immich-b --tail 150) || true
-          (cd demo/household-c && docker compose logs immich-c --tail 150) || true
+          # No --tail: a freeze's cause sits minutes before the failure, and a tail cut is how the
+          # evidence of exactly the stall worth diagnosing disappears. A run's full sidecar log is
+          # single-digit MB — nothing a runner cannot print.
+          (cd demo && docker compose logs --no-color sidecar-b) || true
+          (cd demo/household-c && docker compose logs --no-color sidecar-c) || true
+          (cd demo/household-d && docker compose logs --no-color sidecar-d) || true
+          (cd demo && docker compose logs --no-color immich-b --tail 400) || true
+          (cd demo/household-c && docker compose logs --no-color immich-c --tail 400) || true
+          # What the HOST was doing while the suite stalled: a freeze that clears on its own is
+          # memory or disk pressure, and neither is visible in any container's log.
+          free -m || true
+          df -h /var/lib/docker 2>/dev/null || df -h / || true

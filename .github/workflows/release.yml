@@ -1,8 +1,19 @@
 name: release
 
+# The image ships on the tag, not on the merge: the tag push triggers the suite-gated build.
+# Tags are protected refs that refuse updates, so a tag run broken by the workflow itself is
+# repaired by DISPATCHING this from main — the release's tree plus the workflow fix — with
+# image_tag naming the release; `gh workflow run release.yml --ref main -f image_tag=vX.Y.Z`.
+# A missing tag is still pushed by hand: `git tag vX.Y.Z <release-sha> && git push origin vX.Y.Z`.
+
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'The tag the built image carries — the release being rebuilt (e.g. v1.2.0)'
+        required: true
 
 permissions:
   contents: write
@@ -65,7 +76,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:${{ inputs.image_tag || github.ref_name }}
             ghcr.io/${{ github.repository }}:latest
 
       # release-please owns the tag, the changelog and the GitHub release. This job runs
@@ -77,7 +88,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="${{ inputs.image_tag || github.ref_name }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists (created by release-please) — nothing to do."
           else
