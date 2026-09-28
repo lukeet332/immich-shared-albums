@@ -25,3 +25,4 @@ pub mod status;
 pub mod sweeps;
 pub mod traffic_triggers;
 pub mod trail;
+pub mod wakes;

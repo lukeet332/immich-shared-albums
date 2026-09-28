@@ -151,11 +151,15 @@ static NO_TRANSPORT_LOGGED: std::sync::atomic::AtomicBool =
 /// ORDER IS LOAD-BEARING: the directories run first because detection asks each invited person's
 /// MARKER what it can see, and with no markers there is nobody to ask.
 pub fn start_directory_loop(state: std::sync::Arc<State>) {
-    let period = std::time::Duration::from_millis(cfg().sync_poll_ms);
+    // ISA_SYNC_POLL_MS is the BACKSTOP: `/nudge/directory`, `/invitations/nudge` and
+    // `/index/nudge` wake this lane, so an invite or a directory change converges in seconds and
+    // the poll is for a lost nudge.
+    let backstop = std::time::Duration::from_millis(cfg().sync_poll_ms);
     tokio::spawn(async move {
         let client = crate::immich::client::shared();
         loop {
-            tokio::time::sleep(period).await;
+            let woken = crate::sync::wakes::wait(crate::sync::wakes::Lane::Invites, backstop).await;
+            crate::trace!("invites lane woke: {woken:?}");
             // Held by a rig proving a change was pushed, not swept. Before the tick counter: a held
             // lane did not look, and must not read as having looked.
             if crate::sync::sweeps::sweeps_are_paused() {

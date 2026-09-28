@@ -84,25 +84,35 @@ pub enum NudgeKind {
     Album,
     Index,
     Invitations,
+    Directory,
+    Comments,
 }
 
 static ALBUM_NUDGES: AtomicU64 = AtomicU64::new(0);
 static INDEX_NUDGES: AtomicU64 = AtomicU64::new(0);
 static INVITATION_NUDGES: AtomicU64 = AtomicU64::new(0);
 
+static DIRECTORY_NUDGES: AtomicU64 = AtomicU64::new(0);
+
+static COMMENT_NUDGES: AtomicU64 = AtomicU64::new(0);
+
 pub fn record_nudge(kind: NudgeKind) {
     match kind {
         NudgeKind::Album => ALBUM_NUDGES.fetch_add(1, Ordering::Relaxed),
         NudgeKind::Index => INDEX_NUDGES.fetch_add(1, Ordering::Relaxed),
         NudgeKind::Invitations => INVITATION_NUDGES.fetch_add(1, Ordering::Relaxed),
+        NudgeKind::Directory => DIRECTORY_NUDGES.fetch_add(1, Ordering::Relaxed),
+        NudgeKind::Comments => COMMENT_NUDGES.fetch_add(1, Ordering::Relaxed),
     };
 }
 
-pub fn nudges_received() -> (u64, u64, u64) {
+pub fn nudges_received() -> (u64, u64, u64, u64, u64) {
     (
         ALBUM_NUDGES.load(Ordering::Relaxed),
         INDEX_NUDGES.load(Ordering::Relaxed),
         INVITATION_NUDGES.load(Ordering::Relaxed),
+        DIRECTORY_NUDGES.load(Ordering::Relaxed),
+        COMMENT_NUDGES.load(Ordering::Relaxed),
     )
 }
 

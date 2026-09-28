@@ -853,13 +853,16 @@ fn album_is_unchanged(
     local_version == updated_at && album_count >= stubs + contributions
 }
 
-/// The watch loop: `ISA_SYNC_POLL_MS` between passes, guarded against overlapping itself.
+/// The watch loop. `ISA_SYNC_POLL_MS` is the BACKSTOP — a peer's channel nudge
+/// (`/albums/:mappingId/nudge` wakes this lane) is what makes an album change converge in
+/// seconds; the poll is for a lost nudge, and its default is minutes for exactly that reason.
 pub fn start_watch_loop(state: Arc<crate::state::State>) {
-    let period = std::time::Duration::from_millis(crate::config::cfg().sync_poll_ms);
+    let backstop = std::time::Duration::from_millis(crate::config::cfg().sync_poll_ms);
     tokio::spawn(async move {
         let client = Client::new();
         loop {
-            tokio::time::sleep(period).await;
+            let woken = crate::sync::wakes::wait(crate::sync::wakes::Lane::Watch, backstop).await;
+            crate::trace!("watch lane woke: {woken:?}");
             // Held by a rig proving a change was pushed, not swept. BEFORE the tick counter and the
             // overlap guard: a held loop did not look, and must not read as having looked.
             if crate::sync::sweeps::sweeps_are_paused() {

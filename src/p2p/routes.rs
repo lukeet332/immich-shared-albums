@@ -135,6 +135,18 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
             let (status, value) = crate::p2p::protocol::handle_index_nudge(caller);
             json_answer(status, value)
         }
+        // "My people changed — look again." Wakes the invites lane; it names no users, so a peer
+        // can only cause a re-read of what it is already allowed to see.
+        "/nudge/directory" => {
+            let (status, value) = crate::p2p::protocol::handle_directory_nudge(caller);
+            json_answer(status, value)
+        }
+        // "The conversation moved — read it again." Wakes the comment lane; the pull is
+        // entitlement-checked per album, so a peer can only cause a re-read of its own albums.
+        "/nudge/comments" => {
+            let (status, value) = crate::p2p::protocol::handle_comments_nudge(caller);
+            json_answer(status, value)
+        }
         // A person's picture, so their stand-in on the other server wears their face rather than the
         // addon's. Enrolled AND actually related: an avatar is personal data, not a public asset.
         p if p.starts_with("/users/") && p.ends_with("/avatar") => {

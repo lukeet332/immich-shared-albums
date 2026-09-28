@@ -61,8 +61,10 @@ was recorded — a peer that has published nothing gets an empty list, never a s
 answers the `to-them` direction only: the `from-them` half is what we recorded about the caller, and
 answering with it would hand a peer its own albums to match against themselves. Same gate as
 `/directory`: an enrolled peer may ask, and nothing here grants access to any album.
-`POST /index/nudge` is the same shape for the album index: no payload, no names, nothing an
-enrolled peer could not already read — it only makes the other side re-read what we publish.
+`POST /index/nudge` is the same shape for the album index, and `POST /nudge/directory` and
+`POST /nudge/comments` are its siblings: no payload, no names, nothing an enrolled peer could not
+already read — each only makes the other side re-read a channel it already sees (directory sync,
+invite detection and link-grant retirement wake one lane; the conversation wakes the other).
 
 **Completion, not just acceptance:** `POST …/refs` answers whether refs were _accepted_;
 materialisation, offers and comment push are asynchronous, so `GET /albums/:mappingId/status`
@@ -131,9 +133,13 @@ excluded, so reconciliation can never echo a household's own photos back to it.
 
 ## Nudges are fire-and-forget
 
-When an album moves, every OTHER household mapped to it is told to pull now rather than at its next
-tick. A lost nudge costs nothing: the scheduled handshake catches everything regardless, so this is
-fail-open by design and must never be made blocking.
+When an album moves, every OTHER household mapped to it is told to pull now rather than waiting out
+its backstop sweep, and an album write through the sidecar's own proxy likewise tells the peers'
+index and directory lanes (`note_traffic` -> `nudge_peers_on_album_write`). Each nudge names its lane (`/nudge/directory`, `/nudge/comments`,
+`/invitations/nudge`, `/index/nudge`, `/albums/:mappingId/nudge`) and `sync/wakes.rs` coalesces
+whatever arrives mid-sweep into ONE follow-up, so a burst never stampedes. A lost nudge costs
+nothing: the scheduled handshake catches everything regardless, so this is fail-open by design and
+must never be made blocking.
 
 ## Re-sharing onward follows Immich's roles
 

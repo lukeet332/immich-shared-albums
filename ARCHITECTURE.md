@@ -80,6 +80,7 @@ picker, for the same reason. Known costs; do not make either worse without sayin
 | `sync/reclaim.rs` | stubs whose mapping is gone: the failed-purge backlog the directory lane collects |
 | `sync/status.rs` | the tick/nudge/hint status the panel reads |
 | `sync/sweeps.rs` | the sweep gate: one background lane at a time |
+| `sync/wakes.rs` | the per-lane wake channels: a nudge says "sweep now", the timer is the backstop |
 | `sync/trail.rs` | audit lines that wait for the album's owner |
 | `sync/traffic_triggers.rs` | post-response triggers: index refresh, comment push, removals |
 | `web/activity_filter.rs` | hiding our own audit lines from one reader, in the answer they were served |
@@ -258,6 +259,8 @@ container-based ones start their own sidecar unless they say otherwise.
 | `verify-redeem.mjs` | 25/25 | the enrolment path and every gate that can refuse it: a reused link, an unknown key, a password-gated link with no password or the wrong one, a malformed body, and the setting that turns link joining off at the PEER route as well as on the page | a sidecar on `:9410`, `BKEY` exported |
 | `verify-pairing.mjs` | 17/17 | two sidecars pairing over the real wire: single-use links, replay refused, stale refused, both sides listed, the protocol the peer advertised | two sidecars on `:9410`/`:9420` |
 | `verify-relay-off.sh` | 5/5 | relay-off end to end: the ticket leads with the declared address, a peer behind its own network redeems through it, and without the declared address the same redeem times out | the rig's B and D households up, `immich-shared-albums:demo` built |
+| `verify-nudges.sh` | 7/7 | the nudge A/B: with both backstops 300s out and 20s of observed stillness, an album write through the sidecar's own proxy wakes the peer's lanes in seconds — which no timer can explain | the rig's B and D households up, `immich-shared-albums:demo` built |
+| `verify-nudges-browser.sh` | 7/7 | the same A/B in a real browser: an album made in the app (a session-authenticated proxy write from the person's own panel page) reaches the peer's panel seconds later, backstops 300s out | the rig after `demo/run-mock-e2e.sh` (the admin accounts exist) |
 | `verify-interceptor.mjs` | 10/10 | `/api/assets/:id/thumbnail` across two servers: a MISS comes from the owner byte for byte, a repeat is a cache HIT | self-hosting, `BKEY` exported |
 | `verify-share.mjs` | 13/13 | the join card in Chromium over the framed native album, `?native=1` untouched, dismissal handing over to Immich | a sidecar on `:9400`, `SHARE_KEY` and `SHARE_ALBUM` exported, a screenshot path under `target/` |
 | `verify-share-browser.mjs` | 7/7 | `deploy/INSTALL-AI.md`'s VERIFY step 2 on its own: the card only exists once `share.js` has mounted, so a browser is the only thing that can answer it | a sidecar on `:8391`, `BKEY` exported |
