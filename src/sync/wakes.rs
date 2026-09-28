@@ -1,5 +1,4 @@
 /** sync/wakes.rs — per-lane wake channels: a nudge says "sweep now", the timer is only the backstop. See docs/sync-loops.md. */
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -22,15 +21,17 @@ pub enum Wake {
     Backstop,
 }
 
+/// The `Notify` permit is the whole mechanism, including the coalescing: `notify_one` stores ONE
+/// permit when no waiter is registered, so ten nudges during one sweep leave exactly one
+/// follow-up, consumed by the next `wait`. There is deliberately no mirrored "pending" flag — a
+/// second copy of what the permit already says is state that can only ever disagree with it.
 struct LaneWake {
-    pending: AtomicBool,
     notify: Notify,
 }
 
 fn watch_wake() -> &'static LaneWake {
     static WAKE: OnceLock<LaneWake> = OnceLock::new();
     WAKE.get_or_init(|| LaneWake {
-        pending: AtomicBool::new(false),
         notify: Notify::new(),
     })
 }
@@ -38,7 +39,6 @@ fn watch_wake() -> &'static LaneWake {
 fn comments_wake() -> &'static LaneWake {
     static WAKE: OnceLock<LaneWake> = OnceLock::new();
     WAKE.get_or_init(|| LaneWake {
-        pending: AtomicBool::new(false),
         notify: Notify::new(),
     })
 }
@@ -46,7 +46,6 @@ fn comments_wake() -> &'static LaneWake {
 fn invites_wake() -> &'static LaneWake {
     static WAKE: OnceLock<LaneWake> = OnceLock::new();
     WAKE.get_or_init(|| LaneWake {
-        pending: AtomicBool::new(false),
         notify: Notify::new(),
     })
 }
@@ -59,31 +58,21 @@ fn lane_wake(lane: Lane) -> &'static LaneWake {
     }
 }
 
-/// A nudge for a lane: mark it pending and release the waiter. Coalescing is the pending flag —
-/// ten nudges during one sweep leave ONE follow-up, because `Notify` holds a single permit and
-/// the flag clears on the wake.
+/// A nudge for a lane: release the waiter, or leave the one stored permit for it. Coalescing is
+/// the permit itself — ten nudges during one sweep leave ONE follow-up, never a stampede.
 pub fn wake(lane: Lane) {
-    let w = lane_wake(lane);
-    w.pending.store(true, Ordering::SeqCst);
-    w.notify.notify_one();
-}
-
-/// Whether a nudge is pending for the lane (diagnostics: what the lanes are waiting on).
-pub fn is_pending(lane: Lane) -> bool {
-    lane_wake(lane).pending.load(Ordering::SeqCst)
+    lane_wake(lane).notify.notify_one();
 }
 
 /// Wait for the lane's next trigger: a nudge, or the backstop timer — whichever first. A nudge
-/// that arrived while the lane was sweeping is consumed here, so it costs exactly one follow-up
-/// sweep and never a stampede.
+/// that arrived while the lane was sweeping is consumed here (the stored permit ends this wait
+/// immediately), so it costs exactly one follow-up sweep; a nudge that never arrives costs one
+/// backstop, which is the property the timer keeps.
 pub async fn wait(lane: Lane, backstop: Duration) -> Wake {
     let notified = lane_wake(lane).notify.notified();
     tokio::select! {
         _ = tokio::time::sleep(backstop) => Wake::Backstop,
-        _ = notified => {
-            lane_wake(lane).pending.store(false, Ordering::SeqCst);
-            Wake::Nudged
-        }
+        _ = notified => Wake::Nudged,
     }
 }
 
