@@ -32,6 +32,7 @@ pub fn ledger_of_state() -> Ledger<'static> {
     Ledger {
         wire_checksum: &|id: &str, local: &str| state().wire_checksum(id, local),
         has_ledger_row: &|id: &str| state().store.ledger_by_asset(id).ok().flatten().is_some(),
+        home_id_of: &|user_id: &str| state().home_id_of_stand_in(user_id),
     }
 }
 

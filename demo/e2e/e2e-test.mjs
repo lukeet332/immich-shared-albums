@@ -2107,6 +2107,19 @@ stage('security (entitlement — a signed peer is not entitled to everything)');
     const fat = irohProbe(bKeys, originEp, '/pair', { bodyPad: 1200 * 1024 });
     check('an over-limit body is ANSWERED with 413, not abandoned mid-stream',
           fat.status === 413 && fat.json?.code === 'body_too_large', JSON.stringify(fat));
+
+    // The relayed photo's ref carries the PERSON's id on their own server, never the relaying
+    // server's internal stand-in id: the receiving side keys the one account its directory
+    // already created on it, so the same human stays one account whatever any display name
+    // says later (contributor_for -> the ledger's home_id_of).
+    const dHomeId = DKEY ? (await api(D, DKEY, '/users/me')).id : null;
+    const daveRefs = (irohProbe(bKeys, originEp, `/albums/${ALBUM_ID}/manifest`)?.json?.manifest || [])
+      .filter(r => r.contributor?.displayName === 'Demo Dave');
+    check('a relayed photo\'s ref names the person\'s id on their own server, not the relay\'s stand-in id',
+          !!dHomeId && daveRefs.length > 0 && daveRefs.every(r => r.contributor?.originUserId === dHomeId),
+          daveRefs.length
+            ? daveRefs.map(r => `${r.contributor.displayName}:${r.contributor.originUserId?.slice(0, 8)} vs home:${(dHomeId || '').slice(0, 8)}`).join(', ')
+            : 'no Demo Dave ref in the manifest');
     // The fat-frame probe spins up a docker container in the same instant; on Docker Desktop the
     // host->port-proxy connection can hiccup for one request, so retry rather than flake.
     const health = await until(async () => {

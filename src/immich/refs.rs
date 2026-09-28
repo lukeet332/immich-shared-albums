@@ -18,6 +18,11 @@ pub struct Ledger<'a> {
     pub wire_checksum: &'a (dyn Fn(&str, &str) -> String + Send + Sync),
     /// Whether this sidecar put this bot-owned asset here, so it is ours to offer onward.
     pub has_ledger_row: &'a (dyn Fn(&str) -> bool + Send + Sync),
+    /// The person's id on THEIR OWN server, for a local stand-in's user id — the id a receiving
+    /// server keys the person's account on, independent of any display name here. `None` when
+    /// the store holds no home id for that stand-in (a local human, or an attribution-only
+    /// account a directory never proved).
+    pub home_id_of: &'a (dyn Fn(&str) -> Option<String> + Send + Sync),
 }
 
 impl Ledger<'_> {
@@ -26,6 +31,7 @@ impl Ledger<'_> {
     pub fn empty() -> Ledger<'static> {
         Ledger {
             wire_checksum: &|_, local| local.to_string(),
+            home_id_of: &|_| None,
             has_ledger_row: &|_| false,
         }
     }
@@ -136,12 +142,12 @@ fn without_credit_line(description: Option<&str>) -> Option<String> {
 /// A bot account's local name is decorated ("Nan (via B server)"), but the name that travels must
 /// be the PERSON's — the decoration accumulating one layer per relay hop is exactly what
 /// `person_name` exists to prevent. A human's own name travels verbatim.
-pub fn contributor_for(asset: &Value, users: &USERS) -> Contributor {
-    let origin_user_id = asset
+pub fn contributor_for(asset: &Value, users: &USERS, ledger: Ledger<'_>) -> Contributor {
+    let local_user_id = asset
         .get("ownerId")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    let owner = origin_user_id.as_deref().and_then(|id| users.get(id));
+    let owner = local_user_id.as_deref().and_then(|id| users.get(id));
     let display_name = match owner {
         Some(user) if user.utility => {
             let stripped = person_name(Some(&user.name));
@@ -154,6 +160,16 @@ pub fn contributor_for(asset: &Value, users: &USERS) -> Contributor {
         Some(user) => user.name.clone(),
         None => cfg().name.clone(),
     };
+    // `originUserId` on the wire is the person's id on their OWN server — the id a receiving
+    // server keys their stand-in account on, so the same human resolves to one account whether
+    // they arrived through a directory or a relayed photo. For this household's own human, the
+    // local id IS that id; for a RELAYED photo the owner here is a stand-in, and the store holds
+    // the person's home id — carried in place of the stand-in's local id, which names an account
+    // only THIS server ever had.
+    let origin_user_id = local_user_id
+        .as_deref()
+        .and_then(|id| (ledger.home_id_of)(id))
+        .or(local_user_id);
     Contributor {
         display_name,
         origin_user_id,
@@ -207,7 +223,7 @@ pub fn asset_to_ref(asset: &Value, users: &USERS, ledger: Ledger<'_>) -> Option<
         origin_asset: id,
         checksum,
         checksum_alg: None,
-        contributor: contributor_for(asset, users),
+        contributor: contributor_for(asset, users, ledger),
         kind: kind.to_string(),
         taken_at: asset
             .get("fileCreatedAt")
@@ -441,5 +457,68 @@ mod tests {
         let users = USERS::default();
         let asset = json!({"id": "a1", "type": "IMAGE", "checksum": "s"});
         assert!(!is_offerable(&asset, &users, Ledger::empty()));
+    }
+
+    #[test]
+    fn a_relayed_photo_is_attributed_by_the_persons_home_id_not_the_standins_local_id() {
+        // The asset's owner HERE is a stand-in — an account only this server ever had. The id a
+        // receiving server keys the person's account on is the person's id on their OWN server,
+        // and the store holds it: that is what travels as originUserId, so the same human
+        // resolves to one account whether they arrived through a directory or a relayed photo.
+        install_config();
+        let users = USERS::default();
+        let home_ids = [("stand-in-1", "person-9-at-home")];
+        let ledger = Ledger {
+            home_id_of: &|id: &str| {
+                home_ids
+                    .iter()
+                    .find(|(local, _)| *local == id)
+                    .map(|(_, home)| home.to_string())
+            },
+            ..Ledger::empty()
+        };
+        let asset = json!({"id": "r1", "type": "IMAGE", "checksum": "s", "ownerId": "stand-in-1"});
+        let reference = asset_to_ref(&asset, &users, ledger).expect("a ref");
+        assert_eq!(
+            reference.contributor.origin_user_id.as_deref(),
+            Some("person-9-at-home"),
+            "the stand-in's local id must not travel as the person's id"
+        );
+    }
+
+    #[test]
+    fn a_local_humans_photo_carries_their_own_id_which_is_their_home_id() {
+        install_config();
+        let users = USERS::default();
+        let asset = json!({"id": "h1", "type": "IMAGE", "checksum": "s", "ownerId": "human-1"});
+        let reference = asset_to_ref(&asset, &users, Ledger::empty()).expect("a ref");
+        assert_eq!(
+            reference.contributor.origin_user_id.as_deref(),
+            Some("human-1")
+        );
+    }
+
+    #[test]
+    fn a_stand_in_with_no_known_home_id_carries_the_local_id_as_before() {
+        // An attribution-only account a directory never proved has no home id; the local id is
+        // the only id there is, so it travels — exactly as before, and no worse.
+        install_config();
+        let users = USERS::default();
+        let home_ids = [("a-different-stand-in", "person-2-at-home")];
+        let ledger = Ledger {
+            home_id_of: &|id: &str| {
+                home_ids
+                    .iter()
+                    .find(|(local, _)| *local == id)
+                    .map(|(_, home)| home.to_string())
+            },
+            ..Ledger::empty()
+        };
+        let asset = json!({"id": "r2", "type": "IMAGE", "checksum": "s", "ownerId": "stand-in-1"});
+        let reference = asset_to_ref(&asset, &users, ledger).expect("a ref");
+        assert_eq!(
+            reference.contributor.origin_user_id.as_deref(),
+            Some("stand-in-1")
+        );
     }
 }

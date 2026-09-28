@@ -176,6 +176,21 @@ impl State {
     /// preview), is what a peer must see. A ledger READ failure falls back to the local checksum
     /// (a peer then misses one dedupe) but says so: silently shipping the wrong identity would
     /// materialise duplicate stubs with nothing in the log to explain them.
+    /// The person's id on THEIR OWN server, for a stand-in's local user id — `None` when this
+    /// store holds no home id for that account (a local human, or an attribution-only account a
+    /// directory never proved).
+    pub fn home_id_of_stand_in(&self, local_user_id: &str) -> Option<String> {
+        if local_user_id.is_empty() {
+            return None;
+        }
+        self.collections()
+            .contributors
+            .values()
+            .find(|c| c.user_id == local_user_id)
+            .and_then(|c| c.peer_user_id.clone())
+            .filter(|id| !id.is_empty())
+    }
+
     pub fn wire_checksum(&self, asset_id: &str, fallback: &str) -> String {
         match self.store.ledger_by_asset(asset_id) {
             Ok(Some(entry)) => entry.checksum,
@@ -293,6 +308,31 @@ mod tests {
         state.ensure_identity().unwrap();
         state.save().unwrap();
         state
+    }
+
+    #[test]
+    fn the_home_id_lookup_answers_for_a_stand_in_and_none_for_a_local_human() {
+        // The lookup the ref mint wires to: a stand-in with a stored home id answers it, an
+        // attribution-only record (no home id) does not, and a local human has no record at all.
+        let s = boot("/tmp/isa-state-home-id");
+        s.collections().contributors.insert(
+            "person-9-at-home".into(),
+            crate::store::Contributor {
+                user_id: "stand-in-1".into(),
+                api_key: "a-key-nobody-uses".into(),
+                password: None,
+                avatar_done: false,
+                via_peer: None,
+                peer_user_id: Some("person-9-at-home".into()),
+                home_peer: None,
+            },
+        );
+        assert_eq!(
+            s.home_id_of_stand_in("stand-in-1").as_deref(),
+            Some("person-9-at-home")
+        );
+        assert_eq!(s.home_id_of_stand_in("stand-in-empty").as_deref(), None);
+        assert_eq!(s.home_id_of_stand_in("human-1").as_deref(), None);
     }
 
     #[test]
