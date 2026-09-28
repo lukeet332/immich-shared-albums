@@ -24,8 +24,14 @@ pub fn handler() -> PeerHandler {
 
 async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer {
     match header.path.as_str() {
-        // EXACT paths first: the suffix arms below (e.g. `ends_with("/comments")`) would otherwise
-        // swallow `/nudge/comments` as an album route with a garbage mapping id.
+        // EXACT paths first: the suffix arms below swallow them otherwise —
+        // `ends_with("/comments")` takes `/nudge/comments` as an album route with a garbage
+        // mapping id, and `ends_with("/nudge")` takes `/index/nudge` as a mapping nudge for an
+        // album called "index".
+        "/index/nudge" => {
+            let (status, value) = crate::p2p::protocol::handle_index_nudge(caller);
+            json_answer(status, value)
+        }
         "/nudge/directory" => {
             let (status, value) = crate::p2p::protocol::handle_directory_nudge(caller);
             json_answer(status, value)
@@ -137,12 +143,6 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
         p if p.ends_with("/nudge") => {
             let id = album_mapping_id(p, "/nudge");
             let (status, value) = crate::p2p::protocol::handle_nudge(caller, &id);
-            json_answer(status, value)
-        }
-        // "What I publish has changed — read my index again." The same contract one level up: no
-        // names and no albums, so a peer can only cause a re-read of what the caller already offers.
-        "/index/nudge" => {
-            let (status, value) = crate::p2p::protocol::handle_index_nudge(caller);
             json_answer(status, value)
         }
         // A person's picture, so their stand-in on the other server wears their face rather than the
@@ -344,7 +344,7 @@ mod tests {
             Ok(state) => crate::state::install(state),
             Err(e) => panic!("could not boot a state for the dispatch test: {e}"),
         }
-        for path in ["/nudge/comments", "/nudge/directory"] {
+        for path in ["/index/nudge", "/nudge/comments", "/nudge/directory"] {
             let (status, body) = ask(path);
             assert_eq!(
                 status, 403,

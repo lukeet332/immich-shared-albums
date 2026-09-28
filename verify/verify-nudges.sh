@@ -98,13 +98,16 @@ WOKE=0
 for i in $(seq 1 "${WINDOW}"); do
   read T3W T3I T3C <<< "$(ticks)"
   read N2X N2D <<< "$(nudges)"
-  if [ "${T3I}" -gt "${T2I}" ] && { [ "${N2X}" -gt "${N1X}" ] || [ "${N2D}" -gt "${N1D}" ]; }; then WOKE=1; break; fi
+  if [ "${T3I}" -gt "${T2I}" ] && { [ "${N2X}" -gt "${N1X}" ] && [ "${N2D}" -gt "${N1D}" ]; }; then WOKE=1; break; fi
   sleep 1
 done
 ELAPSED=$(( $(date +%s) - START ))
 if [ "${WOKE}" = "1" ]; then
   check "the write woke the receiver's lanes in ${ELAPSED}s (<${WINDOW}s; its backstop ${SLOW}ms away, ${STILL}s of stillness before it)" 0
-  check "the receiver counted the channel nudges (index+directory)" $(( (N2X > N1X || N2D > N1D) ? 0 : 1 )) "index ${N1X}->${N2X}, directory ${N1D}->${N2D}"
+  # BOTH tells must land: the index nudge refreshes the receiver's view of what the writer
+  # publishes, and the directory nudge wakes the receiver's invites lane. One without the other
+  # is a shadowed route or a dead tell, not a wake.
+  check "the receiver counted BOTH channel nudges (index and directory)" $(( (N2X > N1X && N2D > N1D) ? 0 : 1 )) "index ${N1X}->${N2X}, directory ${N1D}->${N2D}"
   check "and the invites LANE swept — a wake, not just a delivered tell" $(( T3I > T2I ? 0 : 1 )) "invites ticks ${T2I} -> ${T3I}"
 else
   check "the write woke the receiver's lanes" 1 "no invites tick in ${WINDOW}s (ticks ${T2W}/${T2I}/${T2C}, nudges index ${N1X}->${N2X:-?} directory ${N1D}->${N2D:-?})"

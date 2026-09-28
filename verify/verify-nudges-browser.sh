@@ -22,8 +22,10 @@ restore_cadence() {
 trap restore_cadence EXIT
 
 echo "-- both households' sidecars restart with 300s backstops (state persists) --"
-(cd demo && ISA_SYNC_POLL_MS=$SLOW ISA_COMMENT_POLL_MS=$SLOW docker compose up -d --force-recreate 2>&1 | tail -1)
-(cd demo/household-c && ISA_SYNC_POLL_MS=$SLOW ISA_COMMENT_POLL_MS=$SLOW docker compose up -d --force-recreate 2>&1 | tail -1)
+# ISA_TRACE_SYNC on for the run: a failure is diagnosable only from the sidecars' own traces,
+# and the rig compose defaults it to false.
+(cd demo && ISA_SYNC_POLL_MS=$SLOW ISA_COMMENT_POLL_MS=$SLOW ISA_TRACE_SYNC=true docker compose up -d --force-recreate 2>&1 | tail -1)
+(cd demo/household-c && ISA_SYNC_POLL_MS=$SLOW ISA_COMMENT_POLL_MS=$SLOW ISA_TRACE_SYNC=true docker compose up -d --force-recreate 2>&1 | tail -1)
 for i in $(seq 1 45); do
   curl -sf -m 2 "http://localhost:${PORT_SIDECAR_B:-8301}/api/server/ping" >/dev/null 2>&1 \
     && curl -sf -m 2 "http://localhost:${PORT_SIDECAR_C:-8302}/api/server/ping" >/dev/null 2>&1 && break
@@ -36,6 +38,16 @@ echo "-- the real-browser proof --"
   HOST_RESOLVER_RULES="MAP host.docker.internal 127.0.0.1" \
   node ../../verify/verify-nudges-browser.mjs)
 RESULT=$?
+
+# On failure the sidecars' own traces are the only witness — the cadence restore below recreates
+# them, which wipes the logs, so they are printed first. ISA_TRACE_SYNC is rig-on, so every peer
+# request and its elapsed time is in there.
+if [ "${RESULT}" != "0" ]; then
+  echo "-- writer sidecar (outbound tells) --"
+  docker logs household-b-sidecar-b-1 2>&1 | grep -E "nudge|lane woke|peer request|error" | tail -40
+  echo "-- receiver sidecar (inbound tells) --"
+  docker logs household-c-sidecar-c-1 2>&1 | grep -E "nudge|lane woke|peer request|error" | tail -40
+fi
 
 echo "-- rig cadence restored --"
 echo "verify-nudges-browser.mjs exit: ${RESULT}"

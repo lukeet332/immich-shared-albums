@@ -69,10 +69,10 @@ const panelText = async (page) => (await page.locator('body').innerText().catch(
 const candidates = (text) => (text.split('Possible album reunions')[1] || '').split('Your shared albums')[0];
 const seesAlbum = (text, name) => new RegExp(name).test(candidates(text));
 
-const cTicks = async (token) => {
+const cStatus = async (token) => {
   const body = await (await fetch(`${C_WEB}/immich-shared-albums/sync/status`, {
     headers: { Authorization: `Bearer ${token}` } })).json().catch(() => ({}));
-  return body?.ticks || {};
+  return { ticks: body?.ticks || {}, nudges: body?.nudges || {} };
 };
 
 const launchArgs = ['--disable-features=HttpsUpgrades,LocalNetworkAccessChecks,PrivateNetworkAccessNavigations,PrivateNetworkAccessChecks'];
@@ -98,11 +98,11 @@ await cPanel.page.waitForTimeout(3000);
 
 // STILLNESS first: with both backstops 300s out and the setup's publishes settled, no lane may
 // tick — so whatever ticks after the write below can only be the nudge, not a timer.
-const stillBefore = await cTicks(cLogin.accessToken);
+const stillBefore = await cStatus(cLogin.accessToken);
 await cPanel.page.waitForTimeout(15000);
-const stillAfter = await cTicks(cLogin.accessToken);
+const stillAfter = await cStatus(cLogin.accessToken);
 check('no lane ticked on the peer in 15s — the 300s backstops are quiet',
-  stillAfter.invites === stillBefore.invites && stillAfter.watcher === stillBefore.watcher,
+  stillAfter.ticks.invites === stillBefore.ticks.invites && stillAfter.ticks.watcher === stillBefore.ticks.watcher,
   `${JSON.stringify(stillBefore)} -> ${JSON.stringify(stillAfter)}`);
 
 // THE WRITE, as the person makes it: a same-origin fetch from their own panel page, carrying
@@ -116,14 +116,18 @@ const writeStatus = await bPanel.page.evaluate(async (name) => {
 check('the album was made in the app, through the sidecar\'s proxy', String(writeStatus).startsWith('2'), `POST answered ${writeStatus}`);
 
 let wokeAt = null;
-let ticksNow = stillAfter;
+let statusNow = stillAfter;
 for (const deadline = Date.now() + 25000; Date.now() < deadline; ) {
   await cPanel.page.waitForTimeout(1000);
-  ticksNow = await cTicks(cLogin.accessToken);
-  if (ticksNow.invites > stillAfter.invites || ticksNow.watcher > stillAfter.watcher) { wokeAt = Date.now(); break; }
+  statusNow = await cStatus(cLogin.accessToken);
+  if (statusNow.ticks.invites > stillAfter.ticks.invites
+      || statusNow.ticks.watcher > stillAfter.ticks.watcher) { wokeAt = Date.now(); break; }
 }
+// The failure detail names the two halves separately — a counted nudge without a tick is a lane
+// that did not wake; no counted nudge at all is a tell that never arrived.
 check('the write woke the peer\'s lanes in seconds, not at its backstop', !!wokeAt,
-  wokeAt ? `${(wokeAt - createdAt) / 1000}s` : `no tick in 25s (${JSON.stringify(stillAfter)} -> ${JSON.stringify(ticksNow)})`);
+  wokeAt ? `${(wokeAt - createdAt) / 1000}s`
+    : `no tick in 25s — nudges ${JSON.stringify(stillAfter.nudges)} -> ${JSON.stringify(statusNow.nudges)}`);
 
 let sawPair = false;
 for (const deadline = Date.now() + 20000; Date.now() < deadline && !sawPair; ) {
