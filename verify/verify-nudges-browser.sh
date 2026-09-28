@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 BKEY=$(grep -m1 '^B_API_KEY=' demo/.env | cut -d= -f2-)
 CKEY=$(grep -m1 '^C_API_KEY=' demo/household-c/.env | cut -d= -f2-)
 [ -n "${BKEY:-}" ] && [ -n "${CKEY:-}" ] || { echo "❌ the rig's .env keys are missing — run demo/run-mock-e2e.sh first"; exit 1; }
-for p in 2384 2385; do
+for p in "${PORT_IMMICH_B:-2284}" "${PORT_IMMICH_C:-2285}"; do
   curl -sf -m 3 "http://localhost:$p/api/server/ping" >/dev/null || { echo "❌ the rig is not up at :$p"; exit 1; }
 done
 
@@ -25,8 +25,8 @@ echo "-- both households' sidecars restart with 300s backstops (state persists) 
 (cd demo && ISA_SYNC_POLL_MS=$SLOW ISA_COMMENT_POLL_MS=$SLOW docker compose up -d --force-recreate 2>&1 | tail -1)
 (cd demo/household-c && ISA_SYNC_POLL_MS=$SLOW ISA_COMMENT_POLL_MS=$SLOW docker compose up -d --force-recreate 2>&1 | tail -1)
 for i in $(seq 1 45); do
-  curl -sf -m 2 http://localhost:8301/api/server/ping >/dev/null 2>&1 \
-    && curl -sf -m 2 http://localhost:8302/api/server/ping >/dev/null 2>&1 && break
+  curl -sf -m 2 "http://localhost:${PORT_SIDECAR_B:-8301}/api/server/ping" >/dev/null 2>&1 \
+    && curl -sf -m 2 "http://localhost:${PORT_SIDECAR_C:-8302}/api/server/ping" >/dev/null 2>&1 && break
   sleep 1
 done
 sleep 2

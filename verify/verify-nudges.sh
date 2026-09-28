@@ -17,8 +17,6 @@ check() {
 cleanup() { docker rm -f vn-w-fast vn-r-fast vn-w vn-r >/dev/null 2>&1; }
 trap cleanup EXIT
 
-IMMICH_D=2386      # household-d's Immich — the WRITER's server
-IMMICH_B=2384      # household-b's Immich — the RECEIVER's server
 D_NET=household-d_default
 B_NET=household-b_default
 SLOW=300000        # 5 minutes: no backstop sweep can fire inside the measurement window

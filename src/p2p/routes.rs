@@ -24,6 +24,16 @@ pub fn handler() -> PeerHandler {
 
 async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer {
     match header.path.as_str() {
+        // EXACT paths first: the suffix arms below (e.g. `ends_with("/comments")`) would otherwise
+        // swallow `/nudge/comments` as an album route with a garbage mapping id.
+        "/nudge/directory" => {
+            let (status, value) = crate::p2p::protocol::handle_directory_nudge(caller);
+            json_answer(status, value)
+        }
+        "/nudge/comments" => {
+            let (status, value) = crate::p2p::protocol::handle_comments_nudge(caller);
+            json_answer(status, value)
+        }
         // Another server redeeming a code we issued. The connection already proved the CALLER holds
         // the key being enrolled; the secret proves an admin here invited them.
         // The sync reads. Each one resolves the mapping from the CALLER's key, so a valid
@@ -133,18 +143,6 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
         // names and no albums, so a peer can only cause a re-read of what the caller already offers.
         "/index/nudge" => {
             let (status, value) = crate::p2p::protocol::handle_index_nudge(caller);
-            json_answer(status, value)
-        }
-        // "My people changed — look again." Wakes the invites lane; it names no users, so a peer
-        // can only cause a re-read of what it is already allowed to see.
-        "/nudge/directory" => {
-            let (status, value) = crate::p2p::protocol::handle_directory_nudge(caller);
-            json_answer(status, value)
-        }
-        // "The conversation moved — read it again." Wakes the comment lane; the pull is
-        // entitlement-checked per album, so a peer can only cause a re-read of its own albums.
-        "/nudge/comments" => {
-            let (status, value) = crate::p2p::protocol::handle_comments_nudge(caller);
             json_answer(status, value)
         }
         // A person's picture, so their stand-in on the other server wears their face rather than the
@@ -332,5 +330,27 @@ mod tests {
     fn the_feature_list_is_exactly_what_the_handshake_advertises() {
         // Adding a name here is safe; removing one is a compatibility decision.
         assert_eq!(PROTOCOL_FEATURES, ["sync-status"]);
+    }
+
+    /// The exact nudge paths must dispatch to the nudge handlers, not to the suffix arms: an
+    /// `ends_with("/comments")` arm used to swallow `/nudge/comments` as an album route with a
+    /// garbage mapping id, and the comment lane never woke. Both nudge handlers refuse an
+    /// unknown caller with 403, while the shadowed album arm answers 404 — the status tells
+    /// the dispatches apart.
+    #[test]
+    fn the_exact_nudge_paths_reach_their_handlers_not_a_suffix_arm() {
+        crate::config::install_test_config();
+        match crate::state::State::boot() {
+            Ok(state) => crate::state::install(state),
+            Err(e) => panic!("could not boot a state for the dispatch test: {e}"),
+        }
+        for path in ["/nudge/comments", "/nudge/directory"] {
+            let (status, body) = ask(path);
+            assert_eq!(
+                status, 403,
+                "{path} must reach the nudge handler (unknown peer), not a shadowing album arm"
+            );
+            assert_eq!(body["error"], "unknown peer", "{path} dispatch");
+        }
     }
 }

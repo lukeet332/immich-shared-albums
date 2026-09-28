@@ -1612,6 +1612,9 @@ fn note_traffic(path: &str, method: &Method, headers: &HeaderMap) {
 /// peer, because that mapping is the only one whose mirror it is. Fire-and-forget per tell: a peer
 /// that is down answers its next backstop sweep, which is what the backstop is for.
 fn nudge_peers_on_album_write(path: &str) {
+    // The LOCAL watch lane too: its push is what carries a local album write to the peers, and
+    // without this it would wait out the backstop while the peers' forced pulls did all the work.
+    crate::sync::wakes::wake(crate::sync::wakes::Lane::Watch);
     let album_id = path
         .strip_prefix("/api/albums/")
         .map(|rest| rest.split('/').next().unwrap_or_default().to_string())

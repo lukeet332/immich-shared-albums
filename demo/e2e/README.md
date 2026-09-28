@@ -97,7 +97,10 @@ measurement — a full profile is printed with `E2E_PROFILE=1`:
     called at the **top** of each tick, before any skip — unlike `cycles`, which counts passes that
     did work and therefore stops the moment a mapping settles). The rig reads it over
     `GET /immich-shared-albums/sync/status?albumId=` — present only with `ISA_TEST_HOOKS`,
-    admin-only, absent from every real install. Wait for both counts to advance by N, then assert
+    admin-only, absent from every real install. The same answer carries `nudges.{album,index,
+    invitations,directory,comments}` — inbound channel nudges by kind — which is how a test
+    tells "the nudge did it" from "a sweep happened to": a tick without a counted nudge is a
+    timer, and a counted nudge without a tick is a lost wake. Wait for both counts to advance by N, then assert
     the value held. This is why the suite has no literal `sleep` left. The loops can also be held
     outright — `POST /immich-shared-albums/test/pause-sweeps` with `{"paused":true}`, released with
     `false` — and a held loop records no tick at all: that is how the browser lane proves an
