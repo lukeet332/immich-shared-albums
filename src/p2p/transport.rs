@@ -204,20 +204,35 @@ impl Transport {
         header: &RequestHeader,
         body: Option<&[u8]>,
     ) -> Result<(ResponseHeader, Vec<u8>), String> {
+        // ONE retry, and only on a connection death: a cached connection can sit idle for the
+        // minutes a backstop lasts and die without the endpoint noticing, so the first exchange
+        // fails where a fresh dial would have worked — the retry is that fresh dial, evicted and
+        // re-dialled by `round_trip_once`. A dial failure or a timeout is news about the PEER,
+        // not about the cache, so it is answered rather than retried, and the backstop covers it.
+        let first = self.round_trip_once(peer, header, body).await;
+        match first {
+            Err(e) if is_connection_death(&e) => self.round_trip_once(peer, header, body).await,
+            outcome => outcome,
+        }
+    }
+
+    async fn round_trip_once(
+        &self,
+        peer: &Peer,
+        header: &RequestHeader,
+        body: Option<&[u8]>,
+    ) -> Result<(ResponseHeader, Vec<u8>), String> {
         let conn = self.connection_for(peer).await?;
         let result = tokio::time::timeout(DEADLINE, self.exchange_json(&conn, header, body))
             .await
             .map_err(|_| format!("{} timed out after {}s", header.path, DEADLINE.as_secs()))?;
-        match result {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                // A failed exchange may have been a dead connection: evict so the next call dials.
-                if is_connection_death(&e) {
-                    self.evict(&peer.pub_key);
-                }
-                Err(e)
+        if let Err(e) = &result {
+            // A failed exchange may have been a dead connection: evict so the next call dials.
+            if is_connection_death(e) {
+                self.evict(&peer.pub_key);
             }
         }
+        result
     }
 
     async fn exchange_json(
@@ -468,7 +483,12 @@ async fn write_response(
 
 /// True when an exchange failed because the peer went away rather than because we gave up.
 pub fn is_connection_death(message: &str) -> bool {
-    message.contains("connection closed before")
+    // A cached connection can sit idle for the minutes a backstop lasts and die without the
+    // endpoint noticing — the first exchange on it is what discovers the death, and these are
+    // the shapes that discovery takes.
+    message.contains("connection closed")
+        || message.contains("ConnectionError")
+        || message.contains("connection lost")
 }
 
 /// The stored identity, as the transport's secret key. RAW 32 bytes, base64url; the seed IS the key.
@@ -507,6 +527,25 @@ pub fn transport() -> Option<&'static Arc<Transport>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_retry_answers_a_dead_cache_and_not_the_peers_own_news() {
+        // The stale-connection shapes the one retry exists for: a cached connection can sit idle
+        // for the minutes a backstop lasts and die unnoticed — the first exchange discovers it.
+        assert!(is_connection_death(
+            "connection closed before /nudge/directory"
+        ));
+        assert!(is_connection_death(
+            "connection closed: peer closed the connection without warning"
+        ));
+        assert!(is_connection_death("ConnectionError(ConnectionClosed)"));
+        assert!(is_connection_death("connection lost"));
+        // News about the peer, not the cache: answered, never retried — the backstop covers it.
+        assert!(!is_connection_death("/index/nudge timed out after 120s"));
+        assert!(!is_connection_death(
+            "dialling Nudge Verify Writer failed: no address answered"
+        ));
+    }
 
     #[test]
     fn a_peer_key_round_trips_through_the_endpoint_id() {

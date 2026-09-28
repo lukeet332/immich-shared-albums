@@ -170,8 +170,11 @@ impl Config {
             // random port makes that memory wrong across a restart. 0 restores a random port.
             p2p_port: env_port("ISA_P2P_PORT", 8300, 0)?,
             data_dir: env_str("ISA_DATA_DIR", "/data"),
-            sync_poll_ms: env_int("ISA_SYNC_POLL_MS", 20000, 1000)?,
-            comment_poll_ms: env_int("ISA_COMMENT_POLL_MS", 5000, 500)?,
+            // Nudges are the real path (a peer's channel nudge wakes its lane); these timers are
+            // the slow backstop for a LOST nudge, so minutes. An operator can shorten them, but a
+            // lost nudge should be the only thing the shortening buys.
+            sync_poll_ms: env_int("ISA_SYNC_POLL_MS", 120_000, 1000)?,
+            comment_poll_ms: env_int("ISA_COMMENT_POLL_MS", 60_000, 500)?,
             mirror_album_template: env_str("ISA_MIRROR_ALBUM_TEMPLATE", "{name}"),
             cache_max_mb: env_int("ISA_CACHE_MAX_MB", 512, 0)?,
             max_body_kb: env_int("ISA_MAX_BODY_KB", 1024, 1)?,
@@ -389,8 +392,8 @@ pub fn install_test_config() {
             port: 8300,
             p2p_port: 8300,
             data_dir: "/tmp/isa-test-data".into(),
-            sync_poll_ms: 20000,
-            comment_poll_ms: 5000,
+            sync_poll_ms: 120_000,
+            comment_poll_ms: 60_000,
             mirror_album_template: "{name}".into(),
             cache_max_mb: 0,
             max_body_kb: 1024,

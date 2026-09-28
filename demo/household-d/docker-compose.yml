@@ -46,6 +46,10 @@ services:
       # 1000 measured against 4000 in CI (same commit, 2 runs each): ~30s less wall, no stage slower,
       # 155/155 — see demo/e2e/README.md rule 4. The sidecar refuses anything below 1000.
       ISA_SYNC_POLL_MS: "${ISA_SYNC_POLL_MS:-1000}"
+      # The rig's own cadence for the comment lane too: the suite writes comments straight to
+      # Immich (not through the proxy, so no Comment trigger pushes them), and the backstop
+      # default is minutes — which is the production contract, not the rig's.
+      ISA_COMMENT_POLL_MS: "${ISA_COMMENT_POLL_MS:-1000}"
       # Rig only: lets the suite read this sidecar's own progress (loop ticks). Off in every real install.
       ISA_TEST_HOOKS: "true"
       # Rig only: per-stage peer/Immich tracing, so a stalled request names the await it

@@ -1357,10 +1357,17 @@ async fn sync_status_route(headers: &HeaderMap, uri: &Uri) -> Response {
     // nudge from a sweep, and an invented key reads as `undefined` — which compares false and looks
     // exactly like the sidecar never having looked.
     let (watcher, invites, comments) = crate::sync::status::loop_ticks();
-    let (album, index, invitations) = crate::sync::status::nudges_received();
+    let (album, index, invitations, directory, conversation) =
+        crate::sync::status::nudges_received();
     let counters = json!({
         "ticks": { "watcher": watcher, "invites": invites, "comments": comments },
-        "nudges": { "album": album, "index": index, "invitations": invitations },
+        "nudges": {
+            "album": album,
+            "index": index,
+            "invitations": invitations,
+            "directory": directory,
+            "comments": conversation,
+        },
         "hints": crate::web::panel_events::hints_emitted(),
     });
     let album_id = query::param(uri.query(), "albumId");
@@ -1594,6 +1601,90 @@ fn note_traffic(path: &str, method: &Method, headers: &HeaderMap) {
         return;
     };
     crate::sync::index_freshness::note_index_traffic(state(), trigger, creds);
+    if trigger == crate::sync::traffic_triggers::TrafficTrigger::Index {
+        nudge_peers_on_album_write(path);
+    }
+}
+
+/// An album write (create, delete, share, membership) leaves the peers' views stale: their index of
+/// my published albums, and their directory lane (my markers moved). A write that names an album
+/// also leaves that album's MIRROR stale, which the mapping nudge carries — to the mapping's own
+/// peer, because that mapping is the only one whose mirror it is. Fire-and-forget per tell: a peer
+/// that is down answers its next backstop sweep, which is what the backstop is for.
+fn nudge_peers_on_album_write(path: &str) {
+    // The LOCAL watch lane too: its push is what carries a local album write to the peers, and
+    // without this it would wait out the backstop while the peers' forced pulls did all the work.
+    crate::sync::wakes::wake(crate::sync::wakes::Lane::Watch);
+    let album_id = path
+        .strip_prefix("/api/albums/")
+        .map(|rest| rest.split('/').next().unwrap_or_default().to_string())
+        .filter(|id| !id.is_empty());
+    let collections = state().collections();
+    let every_peer_tells: Vec<crate::p2p::frame::RequestHeader> = vec![
+        crate::p2p::frame::RequestHeader {
+            path: "/index/nudge".into(),
+            ..Default::default()
+        },
+        crate::p2p::frame::RequestHeader {
+            path: "/nudge/directory".into(),
+            ..Default::default()
+        },
+    ];
+    let mapping_tells: Vec<(crate::store::Peer, crate::p2p::frame::RequestHeader)> = album_id
+        .map(|album_id| {
+            collections
+                .mappings
+                .iter()
+                .filter(|m| {
+                    m.album_id == album_id && m.role == crate::store::Role::Owner && !m.dead
+                })
+                .filter_map(|m| {
+                    collections
+                        .peers
+                        .iter()
+                        .find(|p| p.pub_key == m.peer)
+                        .cloned()
+                        .map(|peer| {
+                            (
+                                peer,
+                                crate::p2p::frame::RequestHeader {
+                                    path: format!("/albums/{}/nudge", m.album_id),
+                                    ..Default::default()
+                                },
+                            )
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let peers: Vec<crate::store::Peer> = collections.peers.clone();
+    drop(collections);
+    let Some(transport) = crate::p2p::transport::transport() else {
+        return;
+    };
+    for peer in &peers {
+        for header in &every_peer_tells {
+            send_peer_nudge(transport, peer, header);
+        }
+    }
+    for (peer, header) in mapping_tells {
+        send_peer_nudge(transport, &peer, &header);
+    }
+}
+
+/// One fire-and-forget tell: unawaited on purpose — the proxy's answer is already on its way, and
+/// a nudge that cannot be sent is a latency problem, not a failure.
+fn send_peer_nudge(
+    transport: &std::sync::Arc<crate::p2p::transport::Transport>,
+    peer: &crate::store::Peer,
+    header: &crate::p2p::frame::RequestHeader,
+) {
+    let transport = transport.clone();
+    let peer = peer.clone();
+    let header = header.clone();
+    tokio::spawn(async move {
+        let _ = transport.round_trip(&peer, &header, None).await;
+    });
 }
 
 /// The key in Immich's own `/share/<key>` path, which this sidecar fronts. Exactly one segment:

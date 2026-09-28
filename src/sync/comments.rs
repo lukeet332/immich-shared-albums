@@ -647,12 +647,16 @@ pub async fn pull_canonical_comments(
     let _ = state.save();
 }
 
-/// The comment lane's own loop, on its fast cadence.
+/// The comment lane's own loop. `ISA_COMMENT_POLL_MS` is the BACKSTOP: an outbound comment is
+/// pushed the moment it is written (the proxy's Comment trigger), and a peer's
+/// `/nudge/comments` wakes this lane to pull theirs — the timer is for a lost push.
 pub fn start_comment_loop(state: std::sync::Arc<State>) {
-    let period = std::time::Duration::from_millis(cfg().comment_poll_ms);
+    let backstop = std::time::Duration::from_millis(cfg().comment_poll_ms);
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(period).await;
+            let woken =
+                crate::sync::wakes::wait(crate::sync::wakes::Lane::Comments, backstop).await;
+            crate::trace!("comment lane woke: {woken:?}");
             // Held by a rig proving a change was pushed, not swept. BEFORE the tick counter: a held
             // lane did not look, and must not read as having looked.
             if crate::sync::sweeps::sweeps_are_paused() {

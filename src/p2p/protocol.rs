@@ -754,6 +754,43 @@ pub fn handle_nudge(caller_pub: &str, album_mapping_id: &str) -> (u16, Value) {
     (200, json!({ "ok": true }))
 }
 
+/// `POST /nudge/directory` — "my people changed; look again". Wakes the invites lane, which is
+/// where directory sync, invite detection and link-grant retirement live. The same contract as
+/// every nudge: it names no users and carries no data, so a peer can only cause a re-read of what
+/// it is already allowed to see.
+pub fn handle_directory_nudge(caller_pub: &str) -> (u16, Value) {
+    let state = crate::state::state();
+    let known = state
+        .collections()
+        .peers
+        .iter()
+        .any(|p| p.pub_key == caller_pub);
+    if !known {
+        return (403, json!({ "error": "unknown peer" }));
+    }
+    crate::sync::status::record_nudge(crate::sync::status::NudgeKind::Directory);
+    crate::sync::wakes::wake(crate::sync::wakes::Lane::Invites);
+    (200, json!({ "ok": true }))
+}
+
+/// `POST /nudge/comments` — "the conversation moved; read it again". Wakes the comment lane; its
+/// pull is both directions and entitlement-checked per album, so a peer can only cause a re-read
+/// of albums it is already in.
+pub fn handle_comments_nudge(caller_pub: &str) -> (u16, Value) {
+    let state = crate::state::state();
+    let known = state
+        .collections()
+        .peers
+        .iter()
+        .any(|p| p.pub_key == caller_pub);
+    if !known {
+        return (403, json!({ "error": "unknown peer" }));
+    }
+    crate::sync::status::record_nudge(crate::sync::status::NudgeKind::Comments);
+    crate::sync::wakes::wake(crate::sync::wakes::Lane::Comments);
+    (200, json!({ "ok": true }))
+}
+
 /// `POST /index/nudge` — "what you offer me has changed, read my index again".
 ///
 /// The sibling of the album nudge, and the same contract: it carries no names and no albums, so a
