@@ -1,5 +1,5 @@
 // verify/verify-redeem.mjs — a JS peer redeems a share link against the Rust sidecar, over iroh.
-// This is the enrolment path join.ts drives, including every gate that can refuse it.
+// This is the enrolment path the join route in src/web/server.rs drives, including every gate that can refuse it.
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');

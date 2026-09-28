@@ -322,10 +322,10 @@ const toggleProblem = cWasHardened ? await setPasswordLogin(true) : '';
 //
 // A SECOND actor can also switch the setting off under us: minting a key for a newly arrived
 // contributor borrows password login, and a build that decides that borrow from a CACHED read
-// restores `disabled` over an enable it never made. The Rust build no longer can (it borrows only on
-// a refused login — see PORT.md), but the TypeScript build still does, and it is kept as the
-// deprecated baseline rather than fixed. The lane's precondition here is "C has password login on",
-// so it RE-ASSERTS that instead of flaking — bounded, because looping would hide a real regression.
+// restores `disabled` over an enable it never made. The build borrows only on a refused login
+// (the one evidence an OAuth-only instance gives), so a healthy login cannot re-disable; the
+// lane's precondition here is "C has password login on", so it RE-ASSERTS that instead of
+// flaking — bounded, because looping would hide a real regression.
 const signIn = async (base) => {
   let last = 'no attempt completed';
   let reEnabled = 0;

@@ -47,6 +47,17 @@ jobs:
         run: npm run typecheck
       - name: Import cycles
         run: npm run cycles
+      # dist is committed build output; this is the wall that keeps it from drifting from its
+      # source. The pre-commit hook stages it, but a commit made without the hook (GitHub web UI,
+      # --no-verify) must not ship stale UI unchallenged.
+      - name: Committed UI is fresh (build:web reproduces it byte for byte)
+        run: |
+          npm run --silent build:web
+          if [ -n "$(git status --porcelain src/web/dist)" ]; then
+            echo "::error::src/web/dist is stale — run npm run build:web and commit it"
+            git status --porcelain src/web/dist
+            exit 1
+          fi
       # The sidecar is Rust: the unit suite and lints gate here, not only in the Docker build.
       # Cached, because iroh + reqwest are minutes of cold compile and a rerun of a one-line fix
       # should not pay them again.

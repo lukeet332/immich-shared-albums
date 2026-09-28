@@ -20,7 +20,7 @@ const ALBUM = process.env.A_ALBUM || '__CREATE__';
 // literal, changing the rig's cadence silently leaves every hold-point at the old duration, and an
 // experiment that varies the cadence measures nothing. Keep the default in step with
 // demo/docker-compose.yml and the household composes.
-// Guarded the way the sidecar guards it (src/config.ts envInt: empty → default, below 1000 → refuse):
+// Guarded the way the sidecar guards it (src/config.rs env_int: empty → default, below 1000 → refuse):
 // an empty or bad value must not become a zero-length hold, which would let every stable() pass on
 // its first reading.
 const rawPollMs = Number(process.env.ISA_SYNC_POLL_MS);
@@ -69,8 +69,8 @@ const api = async (base, key, path, init = {}) => {
 };
 const j = (o) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
 // Bot users live on the project's own email domain — the one check that separates our bots from
-// real people, so it must match src/config.ts isUtilityEmail exactly.
-// Mirror the runtime's isUtilityEmail: current domain plus the legacy ones it still recognises.
+// real people, so it must match src/config.rs is_utility_email exactly.
+// Mirror the runtime's is_utility_email: current domain plus the legacy ones it still recognises.
 const BOT_DOMAINS = ['immich-shared-albums.internal', 'immich-shared-albums.invalid', 'immich-shared-albums.local', 'sidecar.local'];
 const isBot = (e) => !!e && BOT_DOMAINS.some(d => e.endsWith('@' + d));
 // /immich-shared-albums/join authenticates the caller against that household's own Immich, so the
@@ -529,8 +529,7 @@ if (aAfter) {
         contributed.map(a => a.ownerId.slice(0, 8)).join(','));
   check('contributions owned by the contributor utility user', nanUser && contributed.every(a => a.ownerId === nanUser.id));
   // POLLED, not sampled: the credit is written by a PUT after the upload, and this read can land
-  // between the two — the Rust lane in CI lost that race by 10ms against the TypeScript lane, on the
-  // same commit, which is a property of the read and not of either implementation. The assertion is
+  // between the two — a property of the read, not of the implementation. The assertion is
   // unchanged: BOTH contributed photos must carry the credit, within the window.
   const creditIds = contributed.map(a => a.id);
   const credited = await until(async () => {
@@ -873,9 +872,8 @@ stage('deletion propagation + leave-&-purge (reversible joins)');
   check('native leave: stubs deleted (space reclaimed)', stubsGone);
   // The two checks above pass on LOST VISIBILITY alone: once the admin leaves, the mirror is
   // invisible to them whether or not the sidecar purged anything. The sidecar's own view and its
-  // ledger are the honest answer. RUST-ONLY: the TypeScript's native-leave check sits behind its
-  // `updatedAt` handshake, which Immich does not move when a member leaves, so it never notices this
-  // at all (see PORT.md). The port runs the check before the handshake.
+  // ledger are the honest answer. The check reads the member list directly (last_human_left in
+  // sync/engine.rs) rather than the `updatedAt` handshake, which Immich never moves on a leave.
   const peersGone = await until(async () => {
     const peers = await (await fetch(`${BS}/immich-shared-albums/peers`, { headers: { 'x-api-key': BKEY } })).json();
     return !(peers.albums || []).some(a => a.name === 'delete test') ? true : null;
@@ -2429,9 +2427,9 @@ if (DKEY) {
   }
 }
 
-// The Rust build only: the removal channel, caption propagation and the origin-side leave
-// reclaim are Rust features the TypeScript never had. The runtime probe is the same one the
-// state reader uses - a Rust sidecar's image has no node in it.
+// The removal channel, caption propagation and the origin-side leave reclaim are behaviors of
+// the running sidecar. The runtime probe is the same one the state reader uses — the image has
+// no node in it.
 stage('rust: deleted contributions, caption edits and leaves reclaim what they should');
 {
   const t = `rust lifecycle ${Date.now()}`;
@@ -2626,12 +2624,10 @@ stage('rust: store-shared-locally survives a leave');
 }
 
 // An operator's password-login setting must SURVIVE the addon minting a key. Minting needs a session,
-// and on an OAuth-only instance the addon borrows a password-login window to get one. That borrow used
-// to be decided by a CACHED read of `system-config`, so a stale "disabled" arriving right after an
-// operator (or this lane) enabled it made the addon write "disabled" back over a change it never
-// made — and every sign-in for the next minute answered `Password login has been disabled`. Found by
-// CI on BOTH lanes, which is why the borrow now waits for a refused login as its evidence.
-// RUST-ONLY: the TypeScript has the same up-front read and the same restore.
+// and on an OAuth-only instance the addon borrows a password-login window to get one. The borrow
+// waits for a REFUSED LOGIN as its evidence, not a read of `system-config`: a cached read could be
+// stale, and writing a stale "disabled" back would clobber an enable the addon never made — after
+// which every sign-in for the next minute answers `Password login has been disabled`.
 stage('rust: minting a key never clobbers the password-login setting');
 {
   const readLogin = async () => {
@@ -2688,7 +2684,7 @@ stage('rust: minting a key never clobbers the password-login setting');
 // the sidecar with their credentials, and that is the one moment our bot can be put on THEIR album to
 // write the line — an admin key cannot touch an album it does not own. This is where a withdrawal's
 // trail comes from, and it is the same request Immich's own UI makes.
-// RUST-ONLY: the TypeScript has no traffic triggers for it.
+
 stage('rust: deleting a share link is recorded in the album');
 {
   const albW = await api(B, BKEY, '/albums', j({ albumName: `rust withdraw ${Date.now()}` }));
@@ -2709,7 +2705,6 @@ stage('rust: deleting a share link is recorded in the album');
 // A peer's join is the OWNER's history, and the owner is not there when it happens: our bot can only
 // be put on their album by them. So the event waits in a queue and lands on their next panel visit —
 // the only mechanism that can put "Demo Nan joined your album" on an album we do not own.
-// RUST-ONLY: the TypeScript has no trail queue.
 stage('rust: a peer\'s join and leave reach the owner\'s album on their next visit');
 {
   const t = `rust trail ${Date.now()}`;
@@ -2763,7 +2758,7 @@ stage('rust: a peer\'s join and leave reach the owner\'s album on their next vis
 // The gesture people actually reach for: taking someone off the album. On an INVITATION album that
 // is a revocation; on a LINK album it revokes nothing, because the link is the grant — and an owner
 // who believes otherwise has been misled by the silence. The album says which.
-// RUST-ONLY: the TypeScript has no traffic triggers for it.
+
 stage('rust: removing a person from a link album is recorded, and says the link still stands');
 {
   const albK = await api(A, AKEY, '/albums', j({ albumName: `rust removal ${Date.now()}` }));
@@ -2814,7 +2809,6 @@ stage('rust: removing a person from a link album is recorded, and says the link 
 // A LIKE on one server is a like on the other, attributed to the person who made it — the way a
 // local member's like looks. Likes ride the activity payload with a `type`, and both gates (the
 // statistics and the version handshake) count them, or a like that moved would never be pulled.
-// RUST-ONLY: the TypeScript filters activities to comments.
 stage('rust: a like crosses servers and is attributed to the person who made it');
 {
   const albL = await api(A, AKEY, '/albums', j({ albumName: `rust like ${Date.now()}` }));

@@ -3,11 +3,12 @@
  * build-web.mjs — build src/web/ui (the Preact workspace) into committed artifacts in src/web/dist:
  * <page>.js + <page>.css per bundled page, and a prerendered <page>.html document for every page.
  *
- * The OUTPUT IS COMMITTED on purpose. The Dockerfile is seven lines that copy `src/` and run
- * `node index.ts` with no npm install at all; committing dist means deployment builds nothing.
- * The pre-commit hook runs this, so dist cannot drift from its source, and CI rebuilds and fails
- * on any diff. Runtime values (household name, og tags) stay as %%TOKENS%% in the prerendered
- * HTML — web/assets.ts substitutes them, escaped, per request.
+ * The OUTPUT IS COMMITTED on purpose. The image build has no Node stage at all —
+ * `src/web/assets.rs` include_str!s the committed dist into the binary — so committing dist
+ * means the Docker build needs no npm. The pre-commit hook runs this and stages dist, so it
+ * cannot drift from its source, and CI rebuilds and fails on any diff. Runtime values (household
+ * name, og tags) stay as %%TOKENS%% in the prerendered HTML — web/assets.rs substitutes them,
+ * escaped, per request.
  */
 import { build } from 'esbuild';
 import { mkdirSync, writeFileSync, statSync } from 'node:fs';

@@ -28,7 +28,7 @@
 </p>
 
 > [!WARNING]
-> ⚠️ Pre-1.0 and under very active development. Expect breaking changes between versions, and always follow a [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) backup plan for your precious photos and videos!
+> ⚠️ Under very active development. Breaking changes arrive only in major versions — see [Versioning](#versioning) — and always follow a [3-2-1](https://www.backblaze.com/blog/the-3-2-1-backup-strategy/) backup plan for your precious photos and videos!
 
 > [!NOTE]
 > The recommended setup exposes nothing to the internet. The walkthrough is at [deploy/SETUP.md](./deploy/SETUP.md).

@@ -1,7 +1,7 @@
 /** web/ui/lib/Document.tsx — the one HTML document every page is prerendered into. See ../../http-router.md. */
 
 // Prerendered at build time (scripts/build-web.mjs) into committed dist/*.html. Values that are
-// only known per-request arrive as %%TOKENS%%, substituted with escaping by web/assets.ts.
+// only known per-request arrive as %%TOKENS%%, substituted with escaping by web/assets.rs.
 const PREFIX = '/immich-shared-albums';
 
 export type PageMeta = {
