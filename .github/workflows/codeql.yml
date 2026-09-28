@@ -1,4 +1,6 @@
-# .github/workflows/codeql.yml — CodeQL code scanning over src. See AGENTS.md ("How changes land").
+# .github/workflows/codeql.yml — CodeQL code scanning over the Rust crate and the panel UI. See
+# AGENTS.md ("How changes land"). The crate is where the keys, the store and the wire live; the UI
+# is the other code this repo ships, so both are scanned.
 #
 # Free on public repositories. Advisory, like CodeRabbit: deliberately NOT a required status check,
 # so a finding can never block a merge that CI passed.
@@ -25,9 +27,17 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Rust analysis traces a real build, so the toolchain and a warm cargo cache must exist
+      # before init — the same cache the e2e checks job warms.
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
-          languages: javascript-typescript
+          languages: rust, javascript-typescript
           # Generated output is not source — the same two paths .coderabbit.yaml excludes, so the
           # committed bundles cannot produce findings nobody can act on. security-extended over the
           # default suite, because this addon holds household keys and speaks its own wire protocol.
@@ -37,4 +47,6 @@ jobs:
               - '**/*.bundle.js'
             queries:
               - uses: security-extended
+      # The compiled language (rust) needs a build to trace; plain `cargo build` is all it takes.
+      - uses: github/codeql-action/autobuild@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
       - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2

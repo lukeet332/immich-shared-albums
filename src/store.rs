@@ -1838,11 +1838,11 @@ mod tests {
         );
 
         for p in &state.peers {
-            // NULL is a legitimate value here and the real database has one: the TypeScript writes
-            // a peer with no recorded protocol (learned before a version exchange), and NEITHER
-            // implementation gates on the stored value — the only protocol check is a fail-open
-            // warning in join.ts against the HELLO, not against this column. Asserting Some(2) here
-            // was asserting what a RUST-written database happens to contain.
+            // NULL is a legitimate value here and the real database has one: a peer learned
+            // before its version exchange is recorded with no protocol (hello_peers fills it in
+            // from the HELLO on a later boot), and nothing gates on the stored value — the
+            // column records what a peer speaks, it does not enforce it. Asserting Some(2) here
+            // was asserting what a fresh database happens to contain.
             assert!(
                 p.protocol.is_none() || p.protocol == Some(2),
                 "a peer's protocol is unrecorded or 2, never something else: {:?}",

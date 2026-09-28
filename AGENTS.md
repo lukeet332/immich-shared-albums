@@ -153,7 +153,7 @@ worse without saying so.**
 Two lanes, and the right one depends on whether Immich is involved.
 
 - **Pure logic → strict TDD.** Add the case to the Rust test module (`cargo test --lib`), watch it fail, then implement.
-  Sub-second loop (`npm test`), so there is no excuse to skip it. Anything that can be a pure
+  Sub-second loop, so there is no excuse to skip it. Anything that can be a pure
   function should be one, precisely so it can be tested this way — see `src/sync/invitees.rs`.
 - **Immich-facing behaviour → discover, then pin, then implement.** Probe the real thing on the
   mock rig, write the e2e assertion, then implement. The test still precedes the implementation; it

@@ -2,7 +2,8 @@ name: release-please
 
 # Versioning is decided by conventional commits, not by hand:
 # feat: -> minor, fix: -> patch, feat!/BREAKING CHANGE -> major.
-# On every push to main this maintains a release PR (version bump + changelog + config.ts);
+# On every push to main this maintains a release PR (Cargo.toml + Cargo.lock + changelog — the
+# `rust` release-type bumps the crate itself, so the shipped binary knows its own version);
 # merging that PR creates the GitHub Release and its tag, and the tag triggers the suite-gated
 # build (release.yml). If the tag is missing afterwards, push it by hand: `git tag vX.Y.Z
 # <release-sha> && git push origin vX.Y.Z` — the image ships on the tag, not on the merge.

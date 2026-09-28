@@ -1,12 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "release-type": "simple",
+  "release-type": "rust",
   "last-release-sha": "43385e630e2b099bb149cfeeff61a5fe2be46ce0",
   "include-component-in-tag": false,
   "packages": {
     ".": {
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": ["src/config.ts"]
+      "changelog-path": "CHANGELOG.md"
     }
   }
 }

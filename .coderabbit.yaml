@@ -91,12 +91,13 @@ reviews:
       enabled: false
 
   path_instructions:
-    - path: 'src/**/*.ts'
+    - path: 'src/**'
       instructions: |
         AGENTS.md is the authority on this codebase and is already in your review context. Do not
         restate it, and do not propose anything that contradicts it.
-        - CI already runs `npm run lint`, `npm run typecheck`, `npm run format:check` and
-          `npm test`. Report nothing those four catch, and never comment on formatting.
+        - CI already runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+          `cargo test --locked --lib` and the UI's `npm run lint`, `typecheck`, `format:check`.
+          Report nothing those catch, and never comment on formatting.
         - Tests assert invariants, not literal strings.
         - Prefer flagging a name that needs a comment over suggesting the comment.
     - path: '**/*.md'

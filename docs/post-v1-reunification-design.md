@@ -1,11 +1,11 @@
 # Post-v1 design spec: Google shared-album reunification & the user-level surface
 
-> Status: **the merge is built end to end.** §2's match and both surfaces exist — `sync/matches.ts`
-> pairs the halves, `sync/album-index.ts` records what each side offers, the per-user panel lists
+> Status: **the merge is built end to end.** §2's match and both surfaces exist — `sync/matches.rs`
+> pairs the halves, `sync/album_index.rs` records what each side offers, the per-user panel lists
 > matches and reunites each one (`POST /me/reunite`, reversing with `/me/unreunite`), and the accept
 > flow asks before it acts (`POST /join/preview`, then `POST /join` with `adopt`). §3's suppression
-> is scoped to the album (`sync/album-suppression.ts`), and §7's trail is left in the album's own
-> comments by `sync/audit.ts`. `/commands` remains design. Everything here is post-v1 and confirmed
+> is scoped to the album (`sync/album_suppression.rs`), and §7's trail is left in the album's own
+> comments by `sync/audit.rs`. `/commands` remains design. Everything here is post-v1 and confirmed
 > **non-breaking** — it rides surfaces and identities that v1 already ships and freezes. Captured
 > from the 2026-08-25 design discussion. Decisions are marked **[decided]**; open choices
 > **[open]**; things considered and dropped are in "Rejected alternatives" with rationale.
@@ -76,7 +76,7 @@ A late reunifier is the person this design is most likely to meet: they accepted
 they already hold half of, and a plain join would leave them with **two albums of one name** — the
 duplicate the feature exists to remove. So the accept surface asks before it acts:
 `POST /join/preview` answers whether this household already owns an album of the link's name
-(`findAdoptableAlbum`, the same function `unifyOwnAlbum` re-derives server-side, so a preview can
+(`find_adoptable_album`, the same function `unify_own_album` re-derives server-side, so a preview can
 never offer a marriage the adoption would refuse). The page then offers "reunite with your album" and
 passes `adopt` to `POST /join`, which is the path that already exists and is validated against the
 caller's own list rather than the browser's word.
@@ -121,8 +121,8 @@ So cross-server match precision becomes a **soft optimisation, not a correctness
 A mesh can offer one photo through two shares that land on the same album — three households holding
 the same Google album is the case this design exists for. Suppressing per mapping would materialise
 two stubs for it, and Immich cannot collapse them, because each stub carries a random tail so that it
-is a distinct asset. `existingCopyInAlbum` (`../src/sync/album-suppression.ts`) therefore asks
-whether _the album_ already holds the photo, whichever mapping put it there, and `materialiseRef`
+is a distinct asset. `existing_copy_in_album` (`../src/immich/materialise.rs`) therefore asks
+whether _the album_ already holds the photo, whichever mapping put it there, and `materialise_ref`
 records the row against the second mapping rather than uploading again. Two ledger rows then carry
 one stub, so withdrawing one share's copy leaves the other's claim standing.
 
@@ -136,10 +136,10 @@ resolved for photos that live on **one** side (those get the normal owner→memb
 Adopting a populated album seeds the mapping's ledger, and a seeded row means _"the peer has this,
 do not offer it"_. Seeding the WHOLE album stops the echo but also stops the merge: the photos only
 the adopting side holds are exactly the half this feature exists to move, so the other household
-would never receive them. `seedRowsForAdoption` (`../src/sync/matches.ts`) therefore seeds only the
+would never receive them. `seed_rows_for_adoption` (`../src/sync/matches.rs`) therefore seeds only the
 checksums the peer's own manifest reports, and leaves the rest offerable.
 
-The asymmetry matters because suppression is not symmetric: `existingCopyInAlbum` can only suppress
+The asymmetry matters because suppression is not symmetric: `existing_copy_in_album` can only suppress
 a duplicate it can see in the ledger, and a peer's own human-owned photo leaves no ledger row — so
 offering a photo the peer already holds lands a stub beside their original. Hence "seed what they
 have, offer the rest". When the peer cannot be reached the seeding **fails closed** and seeds
@@ -158,7 +158,7 @@ Normalise for recall (lowercase/trim), and **use the Google album date, not the 
 
 ### Already safe
 
-Deletion propagation only ever touches **bot-owned stubs** (`deleteProxyAsset` refuses non-bot
+Deletion propagation only ever touches **bot-owned stubs** (`delete_proxy_asset` refuses non-bot
 assets), so an **adopted user-owned copy is never auto-deleted.** The v1 guard already covers the
 "no lost data" requirement.
 
@@ -193,7 +193,7 @@ stubs, and every restored server looks like an owner of everything (bots/stubs n
 ### Each person keeps their own album **[decided]**
 
 Immich has no ownership transfer, and the sidecar's only way to make someone a "member" of an
-album is to create a mirror album owned by a stand-in account (`ensureMirror`). So a reunification
+album is to create a mirror album owned by a stand-in account (`ensure_mirror`). So a reunification
 that re-assigned ownership would have to **create a second album on one server** — the duplicate
 the feature exists to avoid. Instead:
 
@@ -215,11 +215,11 @@ the album's owner: the household admin key answers `403 albumUser.create` on an 
 person owns, and a viewer — which is what the house bot is — does too. So the accounts that will own
 the merged stubs (`person-<originUserId>`, one per contributor named by the peer's refs) are granted
 membership as **editors** at adoption, on the album owner's forwarded credential:
-`grantAlbumWriters` in [`../src/sync/album-grant.ts`](../src/sync/album-grant.ts), called from
-`ensureMirror`'s adopt branch and from `unifyOwnAlbum`. A reconcile that runs later holds no owner
+`grant_album_writers` in [`../src/sync/album_grant.rs`](../src/sync/album_grant.rs), called from
+`ensure_mirror`'s adopt branch and from `unify_own_album`. A reconcile that runs later holds no owner
 credential, so a contributor the peer only begins offering afterwards needs the owner in the loop
 again — that is the panel's job, not the loop's. Un-reunifying runs on that same credential, so it
-takes those accounts back off (`stripAlbumBots`): a membership left behind would both keep the
+takes those accounts back off (`strip_album_bots`): a membership left behind would both keep the
 sidecar's read access to a private album and make it indistinguishable from a live mirror.
 
 ### What a side publishes, and what "owned" means **[decided]**
@@ -344,9 +344,9 @@ choice. This also removes the wrinkle that **Immich has no native per-user-priva
 - **User panel** holds the actionable bits (pending requests, repair button, settings); a request
   that is **rejected or times out** has a line only there, because it never created an album the
   two sides share, and writing to the peer's album is not something an ungranted request may do.
-- **Every line is authored by a utility account** (`ensureContributor`, message posted with that
-  account's key). That is what keeps it local: `syncCommentsOnce` drops any comment whose
-  `user.id` is in `utilityIds` before pushing, so the trail cannot cross servers or echo back. A
+- **Every line is authored by a utility account** (`ensure_contributor`, message posted with that
+  account's key). That is what keeps it local: `sync_comments_once` drops any comment whose
+  `user.id` is in `utility_ids` before pushing, so the trail cannot cross servers or echo back. A
   line authored as the human who clicked would sync as that person's comment onto the peer's album.
 - **Each side posts its own copy** as the coordinated event completes — both servers know the
   request (`invited`), the accept (`accepted`) and the merge (`reunited`) from the peer protocol, so
@@ -354,15 +354,15 @@ choice. This also removes the wrinkle that **Immich has no native per-user-priva
   **withdrawal is the exception**: un-reuniting is local to the adopter's album and the origin is
   deliberately NOT told (`/me/unreunite` passes `notifyOrigin: false` so the share stays live and
   returns as an ordinary mirror), so `unreunited` is written on that one album, by the request that
-  carries the owner's credential, before `stripAlbumBots` takes the bot's membership away.
+  carries the owner's credential, before `strip_album_bots` takes the bot's membership away.
 - **Idempotent by ledger, not by hope**: a line is written once per event, tagged through
-  `seenActAdd`/`seenActHas`, because the loops retry a step until it settles and a naive write
-  would accumulate a second "Repair requested by Alice" on every pass. `sync/audit.ts` is where this
-  lives: `auditLine(mappingId, albumId, event, text)` writes the tag for the event and a `local:` tag
+  `seen_act_add`/`seen_act_has`, because the loops retry a step until it settles and a naive write
+  would accumulate a second "Repair requested by Alice" on every pass. `sync/audit.rs` is where this
+  lives: `audit_line(mapping_id, album_id, event, text)` writes the tag for the event and a `local:` tag
   for the activity it posted, so the line is neither repeated nor pushed back to the peer.
-- **The reunion's line is posted at adoption** (`unifyOwnAlbum`, and `ensureMirror`'s adopt branch),
+- **The reunion's line is posted at adoption** (`unify_own_album`, and `ensure_mirror`'s adopt branch),
   because that is the request carrying the album owner's credential — the same request that runs
-  `grantAlbumWriters` and `grantInvitedHumans` (§4), which is what puts the bot on the album so it can
+  `grant_album_writers` and `grant_invited_humans` (§4), which is what puts the bot on the album so it can
   comment at all. A line on an album a human owns cannot be written by a later loop.
 - **Comments sync covers the human replies** on both albums (owner mapping pushes, member mapping
   pulls canonical) — the trail is what stays put, not the conversation.
@@ -370,7 +370,7 @@ choice. This also removes the wrinkle that **Immich has no native per-user-priva
   `POST /activities` requires album access, so the utility account writing the line must be a member
   of the album it writes on — verified: the household admin key answers `403 albumUser.create` on an
   album a different person owns, and a viewer cannot widen one either. On a REUNIFIED album the grant
-  already happens at adoption, on the owner's forwarded credential (`grantAlbumWriters`, per §4), so
+  already happens at adoption, on the owner's forwarded credential (`grant_album_writers`, per §4), so
   the line rides that. On an album a human merely invited us into there is no such moment: the origin
   album's trail cannot be written by a background loop, and the design has to either take the line at
   the one request that carries the owner's credential or not write it on that side at all.
@@ -444,13 +444,13 @@ coordination.
   co-owned-copy overlap. Upside: survives owner-offline permanently.
 - **Save-to-library** (per-photo): explicit opt-in that stores a true original owned by the saving
   user — the deliberate way a copy lands on another disk.
-- **Non-admin share-link redemption fix.** `getSharedLinkByKey` uses the admin key's per-user
+- **Non-admin share-link redemption fix.** `get_shared_link_by_key` uses the admin key's per-user
   `/shared-links`, so a non-admin's share link can't be redeemed cross-server. Fix = switch to
   `/shared-links/me?key=` (also lets `sharedLink.read` be dropped from the key). **Not a clean
   drop-in:** `/shared-links/me` returns 401 for password links and never exposes the `password`
   field the addon currently compares — needs the `/shared-links/login` flow. Non-breaking; safe as
-  v1.0.1. **Does NOT affect IPP** (IPP uses `publicShareLinkMeta`, already `/shared-links/me`, and
-  the interceptor's `?key=` forwarding — neither touches `getSharedLinkByKey` or `sharedLink.read`).
+  v1.0.1. **Does NOT affect IPP** (IPP uses `public_share_link_meta`, already `/shared-links/me`, and
+  the interceptor's `?key=` forwarding — neither touches `get_shared_link_by_key` or `sharedLink.read`).
 
 ---
 
