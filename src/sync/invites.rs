@@ -389,6 +389,14 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
         // indistinguishable from a withdrawal in a single pass. A read that says an album is gone
         // is re-read once before the mapping dies — a transient empty clears, a real withdrawal
         // confirms, and a retirement still costs one pass plus one read.
+        // ONE confirming read for every candidate: re-reading per album would pay a full marker
+        // sweep per withdrawal, and a peer that stopped answering would hold this loop for the
+        // read deadline times the candidate count.
+        let confirming = if withdrawn_candidates.is_empty() {
+            None
+        } else {
+            Some(marker_views(state, client, &targets).await)
+        };
         let mut withdrawn: Vec<(String, String)> = Vec::new();
         for (id, name) in &withdrawn_candidates {
             let album_id = state
@@ -398,9 +406,10 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
                 .find(|m| m.id == *id)
                 .map(|m| m.album_id.clone())
                 .unwrap_or_default();
-            let confirmed_gone = marker_views(state, client, &targets)
-                .await
-                .all_missing(&album_id);
+            let confirmed_gone = confirming
+                .as_ref()
+                .map(|views| views.all_missing(&album_id))
+                .unwrap_or(false);
             if confirmed_gone {
                 withdrawn.push((id.clone(), name.clone()));
             } else {
@@ -790,6 +799,13 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
             .filter(|m| invitation_mirror_was_withdrawn(m, &peer.pub_key, &offered))
             .map(|m| (m.id.clone(), m.album_name.clone()))
             .collect();
+        // ONE confirming pull for every candidate, for the same reason the origin's confirming
+        // read is one sweep and not one per album.
+        let confirming = if withdrawn_candidates.is_empty() {
+            None
+        } else {
+            Some(offered_albums(&peer, transport).await)
+        };
         let mut withdrawn: Vec<(String, String)> = Vec::new();
         for (id, name) in &withdrawn_candidates {
             let remote_album_id = state
@@ -798,11 +814,9 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
                 .iter()
                 .find(|m| m.id == *id)
                 .and_then(|m| m.remote_album_id.clone());
-            let confirmed_gone = match remote_album_id {
-                Some(album_id) => offered_albums(&peer, transport)
-                    .await
-                    .album_is_gone(&album_id),
-                None => false,
+            let confirmed_gone = match (remote_album_id, confirming.as_ref()) {
+                (Some(album_id), Some(views)) => views.album_is_gone(&album_id),
+                _ => false,
             };
             if confirmed_gone {
                 withdrawn.push((id.clone(), name.clone()));
@@ -895,20 +909,23 @@ async fn offered_albums(
         };
     }
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let offered = parsed
-        .get("invitations")
-        .and_then(|i| i.as_array())
-        .map(|list| {
-            list.iter()
-                .filter_map(|invitation| {
-                    invitation
-                        .pointer("/album/id")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
-                })
-                .collect()
+    // A 200 whose body does not name the invitations array is NOT a valid offer — treating it as
+    // an empty one would confirm a teardown on a malformed answer.
+    let Some(list) = parsed.get("invitations").and_then(|i| i.as_array()) else {
+        return OfferViews {
+            offered: Default::default(),
+            fetched: false,
+        };
+    };
+    let offered: std::collections::HashSet<String> = list
+        .iter()
+        .filter_map(|invitation| {
+            invitation
+                .pointer("/album/id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
         })
-        .unwrap_or_default();
+        .collect();
     OfferViews {
         offered,
         fetched: true,
