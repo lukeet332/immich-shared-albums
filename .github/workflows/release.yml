@@ -22,7 +22,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The arm64 half compiles the crate under QEMU (iroh + reqwest + LTO), which is tens of
+    # minutes on its own — the budget the Node image fitted in 12 cannot hold the Rust artefact.
+    timeout-minutes: 120
     env:
       IMMICH_REF: '@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb'
     steps:
