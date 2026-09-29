@@ -149,7 +149,23 @@ Your server stays as private as it is today, the two servers prove their identit
 - The API key doesn't need `all` — see [the API key guide](./deploy/api-key.md). Scoped like that, a leaked key can't delete or edit photos, can't change settings, and can't create a broader key.
 - The addon can't touch your photos. The only assets it ever deletes are the placeholder stubs it created itself, and the delete code refuses anything it doesn't own.
 - Share links are bearer credentials, same as in stock Immich: whoever has the link (and its password, if set) can use it. Treat them accordingly, or keep link-joining switched off.
-- Small surface in Rust: one process, one static binary (~9 MB), SQLite, one native dependency (the peer transport) — a ~32 MB image that idles at **~4 MB of RAM**. [deploy/exposure.md](./deploy/exposure.md) covers how exposed to be, and what the addon changes about hosting.
+- Small surface in Rust: one process, one static binary, SQLite, one native dependency (the peer transport). [deploy/exposure.md](./deploy/exposure.md) covers how exposed to be, and what the addon changes about hosting. The measured numbers are theirs: see [Performance](#performance).
+
+## Performance
+
+The sidecar ships as one Rust binary (~9 MB; the whole container ~32 MB) with no runtime and no interpreter — SQLite bundled, the peer transport in-process, no GC sitting between a photo and its bytes.
+
+Measured with [verify/bench.sh](./verify/bench.sh): both artifacts on the same box, against the same mock Immich, same endpoints, request counts, warm-up.
+
+| Measure | Node/TypeScript sidecar | Rust sidecar |
+| :--- | :--- | :--- |
+| Idle memory (RSS) | ~99 MiB | **~6.6 MiB** |
+| Memory after 300 requests | ~114 MiB | ~7.1 MiB |
+| Cold start to healthy | 0.79 s | **0.32 s** |
+| Latency: health / passthrough | 12.1 / 14.5 ms | 10.7 / 11.4 ms |
+| HTTP threads | 19 | 10 |
+
+Idle memory and cold start are the claims that matter on the small household server this runs on: most of its life is spent doing nothing. Request latency is deliberately shown as ~equal — both sides are bound by the network hop, not the language; what the port bought was the footnote, not the milliseconds.
 
 ## Good to know
 
