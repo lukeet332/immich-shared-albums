@@ -170,7 +170,9 @@ jobs:
         if: always()
         run: |
           for d in demo demo/household-c demo/household-d; do
-            n=$(cd "$d" && docker compose logs --no-log-prefix 2>/dev/null | grep -cE "( 429 | 5[0-9]{2} |status 429|status 5[0-9]{2}|failed: 429|failed: 5[0-9]{2})" || true)
+            # The client's error message is "immich <path> -> <status> ...", so the status is
+            # matched in THAT shape — a bare " 510 " would count the loops' tick heartbeats.
+            n=$(cd "$d" && docker compose logs --no-log-prefix 2>/dev/null | grep -cE '(-> 429 |-> 5[0-9]{2} |status 429|status 5[0-9]{2}|failed: 429|failed: 5[0-9]{2})' || true)
             echo "$d: ${n:-0} line(s) mentioning 429/5xx"
           done
 
