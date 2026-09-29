@@ -1488,13 +1488,15 @@ stage('native album invitations, per person (no share link)');
         // moment they have. Read the mirror through the API rather than state.db: a member mirror
         // is a real table and the runner's purge rewrites it under the process.
         // A failed READ is not a frozen loop: the counter lives behind the sidecar's HTTP surface,
-        // and the runner's published-port path can stall while the containers keep working. Count
-        // the failed reads so a timeout can say which of the two it saw.
-        let statusReadFailures = 0;
+        // and the runner's published-port path can stall while the containers keep working. Record
+        // the failed reads' statuses — a non-OK answer names itself — and wait for the FIRST read
+        // too: the stage before this one killed and restarted the ORIGIN sidecar, and a boot window
+        // must not read as a wedged loop.
+        let readStatuses = [];
         const ticksOn = async () => {
           const r = await fetch(`${BS}/immich-shared-albums/sync/status?albumId=${mirrored.album.id}`,
                                 { headers: { 'x-api-key': BKEY } });
-          if (!r.ok) { statusReadFailures++; return null; }
+          if (!r.ok) { readStatuses.push(r.status); return null; }
           return (await r.json()).ticks ?? null;
         };
         const CYCLES_TO_SURVIVE = 2;
@@ -1509,26 +1511,28 @@ stage('native album invitations, per person (no share link)');
         // a wedged sidecar fails the second window too, so the retry cannot turn a wedge into a pass.
         const measured = [];
         for (let attempt = 0; attempt < 2 && measured[measured.length - 1]?.after == null; attempt++) {
-          statusReadFailures = 0;
-          const ticksBefore = await ticksOn();
-          const ticksAfter = ticksBefore && await until(async () => {
+          readStatuses = [];
+          const ticksBefore = await until(ticksOn, 120000);
+          if (!ticksBefore) { measured.push({ before: null, after: null, failed: readStatuses.length }); continue; }
+          const after = await until(async () => {
             const t = await ticksOn();
             return t && t.watcher >= ticksBefore.watcher + CYCLES_TO_SURVIVE
                      && t.invites >= ticksBefore.invites + CYCLES_TO_SURVIVE ? t : null;
           }, CYCLE_WAIT_MS);
-          measured.push({ ticksBefore, ticksAfter, failed: statusReadFailures });
+          measured.push({ before: ticksBefore, after, failed: readStatuses.length });
         }
-        const { ticksBefore, ticksAfter } = measured[measured.length - 1];
-        const readFailures = measured.reduce((s, m) => s + m.failed, 0);
+        const { before: ticksBefore, after: ticksAfter } = measured[measured.length - 1];
+        const failedReads = measured.reduce((s, m) => s + m.failed, 0);
+        const statuses = readStatuses.join(',') || 'none';
         check('the member sidecar kept evaluating both loops while the mirror was left alone',
               !!ticksAfter,
               ticksBefore
                 ? JSON.stringify({ before: ticksBefore, after: ticksAfter,
-                                   statusReadFailures: readFailures, windows: measured.length,
+                                   failedReads, statuses, windows: measured.length,
                                    verdict: ticksAfter ? 'both loops looked'
-                                     : readFailures > 0 ? `unreadable ${readFailures}x across ${measured.length} window(s) — the loop state is unproven, not disproven`
+                                     : failedReads > 0 ? `unreadable ${failedReads}x (${statuses}) across ${measured.length} window(s) — the loop state is unproven, not disproven`
                                      : 'readable throughout and never advanced — a real wedge' })
-                : 'sync/status unreadable — is ISA_TEST_HOOKS set on B?');
+                : `sync/status unreadable ${failedReads}x (statuses: ${statuses}) — is ISA_TEST_HOOKS set on B, and did the port path survive?`);
 
         // ── MESH: ONE ALBUM REACHED THROUGH TWO SHARES ───────────────────────────────────────
         // The case album-level suppression exists for. Built from LINK shares on purpose: the
