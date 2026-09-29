@@ -146,6 +146,46 @@ pub fn nudge_peer_invitations(peer: &Peer) {
     });
 }
 
+/// The union of every marker's album views, for a confirming read: which albums are seen at all.
+struct MarkerViews {
+    seen: std::collections::HashSet<String>,
+    reads_failed: bool,
+}
+
+impl MarkerViews {
+    /// Whether the album is absent from every marker's view. A failed read is NOT an answer —
+    /// `None` from `albums_as_marker` means the marker's credential was refused, and treating a
+    /// refusal as an empty view is how a live invitation gets retired on Immich's own hiccup.
+    fn all_missing(&self, album_id: &str) -> bool {
+        !self.reads_failed && !self.seen.contains(album_id)
+    }
+}
+
+/// Read every marker's view once more, the confirming half of a withdrawal decision.
+async fn marker_views(
+    state: &State,
+    client: &Client,
+    targets: &[(String, String, String)],
+) -> MarkerViews {
+    let mut seen = std::collections::HashSet::new();
+    let mut reads_failed = false;
+    for (slug, user_id, _name) in targets {
+        let Some(candidate) = state.collections().contributors.get(slug).cloned() else {
+            continue;
+        };
+        let key = candidate.api_key.clone();
+        if key.is_empty() {
+            continue;
+        }
+        let creds = key_creds(state, &key);
+        match albums_as_marker(state, client, &creds, user_id).await {
+            Some(part) => seen.extend(part.visible),
+            None => reads_failed = true,
+        }
+    }
+    MarkerViews { seen, reads_failed }
+}
+
 /// Origin side: turn native album invitations into mappings, and withdrawn ones into dead mappings.
 ///
 /// One album list per invited person, asked as that person's MARKER — which is why the directory
@@ -330,7 +370,7 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
         // were never members of it, so it always looks withdrawn here, and retiring it would kill a
         // live mirror one poll after the pull created it. That is a mirror/withdraw loop, not a
         // withdrawal; member mappings are retired by the pull, against what the peer offers.
-        let withdrawn: Vec<(String, String)> = state
+        let withdrawn_candidates: Vec<(String, String)> = state
             .collections()
             .mappings
             .iter()
@@ -344,6 +384,31 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
             })
             .map(|m| (m.id.clone(), m.album_name.clone()))
             .collect();
+        // CONFIRMED, not sampled: Immich's per-user album list can answer a member with an empty
+        // list for a moment right after a membership write, and one such answer is
+        // indistinguishable from a withdrawal in a single pass. A read that says an album is gone
+        // is re-read once before the mapping dies — a transient empty clears, a real withdrawal
+        // confirms, and a retirement still costs one pass plus one read.
+        let mut withdrawn: Vec<(String, String)> = Vec::new();
+        for (id, name) in &withdrawn_candidates {
+            let album_id = state
+                .collections()
+                .mappings
+                .iter()
+                .find(|m| m.id == *id)
+                .map(|m| m.album_id.clone())
+                .unwrap_or_default();
+            let confirmed_gone = marker_views(state, client, &targets)
+                .await
+                .all_missing(&album_id);
+            if confirmed_gone {
+                withdrawn.push((id.clone(), name.clone()));
+            } else {
+                crate::log!(
+                    "a pass that lost \"{name}\" regained it on the confirming read — Immich's per-user list answered empty once, the invitation stands"
+                );
+            }
+        }
         for (id, name) in withdrawn {
             if let Some(live) = state.collections().mappings.iter_mut().find(|m| m.id == id) {
                 live.dead = true;
@@ -713,13 +778,40 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
 
         // Withdrawn upstream: tear the mirror down rather than leaving a stale album of placeholders
         // that will never resolve. Reached only after a SUCCESSFUL poll — a failed one `continue`d.
-        let withdrawn: Vec<(String, String)> = state
+        // CONFIRMED, not sampled: the offer itself can drop an album for one poll — the origin's
+        // mapping is retired by one rule and resurrected by another inside a second, and a mirror
+        // torn down on that single gap comes back as a NEW album, so the id a panel or a test is
+        // holding never matches again. A poll that says an invitation is gone is asked once more
+        // before the mirror dies — a flap clears, a real withdrawal confirms.
+        let withdrawn_candidates: Vec<(String, String)> = state
             .collections()
             .mappings
             .iter()
             .filter(|m| invitation_mirror_was_withdrawn(m, &peer.pub_key, &offered))
             .map(|m| (m.id.clone(), m.album_name.clone()))
             .collect();
+        let mut withdrawn: Vec<(String, String)> = Vec::new();
+        for (id, name) in &withdrawn_candidates {
+            let remote_album_id = state
+                .collections()
+                .mappings
+                .iter()
+                .find(|m| m.id == *id)
+                .and_then(|m| m.remote_album_id.clone());
+            let confirmed_gone = match remote_album_id {
+                Some(album_id) => offered_albums(&peer, transport)
+                    .await
+                    .album_is_gone(&album_id),
+                None => false,
+            };
+            if confirmed_gone {
+                withdrawn.push((id.clone(), name.clone()));
+            } else {
+                crate::log!(
+                    "a poll that lost \"{name}\" regained it on the confirming pull — the origin's offer dropped it for a moment, the invitation stands"
+                );
+            }
+        }
         for (id, name) in withdrawn {
             // `notify_origin: true` — the origin withdrew, so it should retire its owner mapping.
             match crate::sync::leave::leave_album(state, client, &id, true).await {
@@ -762,6 +854,67 @@ pub fn handle_invitations_nudge(state: &std::sync::Arc<State>, caller_pub: &str)
 }
 
 /// What this household OFFERS the given peer: the invitations it has been given.
+/// The offer's album ids, fetched fresh — the confirming half of a member-side withdrawal.
+struct OfferViews {
+    offered: std::collections::HashSet<String>,
+    fetched: bool,
+}
+
+impl OfferViews {
+    /// Whether the album is truly absent from the offer. An offer that could not be fetched is
+    /// NOT an answer — reading a dead route as an empty offer is how a live mirror gets torn
+    /// down on a network blip, exactly what the confirming pull exists to prevent.
+    fn album_is_gone(&self, album_id: &str) -> bool {
+        self.fetched && !self.offered.contains(album_id)
+    }
+}
+
+async fn offered_albums(
+    peer: &Peer,
+    transport: &std::sync::Arc<crate::p2p::transport::Transport>,
+) -> OfferViews {
+    let header = RequestHeader {
+        path: "/invitations".into(),
+        ..Default::default()
+    };
+    let Ok(Ok((head, body))) = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        transport.round_trip(peer, &header, None),
+    )
+    .await
+    else {
+        return OfferViews {
+            offered: Default::default(),
+            fetched: false,
+        };
+    };
+    if head.status >= 400 {
+        return OfferViews {
+            offered: Default::default(),
+            fetched: false,
+        };
+    }
+    let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let offered = parsed
+        .get("invitations")
+        .and_then(|i| i.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|invitation| {
+                    invitation
+                        .pointer("/album/id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    OfferViews {
+        offered,
+        fetched: true,
+    }
+}
+
 pub fn invitations_for(state: &State, peer_pub: &str) -> Vec<Value> {
     state
         .collections()
@@ -794,6 +947,53 @@ pub fn invitations_for(state: &State, peer_pub: &str) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_offer_that_cannot_be_fetched_is_not_an_empty_one() {
+        // The confirming pull's contract, the member side of the one above: an offer that
+        // could not be fetched or was refused is NOT an answer, or a network blip tears a
+        // live mirror down. An empty but FETCHED offer is a real absence.
+        let offered: std::collections::HashSet<String> =
+            ["album-1".to_string()].into_iter().collect();
+        assert!(!OfferViews {
+            offered,
+            fetched: true
+        }
+        .album_is_gone("album-1"));
+        assert!(OfferViews {
+            offered: Default::default(),
+            fetched: true
+        }
+        .album_is_gone("album-1"));
+        assert!(!OfferViews {
+            offered: Default::default(),
+            fetched: false
+        }
+        .album_is_gone("album-1"));
+    }
+
+    #[test]
+    fn a_refused_marker_read_is_not_an_empty_one() {
+        // The confirming read's contract: Immich refusing a marker's credential is NOT an
+        // answer, or a hiccup on their side would retire a live invitation. An empty but
+        // SUCCESSFUL view is a real absence, and a seen album is not missing at all.
+        let seen: std::collections::HashSet<String> = ["album-1".to_string()].into_iter().collect();
+        assert!(!MarkerViews {
+            seen,
+            reads_failed: false
+        }
+        .all_missing("album-1"));
+        assert!(MarkerViews {
+            seen: Default::default(),
+            reads_failed: false
+        }
+        .all_missing("album-1"));
+        assert!(!MarkerViews {
+            seen: Default::default(),
+            reads_failed: true
+        }
+        .all_missing("album-1"));
+    }
+
     use super::*;
 
     #[test]
