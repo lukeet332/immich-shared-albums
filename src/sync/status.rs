@@ -61,11 +61,17 @@ static COMMENT_TICKS: AtomicU64 = AtomicU64::new(0);
 /// before any early return. A caller asking "has the sidecar looked N more times and left things
 /// alone?" needs this, because the cycle counter above stops advancing the moment a mapping settles.
 pub fn record_loop_tick(loop_name: LoopName) {
-    match loop_name {
+    let n = match loop_name {
         LoopName::Watcher => WATCHER_TICKS.fetch_add(1, Ordering::Relaxed),
         LoopName::Invites => INVITE_TICKS.fetch_add(1, Ordering::Relaxed),
         LoopName::Comments => COMMENT_TICKS.fetch_add(1, Ordering::Relaxed),
     };
+    // The heartbeat: a rig whose HTTP reads stalled cannot tell "the loops stopped" from "the reads
+    // did not arrive", which is how a red e2e stays undiagnosable. One line per loop per ~30 ticks
+    // puts the counters in the log, where the failure dump already reaches.
+    if n % 30 == 0 {
+        crate::log!("{:?} loop at {} ticks", loop_name, n);
+    }
 }
 
 pub fn loop_ticks() -> (u64, u64, u64) {
