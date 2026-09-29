@@ -1504,19 +1504,29 @@ stage('native album invitations, per person (no share link)');
         // sized from one pass's duration; it is sized to fail only on a REAL wedge (ticks never
         // advancing), and `until` still returns the moment both loops have looked twice.
         const CYCLE_WAIT_MS = 600000;
-        const ticksBefore = await ticksOn();
-        const ticksAfter = ticksBefore && await until(async () => {
-          const t = await ticksOn();
-          return t && t.watcher >= ticksBefore.watcher + CYCLES_TO_SURVIVE
-                   && t.invites >= ticksBefore.invites + CYCLES_TO_SURVIVE ? t : null;
-        }, CYCLE_WAIT_MS);
+        // A window whose reads ALL failed observed nothing: the contract ("the loops kept looking")
+        // is unproven, not disproven. When that happens, wait out the stall once and measure again —
+        // a wedged sidecar fails the second window too, so the retry cannot turn a wedge into a pass.
+        const measured = [];
+        for (let attempt = 0; attempt < 2 && measured[measured.length - 1]?.after == null; attempt++) {
+          statusReadFailures = 0;
+          const ticksBefore = await ticksOn();
+          const ticksAfter = ticksBefore && await until(async () => {
+            const t = await ticksOn();
+            return t && t.watcher >= ticksBefore.watcher + CYCLES_TO_SURVIVE
+                     && t.invites >= ticksBefore.invites + CYCLES_TO_SURVIVE ? t : null;
+          }, CYCLE_WAIT_MS);
+          measured.push({ ticksBefore, ticksAfter, failed: statusReadFailures });
+        }
+        const { ticksBefore, ticksAfter } = measured[measured.length - 1];
+        const readFailures = measured.reduce((s, m) => s + m.failed, 0);
         check('the member sidecar kept evaluating both loops while the mirror was left alone',
               !!ticksAfter,
               ticksBefore
                 ? JSON.stringify({ before: ticksBefore, after: ticksAfter,
-                                   statusReadFailures,
+                                   statusReadFailures: readFailures, windows: measured.length,
                                    verdict: ticksAfter ? 'both loops looked'
-                                     : statusReadFailures > 0 ? `unreadable ${statusReadFailures}x — the loop state is unproven, not disproven`
+                                     : readFailures > 0 ? `unreadable ${readFailures}x across ${measured.length} window(s) — the loop state is unproven, not disproven`
                                      : 'readable throughout and never advanced — a real wedge' })
                 : 'sync/status unreadable — is ISA_TEST_HOOKS set on B?');
 
