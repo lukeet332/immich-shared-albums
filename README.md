@@ -92,7 +92,7 @@ Two households, one shared album. Created, shared, joined and commented on, all 
 | Public view-only share links                                  | Yes        | via [immich-public-proxy](https://github.com/alangrainger/immich-public-proxy), optional |
 | Joinable public share links                                   | Yes        | optional, if you host Immich publicly     |
 | Unshare / unlink cleans everything up                         | Yes        | leaving an album works from the app too   |
-| Runs on a Raspberry Pi                                        | —          | one small container, one pinned dependency |
+| Runs on a Raspberry Pi                                        | —          | arm64 image, one small container, ~4 MB of RAM at idle |
 
 ## How it works
 
@@ -149,7 +149,7 @@ Your server stays as private as it is today, the two servers prove their identit
 - The API key doesn't need `all` — see [the API key guide](./deploy/api-key.md). Scoped like that, a leaked key can't delete or edit photos, can't change settings, and can't create a broader key.
 - The addon can't touch your photos. The only assets it ever deletes are the placeholder stubs it created itself, and the delete code refuses anything it doesn't own.
 - Share links are bearer credentials, same as in stock Immich: whoever has the link (and its password, if set) can use it. Treat them accordingly, or keep link-joining switched off.
-- Small surface: one process, SQLite, one native dependency (the peer transport), a codebase you can read — a ~10 MB image that idles at ~7 MB. [deploy/exposure.md](./deploy/exposure.md) covers how exposed to be, and what the addon changes about hosting.
+- Small surface in Rust: one process, one static binary (~9 MB), SQLite, one native dependency (the peer transport) — a ~32 MB image that idles at **~4 MB of RAM**. [deploy/exposure.md](./deploy/exposure.md) covers how exposed to be, and what the addon changes about hosting.
 
 ## Good to know
 
