@@ -218,7 +218,7 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
             continue;
         }
         crate::log!(
-            "detect \"{}\": markers read ({} invited, {} visible) — creating",
+            "detect \"{}\": markers read ({} invited, {} visible)",
             peer.name,
             invited.len(),
             visible.len()

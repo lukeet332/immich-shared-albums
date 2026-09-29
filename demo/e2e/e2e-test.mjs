@@ -1487,10 +1487,15 @@ stage('native album invitations, per person (no share link)');
         // cycles from none; waiting until both loops have looked twice more can, and it ends the
         // moment they have. Read the mirror through the API rather than state.db: a member mirror
         // is a real table and the runner's purge rewrites it under the process.
+        // A failed READ is not a frozen loop: the counter lives behind the sidecar's HTTP surface,
+        // and the runner's published-port path can stall while the containers keep working. Count
+        // the failed reads so a timeout can say which of the two it saw.
+        let statusReadFailures = 0;
         const ticksOn = async () => {
           const r = await fetch(`${BS}/immich-shared-albums/sync/status?albumId=${mirrored.album.id}`,
                                 { headers: { 'x-api-key': BKEY } });
-          return r.ok ? (await r.json()).ticks : null;
+          if (!r.ok) { statusReadFailures++; return null; }
+          return (await r.json()).ticks ?? null;
         };
         const CYCLES_TO_SURVIVE = 2;
         // The sweep gate runs ONE background lane at a time, and a lane may hold it across peer
@@ -1507,7 +1512,13 @@ stage('native album invitations, per person (no share link)');
         }, CYCLE_WAIT_MS);
         check('the member sidecar kept evaluating both loops while the mirror was left alone',
               !!ticksAfter,
-              ticksBefore ? JSON.stringify({ before: ticksBefore, after: ticksAfter }) : 'sync/status unreadable — is ISA_TEST_HOOKS set on B?');
+              ticksBefore
+                ? JSON.stringify({ before: ticksBefore, after: ticksAfter,
+                                   statusReadFailures,
+                                   verdict: ticksAfter ? 'both loops looked'
+                                     : statusReadFailures > 0 ? `unreadable ${statusReadFailures}x — the loop state is unproven, not disproven`
+                                     : 'readable throughout and never advanced — a real wedge' })
+                : 'sync/status unreadable — is ISA_TEST_HOOKS set on B?');
 
         // ── MESH: ONE ALBUM REACHED THROUGH TWO SHARES ───────────────────────────────────────
         // The case album-level suppression exists for. Built from LINK shares on purpose: the

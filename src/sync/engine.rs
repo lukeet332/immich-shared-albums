@@ -571,7 +571,7 @@ async fn reconcile_inner(
             else {
                 continue;
             };
-            let current = client
+            let Ok(current) = client
                 .json(
                     reqwest::Method::GET,
                     &format!("/assets/{}", entry.local_asset),
@@ -579,14 +579,20 @@ async fn reconcile_inner(
                     None,
                 )
                 .await
-                .ok()
-                .flatten()
-                .and_then(|a| {
-                    a.pointer("/exifInfo/description")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
+                .map(|a| {
+                    a.and_then(|a| {
+                        a.pointer("/exifInfo/description")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default()
                 })
-                .unwrap_or_default();
+            else {
+                // The stub is gone or unreadable: there is nothing to refresh, and a PUT would
+                // refuse the same way every pass for ever. Its description lands when the stub is
+                // re-materialised, which sets the fresh one at creation.
+                continue;
+            };
             let wanted = crate::immich::client::composed_description(reference);
             if wanted == current {
                 continue;
@@ -603,6 +609,13 @@ async fn reconcile_inner(
                 Ok(_) => crate::log!(
                     "refreshed a stub's description in \"{}\"",
                     mapping.album_name
+                ),
+                // A 4xx is the credential's answer, not a transient fault: the access is gone or
+                // the state changed permanently. Retrying it every pass held the cursor so the
+                // mapping never settled and the pass never got cheap.
+                Err(e) if e.is_not_visible() => crate::log!(
+                    "description refresh refused for {}: {e} — not retried",
+                    short_id(&entry.local_asset)
                 ),
                 Err(e) => {
                     crate::log!(

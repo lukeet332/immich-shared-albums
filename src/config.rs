@@ -1,7 +1,9 @@
 /** config.rs — process configuration, the shared logger, and small string constants. See ARCHITECTURE.md. */
 use std::sync::OnceLock;
 
-pub const SIDECAR_VERSION: &str = "1.1.1"; // x-release-please-version
+/// The crate version — one source of truth, Cargo.toml, which release-please's `rust`
+/// release-type bumps. The wire's `version` field and the boot line both read this.
+pub const SIDECAR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Every setting here comes from an `ISA_`-prefixed variable, for the reason given in ARCHITECTURE.md
 /// ("Why ISA_"). Parsing is strict and fails loudly at boot: a typo'd boolean must never fail
