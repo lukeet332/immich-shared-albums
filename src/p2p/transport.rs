@@ -183,20 +183,17 @@ impl Transport {
             addr = addr.with_addrs(parsed.clone());
         }
         crate::trace!("dialling \"{}\" via {:?}", peer.name, parsed);
+        // A failed dial evicts NOTHING: this call never installed a connection, and a concurrent
+        // request may have installed a healthy one for the same peer meanwhile — closing that would
+        // fail a request that had nothing to do with this failure. The wedge a moved peer used to
+        // cause is closed where a connection IS dropped instead: `evict` closes its handle.
         let dialled =
             match tokio::time::timeout(DIAL_DEADLINE, self.endpoint.connect(addr, PROTOCOL_ALPN))
                 .await
             {
                 Ok(Ok(conn)) => conn,
-                Ok(Err(e)) => {
-                    // The endpoint keeps its own connection for this node, and a peer that moved
-                    // address leaves it holding the dead one — every later dial stalls on that until
-                    // the process restarts. Release it so the NEXT attempt is a real one.
-                    self.evict(&peer.pub_key);
-                    return Err(format!("dialling {} failed: {e}", peer.name));
-                }
+                Ok(Err(e)) => return Err(format!("dialling {} failed: {e}", peer.name)),
                 Err(_) => {
-                    self.evict(&peer.pub_key);
                     return Err(format!(
                         "dialling {} timed out after {}s",
                         peer.name,

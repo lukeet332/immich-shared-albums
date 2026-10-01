@@ -51,7 +51,10 @@ async fn main() {
                 .collect()
         }),
         key,
-        endpoint_host: None,
+        endpoint_host: endpoint
+            .get("host")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
     };
 
     match redeem_invite(st, &invite, password.as_deref()).await {
