@@ -15,9 +15,10 @@ certificates, and no listening HTTP surface for peers at all.
   dial. `Peer.advertisedHost` is the third hint: the address the peer declared **as written**,
   resolved fresh on every dial by `Transport::resolve_advertised` (IPv4, bounded by
   `advertise::RESOLVE_DEADLINE`). A stored address is frozen at the moment it was minted, so a
-  declared name is the only hint that follows an IP change. When it resolves it is the **only**
-  candidate dialled — a stale address left in the list spends the whole `DIAL_DEADLINE` even behind
-  a live one — and `Peer.lastAddrs` is the fallback for when the name does not resolve.
+  declared name is the only hint that follows an IP change. It leads the dial list — the deadline
+  is spent in order, so a stale address ahead of a live one costs the whole budget — with
+  `Peer.lastAddrs` behind it, which is what still works when the declared address is wrong or
+  unreachable.
 - Connections are cached per peer and redialed when they close — including when one turns out to
   be a zombie after its peer restarted, which `closeReason()` alone does not report (see _Pushed
   refs report partial success_). The accept loop hands `p2p/routes.rs` the caller's proven key

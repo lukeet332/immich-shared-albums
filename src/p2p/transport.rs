@@ -17,6 +17,9 @@ pub const DEADLINE: Duration = Duration::from_secs(120);
 /// Reaching a peer is a different budget from streaming a body: a dial either completes in a few
 /// seconds (direct, hole-punched, or via the relay) or the peer is not there.
 pub const DIAL_DEADLINE: Duration = Duration::from_secs(10);
+/// A declared address gets less than the full dial: it is dialled alone, so the only thing it can
+/// be waiting for is an address that is not answering, and the stored addresses still need budget.
+const DECLARED_DIAL_DEADLINE: Duration = Duration::from_secs(4);
 /// The byte path's response HEADER. Bodies keep DEADLINE semantics — they stream to FIN.
 pub const BYTE_HEAD_DEADLINE: Duration = Duration::from_secs(15);
 /// The most a peer may answer a byte request with. Our own photos are bounded by the library, but a
@@ -63,6 +66,10 @@ pub struct Transport {
     /// Distinguishes one installed connection from the next for the same peer, so a request that
     /// failed on an old one cannot evict the replacement a concurrent request installed.
     next_connection_generation: std::sync::atomic::AtomicU64,
+    /// One dial at a time per peer. Two lanes that both miss the cache in the same instant would
+    /// otherwise race two connections to the same node; the loser waits out its own DIAL_DEADLINE
+    /// and reports a peer it is in fact talking to.
+    dial_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 static TRANSPORT: std::sync::OnceLock<Arc<Transport>> = std::sync::OnceLock::new();
@@ -103,6 +110,7 @@ impl Transport {
             endpoint,
             connections: Mutex::new(HashMap::new()),
             next_connection_generation: std::sync::atomic::AtomicU64::new(1),
+            dial_locks: Mutex::new(HashMap::new()),
         });
 
         // Without the relay there is no address discovery either, so the only addresses a peer is
@@ -156,48 +164,76 @@ impl Transport {
         if let Some(live) = self.cached_live(&peer.pub_key) {
             return Ok(live);
         }
-        let id = endpoint_id(&peer.pub_key)?;
-        let mut addr = EndpointAddr::new(id);
-        if let Some(relay) = &peer.relay_hint {
-            if let Ok(url) = relay.parse() {
-                addr = addr.with_relay_url(url);
-            }
+        let peer_lock = {
+            let mut locks = self.dial_locks.lock().unwrap();
+            locks
+                .entry(peer.pub_key.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _one_dial_at_a_time = peer_lock.lock().await;
+        // Whoever held the lock dialled on our behalf, so look again before racing it.
+        if let Some(live) = self.cached_live(&peer.pub_key) {
+            return Ok(live);
         }
-        let mut parsed: Vec<iroh::TransportAddr> = Vec::new();
-        // A peer that declared a name gave us the address of RECORD: the stored IPs are one
-        // mint-time snapshot of it, and a stale address left in the dial list costs the whole
-        // deadline even behind a live one. So the declared name resolves fresh per dial and, when
-        // it resolves, it is the ONLY candidate — the snapshot is the fallback for when it does not.
-        let mut declared_resolved = false;
+        let id = endpoint_id(&peer.pub_key)?;
+        let base = || {
+            let mut addr = EndpointAddr::new(id);
+            if let Some(relay) = &peer.relay_hint {
+                if let Ok(url) = relay.parse() {
+                    addr = addr.with_relay_url(url);
+                }
+            }
+            addr
+        };
+        let stored: Vec<iroh::TransportAddr> = peer
+            .last_addrs
+            .iter()
+            .flatten()
+            .filter_map(|a| a.parse::<std::net::SocketAddr>().ok())
+            .map(iroh::TransportAddr::Ip)
+            .collect();
+
+        // Two dials, in this order, because one list cannot serve both jobs. A declared address is
+        // resolved NOW — a stored hint was minted once and the IP behind a DDNS name moves — and it
+        // is dialled ALONE and briefly: it is the live answer or it is not, and the addresses
+        // stored beside it are often dead, which can spend a whole deadline on their own. A declared
+        // address can also be wrong (a forward that is not open yet, a name pointing elsewhere),
+        // so a short miss falls through to the stored addresses rather than failing the peer.
         if let Some(host) = &peer.advertised_host {
             match Self::resolve_advertised(host).await {
                 Some(resolved) => {
-                    parsed.push(iroh::TransportAddr::Ip(resolved));
-                    declared_resolved = true;
+                    let only = base().with_addrs(vec![iroh::TransportAddr::Ip(resolved)]);
+                    crate::trace!("dialling \"{}\" at its declared {resolved}", peer.name);
+                    match tokio::time::timeout(
+                        DECLARED_DIAL_DEADLINE,
+                        self.endpoint.connect(only, PROTOCOL_ALPN),
+                    )
+                    .await
+                    {
+                        Ok(Ok(conn)) => return Ok(self.install(peer, conn)),
+                        Ok(Err(e)) => crate::log!(
+                            "the declared address of \"{}\" did not answer ({e}) — dialling the stored addresses",
+                            peer.name
+                        ),
+                        Err(_) => crate::log!(
+                            "the declared address of \"{}\" did not answer within {}s — dialling the stored addresses",
+                            peer.name,
+                            DECLARED_DIAL_DEADLINE.as_secs()
+                        ),
+                    }
                 }
                 None => crate::log!(
                     "the declared address \"{host}\" did not resolve — dialling the stored addresses"
                 ),
             }
         }
-        if !declared_resolved {
-            if let Some(addrs) = &peer.last_addrs {
-                parsed.extend(
-                    addrs
-                        .iter()
-                        .filter_map(|a| a.parse::<std::net::SocketAddr>().ok())
-                        .map(iroh::TransportAddr::Ip),
-                );
-            }
+
+        let mut addr = base();
+        if !stored.is_empty() {
+            crate::trace!("dialling \"{}\" via {:?}", peer.name, stored);
+            addr = addr.with_addrs(stored);
         }
-        if !parsed.is_empty() {
-            addr = addr.with_addrs(parsed.clone());
-        }
-        crate::trace!("dialling \"{}\" via {:?}", peer.name, parsed);
-        // A failed dial evicts NOTHING: this call never installed a connection, and a concurrent
-        // request may have installed a healthy one for the same peer meanwhile — closing that would
-        // fail a request that had nothing to do with this failure. The wedge a moved peer used to
-        // cause is closed where a connection IS dropped instead: `evict` closes its handle.
         let dialled =
             match tokio::time::timeout(DIAL_DEADLINE, self.endpoint.connect(addr, PROTOCOL_ALPN))
                 .await
@@ -212,22 +248,11 @@ impl Transport {
                     ));
                 }
             };
-        let generation = self
-            .next_connection_generation
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.connections.lock().unwrap().insert(
-            peer.pub_key.clone(),
-            CachedConnection {
-                conn: dialled.clone(),
-                generation,
-            },
-        );
-        Ok(CachedConnection {
-            conn: dialled,
-            generation,
-        })
+        Ok(self.install(peer, dialled))
     }
 
+    /// Cache a freshly dialled connection under a NEW generation, and hand the caller both: a
+    /// failed request may only evict the generation it actually used.
     fn cached_live(&self, pub_key: &str) -> Option<CachedConnection> {
         let cached = self.connections.lock().unwrap().get(pub_key).cloned()?;
         // `close_reason()` is NOT a liveness test on its own — it stays None for a peer that is
@@ -242,6 +267,21 @@ impl Transport {
         }
     }
 
+    /// Cache a freshly dialled connection under a NEW generation, and hand the caller both: a
+    /// failed request may only evict the generation it actually used.
+    fn install(&self, peer: &Peer, conn: iroh::endpoint::Connection) -> CachedConnection {
+        let generation = self
+            .next_connection_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.connections.lock().unwrap().insert(
+            peer.pub_key.clone(),
+            CachedConnection {
+                conn: conn.clone(),
+                generation,
+            },
+        );
+        CachedConnection { conn, generation }
+    }
     /// Drop the cached connection, CLOSING it first. Our map is not where a wedged peer lives:
     /// iroh holds a connection per node, and a handle dropped without closing leaves the endpoint
     /// still offering the dead one — so a peer that moved address could only be re-dialled after a
