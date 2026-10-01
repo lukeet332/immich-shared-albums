@@ -1150,9 +1150,10 @@ async fn join(headers: &HeaderMap, body: HttpBody) -> Response {
         );
     };
     let invite = crate::p2p::join::Invite {
-        endpoint_pub: endpoint.0,
-        endpoint_relay: endpoint.1,
-        endpoint_addrs: endpoint.2,
+        endpoint_pub: endpoint.public_key,
+        endpoint_relay: endpoint.relay,
+        endpoint_addrs: endpoint.addrs,
+        endpoint_host: endpoint.host,
         key: key.to_string(),
     };
     let password = body.get("password").and_then(|v| v.as_str());
@@ -1265,7 +1266,16 @@ async fn join(headers: &HeaderMap, body: HttpBody) -> Response {
 }
 
 /// `{pub, relay?, addrs?}` from the invite's base64url token. `None` when it is not one.
-fn decode_endpoint_token(token: &str) -> Option<(String, Option<String>, Option<Vec<String>>)> {
+/// The origin half of a share invite, decoded from the token: who to dial, and the addresses
+/// (and declared hostname) that were minted with it.
+struct EndpointToken {
+    public_key: String,
+    relay: Option<String>,
+    host: Option<String>,
+    addrs: Option<Vec<String>>,
+}
+
+fn decode_endpoint_token(token: &str) -> Option<EndpointToken> {
     let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(token.as_bytes())
         .ok()?;
@@ -1277,19 +1287,23 @@ fn decode_endpoint_token(token: &str) -> Option<(String, Option<String>, Option<
     if public_key.is_empty() {
         return None;
     }
-    Some((
-        public_key.to_string(),
-        value
+    Some(EndpointToken {
+        public_key: public_key.to_string(),
+        relay: value
             .get("relay")
             .and_then(|v| v.as_str())
             .map(str::to_string),
-        value.get("addrs").and_then(|v| v.as_array()).map(|addrs| {
+        host: value
+            .get("host")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        addrs: value.get("addrs").and_then(|v| v.as_array()).map(|addrs| {
             addrs
                 .iter()
                 .filter_map(|a| a.as_str().map(str::to_string))
                 .collect()
         }),
-    ))
+    })
 }
 
 /// `POST /test/hide-dimensions` — rig-only. Hide or reveal one photo's dimensions.
@@ -1740,6 +1754,11 @@ async fn endpoint_token(transport: &crate::p2p::transport::Transport) -> String 
     let addrs = crate::p2p::advertise::advertised_addresses(transport).await;
     if !addrs.is_empty() {
         obj.insert("addrs".into(), json!(addrs));
+    }
+    // The declared hostname travels with the IPs: a DDNS deployment's address changes under it,
+    // and the receiver can only re-resolve if the NAME reached it.
+    if let Some(host) = crate::p2p::advertise::declared_host() {
+        obj.insert("host".into(), json!(host));
     }
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(serde_json::Value::Object(obj).to_string())

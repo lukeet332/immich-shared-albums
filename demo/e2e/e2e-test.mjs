@@ -2249,6 +2249,12 @@ stage('pairing links two servers on its own (no album)');
     check('the ticket leads with the declared address (ISA_ADVERTISE_ADDR)',
           leads && decoded.addrs.length > 1,
           `addrs=${JSON.stringify(decoded?.addrs)}`);
+    // The declared address ALSO travels verbatim, so the receiver can resolve the name again
+    // later instead of trusting one mint-time answer — the DDNS case, where the IP behind the
+    // hostname moves after the ticket was made.
+    check('the ticket carries the declared address verbatim, unresolved',
+          decoded?.host === B_ADVERTISE,
+          `host=${JSON.stringify(decoded?.host)} declared=${B_ADVERTISE}`);
     check('the link expires within the hour', minted.expiresAt - Date.now() < 3600000,
           `${Math.round((minted.expiresAt - Date.now()) / 60000)} min`);
     // survives being pasted into a messenger: one line, no spaces
@@ -2269,6 +2275,13 @@ stage('pairing links two servers on its own (no album)');
     const bPeers = (await (await fetch(`${BS}/immich-shared-albums/peers`, { headers: { 'x-api-key': BKEY } })).json()).peers || [];
     check('the minting side lists it too (one round trip pairs both)',
           bPeers.some(p => (p.name || '').includes('(D)')), bPeers.map(p => p.name).join(', '));
+    // ...and the redeeming side kept the declared NAME to re-resolve, not just the IPs minted
+    // with it. Read from state.db: /peers is the panel's summary and carries no dial detail.
+    const dPeers = readSidecarPeers('d-sidecar') || [];
+    const declared = dPeers.find(p => p.pub === decoded.pub);
+    check('the linked peer is stored with the declared address to re-resolve',
+          declared?.advertisedHost === B_ADVERTISE,
+          `advertisedHost=${JSON.stringify(declared?.advertisedHost)} declared=${B_ADVERTISE}`);
 
     // SECURITY: single-use. A forwarded copy must be inert.
     const replay = await fetch(`${DS}/immich-shared-albums/pair`,

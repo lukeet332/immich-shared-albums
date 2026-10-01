@@ -126,6 +126,7 @@ async fn main() {
         first_seen_at: config::iso_now(),
         relay_hint: None,
         last_addrs: peer_addr.map(|a| vec![a]),
+        advertised_host: None,
     });
     // `storedFull: false` is what makes this a PROXY row: the local asset is a stub, so the
     // interceptor is the only thing that can serve its true pixels.

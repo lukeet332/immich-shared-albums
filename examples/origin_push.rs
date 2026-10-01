@@ -142,6 +142,7 @@ async fn main() {
         first_seen_at: iso_now(),
         relay_hint: None,
         last_addrs: Some(vec![peer_addr]),
+        advertised_host: None,
     });
     st.save().expect("save state");
 

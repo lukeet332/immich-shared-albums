@@ -51,6 +51,7 @@ async fn main() {
                 .collect()
         }),
         key,
+        endpoint_host: None,
     };
 
     match redeem_invite(st, &invite, password.as_deref()).await {

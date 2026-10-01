@@ -152,27 +152,58 @@ impl Transport {
                 addr = addr.with_relay_url(url);
             }
         }
-        if let Some(addrs) = &peer.last_addrs {
-            let parsed: Vec<iroh::TransportAddr> = addrs
-                .iter()
-                .filter_map(|a| a.parse::<std::net::SocketAddr>().ok())
-                .map(iroh::TransportAddr::Ip)
-                .collect();
-            if !parsed.is_empty() {
-                addr = addr.with_addrs(parsed);
+        let mut parsed: Vec<iroh::TransportAddr> = Vec::new();
+        // A peer that declared a name gave us the address of RECORD: the stored IPs are one
+        // mint-time snapshot of it, and a stale address left in the dial list costs the whole
+        // deadline even behind a live one. So the declared name resolves fresh per dial and, when
+        // it resolves, it is the ONLY candidate — the snapshot is the fallback for when it does not.
+        let mut declared_resolved = false;
+        if let Some(host) = &peer.advertised_host {
+            match Self::resolve_advertised(host).await {
+                Some(resolved) => {
+                    parsed.push(iroh::TransportAddr::Ip(resolved));
+                    declared_resolved = true;
+                }
+                None => crate::log!(
+                    "the declared address \"{host}\" did not resolve — dialling the stored addresses"
+                ),
             }
         }
+        if !declared_resolved {
+            if let Some(addrs) = &peer.last_addrs {
+                parsed.extend(
+                    addrs
+                        .iter()
+                        .filter_map(|a| a.parse::<std::net::SocketAddr>().ok())
+                        .map(iroh::TransportAddr::Ip),
+                );
+            }
+        }
+        if !parsed.is_empty() {
+            addr = addr.with_addrs(parsed.clone());
+        }
+        crate::trace!("dialling \"{}\" via {:?}", peer.name, parsed);
         let dialled =
-            tokio::time::timeout(DIAL_DEADLINE, self.endpoint.connect(addr, PROTOCOL_ALPN))
+            match tokio::time::timeout(DIAL_DEADLINE, self.endpoint.connect(addr, PROTOCOL_ALPN))
                 .await
-                .map_err(|_| {
-                    format!(
+            {
+                Ok(Ok(conn)) => conn,
+                Ok(Err(e)) => {
+                    // The endpoint keeps its own connection for this node, and a peer that moved
+                    // address leaves it holding the dead one — every later dial stalls on that until
+                    // the process restarts. Release it so the NEXT attempt is a real one.
+                    self.evict(&peer.pub_key);
+                    return Err(format!("dialling {} failed: {e}", peer.name));
+                }
+                Err(_) => {
+                    self.evict(&peer.pub_key);
+                    return Err(format!(
                         "dialling {} timed out after {}s",
                         peer.name,
                         DIAL_DEADLINE.as_secs()
-                    )
-                })?
-                .map_err(|e| format!("dialling {} failed: {e}", peer.name))?;
+                    ));
+                }
+            };
         self.connections
             .lock()
             .unwrap()
@@ -187,17 +218,44 @@ impl Transport {
         if conn.close_reason().is_none() {
             Some(conn)
         } else {
-            self.connections.lock().unwrap().remove(pub_key);
+            // A zombie dropped from our map alone is still live inside the endpoint; evicting is
+            // what keeps the next dial a fresh one rather than the same dead connection.
+            self.evict(pub_key);
             None
         }
     }
 
+    /// Drop the cached connection, CLOSING it first. Our map is not where a wedged peer lives:
+    /// iroh holds a connection per node, and a handle dropped without closing leaves the endpoint
+    /// still offering the dead one — so a peer that moved address could only be re-dialled after a
+    /// process restart. Closing is what makes the next dial a real one.
     fn evict(&self, pub_key: &str) {
-        self.connections.lock().unwrap().remove(pub_key);
+        if let Some(conn) = self.connections.lock().unwrap().remove(pub_key) {
+            conn.close(0u8.into(), b"re-dialling this peer");
+        }
     }
 
-    /// One JSON round trip: dial, send the header and body frames, read the response header, then
-    /// read the JSON body to FIN.
+    /// The declared `host:port`, resolved now. IPv4 only: the transport binds
+    /// `0.0.0.0:ISA_P2P_PORT`, so an AAAA answer would name a port nothing is listening on.
+    /// Bounded: a stalled resolver must not hold a dial hostage.
+    async fn resolve_advertised(host: &str) -> Option<std::net::SocketAddr> {
+        let lookup_host = host.to_string();
+        let lookup = tokio::task::spawn_blocking(move || {
+            use std::net::ToSocketAddrs;
+            lookup_host
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut all| all.find(|a| a.is_ipv4()))
+        });
+        tokio::time::timeout(crate::p2p::advertise::RESOLVE_DEADLINE, lookup)
+            .await
+            .ok()
+            .and_then(|done| done.ok())
+            .flatten()
+    }
+
+    /// One JSON round trip: dial, send the header and body frames, read the response header,
+    /// then read the JSON body to FIN.
     pub async fn round_trip(
         &self,
         peer: &Peer,

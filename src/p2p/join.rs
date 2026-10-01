@@ -14,6 +14,9 @@ pub struct Invite {
     pub endpoint_pub: String,
     pub endpoint_relay: Option<String>,
     pub endpoint_addrs: Option<Vec<String>>,
+    /// The origin's DECLARED address as written — resolved fresh per dial, because the IP behind
+    /// a DDNS name moves and the stored one was minted once.
+    pub endpoint_host: Option<String>,
     pub key: String,
 }
 
@@ -115,6 +118,7 @@ pub async fn redeem_invite(
         first_seen_at: crate::config::iso_now(),
         relay_hint: invite.endpoint_relay.clone(),
         last_addrs: invite.endpoint_addrs.clone(),
+        advertised_host: invite.endpoint_host.clone(),
     };
     let body = json!({
         "shareKey": invite.key,
@@ -237,6 +241,7 @@ pub async fn redeem_invite(
             existing.protocol = protocol;
             existing.relay_hint = invite.endpoint_relay.clone();
             existing.last_addrs = invite.endpoint_addrs.clone();
+            existing.advertised_host = invite.endpoint_host.clone();
         }
         None => collections.peers.push(Peer {
             pub_key: public_key.to_string(),
@@ -248,6 +253,7 @@ pub async fn redeem_invite(
             first_seen_at: crate::config::iso_now(),
             relay_hint: invite.endpoint_relay.clone(),
             last_addrs: invite.endpoint_addrs.clone(),
+            advertised_host: invite.endpoint_host.clone(),
         }),
     }
     drop(collections);
@@ -321,6 +327,7 @@ mod tests {
             endpoint_pub: String::new(),
             endpoint_relay: None,
             endpoint_addrs: None,
+            endpoint_host: None,
             key: "k".into(),
         };
         assert!(empty.endpoint_pub.trim().is_empty());

@@ -86,6 +86,7 @@ async fn main() {
         // Where to dial the origin. A real join records this from the share page's endpoint token;
         // without it the member has a mapping but no way to reach the server behind it.
         last_addrs: std::env::var("PEER_ADDR").ok().map(|a| vec![a]),
+        advertised_host: None,
     });
     st.save().expect("save state");
     let peer_pub = st

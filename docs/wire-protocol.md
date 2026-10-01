@@ -10,9 +10,14 @@ certificates, and no listening HTTP surface for peers at all.
 - ALPN `isa/2`, `PROTOCOL_VERSION = 2`. One bi-stream per request: u32-LE length-prefixed JSON
   header `{path, range?}` + length-prefixed body; response header `{status, headers?}` + body
   streamed to FIN. `Range` rides the frame header (seekable video).
-- Dialing needs the key plus hints: `Peer.relayHint`/`Peer.lastAddrs`, refreshed after every
-  successful dial — **hints, never identity**. First contact gets them from the pairing ticket or
-  the share page's endpoint token.
+- Dialing needs the key plus hints: `Peer.relayHint`/`Peer.lastAddrs`, which come from the pairing
+  ticket or the share page's endpoint token — **hints, never identity**, and never re-learned from a
+  dial. `Peer.advertisedHost` is the third hint: the address the peer declared **as written**,
+  resolved fresh on every dial by `Transport::resolve_advertised` (IPv4, bounded by
+  `advertise::RESOLVE_DEADLINE`). A stored address is frozen at the moment it was minted, so a
+  declared name is the only hint that follows an IP change. When it resolves it is the **only**
+  candidate dialled — a stale address left in the list spends the whole `DIAL_DEADLINE` even behind
+  a live one — and `Peer.lastAddrs` is the fallback for when the name does not resolve.
 - Connections are cached per peer and redialed when they close — including when one turns out to
   be a zombie after its peer restarted, which `closeReason()` alone does not report (see _Pushed
   refs report partial success_). The accept loop hands `p2p/routes.rs` the caller's proven key
@@ -22,9 +27,11 @@ certificates, and no listening HTTP surface for peers at all.
   along with the address discovery that came with it, so addresses must then be reachable
   without it (`ISA_ADVERTISE_ADDR`).
 - **What a ticket or token carries as addresses** comes from `advertised_addresses`
-  (`p2p/advertise.rs`): `ISA_ADVERTISE_ADDR` first when set — a hostname is resolved when the
-  link is minted — then the endpoint's own. The declared one is the only candidate a peer outside
-  this container's networks can dial once the relay is off. **Discovery is never enabled** —
+  (`p2p/advertise.rs`): `ISA_ADVERTISE_ADDR` first when set, then the endpoint's own. Alongside the
+  resolved IPs, ticket (`Ticket.host`) and token (`endpoint_token`'s `host`) carry the declared
+  address **verbatim** via `advertise::declared_host` — so the peer can re-resolve a hostname later
+  instead of trusting one mint-time answer. The declared address is the only candidate a peer
+  outside this container's networks can dial once the relay is off. **Discovery is never enabled** —
   tickets and tokens carry the address, so no registry learns a server exists.
 
 | File             | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |

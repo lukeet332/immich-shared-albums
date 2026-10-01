@@ -88,6 +88,7 @@ async fn main() {
         first_seen_at: config::iso_now(),
         relay_hint: None,
         last_addrs: None,
+        advertised_host: None,
     };
     // The peer must be LINKED, or provisioning refuses: creating an account is a commitment on
     // behalf of a server, and finishing one for an unlinked server would leave an orphan bot with a
