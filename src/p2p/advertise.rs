@@ -44,6 +44,14 @@ async fn resolve_ipv4(host: &str, port: u16) -> Option<String> {
         .flatten()
 }
 
+/// The DECLARED address, as written — the hostname a DDNS deployment keeps current, which the
+/// other side can resolve fresh whenever the IP behind it changes. `None` when nothing is
+/// declared (or a resolver handed us an address that never had a name to begin with).
+pub fn declared_host() -> Option<String> {
+    let AdvertiseAddr { host, port } = cfg().advertise_addr.as_ref()?;
+    Some(format!("{host}:{port}"))
+}
+
 /// What a pairing ticket or share-page token carries. The declared address
 /// (`ISA_ADVERTISE_ADDR`) is resolved HERE and now — a link is a point-in-time address, so a
 /// stale answer is worse than a fresh failure. A host that does not resolve logs and falls back

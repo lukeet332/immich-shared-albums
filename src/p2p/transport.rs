@@ -59,10 +59,20 @@ pub struct Transport {
     /// One live connection per peer key. A connection whose peer restarted still LOOKS open to
     /// QUIC for ~45 s, so reuse is gated on `close_reason()` being `None` — and every wait that can
     /// span a restart additionally races `closed()`, because that is the only signal that fires.
-    connections: Mutex<HashMap<String, iroh::endpoint::Connection>>,
+    connections: Mutex<HashMap<String, CachedConnection>>,
+    /// Distinguishes one installed connection from the next for the same peer, so a request that
+    /// failed on an old one cannot evict the replacement a concurrent request installed.
+    next_connection_generation: std::sync::atomic::AtomicU64,
 }
 
 static TRANSPORT: std::sync::OnceLock<Arc<Transport>> = std::sync::OnceLock::new();
+
+/// One installed connection, and the generation it was installed under.
+#[derive(Clone)]
+struct CachedConnection {
+    conn: iroh::endpoint::Connection,
+    generation: u64,
+}
 
 impl Transport {
     /// Bind the endpoint and start accepting. The endpoint binds a STABLE UDP port because a peer
@@ -92,6 +102,7 @@ impl Transport {
         let transport = Arc::new(Transport {
             endpoint,
             connections: Mutex::new(HashMap::new()),
+            next_connection_generation: std::sync::atomic::AtomicU64::new(1),
         });
 
         // Without the relay there is no address discovery either, so the only addresses a peer is
@@ -141,7 +152,7 @@ impl Transport {
     }
 
     /// A connection to a peer, reusing a live one when there is one.
-    pub async fn connection_for(&self, peer: &Peer) -> Result<iroh::endpoint::Connection, String> {
+    async fn connection_for(&self, peer: &Peer) -> Result<CachedConnection, String> {
         if let Some(live) = self.cached_live(&peer.pub_key) {
             return Ok(live);
         }
@@ -152,52 +163,120 @@ impl Transport {
                 addr = addr.with_relay_url(url);
             }
         }
-        if let Some(addrs) = &peer.last_addrs {
-            let parsed: Vec<iroh::TransportAddr> = addrs
-                .iter()
-                .filter_map(|a| a.parse::<std::net::SocketAddr>().ok())
-                .map(iroh::TransportAddr::Ip)
-                .collect();
-            if !parsed.is_empty() {
-                addr = addr.with_addrs(parsed);
+        let mut parsed: Vec<iroh::TransportAddr> = Vec::new();
+        // A peer that declared a name gave us the address of RECORD: the stored IPs are one
+        // mint-time snapshot of it, and a stale address left in the dial list costs the whole
+        // deadline even behind a live one. So the declared name resolves fresh per dial and, when
+        // it resolves, it is the ONLY candidate — the snapshot is the fallback for when it does not.
+        let mut declared_resolved = false;
+        if let Some(host) = &peer.advertised_host {
+            match Self::resolve_advertised(host).await {
+                Some(resolved) => {
+                    parsed.push(iroh::TransportAddr::Ip(resolved));
+                    declared_resolved = true;
+                }
+                None => crate::log!(
+                    "the declared address \"{host}\" did not resolve — dialling the stored addresses"
+                ),
             }
         }
+        if !declared_resolved {
+            if let Some(addrs) = &peer.last_addrs {
+                parsed.extend(
+                    addrs
+                        .iter()
+                        .filter_map(|a| a.parse::<std::net::SocketAddr>().ok())
+                        .map(iroh::TransportAddr::Ip),
+                );
+            }
+        }
+        if !parsed.is_empty() {
+            addr = addr.with_addrs(parsed.clone());
+        }
+        crate::trace!("dialling \"{}\" via {:?}", peer.name, parsed);
+        // A failed dial evicts NOTHING: this call never installed a connection, and a concurrent
+        // request may have installed a healthy one for the same peer meanwhile — closing that would
+        // fail a request that had nothing to do with this failure. The wedge a moved peer used to
+        // cause is closed where a connection IS dropped instead: `evict` closes its handle.
         let dialled =
-            tokio::time::timeout(DIAL_DEADLINE, self.endpoint.connect(addr, PROTOCOL_ALPN))
+            match tokio::time::timeout(DIAL_DEADLINE, self.endpoint.connect(addr, PROTOCOL_ALPN))
                 .await
-                .map_err(|_| {
-                    format!(
+            {
+                Ok(Ok(conn)) => conn,
+                Ok(Err(e)) => return Err(format!("dialling {} failed: {e}", peer.name)),
+                Err(_) => {
+                    return Err(format!(
                         "dialling {} timed out after {}s",
                         peer.name,
                         DIAL_DEADLINE.as_secs()
-                    )
-                })?
-                .map_err(|e| format!("dialling {} failed: {e}", peer.name))?;
-        self.connections
-            .lock()
-            .unwrap()
-            .insert(peer.pub_key.clone(), dialled.clone());
-        Ok(dialled)
+                    ));
+                }
+            };
+        let generation = self
+            .next_connection_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.connections.lock().unwrap().insert(
+            peer.pub_key.clone(),
+            CachedConnection {
+                conn: dialled.clone(),
+                generation,
+            },
+        );
+        Ok(CachedConnection {
+            conn: dialled,
+            generation,
+        })
     }
 
-    fn cached_live(&self, pub_key: &str) -> Option<iroh::endpoint::Connection> {
-        let conn = self.connections.lock().unwrap().get(pub_key).cloned()?;
+    fn cached_live(&self, pub_key: &str) -> Option<CachedConnection> {
+        let cached = self.connections.lock().unwrap().get(pub_key).cloned()?;
         // `close_reason()` is NOT a liveness test on its own — it stays None for a peer that is
         // already gone — but a Some(_) is conclusive, so it is the right reuse gate.
-        if conn.close_reason().is_none() {
-            Some(conn)
+        if cached.conn.close_reason().is_none() {
+            Some(cached)
         } else {
-            self.connections.lock().unwrap().remove(pub_key);
+            // A zombie dropped from our map alone is still live inside the endpoint; closing it is
+            // what keeps the next dial a fresh one rather than the same dead connection.
+            self.evict(pub_key, cached.generation);
             None
         }
     }
 
-    fn evict(&self, pub_key: &str) {
-        self.connections.lock().unwrap().remove(pub_key);
+    /// Drop the cached connection, CLOSING it first. Our map is not where a wedged peer lives:
+    /// iroh holds a connection per node, and a handle dropped without closing leaves the endpoint
+    /// still offering the dead one — so a peer that moved address could only be re-dialled after a
+    /// process restart. Closing is what makes the next dial a real one.
+    fn evict(&self, pub_key: &str, generation: u64) {
+        let mut cached = self.connections.lock().unwrap();
+        if cached.get(pub_key).map(|c| c.generation) != Some(generation) {
+            return;
+        }
+        if let Some(stale) = cached.remove(pub_key) {
+            stale.conn.close(0u8.into(), b"re-dialling this peer");
+        }
     }
 
-    /// One JSON round trip: dial, send the header and body frames, read the response header, then
-    /// read the JSON body to FIN.
+    /// The declared `host:port`, resolved now. IPv4 only: the transport binds
+    /// `0.0.0.0:ISA_P2P_PORT`, so an AAAA answer would name a port nothing is listening on.
+    /// Bounded: a stalled resolver must not hold a dial hostage.
+    async fn resolve_advertised(host: &str) -> Option<std::net::SocketAddr> {
+        let lookup_host = host.to_string();
+        let lookup = tokio::task::spawn_blocking(move || {
+            use std::net::ToSocketAddrs;
+            lookup_host
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut all| all.find(|a| a.is_ipv4()))
+        });
+        tokio::time::timeout(crate::p2p::advertise::RESOLVE_DEADLINE, lookup)
+            .await
+            .ok()
+            .and_then(|done| done.ok())
+            .flatten()
+    }
+
+    /// One JSON round trip: dial, send the header and body frames, read the response header,
+    /// then read the JSON body to FIN.
     pub async fn round_trip(
         &self,
         peer: &Peer,
@@ -222,14 +301,14 @@ impl Transport {
         header: &RequestHeader,
         body: Option<&[u8]>,
     ) -> Result<(ResponseHeader, Vec<u8>), String> {
-        let conn = self.connection_for(peer).await?;
-        let result = tokio::time::timeout(DEADLINE, self.exchange_json(&conn, header, body))
+        let used = self.connection_for(peer).await?;
+        let result = tokio::time::timeout(DEADLINE, self.exchange_json(&used.conn, header, body))
             .await
             .map_err(|_| format!("{} timed out after {}s", header.path, DEADLINE.as_secs()))?;
         if let Err(e) = &result {
             // A failed exchange may have been a dead connection: evict so the next call dials.
             if is_connection_death(e) {
-                self.evict(&peer.pub_key);
+                self.evict(&peer.pub_key, used.generation);
             }
         }
         result
@@ -306,11 +385,7 @@ impl Transport {
         range: Option<&str>,
         mapping: Option<&str>,
     ) -> Result<(ResponseHeader, Vec<u8>), String> {
-        let outcome = self.byte_request_on(peer, path, range, mapping).await;
-        if outcome.is_err() {
-            self.evict(&peer.pub_key);
-        }
-        outcome
+        self.byte_request_on(peer, path, range, mapping).await
     }
 
     /// The header has a shorter deadline, and the body streams to FIN with none at all — a 4K
@@ -322,7 +397,28 @@ impl Transport {
         range: Option<&str>,
         mapping: Option<&str>,
     ) -> Result<(ResponseHeader, Vec<u8>), String> {
-        let conn = self.connection_for(peer).await?;
+        let used = self.connection_for(peer).await?;
+        match self
+            .byte_request_over(peer, &used, path, range, mapping)
+            .await
+        {
+            Ok(outcome) => Ok(outcome),
+            Err(e) => {
+                self.evict(&peer.pub_key, used.generation);
+                Err(e)
+            }
+        }
+    }
+
+    async fn byte_request_over(
+        &self,
+        peer: &Peer,
+        used: &CachedConnection,
+        path: &str,
+        range: Option<&str>,
+        mapping: Option<&str>,
+    ) -> Result<(ResponseHeader, Vec<u8>), String> {
+        let conn = &used.conn;
         let header = RequestHeader {
             path: path.to_string(),
             range: range.map(|r| r.to_string()),

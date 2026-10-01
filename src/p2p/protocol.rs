@@ -187,6 +187,7 @@ pub async fn handle_redeem(caller_pub: &str, body: &[u8]) -> (u16, Value) {
                 first_seen_at: crate::config::iso_now(),
                 relay_hint: None,
                 last_addrs: None,
+                advertised_host: None,
             }),
         }
     }

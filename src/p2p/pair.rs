@@ -36,6 +36,10 @@ pub struct Ticket {
     pub relay: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub addrs: Option<Vec<String>>,
+    /// The DECLARED address as written — `photos.example.com:8300` — so a receiver can resolve
+    /// the hostname itself when the IP behind it moves. Additive: an older redeemer ignores it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub host: Option<String>,
     pub secret: String,
 }
 
@@ -101,6 +105,7 @@ pub async fn mint_pairing(transport: &Transport, store: &Store) -> (String, i64)
         pub_key: transport.public_key(),
         relay: transport.relay_url(),
         addrs: Some(crate::p2p::advertise::advertised_addresses(transport).await),
+        host: crate::p2p::advertise::declared_host(),
         secret: code,
     };
     if ticket.addrs.as_ref().map(|a| a.is_empty()).unwrap_or(true) {
@@ -235,6 +240,7 @@ pub async fn handle_pair(transport: &Transport, caller_pub: &str, body: &[u8]) -
                 first_seen_at: crate::config::iso_now(),
                 relay_hint: None,
                 last_addrs: None,
+                advertised_host: None,
             }),
         }
     }
@@ -282,6 +288,7 @@ pub async fn redeem_pairing(
         first_seen_at: crate::config::iso_now(),
         relay_hint: ticket.relay.clone(),
         last_addrs: ticket.addrs.clone(),
+        advertised_host: ticket.host.clone(),
     };
     let body = json!({
         "code": ticket.secret,
@@ -322,24 +329,37 @@ pub async fn redeem_pairing(
         .to_string();
 
     // Record the link we just proved. The identity came from the CONNECTION, so `ticket.pub_key`
-    // is what we dialled and what the far end proved it holds.
+    // is what we dialled and what the far end proved it holds. A ticket carries hints minted just
+    // now, so a peer that already exists takes them too — a DDNS name that moved, or a port
+    // forward that changed, is reachable again without unlinking first.
+    let name = linked.clone();
+    let version = answer
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let protocol = answer.get("protocol").and_then(|p| p.as_i64());
     {
         let mut collections = state().collections();
-        if !collections
+        match collections
             .peers
-            .iter()
-            .any(|p| p.pub_key == ticket.pub_key)
+            .iter_mut()
+            .find(|p| p.pub_key == ticket.pub_key)
         {
-            collections.peers.push(Peer {
-                name: linked.clone(),
-                version: answer
-                    .get("version")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
-                protocol: answer.get("protocol").and_then(|p| p.as_i64()),
+            Some(known) => {
+                known.name = name;
+                known.version = version;
+                known.protocol = protocol;
+                known.relay_hint = ticket.relay.clone();
+                known.last_addrs = ticket.addrs.clone();
+                known.advertised_host = ticket.host.clone();
+            }
+            None => collections.peers.push(Peer {
+                name,
+                version,
+                protocol,
                 features: None,
                 ..peer.clone()
-            });
+            }),
         }
     }
     let _ = state().save();
@@ -448,6 +468,7 @@ mod tests {
             pub_key: "A".repeat(43),
             relay: Some("https://relay.example/".into()),
             addrs: Some(vec!["1.2.3.4:8300".into()]),
+            host: Some("home.example.com:8300".into()),
             secret: "s3cret".into(),
         };
         let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_string(&ticket).unwrap());
@@ -470,6 +491,7 @@ mod tests {
                 pub_key: "B".repeat(43),
                 relay: None,
                 addrs: None,
+                host: None,
                 secret: "s".into(),
             })
             .unwrap(),

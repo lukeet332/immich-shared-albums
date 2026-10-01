@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 /// The shape this build writes. A store at any other version is either migrated by the numbered
 /// chain below or refused — never guessed at.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// How many panel visits a queued audit line is worth before this build stops asking. Small on
 /// purpose: a line whose album cannot be written is almost always one whose album is gone.
@@ -154,6 +154,10 @@ pub struct Peer {
     pub relay_hint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_addrs: Option<Vec<String>>,
+    /// The DECLARED address as written by the peer — the hostname it keeps current, resolved
+    /// fresh each dial because the IP behind a DDNS name moves.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub advertised_host: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -349,6 +353,13 @@ impl Store {
             conn.execute_batch("DELETE FROM published_albums;")?;
             set_user_version(&conn, 4)?;
             current = 4;
+        }
+        // v4 -> v5: the peer's DECLARED address (the hostname it keeps current). Empty for
+        // peers already stored — a hint from a fresh pairing or join fills it again.
+        if current == 4 {
+            add_column_if_missing(&conn, "peers", "advertisedHost", "TEXT")?;
+            set_user_version(&conn, 5)?;
+            current = 5;
         }
         if current != SCHEMA_VERSION {
             return Err(StoreError::SchemaVersion {
@@ -904,7 +915,7 @@ impl Store {
         let peers: Vec<Peer> = {
             let conn = self.conn.lock().unwrap();
             let mut stmt = conn.prepare(
-                "SELECT pub, name, version, protocol, features, via, firstSeenAt, relayHint, lastAddrs FROM peers",
+                "SELECT pub, name, version, protocol, features, via, firstSeenAt, relayHint, lastAddrs, advertisedHost FROM peers",
             )?;
             let rows = stmt.query_map([], |r| {
                 Ok(Peer {
@@ -921,6 +932,7 @@ impl Store {
                     last_addrs: r
                         .get::<_, Option<String>>(8)?
                         .and_then(|s| serde_json::from_str(&s).ok()),
+                    advertised_host: r.get(9)?,
                 })
             })?;
             rows.filter_map(|r| r.ok()).collect()
@@ -1048,13 +1060,14 @@ impl Store {
         tx.execute("DELETE FROM peers", [])?;
         for p in &state.peers {
             tx.execute(
-                "INSERT INTO peers (pub, name, version, protocol, features, via, firstSeenAt, relayHint, lastAddrs)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                "INSERT INTO peers (pub, name, version, protocol, features, via, firstSeenAt, relayHint, lastAddrs, advertisedHost)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
                 rusqlite::params![
                     p.pub_key, p.name, p.version, p.protocol,
                     p.features.as_ref().map(|f| serde_json::to_string(f).unwrap_or_default()),
                     p.via, p.first_seen_at, p.relay_hint,
                     p.last_addrs.as_ref().map(|a| serde_json::to_string(a).unwrap_or_default()),
+                    p.advertised_host,
                 ],
             )?;
         }
@@ -1190,7 +1203,8 @@ fn create_schema(conn: &Connection) -> Result<(), StoreError> {
           via TEXT NOT NULL,
           firstSeenAt TEXT NOT NULL,
           relayHint TEXT,
-          lastAddrs TEXT
+          lastAddrs TEXT,
+          advertisedHost TEXT
         );
         CREATE TABLE IF NOT EXISTS mappings (
           id TEXT PRIMARY KEY,
@@ -1411,7 +1425,7 @@ mod tests {
     fn a_fresh_store_is_stamped_with_the_schema_version() {
         let s = store();
         assert_eq!(s.user_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 4);
+        assert_eq!(SCHEMA_VERSION, 5);
     }
 
     #[test]
@@ -1471,7 +1485,7 @@ mod tests {
         match Store::open(dir.to_str().unwrap()).err() {
             Some(StoreError::SchemaVersion {
                 found: 99,
-                expected: 4,
+                expected: SCHEMA_VERSION,
             }) => {}
             other => panic!("expected a v99 refusal, got {other:?}"),
         }
