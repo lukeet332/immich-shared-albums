@@ -211,7 +211,14 @@ impl Transport {
                     )
                     .await
                     {
-                        Ok(Ok(conn)) => return Ok(self.install(peer, conn)),
+                        Ok(Ok(conn)) => {
+                            // The declared address ANSWERED, so it is the peer's current address —
+                            // our own fact, not one iroh reports. Recording it keeps the stored
+                            // hints true, so a later dial has a live address to fall back on
+                            // rather than the one minted when the link was made.
+                            self.remember_answered_address(&peer.pub_key, resolved);
+                            return Ok(self.install(peer, conn));
+                        }
                         Ok(Err(e)) => crate::log!(
                             "the declared address of \"{}\" did not answer ({e}) — dialling the stored addresses",
                             peer.name
@@ -251,8 +258,7 @@ impl Transport {
         Ok(self.install(peer, dialled))
     }
 
-    /// Cache a freshly dialled connection under a NEW generation, and hand the caller both: a
-    /// failed request may only evict the generation it actually used.
+    /// The cached connection for this peer, if it is still worth handing out.
     fn cached_live(&self, pub_key: &str) -> Option<CachedConnection> {
         let cached = self.connections.lock().unwrap().get(pub_key).cloned()?;
         // `close_reason()` is NOT a liveness test on its own — it stays None for a peer that is
@@ -265,6 +271,21 @@ impl Transport {
             self.evict(pub_key, cached.generation);
             None
         }
+    }
+
+    /// Record an address that has just answered as this peer's current one.
+    fn remember_answered_address(&self, peer_pub: &str, answered: std::net::SocketAddr) {
+        let mut collections = crate::state::state().collections();
+        let Some(peer) = collections.peers.iter_mut().find(|p| p.pub_key == peer_pub) else {
+            return;
+        };
+        let next = promote_answered_address(peer.last_addrs.as_ref(), answered);
+        if peer.last_addrs.as_deref() == Some(next.as_slice()) {
+            return;
+        }
+        peer.last_addrs = Some(next);
+        drop(collections);
+        let _ = crate::state::state().save();
     }
 
     /// Cache a freshly dialled connection under a NEW generation, and hand the caller both: a
@@ -617,6 +638,27 @@ async fn write_response(
     Ok(())
 }
 
+/// The stored hints after an address has ANSWERED: that address first, then the rest of what was
+/// stored, with duplicates dropped.
+///
+/// Pure, because the interesting part is what it does to a list that may already contain the
+/// answer, and a store write is no place to discover that. An address that answered is the peer's
+/// current one by our own account — it is not learned from the endpoint — so the stored hints stay
+/// true as addresses move, instead of freezing at the moment the link was made.
+fn promote_answered_address(
+    stored: Option<&Vec<String>>,
+    answered: std::net::SocketAddr,
+) -> Vec<String> {
+    let answered = answered.to_string();
+    let mut next = vec![answered.clone()];
+    for hint in stored.into_iter().flatten() {
+        if hint != &answered && !next.contains(hint) {
+            next.push(hint.clone());
+        }
+    }
+    next
+}
+
 /// True when an exchange failed because the peer went away rather than because we gave up.
 pub fn is_connection_death(message: &str) -> bool {
     // A cached connection can sit idle for the minutes a backstop lasts and die without the
@@ -728,6 +770,46 @@ mod tests {
         ));
         assert!(!is_connection_death("/hello timed out after 120s"));
         assert!(!is_connection_death("dialling B failed: timeout"));
+    }
+
+    #[test]
+    fn an_address_that_answered_leads_the_hints_and_is_not_repeated() {
+        // The rule the self-healing store write depends on: what answered comes first, whatever
+        // was stored is kept behind it as fallback, and nothing appears twice.
+        let answered: std::net::SocketAddr = "192.0.2.9:8300".parse().unwrap();
+        assert_eq!(
+            promote_answered_address(None, answered),
+            vec!["192.0.2.9:8300"]
+        );
+
+        // The stale hint that was minted with the link goes behind the one that answered — this is
+        // the whole point: a moved peer's stored address is replaced by its current one.
+        let stored = Some(vec![
+            "192.0.2.9:8300".to_string(),
+            "172.16.0.4:8300".to_string(),
+        ]);
+        assert_eq!(
+            promote_answered_address(stored.as_ref(), answered),
+            vec!["192.0.2.9:8300", "172.16.0.4:8300"]
+        );
+
+        // Already first: the caller compares before writing, so this must be a no-op list.
+        let already = Some(vec!["192.0.2.9:8300".to_string()]);
+        assert_eq!(
+            promote_answered_address(already.as_ref(), answered),
+            vec!["192.0.2.9:8300"]
+        );
+
+        // A new answer moves ahead of the old one rather than joining it.
+        let moved = Some(vec![
+            "192.0.2.9:8300".to_string(),
+            "172.16.0.4:8300".to_string(),
+        ]);
+        let new_answer: std::net::SocketAddr = "192.0.2.40:8300".parse().unwrap();
+        assert_eq!(
+            promote_answered_address(moved.as_ref(), new_answer),
+            vec!["192.0.2.40:8300", "192.0.2.9:8300", "172.16.0.4:8300"]
+        );
     }
 
     #[test]
