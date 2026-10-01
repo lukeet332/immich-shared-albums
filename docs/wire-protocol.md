@@ -13,12 +13,14 @@ certificates, and no listening HTTP surface for peers at all.
 - Dialing needs the key plus hints: `Peer.relayHint`/`Peer.lastAddrs`, which come from the pairing
   ticket or the share page's endpoint token — **hints, never identity**. `Peer.advertisedHost` is
   the third hint: the address the peer declared **as written**, resolved fresh on every dial by
-  `Transport::resolve_advertised` (IPv4, bounded by `advertise::RESOLVE_DEADLINE`). A stored
-  address is refreshed from one that ANSWERS (`promote_answered_address`) — our own fact, not one
-  the endpoint reports — so the hints stay true as addresses move instead of freezing at the moment
-  the link was made. The declared address leads the dial list, with `Peer.lastAddrs` behind it for
-  when the declared one is wrong or unreachable: the deadline is spent in order, so a stale
-  address ahead of a live one costs the whole budget.
+  `Transport::resolve_advertised` (IPv4, bounded by `advertise::RESOLVE_DEADLINE`). Two dials,
+  serialized per peer (`dial_locks`): the declared address **alone** under
+  `DECLARED_DIAL_DEADLINE`, then `Peer.lastAddrs` under `DIAL_DEADLINE` if the declared one does
+  not resolve, fails, or times out. They are separate because the stored hints are often dead, and
+  a stale address sharing a list with a live one spends the whole budget. A stored address is
+  refreshed when the **declared** address answers (`promote_answered_address`) — our own fact, not
+  one the endpoint reports — so the hints stay true as addresses move instead of freezing at the
+  moment the link was made.
 - Connections are cached per peer and redialed when they close — including when one turns out to
   be a zombie after its peer restarted, which `closeReason()` alone does not report (see _Pushed
   refs report partial success_). The accept loop hands `p2p/routes.rs` the caller's proven key
