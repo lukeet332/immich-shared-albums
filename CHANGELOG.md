@@ -5,6 +5,16 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## [1.2.2](https://github.com/lukeet332/immich-shared-albums/compare/v1.2.1...v1.2.2) (2026-10-01)
+
+
+### Bug Fixes
+
+* a declared hostname travels with the link, so a DDNS move keeps it reachable ([#176](https://github.com/lukeet332/immich-shared-albums/issues/176)) ([343c24f](https://github.com/lukeet332/immich-shared-albums/commit/343c24f87c28d6ea23aed2bf731741fb465145fc))
+* a withdrawal is confirmed before the mirror dies ([#174](https://github.com/lukeet332/immich-shared-albums/issues/174)) ([9dbca1f](https://github.com/lukeet332/immich-shared-albums/commit/9dbca1fe707ae9db30ae6869f12b15983469da4e))
+* keep the stored addresses behind a declared one, and dial one peer at a time ([#178](https://github.com/lukeet332/immich-shared-albums/issues/178)) ([8f54d9d](https://github.com/lukeet332/immich-shared-albums/commit/8f54d9d5e6fbcbdab0185f6af5f2cfd1e2909bea))
+* refresh a stored hint from the address that answers ([#180](https://github.com/lukeet332/immich-shared-albums/issues/180)) ([2396cbd](https://github.com/lukeet332/immich-shared-albums/commit/2396cbdb33785e020da44840d8327577fde39cdb))
+
 ## [1.2.1](https://github.com/lukeet332/immich-shared-albums/compare/v1.2.0...v1.2.1) (2026-09-29)
 
 
