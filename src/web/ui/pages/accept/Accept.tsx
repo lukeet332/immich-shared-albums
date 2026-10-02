@@ -197,7 +197,7 @@ export const Accept = ({ household }: { household: string }) => {
         <Button
           id="joinseparate"
           fill="outlined"
-          className="isa-hero-secondary"
+          class="isa-hero-secondary"
           disabled={joinInProgress}
           onClick={() => acceptInvite()}
         >
