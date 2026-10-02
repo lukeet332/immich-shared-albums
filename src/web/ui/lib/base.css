@@ -57,18 +57,31 @@ h3 {
   font-weight: 600;
   letter-spacing: -0.02em;
 }
+/* A household name is operator-supplied and can be a hostname; it must wrap, not push the page
+   sideways. The same goes for every peer and album name the panel prints. */
 .isa-page-household {
   color: var(--isa-ink-muted);
   font-weight: 400;
+  overflow-wrap: anywhere;
 }
 .isa-page-lede {
   color: var(--isa-ink-muted);
   font-size: 13.5px;
   margin: 0 0 var(--isa-space-6);
+  overflow-wrap: anywhere;
 }
 
 /* Every interactive thing on the page, on one keyboard. */
 :where(button, a, input, select, [tabindex]):focus-visible {
   outline: 2px solid var(--isa-accent);
   outline-offset: 2px;
+}
+
+/* A title and a household name long enough to wrap leave the title too wide for the narrowest
+   phone, so it steps down with them. ui.css cannot hold this rule: it is inlined BEFORE this file,
+   and a same-specificity rule there always loses to the one here. */
+@media (max-width: 420px) {
+  .isa-page-title {
+    font-size: 20px;
+  }
 }

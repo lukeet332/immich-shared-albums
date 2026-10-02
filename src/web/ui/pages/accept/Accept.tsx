@@ -5,7 +5,8 @@ import { readInvite } from './fragment.ts';
 import { join, preview, whoami, type JoinResult, type Me, type Reunion } from './api.ts';
 import { OpenInApp } from './OpenInApp.tsx';
 
-// #who/#go/#out (and #openapp) are a TEST CONTRACT — the browser lane drives them. Keep them.
+// #who/#go/#out/#reunion/#joinseparate (and #openapp in OpenInApp.tsx) are a TEST CONTRACT —
+// the browser lane drives them. Keep them.
 
 /** How often to re-check whether they have signed in, while this page waits. */
 const SIGN_IN_POLL_MS = 2500;

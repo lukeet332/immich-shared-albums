@@ -167,12 +167,11 @@ export const App = () => {
   const reunifiedAlbums = albums?.filter(a => a.reunified) ?? [];
 
   return (
-    // A fragment, not a <main>: the prerendered document (document.tsx) already provides the page's
-    // one <main>, and nesting a second inside it is invalid, announces two landmarks, and applies
-    // the page padding twice — which is why this page once sat 40px lower than its siblings.
+    // A fragment, not a <main>: document.tsx already provides the page's one <main>, and a second
+    // inside it is invalid and announces two landmarks.
     <>
       <div class="isa-page-head">
-        <span class="isa-page-title">🔗 Shared albums</span>
+        <h1 class="isa-page-title">🔗 Shared albums</h1>
         <span class="isa-page-household">· {household || '…'}</span>
       </div>
       <p class="isa-page-lede">

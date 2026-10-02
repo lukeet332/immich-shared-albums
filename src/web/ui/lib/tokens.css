@@ -27,7 +27,6 @@
   --isa-danger: #c5221f;
   --isa-danger-surface: #fce8e6;
   --isa-ok: #137333;
-  --isa-ok-surface: #e6f4ea;
 
   /* The switch's own four values: the thumb grows when pressed and the track alone cannot express
      that, so the two states are separate colours rather than one inverted. */
@@ -101,10 +100,13 @@
     --isa-danger: #f28b82;
     --isa-danger-surface: #3a1d1d;
     --isa-ok: #81c995;
-    --isa-ok-surface: #0f2e22;
 
     --isa-switch-track-off: #44474d;
     --isa-switch-thumb-off: #b7bcc4;
+    /* The "on" pair follows the dark accent, and is restated here rather than inherited: each
+       scheme has to stand on its own for check-contrast.mjs to measure it. */
+    --isa-switch-track-on: var(--isa-accent);
+    --isa-switch-thumb-on: var(--isa-accent-ink);
 
     --isa-state-hover: rgba(232, 234, 237, 0.08);
     --isa-state-press: rgba(232, 234, 237, 0.12);

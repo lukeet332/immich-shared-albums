@@ -1,11 +1,10 @@
-/** web/ui/lib/Button.tsx — the one button, in the six fills the panels use. See design-system.md. */
+/** web/ui/lib/Button.tsx — the one button, in the fills the panels use. See design-system.md. */
 import type { JSX } from 'preact';
 
-/** Filled is the one action on screen, tonal and outlined are its neighbours, danger is for the
+/** Filled is the one action on screen, outlined and text are its neighbours, danger is for the
  *  destructive row and the destructive confirmation. */
 const FILLS = {
   filled: 'isa-btn--filled',
-  tonal: 'isa-btn--tonal',
   outlined: 'isa-btn--outlined',
   text: 'isa-btn--text',
   danger: 'isa-btn--danger',
@@ -14,6 +13,9 @@ const FILLS = {
 
 export type ButtonFill = keyof typeof FILLS;
 
+/** Not a ref-forwarding component, deliberately: Preact gives a function component's ref its own
+ *  wrapper rather than the DOM node, and a caller that wants the node to focus it has to hold a host
+ *  element. `confirm.tsx` is that caller, and it writes the button out itself for the reason. */
 export const Button = ({
   fill = 'filled',
   className,

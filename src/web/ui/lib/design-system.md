@@ -8,9 +8,14 @@ The layers below are the whole vocabulary; a rule that is not here is a rule a p
 | File                  | Owns                                                                                                                                                                       |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tokens.css`          | Every colour, radius, space step and duration, in both schemes. The only file under `src/web/ui` allowed a colour literal (`scripts/check-tokens.mjs`).                    |
-| `ui.css`              | The shared components, every one used by two pages or more: card, section, row, button, field, setting, switch, notice, dialog, spinner, keyframes.                             |
+| `ui.css`              | The shared components: card, section, row, button, field, setting, switch, notice, dialog, spinner, keyframes. A page styles itself from here plus its own stylesheet.           |
 | `base.css`            | The document shell our own pages render into — `body`, `main`, the heading reset, `.isa-page-*`, the focus ring. Imports `ui.css`.                                           |
 | `<page>.css`          | Only what is that page's. Every page imports `base.css`; `share.css` imports `ui.css` directly, because its document frames Immich's page and must not restyle it.               |
+
+`ui.css` is inlined **before** `base.css` — it is what `base.css` imports — so a rule in `ui.css`
+that a `base.css` rule of the same specificity also names always loses to it. Narrow-screen overrides
+for `.isa-page-*` therefore live in `base.css`, and the `@media` block at the end of `ui.css` carries
+only selectors `base.css` does not declare.
 
 `--isa-accent` is load-bearing outside this file: `demo/e2e/browser-test.mjs` asserts a signed-out
 page's CTA computes to `rgb(66, 80, 175)`. Changing the light accent changes that contract.
@@ -26,9 +31,13 @@ page's CTA computes to `rgb(66, 80, 175)`. Changing the light accent changes tha
 | `Notice`        | `#notice`, the snackbar, `role=status`/`alert`            | me `App.tsx`                                         |
 | `confirm.tsx`   | `Confirm` — the one dialog, `.isa-scrim` + `.isa-dialog`   | me, panel                                            |
 
-`Button`'s `fill` is the only knob: `filled`, `tonal`, `outlined`, `text`, `danger`, `dangerFilled`.
+`Button`'s `fill` is the only knob: `filled`, `outlined`, `text`, `danger`, `dangerFilled`.
 Destructive in a list is `danger` (tonal) so a page of rows is not a wall of red; the filled
 `dangerFilled` is for a confirmation, where the action is the only thing on screen.
+
+`Button` does **not** forward a `ref`. Preact hands a function component's ref its own wrapper, not
+the DOM node, and `confirm.tsx` — the one caller that needs the node, to take the caret — writes its
+confirm button out as a host `<button>` instead. Anything else that needs the node does the same.
 
 ## The switch
 
@@ -36,8 +45,8 @@ Destructive in a list is `danger` (tonal) so a page of rows is not a wall of red
   element and no `div` with a click handler: the keyboard, the form and assistive technology get the
   control they already understand.
 - `role="switch"` is what announces it as on/off rather than checked/unchecked.
-- Track 52x32, thumb 16 unselected and 24 selected, at Material's centres (16dp and 36dp from the
-  left edge) so the thumb never leaves the track; pressing grows it to 28 about its own centre.
+- Track 52x32. Thumb 16 unselected and 24 selected, centred at Material's 16dp and 36dp; pressing
+  grows it to 28 about that same centre, so it never slides.
 - The whole row is the target: `Setting` wraps the control in a `<label>`, so nobody has to hit 52
   pixels of switch.
 
@@ -55,8 +64,9 @@ Destructive in a list is `danger` (tonal) so a page of rows is not a wall of red
 - Two curves, Google's: `--isa-ease-standard` for anything that settles, `--isa-ease-emphasized`
   for an entrance or a press that has to feel answered. Three durations: `--isa-duration-short`,
   `-medium`, `-long`.
-- Entrances (`isa-rise-in`), the sheet (`isa-sheet-in`), the dialog (`isa-dialog-in`) and the notice
-  (`isa-notice-in`) are the only animations. They arrive, and then they are gone.
+- Four arrivals — the card (`isa-rise-in`), the sheet (`isa-sheet-in`), the dialog (`isa-dialog-in`,
+  with its scrim's `isa-fade-in`) and the notice (`isa-notice-in`) — and one loop, the spinner
+  (`isa-spin`). Everything else arrives and is then still.
 - Buttons carry a state layer (`.isa-btn::after`, 8% hover / 12% pressed) rather than a colour swap;
   the switch answers a press by growing both its thumb and its halo.
 - `prefers-reduced-motion: reduce` collapses all of it, scoped to `.isa-page` — the class

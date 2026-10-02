@@ -102,6 +102,7 @@
   color: var(--isa-ink-muted);
   font-size: 12.5px;
   margin-top: 2px;
+  overflow-wrap: anywhere;
 }
 .isa-row-action {
   flex: none;
@@ -117,6 +118,7 @@
   font-size: 13px;
   flex: 1 1 200px;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* A row that goes somewhere: the whole row is the target and the chevron says so. */
@@ -197,10 +199,6 @@
   background: var(--isa-accent);
   color: var(--isa-accent-ink);
   box-shadow: var(--isa-shadow-1);
-}
-.isa-btn--tonal {
-  background: var(--isa-accent-container);
-  color: var(--isa-accent);
 }
 .isa-btn--outlined {
   border: 1px solid var(--isa-outline);
@@ -305,9 +303,10 @@ select.isa-field {
 
 /* ── the switch ─────────────────────────────────────────────────────────────────────────────── */
 /* The REAL checkbox, drawn as a Material switch: no replacement element, so the keyboard, the
-   form and every assistive technology already understand it. The thumb's resting places are
-   Material's — a 16dp disc centred 16dp from the left edge, a 24dp disc centred 36dp from it — so
-   the track stays 52x32 in every state and the thumb never leaves it. */
+   form and every assistive technology already understand it. The thumb's resting CENTRES are
+   Material's — 16dp from the left edge unselected, 36dp selected — and every `left` below is that
+   centre minus the border minus the radius, because `::after` is placed against the PADDING box.
+   So: 16 − 2 − 8 = 6, and 36 − 2 − 12 = 22. The track is 52x32 in every state, thumb never leaves. */
 .isa-switch {
   appearance: none;
   -webkit-appearance: none;
@@ -329,7 +328,7 @@ select.isa-field {
   content: '';
   position: absolute;
   top: 50%;
-  left: 8px;
+  left: 6px;
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -349,18 +348,18 @@ select.isa-field {
 .isa-switch:checked::after {
   width: 24px;
   height: 24px;
-  left: 24px;
+  left: 22px;
   background: var(--isa-switch-thumb-on);
 }
 /* Pressing grows the thumb under the finger, the way Google's does, and grows it about its own
-   centre — which is why the left edge steps BACK by half of what the width gains. */
+   centre — so the left edge steps BACK by half of what the width gains: 16 − 14 = 0, 36 − 14 = 20. */
 .isa-switch:active::after {
   width: 28px;
   height: 28px;
-  left: 2px;
+  left: 0;
 }
 .isa-switch:checked:active::after {
-  left: 18px;
+  left: 20px;
 }
 .isa-switch:hover {
   box-shadow: 0 0 0 8px var(--isa-state-hover);
@@ -429,9 +428,11 @@ select.isa-field {
   flex: none;
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
-  margin: -8px -8px -8px 0;
+  /* A thumb-sized target inside a snackbar that stays thumb-sized: the negative margins cancel the
+     padding around it, so the × is 44px to hit without making the bar 44px taller than it is. */
+  width: var(--isa-touch);
+  height: var(--isa-touch);
+  margin: calc(-1 * var(--isa-space-3)) calc(-1 * var(--isa-space-2)) calc(-1 * var(--isa-space-3)) 0;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -555,6 +556,8 @@ select.isa-field {
 }
 
 /* ── narrow screens ─────────────────────────────────────────────────────────────────────────── */
+/* Only rules whose base selector is NOT declared in base.css may live here: esbuild inlines
+   base.css AFTER this file, so a same-specificity rule in both always loses to base.css's. */
 @media (max-width: 420px) {
   :root {
     --isa-pad-card: 16px;
@@ -571,8 +574,5 @@ select.isa-field {
   }
   .isa-row-action .isa-btn {
     width: 100%;
-  }
-  .isa-page-title {
-    font-size: 20px;
   }
 }

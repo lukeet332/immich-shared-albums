@@ -15,7 +15,6 @@ const PAIRS = [
   ['ink', 'surface'],
   ['ink', 'sunken'],
   ['ink', 'surface-sunken-strong'],
-  ['ink', 'ok-surface'],
   ['ink', 'danger-surface'],
   ['ink-muted', 'surface'],
   ['ink-muted', 'sunken'],
@@ -27,9 +26,9 @@ const PAIRS = [
   ['danger', 'surface'],
   ['danger', 'danger-surface'],
   ['ok', 'surface'],
-  ['ok', 'ok-surface'],
-  // The switch's moving part against the track it moves on: a shape, not a word.
+  // The switch's moving part against the track it moves on, in BOTH states: a shape, not a word.
   ['switch-thumb-off', 'switch-track-off', SHAPE],
+  ['switch-thumb-on', 'switch-track-on', SHAPE],
 ];
 
 const css = fs.readFileSync(CSS, 'utf8');

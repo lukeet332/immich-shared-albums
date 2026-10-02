@@ -10,9 +10,8 @@ export const Switch = ({
   onChange: (next: boolean) => void;
   disabled?: boolean;
 }) => (
-  // The INPUT is the switch: `appearance: none` in ui.css draws the track and thumb on it, so the
-  // keyboard, the form and every assistive technology get the control they already understand.
-  // `role="switch"` is what tells a screen reader this is on/off rather than checked/unchecked.
+  // The INPUT is the switch: ui.css draws the track and the thumb on it with appearance:none, and
+  // role="switch" is what announces it as on/off rather than checked/unchecked.
   <input
     id={id}
     class="isa-switch"

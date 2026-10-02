@@ -8,8 +8,6 @@ export const Notice = ({
   text: string;
   onDismiss: () => void;
 }) => (
-  // A success fades on its own; a failure stays until dismissed, because it is asking for
-  // something. `alert` on a failure is what interrupts; a success waits its turn.
   <div
     id="notice"
     data-kind={kind}

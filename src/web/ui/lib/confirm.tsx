@@ -43,16 +43,19 @@ export const Confirm = ({ ask, onClose }: { ask: Confirmation | null; onClose: (
           <Button fill="text" onClick={onClose}>
             Cancel
           </Button>
-          <Button
+          {/* A host button, not <Button>: this is the one control in the tree that needs the DOM
+              node itself, to take the caret when the dialog opens. See the note on Button. */}
+          <button
+            type="button"
             ref={confirmButton}
-            fill={ask.danger ? 'dangerFilled' : 'filled'}
+            class={`isa-btn ${ask.danger ? 'isa-btn--danger-filled' : 'isa-btn--filled'}`}
             onClick={() => {
               onClose();
               ask.onConfirm();
             }}
           >
             {ask.confirm}
-          </Button>
+          </button>
         </div>
       </div>
     </div>

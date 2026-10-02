@@ -88,79 +88,22 @@ iframe.native-album {
   gap: var(--isa-space-2);
   margin-top: var(--isa-space-4);
 }
-#immich-shared-albums-banner input {
+#immich-shared-albums-banner form .isa-field {
   flex: 1 1 auto;
   min-width: 0;
-  box-sizing: border-box;
-  font: inherit;
-  font-size: 14px;
-  min-height: var(--isa-touch);
-  padding: 0 var(--isa-space-4);
-  border-radius: var(--isa-radius-pill);
-  border: 1px solid transparent;
-  background: var(--isa-sunken);
-  color: var(--isa-ink);
-  outline: none;
-  transition:
-    background var(--isa-duration-short) var(--isa-ease-standard),
-    border-color var(--isa-duration-short) var(--isa-ease-standard),
-    box-shadow var(--isa-duration-short) var(--isa-ease-standard);
-}
-#immich-shared-albums-banner input::placeholder {
-  color: var(--isa-ink-subtle);
-}
-#immich-shared-albums-banner input:focus {
-  background: var(--isa-surface);
-  border-color: var(--isa-accent);
-  box-shadow: 0 0 0 3px var(--isa-focus);
-}
-#immich-shared-albums-banner button.join {
-  flex: none;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  min-height: var(--isa-touch);
-  padding: 0 var(--isa-space-5);
-  border: 0;
-  border-radius: var(--isa-radius-pill);
-  cursor: pointer;
-  background: var(--isa-accent);
-  color: var(--isa-accent-ink);
-  transition:
-    box-shadow var(--isa-duration-short) var(--isa-ease-standard),
-    scale var(--isa-duration-short) var(--isa-ease-standard);
-}
-#immich-shared-albums-banner button.join:hover {
-  box-shadow: var(--isa-shadow-2);
-}
-#immich-shared-albums-banner button.join:active {
-  scale: 0.97;
-}
-#immich-shared-albums-banner button.join[disabled] {
-  opacity: 0.5;
-  cursor: default;
 }
 #immich-shared-albums-banner .dismiss {
   position: absolute;
   top: var(--isa-space-2);
   right: var(--isa-space-2);
-  display: grid;
-  place-items: center;
   width: 44px;
   height: 44px;
   box-sizing: border-box;
   padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: none;
   color: var(--isa-ink-muted);
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background var(--isa-duration-short) var(--isa-ease-standard);
 }
 #immich-shared-albums-banner .dismiss:hover {
-  background: var(--isa-state-hover);
+  color: var(--isa-ink);
 }
 #immich-shared-albums-banner .err {
   margin: var(--isa-space-3) 0 0;

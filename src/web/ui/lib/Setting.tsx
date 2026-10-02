@@ -11,8 +11,6 @@ export const Setting = ({
   /** The control that changes it — a Switch, or a select. */
   children: ComponentChildren;
 }) => (
-  // A label, so the whole row is the target of the control inside it — a 52px switch is a poor
-  // thing to ask anyone to hit on its own.
   <label class="isa-setting">
     <span class="isa-setting-text">
       <span class="isa-setting-label">{label}</span>

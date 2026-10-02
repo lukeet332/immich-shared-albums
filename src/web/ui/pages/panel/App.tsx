@@ -68,7 +68,7 @@ export const App = () => {
   return (
     <>
       <div class="isa-page-head">
-        <span class="isa-page-title">🔗 Shared albums</span>
+        <h1 class="isa-page-title">🔗 Shared albums</h1>
         <span class="isa-page-household">· {data.household.name}</span>
       </div>
       <p class="isa-page-lede">

@@ -36,7 +36,7 @@ export const App = () => {
   return (
     <>
       <div class="isa-page-head">
-        <span class="isa-page-title">🔗 Shared albums</span>
+        <h1 class="isa-page-title">🔗 Shared albums</h1>
       </div>
       <Card>
         {/* `choice` alongside `isa-choice` is a TEST CONTRACT — the browser lane asserts on a.choice. */}
