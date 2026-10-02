@@ -1,5 +1,7 @@
 /** web/ui/pages/panel/App.tsx — composition root of the admin panel. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
+import { Card } from '../../lib/Card.tsx';
+import { Notice } from '../../lib/Notice.tsx';
 import { Confirm, type Confirmation } from '../../lib/confirm.tsx';
 import { overview, unlinkPeer, type Overview, type Peer } from './api.ts';
 import { LinkServer } from './LinkServer.tsx';
@@ -7,12 +9,19 @@ import { ConnectedServers } from './ConnectedServers.tsx';
 import { SharedAlbums } from './SharedAlbums.tsx';
 import { Settings } from './Settings.tsx';
 
+/** What an action did. Said once, in the snackbar: a row that writes its outcome into its own card
+ *  puts the message where the row it describes no longer is — unlinking DELETES the row, so the note
+ *  that unlinking worked left the screen with it. */
+export type Outcome = { kind: 'ok' | 'error'; text: string };
+
+const NOTICE_MS = 6000;
+
 export const App = () => {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState('');
   const [asking, setAsking] = useState<Confirmation | null>(null);
   const [unlinking, setUnlinking] = useState('');
-  const [note, setNote] = useState('');
+  const [notice, setNotice] = useState<Outcome | null>(null);
 
   const load = () =>
     overview()
@@ -22,6 +31,13 @@ export const App = () => {
   useEffect(() => {
     void load();
   }, []);
+
+  // A success fades; a failure stays, because it is asking for something.
+  useEffect(() => {
+    if (notice?.kind !== 'ok') return;
+    const timer = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   const unlink = (peer: Peer) => {
     setAsking({
@@ -34,13 +50,12 @@ export const App = () => {
         // button has to be dead for the duration: the route does not deduplicate, and a second
         // request would come back "unknown household" and print an error over a success.
         setUnlinking(peer.pub);
-        setNote('Unlinking…');
         unlinkPeer(peer.pub)
           .then(r => {
-            setNote(`Unlinked ${r.household}.`);
+            setNotice({ kind: 'ok', text: `Unlinked ${r.household}.` });
             return load();
           })
-          .catch((e: Error) => setNote(`Error: ${e.message}`))
+          .catch((e: Error) => setNotice({ kind: 'error', text: `Could not unlink: ${e.message}` }))
           .finally(() => setUnlinking(''));
       },
     });
@@ -48,20 +63,22 @@ export const App = () => {
 
   if (error) {
     return (
-      <div class="isa-section">
-        <h1 class="isa-page-title">Shared albums</h1>
-        <p class="isa-note isa-note--error">
-          Could not load: {error}. You may need to sign in to Immich as an admin.
-        </p>
-      </div>
+      <>
+        <div class="isa-page-head">
+          <h1 class="isa-page-title">🔗 Shared albums</h1>
+        </div>
+        <Card>Could not load: {error}. You may need to sign in to Immich as an admin.</Card>
+      </>
     );
   }
   if (!data) {
     return (
-      <div class="isa-section">
-        <h1 class="isa-page-title">Shared albums</h1>
+      <>
+        <div class="isa-page-head">
+          <h1 class="isa-page-title">🔗 Shared albums</h1>
+        </div>
         <p class="isa-page-lede">Loading…</p>
-      </div>
+      </>
     );
   }
 
@@ -74,9 +91,10 @@ export const App = () => {
       <p class="isa-page-lede">
         Server-side settings and pairings. <a href="/immich-shared-albums/me">Your own shared albums →</a>
       </p>
-      <LinkServer onLinked={load} />
+      {notice && <Notice kind={notice.kind} text={notice.text} onDismiss={() => setNotice(null)} />}
+      <LinkServer onLinked={load} onOutcome={setNotice} />
       <SharedAlbums albums={data.albums} />
-      <ConnectedServers peers={data.peers} onUnlink={unlink} unlinking={unlinking} note={note} />
+      <ConnectedServers peers={data.peers} onUnlink={unlink} unlinking={unlinking} />
       <Settings />
       <Confirm ask={asking} onClose={() => setAsking(null)} />
     </>

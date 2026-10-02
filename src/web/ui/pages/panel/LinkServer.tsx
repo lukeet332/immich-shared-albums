@@ -3,24 +3,30 @@ import { useState } from 'preact/hooks';
 import { Button } from '../../lib/Button.tsx';
 import { Card } from '../../lib/Card.tsx';
 import { mintLink, redeemLink } from './api.ts';
+import type { Outcome } from './App.tsx';
 
-export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
+export const LinkServer = ({
+  onLinked,
+  onOutcome,
+}: {
+  onLinked: () => void;
+  /** Where an action's outcome goes: the snackbar the panel already owns, not a line in this card. */
+  onOutcome: (outcome: Outcome) => void;
+}) => {
   const [link, setLink] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState(0);
   const [showPasteBox, setShowPasteBox] = useState(false);
   const [theirLink, setTheirLink] = useState('');
-  const [note, setNote] = useState('');
-  const [copyLabel, setCopyLabel] = useState('Copy');
+  const [copied, setCopied] = useState(false);
 
   const createLink = async () => {
-    setNote('Creating…');
     try {
       const minted = await mintLink();
       setLink(minted.link);
       setExpiresAt(minted.expiresAt);
-      setNote('');
+      onOutcome({ kind: 'ok', text: 'Pairing link created — it is shown once.' });
     } catch (err) {
-      setNote(`Error: ${(err as Error).message}`);
+      onOutcome({ kind: 'error', text: `Could not create a link: ${(err as Error).message}` });
     }
   };
 
@@ -30,23 +36,26 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
     // people running the simplest setups.
     try {
       await navigator.clipboard.writeText(link!);
-      setCopyLabel('Copied');
+      setCopied(true);
+      onOutcome({ kind: 'ok', text: 'Link copied to your clipboard.' });
     } catch {
       (document.getElementById('pairlink') as HTMLInputElement | null)?.select();
-      setCopyLabel('Press Ctrl/Cmd+C');
+      onOutcome({ kind: 'error', text: 'Clipboard is blocked here — the link is selected, copy it.' });
     }
   };
 
   const redeemTheirLink = async (event: Event) => {
     event.preventDefault();
-    setNote('Linking…');
     try {
       const linked = await redeemLink(theirLink);
-      setNote(`Linked with ${linked.linked} — their people can now be invited to albums.`);
+      onOutcome({
+        kind: 'ok',
+        text: `Linked with ${linked.linked} — their people can now be invited to albums.`,
+      });
       setTheirLink('');
       onLinked();
     } catch (err) {
-      setNote(`Error: ${(err as Error).message}`);
+      onOutcome({ kind: 'error', text: `Could not link: ${(err as Error).message}` });
     }
   };
 
@@ -65,13 +74,13 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
 
         {link && (
           <div class="isa-stack">
-            <p class="isa-note">
+            <p class="isa-setting-description">
               Send it now: one use, {minutesLeft} minute{minutesLeft === 1 ? '' : 's'} left, and never shown
               again.
             </p>
             <div class="isa-actions">
               <input id="pairlink" class="isa-field" readOnly value={link} />
-              <Button onClick={copyToClipboard}>{copyLabel}</Button>
+              <Button onClick={copyToClipboard}>{copied ? 'Copied' : 'Copy'}</Button>
             </div>
           </div>
         )}
@@ -87,8 +96,6 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
             <Button type="submit">Link servers</Button>
           </form>
         )}
-
-        <div class="isa-note">{note}</div>
       </Card>
     </section>
   );

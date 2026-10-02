@@ -39,6 +39,11 @@
   --isa-state-hover: rgba(32, 33, 36, 0.08);
   --isa-state-press: rgba(32, 33, 36, 0.12);
 
+  /* The snackbar: dark in BOTH schemes, as Google Photos draws it. Inverting the page's ink instead
+     puts a glaring white box on a dark page. */
+  --isa-notice-surface: #31353b;
+  --isa-notice-ink: #e8eaed;
+
   --isa-shadow-1: 0 1px 2px rgba(60, 64, 67, 0.12), 0 1px 3px rgba(60, 64, 67, 0.1);
   --isa-shadow-2: 0 2px 6px rgba(60, 64, 67, 0.14), 0 8px 28px rgba(60, 64, 67, 0.16);
   --isa-shadow-3: 0 6px 16px rgba(60, 64, 67, 0.18), 0 20px 48px rgba(60, 64, 67, 0.24);
@@ -110,6 +115,9 @@
 
     --isa-state-hover: rgba(232, 234, 237, 0.08);
     --isa-state-press: rgba(232, 234, 237, 0.12);
+
+    --isa-notice-surface: #2e333b;
+    --isa-notice-ink: #e8eaed;
 
     --isa-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.45);
     --isa-shadow-2: 0 10px 32px rgba(0, 0, 0, 0.55);

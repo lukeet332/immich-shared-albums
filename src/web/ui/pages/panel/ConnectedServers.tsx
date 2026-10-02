@@ -9,13 +9,11 @@ export const ConnectedServers = ({
   peers,
   onUnlink,
   unlinking,
-  note,
 }: {
   peers: Peer[];
   onUnlink: (peer: Peer) => void;
   /** The `pub` being unlinked right now, so its button cannot submit the same peer twice. */
   unlinking: string;
-  note: string;
 }) => (
   <section class="isa-section">
     <h2 class="isa-section-title">Connected servers</h2>
@@ -47,7 +45,6 @@ export const ConnectedServers = ({
           ))}
         </div>
       )}
-      <div class="isa-note">{note}</div>
     </Card>
   </section>
 );

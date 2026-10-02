@@ -28,7 +28,7 @@ page's CTA computes to `rgb(66, 80, 175)`. Changing the light accent changes tha
 | `Card`          | `<section class="isa-card isa-enter">` with an optional lede   | panel, me, root                                      |
 | `Setting`       | `<label class="isa-setting">` — text, description, control | panel `Settings.tsx`, me `App.tsx`                   |
 | `Switch`        | `<input type="checkbox" role="switch" class="isa-switch">` | panel `Settings.tsx`, me `App.tsx`                   |
-| `Notice`        | `#notice`, the snackbar, `role=status`/`alert`            | me `App.tsx`                                         |
+| `Notice`        | `#notice`, the snackbar, `role=status`/`alert`            | me `App.tsx`, panel `App.tsx` and `LinkServer.tsx`     |
 | `confirm.tsx`   | `Confirm` — the one dialog, `.isa-scrim` + `.isa-dialog`   | me, panel                                            |
 
 `Button`'s `fill` is the only knob: `filled`, `outlined`, `text`, `danger`, `dangerFilled`.
@@ -66,11 +66,25 @@ confirm button out as a host `<button>` instead. Anything else that needs the no
   `-medium`, `-long`.
 - Four arrivals — the card (`isa-rise-in`), the sheet (`isa-sheet-in`), the dialog (`isa-dialog-in`,
   with its scrim's `isa-fade-in`) and the notice (`isa-notice-in`) — and one loop, the spinner
-  (`isa-spin`). Everything else arrives and is then still.
+  (`isa-spin`). Everything else arrives and is then still. The notice also leaves (`isa-notice-out`),
+  in the direction it was swiped.
 - Buttons carry a state layer (`.isa-btn::after`, 8% hover / 12% pressed) rather than a colour swap;
   the switch answers a press by growing both its thumb and its halo.
 - `prefers-reduced-motion: reduce` collapses all of it, scoped to `.isa-page` — the class
   `Document.tsx` puts on `<body>` — so the rule cannot reach the framed Immich page under the banner.
+
+## The snackbar
+
+- `Notice` is how **every** action reports: a card that writes its outcome into itself puts the
+  message where the row it describes no longer is, and unlinking deletes that row.
+- It spans the gutter — `width`, not `max-width` — because a bar that hugs its words wraps a
+  one-line outcome into six, and a phone is the only place it is read.
+- `--isa-notice-surface` is **dark in both schemes**, as Google Photos draws it. Inverting the page's
+  ink instead puts a glaring white box on a dark page.
+- **Three ways out**, because each leaves someone out otherwise: the × , a horizontal swipe
+  (pointer events, so the finger and the mouse are one path), and Escape. A short swipe springs
+  back — a bar that vanishes under a slip is worse than no bar.
+- `touch-action: pan-y` keeps a vertical drag the page's scroll.
 
 ## Narrow screens
 

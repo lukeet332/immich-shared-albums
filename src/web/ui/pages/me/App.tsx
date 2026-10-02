@@ -342,8 +342,8 @@ export const App = () => {
         <h2 class="isa-section-title">Album activity</h2>
         <Card>
           <Setting
-            label="Show what immich-shared-albums did to this album"
-            description="Posted in the album as comments. Off hides them from you only — everyone else still sees them."
+            label="Display bot comments"
+            description="What the addon did is written into the album as comments. Off hides them from you only — everyone else still sees them."
           >
             <Switch id="audit-visible" checked={auditVisible} onChange={next => void onToggleAudit(next)} />
           </Setting>
