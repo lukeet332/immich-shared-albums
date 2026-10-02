@@ -83,6 +83,7 @@ export const Share = () => {
       {!dismissed && (
         <div class="card" role="dialog" aria-label="Join this album with your own Immich server">
           <button
+            type="button"
             class="dismiss"
             aria-label="Continue to the album"
             onClick={() => {

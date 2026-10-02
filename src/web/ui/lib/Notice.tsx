@@ -21,7 +21,7 @@ export const Notice = ({
       {kind === 'ok' ? '✓' : '!'}
     </span>
     <span class="isa-notice-text">{text}</span>
-    <button class="isa-notice-dismiss" aria-label="Dismiss" onClick={onDismiss}>
+    <button type="button" class="isa-notice-dismiss" aria-label="Dismiss" onClick={onDismiss}>
       ×
     </button>
   </div>
