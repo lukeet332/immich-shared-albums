@@ -1,7 +1,9 @@
 /** web/ui/pages/panel/Settings.tsx — the panel-managed settings: shared-link joining, pairing-link
  *  TTL, and storing shared assets locally. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
-import { s } from '../../lib/theme.ts';
+import { Card } from '../../lib/Card.tsx';
+import { Setting } from '../../lib/Setting.tsx';
+import { Switch } from '../../lib/Switch.tsx';
 import { getSettings, saveSettings, type Settings as S } from './api.ts';
 
 const TTL_CHOICES = [
@@ -36,8 +38,7 @@ export const Settings = () => {
     pairingTtlMinutes: pairingTtl,
     storeSharedAssetsLocally: storeLocal,
   });
-  const toggleJoin = () => {
-    const next = !shareLinkJoin;
+  const toggleJoin = (next: boolean) => {
     setShareLinkJoin(next);
     void persist({ ...base(), shareLinkJoin: next });
   };
@@ -46,50 +47,37 @@ export const Settings = () => {
     setPairingTtl(next);
     void persist({ ...base(), pairingTtlMinutes: next });
   };
-  const toggleStore = () => {
-    const next = !storeLocal;
+  const toggleStore = (next: boolean) => {
     setStoreLocal(next);
     void persist({ ...base(), storeSharedAssetsLocally: next });
   };
 
   return (
-    <div style={s.card}>
-      <h2 style={s.cardHeading}>Settings</h2>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14 }}>
-        <input type="checkbox" checked={shareLinkJoin} onChange={toggleJoin} />
-        Allow other Immich users to join albums via shared links
-      </label>
-      <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>
-        Off, share pages are Immich's own and joins are refused. Linked servers and pairing are unaffected.
-      </p>
-      <label
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          cursor: 'pointer',
-          fontSize: 14,
-          marginTop: 12,
-        }}
-      >
-        <input type="checkbox" checked={storeLocal} onChange={toggleStore} />
-        Store shared photos on this server
-      </label>
-      <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>
-        Off, they stream from their owner and use no space here. On, they are copied over in the background
-        and use real disk space. Turning this off does not remove copies already made.
-      </p>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, marginTop: 12 }}>
-        Pairing links stay valid for
-        <select style={s.input} value={pairingTtl} onChange={changeTtl}>
-          {TTL_CHOICES.map(c => (
-            <option key={c.minutes} value={c.minutes}>
-              {c.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <p style={{ ...s.muted, marginTop: 8, fontSize: 12.5 }}>Shown once. Create another if it is lost.</p>
-    </div>
+    <section class="isa-section">
+      <h2 class="isa-section-title">Settings</h2>
+      <Card>
+        <Setting
+          label="Allow other Immich users to join albums via shared links"
+          description="Off, share pages are Immich's own and joins are refused. Linked servers and pairing are unaffected."
+        >
+          <Switch id="share-link-join" checked={shareLinkJoin} onChange={toggleJoin} />
+        </Setting>
+        <Setting
+          label="Store shared photos on this server"
+          description="Off, they stream from their owner and use no space here. On, they are copied over in the background and use real disk space. Turning this off does not remove copies already made."
+        >
+          <Switch id="store-locally" checked={storeLocal} onChange={toggleStore} />
+        </Setting>
+        <Setting label="Pairing links stay valid for" description="Shown once. Create another if it is lost.">
+          <select class="isa-field" value={pairingTtl} onChange={changeTtl}>
+            {TTL_CHOICES.map(c => (
+              <option key={c.minutes} value={c.minutes}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </Setting>
+      </Card>
+    </section>
   );
 };

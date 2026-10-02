@@ -1,40 +1,80 @@
-/* web/ui/lib/tokens.css — the one place a colour, radius or typeface is written down. See ../../http-router.md. */
+/* web/ui/lib/tokens.css — the one place a colour, radius, space or duration is written down. See design-system.md. */
 :root {
   --isa-font: 'Overpass', 'Inter', Roboto, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* Surfaces. Google stacks tonal containers rather than outlines, so depth is a fill change
+     first and a hairline second. */
   --isa-bg: #f8f9fa;
   --isa-surface: #ffffff;
-  --isa-sunken: #f1f3f4;
+  --isa-sunken: #eef0f3;
+  --isa-surface-sunken-strong: #e4e7eb;
+
+  /* Ink, three steps: what you read, what you read as context, what is a boundary. */
   --isa-ink: #202124;
   --isa-ink-muted: #5f6368;
-  --isa-line: rgba(0, 0, 0, 0.06);
-  --isa-hairline: rgba(0, 0, 0, 0.08);
+  --isa-ink-subtle: #666a6f;
+
+  --isa-hairline: rgba(0, 0, 0, 0.09);
+  --isa-outline: rgba(0, 0, 0, 0.14);
+
   --isa-accent: #4250af;
   --isa-accent-2: #7c3aed;
   --isa-accent-ink: #ffffff;
+  --isa-accent-container: #e8eaf6;
   --isa-focus: rgba(66, 80, 175, 0.15);
   --isa-scrim: rgba(32, 33, 36, 0.45);
-  --isa-danger: #d93025;
+
+  --isa-danger: #c5221f;
   --isa-danger-surface: #fce8e6;
   --isa-ok: #137333;
   --isa-ok-surface: #e6f4ea;
-  --isa-shadow-1: 0 1px 3px rgba(60, 64, 67, 0.15);
-  --isa-spinner: rgba(255, 255, 255, 0.35);
-  --isa-accent-tint: rgba(66, 80, 175, 0.08);
-  --isa-focus-ring: rgba(66, 80, 175, 0.45);
-  --isa-shadow-2: 0 8px 28px rgba(60, 64, 67, 0.22);
-  --isa-radius-card: 28px;
-  --isa-radius-control: 12px;
+
+  /* The switch's own four values: the thumb grows when pressed and the track alone cannot express
+     that, so the two states are separate colours rather than one inverted. */
+  --isa-switch-track-off: #c6cad1;
+  --isa-switch-thumb-off: #6b7076;
+  --isa-switch-track-on: var(--isa-accent);
+  --isa-switch-thumb-on: var(--isa-accent-ink);
+
+  /* State layers: the tint a hover and a press lay over whatever fill is already there. */
+  --isa-state-hover: rgba(32, 33, 36, 0.08);
+  --isa-state-press: rgba(32, 33, 36, 0.12);
+
+  --isa-shadow-1: 0 1px 2px rgba(60, 64, 67, 0.12), 0 1px 3px rgba(60, 64, 67, 0.1);
+  --isa-shadow-2: 0 2px 6px rgba(60, 64, 67, 0.14), 0 8px 28px rgba(60, 64, 67, 0.16);
+  --isa-shadow-3: 0 6px 16px rgba(60, 64, 67, 0.18), 0 20px 48px rgba(60, 64, 67, 0.24);
+  --isa-spinner: rgba(255, 255, 255, 0.4);
+
+  /* Shape: a small step, a card, and the pill every control rounds to. */
+  --isa-radius-sm: 10px;
+  --isa-radius-lg: 18px;
+  --isa-radius-card: 24px;
   --isa-radius-pill: 999px;
-  --isa-pad-card: 22px;
-  --isa-pad-hero: 30px;
+
+  --isa-pad-card: 20px;
+  --isa-pad-hero: 32px;
+  /* The page's own gutter, widened once there is room for it. */
+  --isa-gutter: 16px;
+  --isa-page-max: 560px;
   --isa-space-1: 4px;
   --isa-space-2: 8px;
   --isa-space-3: 12px;
   --isa-space-4: 16px;
-  --isa-space-5: 22px;
-  --isa-space-6: 28px;
-  --isa-gap: 12px;
-  --isa-ease: cubic-bezier(0.21, 1.02, 0.73, 1);
+  --isa-space-5: 20px;
+  --isa-space-6: 24px;
+  --isa-space-7: 32px;
+  --isa-space-8: 40px;
+  /* A thumb's floor: anything tappable is at least this tall, whatever its type size says. */
+  --isa-touch: 44px;
+
+  /* Motion: Google's two curves — standard for anything that settles, emphasized for the entrance
+     and the press that has to feel like it was answered. */
+  --isa-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --isa-ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --isa-duration-short: 120ms;
+  --isa-duration-medium: 220ms;
+  --isa-duration-long: 400ms;
+
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -42,24 +82,45 @@
     --isa-bg: #15181e;
     --isa-surface: #1b1f26;
     --isa-sunken: #262b33;
+    --isa-surface-sunken-strong: #303640;
+
     --isa-ink: #e8eaed;
     --isa-ink-muted: #9aa0a6;
-    --isa-line: rgba(255, 255, 255, 0.08);
-    --isa-hairline: rgba(255, 255, 255, 0.06);
+    --isa-ink-subtle: #969ba1;
+
+    --isa-hairline: rgba(255, 255, 255, 0.07);
+    --isa-outline: rgba(255, 255, 255, 0.16);
+
     --isa-accent: #a8c7fa;
     --isa-accent-2: #a8c7fa;
     --isa-accent-ink: #0d1b3d;
+    --isa-accent-container: #2a3555;
     --isa-focus: rgba(168, 199, 250, 0.22);
     --isa-scrim: rgba(0, 0, 0, 0.6);
+
     --isa-danger: #f28b82;
     --isa-danger-surface: #3a1d1d;
     --isa-ok: #81c995;
     --isa-ok-surface: #0f2e22;
-    --isa-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.4);
-    --isa-spinner: rgba(255, 255, 255, 0.35);
-    --isa-accent-tint: rgba(168, 199, 250, 0.12);
-    --isa-focus-ring: rgba(168, 199, 250, 0.45);
-    --isa-shadow-2: 0 10px 32px rgba(0, 0, 0, 0.5);
+
+    --isa-switch-track-off: #44474d;
+    --isa-switch-thumb-off: #b7bcc4;
+
+    --isa-state-hover: rgba(232, 234, 237, 0.08);
+    --isa-state-press: rgba(232, 234, 237, 0.12);
+
+    --isa-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.45);
+    --isa-shadow-2: 0 10px 32px rgba(0, 0, 0, 0.55);
+    --isa-shadow-3: 0 16px 48px rgba(0, 0, 0, 0.6);
+    --isa-spinner: rgba(255, 255, 255, 0.4);
+
     color-scheme: dark;
+  }
+}
+
+/* One step once a phone is in landscape or a tablet is out — the gutter, not the content width. */
+@media (min-width: 600px) {
+  :root {
+    --isa-gutter: 24px;
   }
 }

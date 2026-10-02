@@ -1,6 +1,6 @@
 /** web/ui/pages/root/App.tsx — the one URL to remember: it decides which panel to open. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
-import { s } from '../../lib/theme.ts';
+import { Card } from '../../lib/Card.tsx';
 import { myAlbums } from '../me/api.ts';
 
 const ROUTE_PREFIX = '/immich-shared-albums';
@@ -27,39 +27,34 @@ export const App = () => {
 
   if (failed)
     return (
-      <div style={s.card}>
+      <Card>
         Could not reach this server. <a href={`${ROUTE_PREFIX}/me`}>Open your shared albums</a>.
-      </div>
+      </Card>
     );
-  if (isAdmin === null) return <div style={s.card}>Loading…</div>;
+  if (isAdmin === null) return <Card>Loading…</Card>;
 
   return (
     <>
-      <h1 style={{ fontSize: 20, letterSpacing: '-.02em' }}>🔗 Shared albums</h1>
-      <div style={s.card}>
-        <a
-          href={`${ROUTE_PREFIX}/me`}
-          className="choice"
-          style={{ ...s.choice, color: 'inherit', textDecoration: 'none' }}
-        >
-          <div style={s.grow}>
-            <div style={s.title}>Your shared albums</div>
-            <div style={s.sub}>Albums you share across servers</div>
-          </div>
-          <span style={s.chevron}>›</span>
-        </a>
-        <a
-          href={`${ROUTE_PREFIX}/admin`}
-          className="choice"
-          style={{ ...s.choice, color: 'inherit', textDecoration: 'none' }}
-        >
-          <div style={s.grow}>
-            <div style={s.title}>Server settings and pairings</div>
-            <div style={s.sub}>Linked servers, pairing, and this server's sharing settings · admins only</div>
-          </div>
-          <span style={s.chevron}>›</span>
-        </a>
+      <div class="isa-page-head">
+        <span class="isa-page-title">🔗 Shared albums</span>
       </div>
+      <Card>
+        {/* `choice` alongside `isa-choice` is a TEST CONTRACT — the browser lane asserts on a.choice. */}
+        <a href={`${ROUTE_PREFIX}/me`} class="isa-choice choice">
+          <span class="isa-row-main">
+            <span class="isa-row-title">Your shared albums</span>
+            <span class="isa-row-sub">Albums you share across servers</span>
+          </span>
+          <span class="isa-chevron">›</span>
+        </a>
+        <a href={`${ROUTE_PREFIX}/admin`} class="isa-choice choice">
+          <span class="isa-row-main">
+            <span class="isa-row-title">Server settings and pairings</span>
+            <span class="isa-row-sub">Linked servers, pairing, and this server's settings · admins only</span>
+          </span>
+          <span class="isa-chevron">›</span>
+        </a>
+      </Card>
     </>
   );
 };

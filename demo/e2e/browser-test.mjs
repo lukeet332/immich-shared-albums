@@ -233,6 +233,77 @@ check('the admin stays at the root rather than being sent to a panel',
   }
 }
 
+// 6c. THE PANEL IS ONE DESIGN SYSTEM, and the three properties it holds are the three that were
+//     broken before they were written down — so they are the three worth pinning. A checkbox drawn
+//     as a switch has to BE a switch: still a checkbox, still announced as one, and with a thumb that
+//     stays inside its track. A page has to FIT its phone, which is how the sign-in card once scrolled
+//     sideways at 92vw plus its own padding. And anything tappable has to be a thumb, not a glyph.
+{
+  const designCtx = await browser.newContext({ viewport: { width: 360, height: 640 } });
+  await designCtx.addCookies(['immich_access_token', 'immich_auth_type', 'immich_is_authenticated'].map((name) => ({
+    name, url: B_PANEL_WEB,
+    value: name === 'immich_access_token' ? login.accessToken : (name === 'immich_auth_type' ? 'password' : 'true'),
+  })));
+  const phone = await designCtx.newPage();
+
+  await phone.goto(`${B_PANEL_WEB}/immich-shared-albums/admin`, { waitUntil: 'networkidle' });
+  const switches = await phone.evaluate(() =>
+    [...document.querySelectorAll('input[type=checkbox]')].map(input => {
+      const box = input.getBoundingClientRect();
+      const track = getComputedStyle(input);
+      return {
+        id: input.id,
+        isSwitch: input.getAttribute('role') === 'switch',
+        insideALabel: !!input.closest('label'),
+        width: Math.round(box.width),
+        height: Math.round(box.height),
+        appearance: track.appearance,
+      };
+    })
+  );
+  check('every checkbox is a Material switch, announced as one',
+    switches.length > 0 && switches.every(s => s.isSwitch && s.insideALabel),
+    JSON.stringify(switches));
+  check('a switch is a real checkbox drawn at Material\'s 52x32, not a replacement element',
+    switches.every(s => s.width === 52 && s.height === 32 && s.appearance === 'none'),
+    JSON.stringify(switches.map(s => `${s.id} ${s.width}x${s.height} appearance=${s.appearance}`)));
+
+  // The two pages people actually open, at the width people actually hold.
+  for (const [label, url] of [
+    ['your albums', `${B_PANEL_WEB}/immich-shared-albums/me`],
+    ['server panel', `${B_PANEL_WEB}/immich-shared-albums/admin`],
+  ]) {
+    await phone.goto(url, { waitUntil: 'domcontentloaded' });
+    await phone.waitForFunction(() => !/Loading/.test(document.body.innerText), null, { timeout: 30000 }).catch(() => {});
+    const layout = await phone.evaluate(() => {
+      const doc = document.documentElement;
+      // A CONTROL is something you press. An inline link inside a paragraph is text, and is allowed
+      // to be as short as its line. A switch is 32px of paint but the ROW is its target, so the row
+      // is what gets measured.
+      const target = el => el.type === 'checkbox' ? (el.closest('label') ?? el) : el;
+      const controls = [...document.querySelectorAll('button, input, select, a, [role=switch]')].filter(el => {
+        if (el.closest('p')) return false;
+        const style = getComputedStyle(el);
+        if (el.tagName === 'A' && style.display === 'inline') return false;
+        return target(el).getBoundingClientRect().width > 0;
+      });
+      return {
+        scrollWidth: doc.scrollWidth,
+        clientWidth: doc.clientWidth,
+        undersized: controls
+          .map(target)
+          .filter(el => el.getBoundingClientRect().height < 44)
+          .map(el => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''} ${Math.round(el.getBoundingClientRect().height)}px`),
+      };
+    });
+    check(`${label} fits a 360px phone without scrolling sideways`,
+      layout.scrollWidth <= layout.clientWidth + 1, `${layout.scrollWidth} > ${layout.clientWidth}`);
+    check(`${label}: every control is at least a thumb tall`, layout.undersized.length === 0,
+      layout.undersized.join(', ') || 'all 44px+');
+  }
+  await designCtx.close();
+}
+
 // The signed-out pages are the only ones whose stylesheet is built on its own, so they are where an
 // un-inlined token import would show up: the accent button renders as plain black text. Assert the
 // computed colour rather than the markup, because that is what a person sees.
@@ -287,8 +358,20 @@ const C_PANEL_WEB = process.env.C_PANEL_WEB || `http://localhost:${PORT('PORT_SI
 const panelName = `panel offer ${Date.now()}`;
 const panelText = async (p) => (await p.locator('body').innerText().catch(() => '')) || '';
 /** Only the candidates section: the panel prints album names in three places, so finding one
- *  anywhere on the page says nothing about whether this list still offers it. */
-const candidates = (t) => (t.split('Possible album reunions')[1] || '').split('Your shared albums')[0];
+ *  anywhere on the page says nothing about whether this list still offers it.
+ *
+ *  Case-insensitively, because this is RENDERED text: the panel's section titles are uppercased in
+ *  CSS (`.isa-section-title`), and `innerText` returns what was painted, not what is in the DOM. A
+ *  splitter that matched the DOM's casing silently stopped splitting — and every "the pair appears"
+ *  check below it failed for a reason that had nothing to do with pairing. */
+const sectionBetween = (text, fromHeading, toHeading) => {
+  const from = text.search(new RegExp(fromHeading, 'i'));
+  if (from < 0) return '';
+  const rest = text.slice(from + fromHeading.length);
+  const to = rest.search(new RegExp(toHeading, 'i'));
+  return to < 0 ? rest : rest.slice(0, to);
+};
+const candidates = (t) => sectionBetween(t, 'Possible album reunions', 'Your shared albums');
 const seesPair = (t) => new RegExp(panelName).test(candidates(t));
 
 // C is hardened like production by run-mock-e2e.sh (`passwordLogin.enabled = false`), which is why no
@@ -394,7 +477,7 @@ check('the first person to open their panel sees no pair yet — matching is a p
 
 const cPanel = await panelOf(C_PANEL_WEB, cLogin.accessToken);
 const appeared = await cPanel.p.waitForFunction(
-  (n) => new RegExp(`Possible album reunions[\\s\\S]*?${n}`).test(document.body.innerText),
+  (n) => new RegExp(`Possible album reunions[\\s\\S]*?${n}`, 'i').test(document.body.innerText),
   panelName, { timeout: 30000 }).then(() => true).catch(() => false);
 check('opening the other person\'s panel is enough — the pair appears, with no API call', appeared,
   (await panelText(cPanel.p)).split('\n').find((l) => l.includes(panelName)) || '(never appeared)');
@@ -446,7 +529,7 @@ await soloPanel.p.waitForTimeout(3000);
 await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
 await cPanel.p.waitForTimeout(3000);
 check('a non-admin\'s own panel offers their album too, so the pair appears',
-  new RegExp(`Possible album reunions[\\s\\S]*?${soloName}`).test(await panelText(cPanel.p)));
+  new RegExp(`Possible album reunions[\\s\\S]*?${soloName}`, 'i').test(await panelText(cPanel.p)));
 
 await fetch(`${B_PANEL_WEB}/api/albums/${soloAlbum.id}`, { method: 'DELETE',
   headers: { Authorization: `Bearer ${soloLogin.accessToken}` } });
@@ -456,7 +539,7 @@ check('with nothing left to offer, the panel still loads', !/Loading/.test(await
 await cPanel.p.reload({ waitUntil: 'domcontentloaded' });
 await cPanel.p.waitForTimeout(3000);
 check('and the peer stops matching against the album that is gone',
-  !new RegExp(`Possible album reunions[\\s\\S]*?${soloName}`).test(await panelText(cPanel.p)));
+  !new RegExp(`Possible album reunions[\\s\\S]*?${soloName}`, 'i').test(await panelText(cPanel.p)));
 
 
 // 8. The reunion round trip through the PANELS alone: one side invites — which shares its own album

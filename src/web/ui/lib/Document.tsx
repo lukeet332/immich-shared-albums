@@ -33,7 +33,7 @@ export const Document = ({ page, children }: { page: PageMeta; children?: preact
       ))}
       <link rel="stylesheet" href={`${PREFIX}/assets/${page.name}.css`} />
     </head>
-    <body>
+    <body class="isa-page">
       {children}
       {page.hasScript && <script type="module" src={`${PREFIX}/assets/${page.name}.js`} />}
     </body>

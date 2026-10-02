@@ -1,6 +1,6 @@
-/** web/ui/lib/confirm.tsx — the one confirmation every action asks through. See ../../http-router.md. */
+/** web/ui/lib/confirm.tsx — the one confirmation every action asks through. See design-system.md. */
 import { useEffect, useRef } from 'preact/hooks';
-import { s } from './theme.ts';
+import { Button } from './Button.tsx';
 
 export type Confirmation = {
   title: string;
@@ -29,30 +29,30 @@ export const Confirm = ({ ask, onClose }: { ask: Confirmation | null; onClose: (
   }, [ask]);
   if (!ask) return null;
   return (
-    <div style={s.scrim} onClick={onClose}>
+    <div class="isa-scrim" onClick={onClose}>
       <div
-        style={s.dialog}
+        class="isa-dialog"
         role="dialog"
         aria-modal="true"
         aria-label={ask.title}
         onClick={e => e.stopPropagation()}
       >
-        <div style={s.title}>{ask.title}</div>
-        <p style={s.dialogBody}>{ask.body}</p>
-        <div style={s.dialogActions}>
-          <button style={s.buttonQuiet} onClick={onClose}>
+        <div class="isa-dialog-title">{ask.title}</div>
+        <p class="isa-dialog-body">{ask.body}</p>
+        <div class="isa-dialog-actions">
+          <Button fill="text" onClick={onClose}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             ref={confirmButton}
-            style={{ ...s.button, ...(ask.danger ? s.buttonDanger : {}) }}
+            fill={ask.danger ? 'dangerFilled' : 'filled'}
             onClick={() => {
               onClose();
               ask.onConfirm();
             }}
           >
             {ask.confirm}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

@@ -1,7 +1,6 @@
 /** web/ui/pages/panel/App.tsx — composition root of the admin panel. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
 import { Confirm, type Confirmation } from '../../lib/confirm.tsx';
-import { s, t } from '../../lib/theme.ts';
 import { overview, unlinkPeer, type Overview, type Peer } from './api.ts';
 import { LinkServer } from './LinkServer.tsx';
 import { ConnectedServers } from './ConnectedServers.tsx';
@@ -49,23 +48,31 @@ export const App = () => {
 
   if (error) {
     return (
-      <p style={{ ...s.muted, color: t.danger }}>
-        Could not load: {error}. You may need to sign in to Immich as an admin.
-      </p>
+      <div class="isa-section">
+        <h1 class="isa-page-title">Shared albums</h1>
+        <p class="isa-note isa-note--error">
+          Could not load: {error}. You may need to sign in to Immich as an admin.
+        </p>
+      </div>
     );
   }
-  if (!data) return <p style={s.muted}>Loading…</p>;
+  if (!data) {
+    return (
+      <div class="isa-section">
+        <h1 class="isa-page-title">Shared albums</h1>
+        <p class="isa-page-lede">Loading…</p>
+      </div>
+    );
+  }
 
   return (
     <>
-      <h1 style={{ fontSize: 20, letterSpacing: '-.02em' }}>
-        🔗 Shared albums <span style={{ color: t.muted, fontWeight: 400 }}>· {data.household.name}</span>
-      </h1>
-      <p style={{ ...s.muted, marginBottom: 4 }}>
-        Server-side settings and pairings.{' '}
-        <a href="/immich-shared-albums/me" style={{ color: 'inherit' }}>
-          Your own shared albums →
-        </a>
+      <div class="isa-page-head">
+        <span class="isa-page-title">🔗 Shared albums</span>
+        <span class="isa-page-household">· {data.household.name}</span>
+      </div>
+      <p class="isa-page-lede">
+        Server-side settings and pairings. <a href="/immich-shared-albums/me">Your own shared albums →</a>
       </p>
       <LinkServer onLinked={load} />
       <SharedAlbums albums={data.albums} />

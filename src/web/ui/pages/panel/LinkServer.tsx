@@ -1,6 +1,7 @@
 /** web/ui/pages/panel/LinkServer.tsx — linking two servers: mint a pairing link, or paste one from the other admin. See ../../../http-router.md. */
 import { useState } from 'preact/hooks';
-import { s } from '../../lib/theme.ts';
+import { Button } from '../../lib/Button.tsx';
+import { Card } from '../../lib/Card.tsx';
 import { mintLink, redeemLink } from './api.ts';
 
 export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
@@ -52,46 +53,43 @@ export const LinkServer = ({ onLinked }: { onLinked: () => void }) => {
   const minutesLeft = Math.max(1, Math.round((expiresAt - Date.now()) / 60000));
 
   return (
-    <div style={s.card}>
-      <h2 style={s.cardHeading}>Link a server</h2>
-      <p style={s.muted}>One use, and it shares no photos.</p>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button style={s.button} onClick={createLink}>
-          Create a link
-        </button>
-        <button style={s.buttonQuiet} onClick={() => setShowPasteBox(true)}>
-          I have a link
-        </button>
-      </div>
-
-      {link && (
-        <div style={{ marginTop: 10 }}>
-          <p style={s.muted}>
-            Send it now: one use, {minutesLeft} minute{minutesLeft === 1 ? '' : 's'} left, and never shown
-            again.
-          </p>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input id="pairlink" style={s.input} readOnly value={link} />
-            <button style={s.button} onClick={copyToClipboard}>
-              {copyLabel}
-            </button>
-          </div>
+    <section class="isa-section">
+      <h2 class="isa-section-title">Link a server</h2>
+      <Card lede="One use, and it shares no photos.">
+        <div class="isa-actions">
+          <Button onClick={createLink}>Create a link</Button>
+          <Button fill="outlined" onClick={() => setShowPasteBox(true)}>
+            I have a link
+          </Button>
         </div>
-      )}
 
-      {showPasteBox && (
-        <form style={{ display: 'flex', gap: 8, marginTop: 10 }} onSubmit={redeemTheirLink}>
-          <input
-            style={s.input}
-            placeholder="Paste the link they sent you"
-            value={theirLink}
-            onInput={event => setTheirLink((event.target as HTMLInputElement).value)}
-          />
-          <button style={s.button}>Link servers</button>
-        </form>
-      )}
+        {link && (
+          <div class="isa-stack">
+            <p class="isa-note">
+              Send it now: one use, {minutesLeft} minute{minutesLeft === 1 ? '' : 's'} left, and never shown
+              again.
+            </p>
+            <div class="isa-actions">
+              <input id="pairlink" class="isa-field" readOnly value={link} />
+              <Button onClick={copyToClipboard}>{copyLabel}</Button>
+            </div>
+          </div>
+        )}
 
-      <div style={s.note}>{note}</div>
-    </div>
+        {showPasteBox && (
+          <form class="isa-stack" onSubmit={redeemTheirLink}>
+            <input
+              class="isa-field"
+              placeholder="Paste the link they sent you"
+              value={theirLink}
+              onInput={event => setTheirLink((event.target as HTMLInputElement).value)}
+            />
+            <Button type="submit">Link servers</Button>
+          </form>
+        )}
+
+        <div class="isa-note">{note}</div>
+      </Card>
+    </section>
   );
 };

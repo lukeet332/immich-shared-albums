@@ -1,8 +1,12 @@
-@import '../../lib/tokens.css';
+/* web/ui/pages/share/share.css — the join card over Immich's own share page. Everything here is
+   scoped to the banner: the framed album underneath is Immich's document, not ours to restyle. */
+@import '../../lib/ui.css';
+
 html,
 body {
   margin: 0;
   height: 100%;
+  background: var(--isa-bg);
 }
 iframe.native-album {
   position: fixed;
@@ -14,20 +18,21 @@ iframe.native-album {
 #immich-shared-albums-banner .card {
   position: fixed;
   z-index: 2147483000;
-  right: 24px;
-  bottom: 24px;
+  right: var(--isa-space-6);
+  bottom: var(--isa-space-6);
   width: 400px;
-  max-width: calc(100vw - 32px);
+  max-width: calc(100vw - 2 * var(--isa-gutter));
   box-sizing: border-box;
   font-family: var(--isa-font);
   background: var(--isa-surface);
   color: var(--isa-ink);
-  border: 1px solid var(--isa-hairline);
   border-radius: var(--isa-radius-card);
-  box-shadow: var(--isa-shadow-1), var(--isa-shadow-2);
-  padding: 22px 22px 18px;
-  animation: isa-in 0.35s var(--isa-ease) both;
+  box-shadow: var(--isa-shadow-2);
+  padding: var(--isa-pad-card);
+  animation: isa-rise-in var(--isa-duration-long) var(--isa-ease-emphasized) both;
 }
+/* A phone gets the card as a sheet, because a floating box over an album is what nobody expects on
+   a screen they hold with one hand. */
 @media (max-width: 560px) {
   #immich-shared-albums-banner .card {
     right: 0;
@@ -35,56 +40,39 @@ iframe.native-album {
     left: 0;
     width: auto;
     max-width: none;
-    border-radius: var(--isa-radius-card) 28px 0 0;
-    padding-bottom: max(18px, env(safe-area-inset-bottom));
-    animation-name: isa-in-sheet;
+    border-radius: var(--isa-radius-card) var(--isa-radius-card) 0 0;
+    padding: var(--isa-pad-card) var(--isa-pad-card) max(var(--isa-space-4), env(safe-area-inset-bottom));
+    animation-name: isa-sheet-in;
   }
 }
-@keyframes isa-in {
+@keyframes isa-sheet-in {
   from {
-    opacity: 0;
-    transform: translateY(14px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-@keyframes isa-in-sheet {
-  from {
-    transform: translateY(100%);
-  }
-  to {
-    transform: none;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  #immich-shared-albums-banner .card {
-    animation: none;
+    translate: 0 100%;
   }
 }
 #immich-shared-albums-banner .row {
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  padding-right: 26px;
+  gap: var(--isa-space-3);
+  /* Clear of the dismiss button, which is a thumb-sized target rather than a glyph-sized one. */
+  padding-right: 44px;
 }
 #immich-shared-albums-banner .logo {
   flex: none;
+  display: grid;
+  place-items: center;
   width: 42px;
   height: 42px;
   border-radius: 50%;
-  display: grid;
-  place-items: center;
   background: linear-gradient(135deg, var(--isa-accent), var(--isa-accent-2));
-  box-shadow: 0 2px 8px var(--isa-focus);
+  box-shadow: var(--isa-shadow-1);
 }
 #immich-shared-albums-banner .logo svg {
   width: 22px;
   height: 22px;
 }
 #immich-shared-albums-banner h2 {
-  margin: 2px 0 5px;
+  margin: 0 0 var(--isa-space-1);
   font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -97,25 +85,29 @@ iframe.native-album {
 }
 #immich-shared-albums-banner form {
   display: flex;
-  gap: 10px;
-  margin-top: 16px;
+  gap: var(--isa-space-2);
+  margin-top: var(--isa-space-4);
 }
 #immich-shared-albums-banner input {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   box-sizing: border-box;
   font: inherit;
   font-size: 14px;
-  padding: 11px 18px;
+  min-height: var(--isa-touch);
+  padding: 0 var(--isa-space-4);
   border-radius: var(--isa-radius-pill);
   border: 1px solid transparent;
   background: var(--isa-sunken);
-  color: inherit;
+  color: var(--isa-ink);
   outline: none;
   transition:
-    background 0.15s,
-    border-color 0.15s,
-    box-shadow 0.15s;
+    background var(--isa-duration-short) var(--isa-ease-standard),
+    border-color var(--isa-duration-short) var(--isa-ease-standard),
+    box-shadow var(--isa-duration-short) var(--isa-ease-standard);
+}
+#immich-shared-albums-banner input::placeholder {
+  color: var(--isa-ink-subtle);
 }
 #immich-shared-albums-banner input:focus {
   background: var(--isa-surface);
@@ -127,53 +119,58 @@ iframe.native-album {
   font: inherit;
   font-size: 14px;
   font-weight: 600;
-  padding: 11px 22px;
+  min-height: var(--isa-touch);
+  padding: 0 var(--isa-space-5);
   border: 0;
   border-radius: var(--isa-radius-pill);
   cursor: pointer;
   background: var(--isa-accent);
-  color: var(--isa-surface);
+  color: var(--isa-accent-ink);
   transition:
-    filter 0.15s,
-    box-shadow 0.15s,
-    transform 0.05s;
+    box-shadow var(--isa-duration-short) var(--isa-ease-standard),
+    scale var(--isa-duration-short) var(--isa-ease-standard);
 }
 #immich-shared-albums-banner button.join:hover {
-  filter: brightness(1.08);
-  box-shadow: 0 2px 10px var(--isa-focus);
+  box-shadow: var(--isa-shadow-2);
 }
 #immich-shared-albums-banner button.join:active {
-  transform: scale(0.97);
+  scale: 0.97;
+}
+#immich-shared-albums-banner button.join[disabled] {
+  opacity: 0.5;
+  cursor: default;
 }
 #immich-shared-albums-banner .dismiss {
   position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 32px;
-  height: 32px;
+  top: var(--isa-space-2);
+  right: var(--isa-space-2);
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
   box-sizing: border-box;
+  padding: 0;
   border: 0;
   border-radius: 50%;
   background: none;
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
   color: var(--isa-ink-muted);
-  padding: 0;
-  display: grid;
-  place-items: center;
-  transition: background 0.15s;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--isa-duration-short) var(--isa-ease-standard);
 }
 #immich-shared-albums-banner .dismiss:hover {
-  background: var(--isa-hairline);
+  background: var(--isa-state-hover);
 }
 #immich-shared-albums-banner .err {
-  margin: 10px 0 0;
+  margin: var(--isa-space-3) 0 0;
   font-size: 12.5px;
+  line-height: 1.5;
   color: var(--isa-danger);
+  animation: isa-rise-in var(--isa-duration-medium) var(--isa-ease-emphasized) both;
 }
 #immich-shared-albums-banner .hint {
-  margin: 14px 0 0;
+  margin: var(--isa-space-4) 0 0;
   font-size: 12px;
   line-height: 1.55;
   color: var(--isa-ink-muted);
@@ -184,41 +181,4 @@ iframe.native-album {
 }
 #immich-shared-albums-banner .hint a:hover {
   text-decoration: underline;
-}
-@media (prefers-color-scheme: dark) {
-  #immich-shared-albums-banner .card {
-    background: var(--isa-surface);
-    color: var(--isa-ink);
-    border-color: var(--isa-line);
-    box-shadow: var(--isa-shadow-1), var(--isa-shadow-2);
-  }
-  #immich-shared-albums-banner .sub {
-    color: var(--isa-ink-muted);
-  }
-  #immich-shared-albums-banner input {
-    background: var(--isa-sunken);
-    color: var(--isa-ink);
-  }
-  #immich-shared-albums-banner input::placeholder {
-    color: var(--isa-ink-muted);
-  }
-  #immich-shared-albums-banner input:focus {
-    background: var(--isa-sunken);
-  }
-  #immich-shared-albums-banner .dismiss {
-    color: var(--isa-ink-muted);
-  }
-  #immich-shared-albums-banner .dismiss:hover {
-    background: var(--isa-line);
-  }
-  #immich-shared-albums-banner .hint {
-    color: var(--isa-ink-muted);
-  }
-  #immich-shared-albums-banner .hint a {
-    color: var(--isa-accent);
-  }
-  #immich-shared-albums-banner button.join {
-    background: var(--isa-accent);
-    color: var(--isa-accent-ink);
-  }
 }
