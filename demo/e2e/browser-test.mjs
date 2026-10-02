@@ -709,14 +709,16 @@ check('a pair with nothing shared yet is offered an invitation', inviteRowShown,
   (await panelText(bPanel.p)).split('\n').filter(l => /^Invite /.test(l)).slice(0, 2).join(' | ') || '(none)');
 
 check('Invite was clicked', await clickInRow(bPanel.p, '^Invite ', inviteName), await clickDetail(bPanel.p, '^Invite ', inviteName));
-check('and it asked first, rather than sharing on the click alone', await confirmDialog(bPanel.p, 'Invite'));
+const askedFirst = (await bPanel.p.locator('[role=dialog]').count()) > 0;
+check('and it asked first, rather than sharing on the click alone', askedFirst);
 // Every other confirm check in this lane CLICKS the dialog's button, so none of them can tell a
-// keyboard user from a trapped one. Asserted on this first dialog: it takes the caret on open, and
-// Escape closes it — a focus ref that stopped resolving threw before its keydown handler was ever
-// registered, which left the dialog on screen with nothing but a mouse able to close it.
-const dialogTookCaret = await bPanel.p.evaluate(
+// keyboard user from a trapped one. Asserted here, while this first dialog is still open: it takes
+// the caret, and Escape closes it. A focus ref that stopped resolving threw before the effect
+// reached the keydown registration just below it, which left the dialog on screen with nothing but
+// a mouse able to dismiss it — and every other check here clicked the button straight past that.
+const dialogTookCaret = askedFirst && (await bPanel.p.evaluate(
   () => document.activeElement?.closest('[role=dialog]') !== null
-);
+));
 await bPanel.p.keyboard.press('Escape');
 const escapeClosed = await bPanel.p
   .waitForSelector('[role=dialog]', { state: 'detached', timeout: 5000 })
@@ -724,7 +726,7 @@ const escapeClosed = await bPanel.p
   .catch(() => false);
 check('the dialog takes the caret, and Escape closes it', dialogTookCaret && escapeClosed,
   `caret=${dialogTookCaret}, closed=${escapeClosed}`);
-check('and asking again opens it once more',
+check('and it asks again, so confirming the reopened one is what shares the album',
   (await clickInRow(bPanel.p, '^Invite ', inviteName)) && (await confirmDialog(bPanel.p, 'Invite')));
 // A page opened before a change needs the change PUSHED to it: the panel follows `/events`, so the
 // waits below reload only where they are testing the fetch path itself, and the invitation case
