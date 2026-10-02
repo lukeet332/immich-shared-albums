@@ -716,9 +716,13 @@ check('and it asked first, rather than sharing on the click alone', askedFirst);
 // the caret, and Escape closes it. A focus ref that stopped resolving threw before the effect
 // reached the keydown registration just below it, which left the dialog on screen with nothing but
 // a mouse able to dismiss it — and every other check here clicked the button straight past that.
-const dialogTookCaret = askedFirst && (await bPanel.p.evaluate(
-  () => document.activeElement?.closest('[role=dialog]') !== null
-));
+//
+// WAITED FOR, not sampled: Preact moves the caret in an effect, which lands after the dialog is in
+// the DOM, so reading activeElement the instant the node appears is a race a fast runner loses.
+const dialogTookCaret = askedFirst && (await bPanel.p
+  .waitForFunction(() => document.activeElement?.closest('[role=dialog]') !== null, null, { timeout: 5000 })
+  .then(() => true)
+  .catch(() => false));
 await bPanel.p.keyboard.press('Escape');
 const escapeClosed = await bPanel.p
   .waitForSelector('[role=dialog]', { state: 'detached', timeout: 5000 })
