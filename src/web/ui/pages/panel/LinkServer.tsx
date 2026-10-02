@@ -3,7 +3,7 @@ import { useState } from 'preact/hooks';
 import { Button } from '../../lib/Button.tsx';
 import { Card } from '../../lib/Card.tsx';
 import { mintLink, redeemLink } from './api.ts';
-import type { Outcome } from './App.tsx';
+import type { Outcome } from '../../lib/announce.ts';
 
 export const LinkServer = ({
   onLinked,
@@ -24,6 +24,7 @@ export const LinkServer = ({
       const minted = await mintLink();
       setLink(minted.link);
       setExpiresAt(minted.expiresAt);
+      setCopied(false);
       onOutcome({ kind: 'ok', text: 'Pairing link created — it is shown once.' });
     } catch (err) {
       onOutcome({ kind: 'error', text: `Could not create a link: ${(err as Error).message}` });

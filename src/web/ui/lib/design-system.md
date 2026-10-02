@@ -29,6 +29,7 @@ page's CTA computes to `rgb(66, 80, 175)`. Changing the light accent changes tha
 | `Setting`       | `<label class="isa-setting">` — text, description, control | panel `Settings.tsx`, me `App.tsx`                   |
 | `Switch`        | `<input type="checkbox" role="switch" class="isa-switch">` | panel `Settings.tsx`, me `App.tsx`                   |
 | `Notice`        | `#notice`, the snackbar, `role=status`/`alert`            | me `App.tsx`, panel `App.tsx` and `LinkServer.tsx`     |
+| `useAnnouncer`  | the notice state, `announce()`, `dismiss()` and the success fade | me and panel, in place of two copies     |
 | `confirm.tsx`   | `Confirm` — the one dialog, `.isa-scrim` + `.isa-dialog`   | me, panel                                            |
 
 `Button`'s `fill` is the only knob: `filled`, `outlined`, `text`, `danger`, `dangerFilled`.
@@ -81,6 +82,9 @@ confirm button out as a host `<button>` instead. Anything else that needs the no
   one-line outcome into six, and a phone is the only place it is read.
 - `--isa-notice-surface` is **dark in both schemes**, as Google Photos draws it. Inverting the page's
   ink instead puts a glaring white box on a dark page.
+- `useAnnouncer` numbers every announcement, and the `Notice` is keyed on that number: a second
+  message REPLACES the first instead of inheriting whatever the first was doing on its way out —
+  otherwise a bar mid-swipe takes the message that replaced it down with it.
 - **Three ways out**, because each leaves someone out otherwise: the × , a horizontal swipe
   (pointer events, so the finger and the mouse are one path), and Escape. A short swipe springs
   back — a bar that vanishes under a slip is worse than no bar.

@@ -1,5 +1,6 @@
 /** web/ui/pages/panel/App.tsx — composition root of the admin panel. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
+import { useAnnouncer } from '../../lib/announce.ts';
 import { Card } from '../../lib/Card.tsx';
 import { Notice } from '../../lib/Notice.tsx';
 import { Confirm, type Confirmation } from '../../lib/confirm.tsx';
@@ -9,19 +10,12 @@ import { ConnectedServers } from './ConnectedServers.tsx';
 import { SharedAlbums } from './SharedAlbums.tsx';
 import { Settings } from './Settings.tsx';
 
-/** What an action did. Said once, in the snackbar: a row that writes its outcome into its own card
- *  puts the message where the row it describes no longer is — unlinking DELETES the row, so the note
- *  that unlinking worked left the screen with it. */
-export type Outcome = { kind: 'ok' | 'error'; text: string };
-
-const NOTICE_MS = 6000;
-
 export const App = () => {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState('');
   const [asking, setAsking] = useState<Confirmation | null>(null);
   const [unlinking, setUnlinking] = useState('');
-  const [notice, setNotice] = useState<Outcome | null>(null);
+  const [notice, announce, dismiss] = useAnnouncer();
 
   const load = () =>
     overview()
@@ -31,13 +25,6 @@ export const App = () => {
   useEffect(() => {
     void load();
   }, []);
-
-  // A success fades; a failure stays, because it is asking for something.
-  useEffect(() => {
-    if (notice?.kind !== 'ok') return;
-    const timer = setTimeout(() => setNotice(null), NOTICE_MS);
-    return () => clearTimeout(timer);
-  }, [notice]);
 
   const unlink = (peer: Peer) => {
     setAsking({
@@ -52,10 +39,10 @@ export const App = () => {
         setUnlinking(peer.pub);
         unlinkPeer(peer.pub)
           .then(r => {
-            setNotice({ kind: 'ok', text: `Unlinked ${r.household}.` });
+            announce({ kind: 'ok', text: `Unlinked ${r.household}.` });
             return load();
           })
-          .catch((e: Error) => setNotice({ kind: 'error', text: `Could not unlink: ${e.message}` }))
+          .catch((e: Error) => announce({ kind: 'error', text: `Could not unlink: ${e.message}` }))
           .finally(() => setUnlinking(''));
       },
     });
@@ -91,8 +78,8 @@ export const App = () => {
       <p class="isa-page-lede">
         Server-side settings and pairings. <a href="/immich-shared-albums/me">Your own shared albums →</a>
       </p>
-      {notice && <Notice kind={notice.kind} text={notice.text} onDismiss={() => setNotice(null)} />}
-      <LinkServer onLinked={load} onOutcome={setNotice} />
+      {notice && <Notice key={notice.id} kind={notice.kind} text={notice.text} onDismiss={dismiss} />}
+      <LinkServer onLinked={load} onOutcome={announce} />
       <SharedAlbums albums={data.albums} />
       <ConnectedServers peers={data.peers} onUnlink={unlink} unlinking={unlinking} />
       <Settings />
