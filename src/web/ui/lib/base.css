@@ -1,0 +1,87 @@
+/* web/ui/lib/base.css — the document shell our own pages render into. See design-system.md. */
+@import './ui.css';
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  margin: 0;
+  font-family: var(--isa-font);
+  background: var(--isa-bg);
+  color: var(--isa-ink);
+  min-height: 100vh;
+  display: grid;
+  place-items: start center;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+/* One column, one gutter, and enough room under the last card for a phone's home indicator. */
+main {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--isa-page-max);
+  padding: var(--isa-space-6) var(--isa-gutter) calc(var(--isa-space-8) + env(safe-area-inset-bottom));
+}
+noscript {
+  color: var(--isa-ink-muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+a {
+  color: var(--isa-accent);
+}
+h1,
+h2,
+h3 {
+  /* Headings are reset to the page's own type: an `h2` brings 0.83em and a block margin that would
+     land on top of the rhythm the layout sets. */
+  display: block;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  margin: 0;
+  padding: 0;
+}
+
+/* A title and the household it belongs to, which is the only place the page says whose it is. */
+.isa-page-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--isa-space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--isa-space-1);
+}
+.isa-page-title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+/* A household name is operator-supplied and can be a hostname; it must wrap, not push the page
+   sideways. The same goes for every peer and album name the panel prints. */
+.isa-page-household {
+  color: var(--isa-ink-muted);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.isa-page-lede {
+  color: var(--isa-ink-muted);
+  font-size: 13.5px;
+  margin: 0 0 var(--isa-space-6);
+  overflow-wrap: anywhere;
+}
+
+/* Every interactive thing on the page, on one keyboard. */
+:where(button, a, input, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--isa-accent);
+  outline-offset: 2px;
+}
+
+/* A title and a household name long enough to wrap leave the title too wide for the narrowest
+   phone, so it steps down with them. ui.css cannot hold this rule: it is inlined BEFORE this file,
+   and a same-specificity rule there always loses to the one here. */
+@media (max-width: 420px) {
+  .isa-page-title {
+    font-size: 20px;
+  }
+}

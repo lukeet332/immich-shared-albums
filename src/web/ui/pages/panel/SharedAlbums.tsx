@@ -1,19 +1,28 @@
 /** web/ui/pages/panel/SharedAlbums.tsx — the albums currently shared in either direction. See ../../../http-router.md. */
-import { s } from '../../lib/theme.ts';
+import { Card } from '../../lib/Card.tsx';
 import type { Album } from './api.ts';
 
 export const SharedAlbums = ({ albums }: { albums: Album[] }) => (
-  <div style={s.card}>
-    <h2 style={s.cardHeading}>Shared albums</h2>
-    {albums.length === 0 && <p style={s.muted}>None yet.</p>}
-    {albums.map(a => (
-      <div key={`${a.name}:${a.peer}:${a.role}`} style={{ ...s.item, ...s.row }}>
-        <span>{a.name}</span>
-        <span style={s.sub}>
-          {a.role === 'owner' ? 'shared out' : 'shared with us'} · {a.peer}
-          {a.via === 'invite' ? ' · invited' : ''}
-        </span>
-      </div>
-    ))}
-  </div>
+  <section class="isa-section">
+    <h2 class="isa-section-title">Shared albums</h2>
+    <Card>
+      {albums.length === 0 ? (
+        <span class="isa-empty">None yet.</span>
+      ) : (
+        <div class="isa-rows">
+          {albums.map(a => (
+            <div class="isa-row" key={`${a.name}:${a.peer}:${a.role}`}>
+              <div class="isa-row-main">
+                <div class="isa-row-title">{a.name}</div>
+                <div class="isa-row-sub">
+                  {a.role === 'owner' ? 'shared out' : 'shared with us'} · {a.peer}
+                  {a.via === 'invite' ? ' · invited' : ''}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  </section>
 );

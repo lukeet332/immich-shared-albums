@@ -64,7 +64,32 @@ if (withImport.length) {
   process.exit(1);
 }
 
+// EVERY page styles itself from the shared layer, so no page can quietly ship its own spacing,
+// colour or radius. base.css is the document shell; share.css takes ui.css directly, because its
+// document frames Immich's page and must not import a body reset. See lib/design-system.md.
+const SHARED_LAYER = /@import\s+'\.\.\/\.\.\/lib\/(base|ui)\.css'/;
+const pageStylesheets = fs
+  .readdirSync(path.join(UI, 'pages'), { withFileTypes: true })
+  .filter(entry => entry.isDirectory())
+  .map(entry => path.join(UI, 'pages', entry.name))
+  .flatMap(dir =>
+    fs
+      .readdirSync(dir)
+      .filter(name => name.endsWith('.css'))
+      .map(name => path.join(dir, name))
+  );
+const unshared = pageStylesheets.filter(file => !SHARED_LAYER.test(fs.readFileSync(file, 'utf8')));
+if (unshared.length) {
+  console.error("page stylesheets that don't import the shared layer:");
+  for (const file of unshared) console.error(`  ${file}`);
+  console.error(
+    "Import '../../lib/base.css' (or '../../lib/ui.css' for the banner) so the page inherits the theme."
+  );
+  process.exit(1);
+}
+
 console.log(
   `colours live in ${OWNS_COLOURS} (${Object.keys(ALLOWED).length} file(s) still on the ratchet), ` +
-    `and every built stylesheet carries its tokens`
+    `every built stylesheet carries its tokens, and all ${pageStylesheets.length} page stylesheets ` +
+    `import the shared layer`
 );

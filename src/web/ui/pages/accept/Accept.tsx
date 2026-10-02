@@ -1,10 +1,12 @@
 /** web/ui/pages/accept/Accept.tsx — the joining flow: sign-in poll, redeem, watch the album fill, hand over the deeplink. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
+import { Button } from '../../lib/Button.tsx';
 import { readInvite } from './fragment.ts';
 import { join, preview, whoami, type JoinResult, type Me, type Reunion } from './api.ts';
 import { OpenInApp } from './OpenInApp.tsx';
 
-// #who/#go/#out (and #openapp) are a TEST CONTRACT — the browser lane drives them. Keep them.
+// #who/#go/#out/#reunion/#joinseparate (and #openapp in OpenInApp.tsx) are a TEST CONTRACT —
+// the browser lane drives them. Keep them.
 
 /** How often to re-check whether they have signed in, while this page waits. */
 const SIGN_IN_POLL_MS = 2500;
@@ -80,7 +82,7 @@ export const Accept = ({ household }: { household: string }) => {
   if (!invite) {
     return (
       <>
-        <h1>Invalid or expired invite</h1>
+        <h1 class="isa-hero-title">Invalid or expired invite</h1>
         <p>This link is missing the album details. Ask whoever shared it to send it again.</p>
       </>
     );
@@ -119,8 +121,8 @@ export const Accept = ({ household }: { household: string }) => {
   if (joined?.ok) {
     return (
       <>
-        <h1>All set</h1>
-        <div id="out" class="out">
+        <h1 class="isa-hero-title">All set</h1>
+        <div id="out" class="out isa-hero-done">
           Joined “{joined.album}” from {joined.from}.
           {joined.permissions === 'view' &&
             ' View-only album: you can look and comment, but photos you add stay on your server.'}
@@ -132,7 +134,7 @@ export const Accept = ({ household }: { household: string }) => {
 
   return (
     <>
-      <h1>Join shared album?</h1>
+      <h1 class="isa-hero-title">Join shared album?</h1>
       <p>
         This will add the album to your account on <b>{household}</b>. Photos stay on their owners' servers.
       </p>
@@ -148,7 +150,7 @@ export const Accept = ({ household }: { household: string }) => {
       </div>
       {albumNeedsPassword && (
         <input
-          class="pw"
+          class="pw isa-field"
           type="password"
           placeholder="Album password"
           autocomplete="current-password"
@@ -157,15 +159,16 @@ export const Accept = ({ household }: { household: string }) => {
         />
       )}
       {reunion && (
+        // The reunion offer: a real choice, so it reads as one — the primary button becomes the
+        // reunion and this states what that means, with the separate join kept visible underneath.
         <div id="reunion" class="reunion">
           You already have an album called “{reunion.name}”. Reuniting the two shows the photos you both hold
           once, and leaves the album yours — you can undo it from your shared-albums page.
         </div>
       )}
-      <button
+      <Button
         id="go"
         disabled={!signedInUser || joinInProgress || !previewSettled}
-        class={joinInProgress ? 'busy' : ''}
         onClick={() => acceptInvite(reunion?.albumId)}
       >
         {!signedInUser ? (
@@ -174,12 +177,12 @@ export const Accept = ({ household }: { household: string }) => {
           'Sign in to continue'
         ) : joinInProgress ? (
           <>
-            <span class="spin" />
+            <span class="isa-spinner" />
             Joining — syncing photos…
           </>
         ) : !previewSettled ? (
           <>
-            <span class="spin" />
+            <span class="isa-spinner" />
             Checking your albums…
           </>
         ) : reunion ? (
@@ -187,13 +190,19 @@ export const Accept = ({ household }: { household: string }) => {
         ) : (
           'Accept & join'
         )}
-      </button>
+      </Button>
       {reunion && (
         // The other choice, stated rather than hidden: joining separately is what a plain join does,
         // and it is right when the two albums only share a name.
-        <button id="joinseparate" class="secondary" disabled={joinInProgress} onClick={() => acceptInvite()}>
+        <Button
+          id="joinseparate"
+          fill="outlined"
+          class="isa-hero-secondary"
+          disabled={joinInProgress}
+          onClick={() => acceptInvite()}
+        >
           Join as a separate album
-        </button>
+        </Button>
       )}
       <div id="out" class="out">
         {message}

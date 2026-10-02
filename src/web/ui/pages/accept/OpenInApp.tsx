@@ -31,8 +31,8 @@ export const OpenInApp = ({ albumId, photos }: { albumId: string; photos: number
 
   if (!linkEnabled) {
     return (
-      <a id="openapp" class="cta" style={{ opacity: 0.45, pointerEvents: 'none' }}>
-        <span class="spin" />
+      <a id="openapp" class="cta" aria-disabled="true" style={{ opacity: 0.55, pointerEvents: 'none' }}>
+        <span class="isa-spinner" />
         Syncing {photosArrived}/{photos}…
       </a>
     );

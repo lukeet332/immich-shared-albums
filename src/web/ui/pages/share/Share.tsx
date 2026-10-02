@@ -83,7 +83,8 @@ export const Share = () => {
       {!dismissed && (
         <div class="card" role="dialog" aria-label="Join this album with your own Immich server">
           <button
-            class="dismiss"
+            type="button"
+            class="isa-btn isa-btn--text dismiss"
             aria-label="Continue to the album"
             onClick={() => {
               setDismissed(true);
@@ -117,6 +118,7 @@ export const Share = () => {
           </div>
           <form onSubmit={join}>
             <input
+              class="isa-field"
               type="text"
               inputMode="url"
               autocomplete="off"
@@ -127,7 +129,7 @@ export const Share = () => {
               value={address}
               onInput={e => setAddress((e.target as HTMLInputElement).value)}
             />
-            <button class="join" type="submit" disabled={probing}>
+            <button class="isa-btn isa-btn--filled join" type="submit" disabled={probing}>
               {probing ? 'Checking…' : 'Join'}
             </button>
           </form>

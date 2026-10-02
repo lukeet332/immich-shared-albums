@@ -163,7 +163,7 @@ it is.
 | Route | Method | Auth | Notes |
 | --- | --- | --- | --- |
 | `/` and the four surfaces | GET | per surface | see `web/frontend.rs` |
-| `/assets/*.js`, `/assets/tokens.css` | GET | public | shared by the surfaces |
+| `/assets/*.js`, `/assets/*.css` | GET | public | one bundle per page; each `.css` carries the token file inline (`web/assets.rs`) |
 | `/share/:key` | GET | public | `?native=1` = Immich's own page |
 | `/health` | GET | public | `{"ok":true,"protocol":2}` |
 | `/events` | GET | signed in | SSE hints: `{type}` of `invitations`/`index`/`shares` |

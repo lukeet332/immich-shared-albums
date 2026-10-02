@@ -4,7 +4,9 @@ Fully API-driven cross-household test — **no phone, no emulator, no real serve
 Runs three throwaway mock Immich stacks (C origin, B and D joiners) and asserts
 the whole flow, exits non-zero on any fail. A Playwright lane (browser-test.mjs) covers the
 banner/accept browser flows and the panels' live channel in CI — an open page that has to be
-reloaded to see a change fails it.
+reloaded to see a change fails it — plus the three layout properties the UI design system holds:
+every checkbox is an announced 52×32 Material switch, `/me` and `/admin` fit a 360px phone without
+scrolling sideways, and nothing tappable on them is under 44px.
 
 ```bash
 ./demo/run-mock-e2e.sh
