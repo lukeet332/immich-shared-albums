@@ -4,6 +4,7 @@ use crate::immich::client::Client;
 use crate::state::State;
 use crate::store::Role;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 /// What an unlink did, as the panel reports it.
 pub struct UnlinkResult {
@@ -208,7 +209,13 @@ pub fn linked_peers(state: &State) -> Vec<Value> {
 }
 
 /// Albums this server is sharing or receiving, for the panel.
-pub fn shared_albums(state: &State) -> Vec<Value> {
+///
+/// `openable` is the set of album ids the VIEWER may read, from their own credential, and it
+/// decides `canOpen` and nothing else. An admin is entitled to see every mapping on the server, so
+/// every row names its album — but `/albums/<id>` is answered by IMMICH for whoever follows it, and
+/// refuses an album they are not a member of. The title stays a link either way and says so when
+/// it is pressed. `None` is a refused read, which opens nothing.
+pub fn shared_albums(state: &State, openable: Option<&HashSet<String>>) -> Vec<Value> {
     let collections = state.collections();
     collections
         .mappings
@@ -219,6 +226,8 @@ pub fn shared_albums(state: &State) -> Vec<Value> {
                 "name": m.album_name,
                 // The panel's row title links to the album, so the row has to name it.
                 "albumId": m.album_id,
+                // Whether THIS admin can open it. Not whether the mapping exists.
+                "canOpen": openable.is_some_and(|seen| seen.contains(&m.album_id)),
                 "role": m.role.as_str(),
                 "via": m.via,
                 "peer": collections
@@ -384,6 +393,29 @@ mod tests {
     }
 
     #[test]
+    fn a_row_the_viewer_cannot_open_still_links_and_says_it_cannot_open() {
+        // An admin sees every mapping, but `/albums/<id>` is IMMICH answering the person who
+        // follows it — and it refuses an album they are not a member of. The row still names its
+        // album; what it must not claim is that this admin can open it.
+        let s = state_with(
+            vec![peer("peer-b", "Household B")],
+            vec![mapping("peer-b", Role::Member, false)],
+            vec![],
+        );
+        let not_mine = shared_albums(&s, Some(&HashSet::new()));
+        assert_eq!(not_mine.len(), 1, "the row still lists");
+        assert_eq!(not_mine[0]["albumId"], "a1", "and still names its album");
+        assert_eq!(
+            not_mine[0]["canOpen"], false,
+            "but not that this admin can open it"
+        );
+
+        // A refused read is not "can open everything".
+        let unread = shared_albums(&s, None);
+        assert_eq!(unread[0]["canOpen"], false, "{0}", unread[0]);
+    }
+
+    #[test]
     fn shared_albums_omits_dead_mappings_and_names_the_peer() {
         let s = state_with(
             vec![peer("peer-b", "Household B")],
@@ -394,16 +426,17 @@ mod tests {
             }],
             vec![],
         );
-        let albums = shared_albums(&s);
+        let openable = HashSet::from(["a1".to_string()]);
+        let albums = shared_albums(&s, Some(&openable));
         assert_eq!(albums.len(), 1);
         assert_eq!(albums[0]["name"], "Holidays");
         assert_eq!(albums[0]["role"], "member");
         assert_eq!(albums[0]["peer"], "Household B");
-        // Without this the panel can name an album but not open it.
         assert_eq!(
             albums[0]["albumId"], "a1",
             "the id the mapping already holds"
         );
+        assert_eq!(albums[0]["canOpen"], true, "and this viewer may open it");
         let _ = Creds {
             headers: Default::default(),
         };

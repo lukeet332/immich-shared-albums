@@ -96,10 +96,20 @@ handshake count comments + likes, or a like that moved would never be pulled. Ut
 activity is excluded at the ORIGIN: our bot's lines are this household's trail, not a person for the
 peer to mirror.
 
-**Album rows carry the album they name.** `/peers` and `/me/albums` answer with `albumId` on every
-row, and a reunion row carries it top-level like `mappingId`, so the panel can link an album's name
-to `/albums/<albumId>`. It comes from `OwnedAlbum.id`, which is `#[serde(skip_serializing)]`: the id
-is local by construction and is never published to a peer, because a peer's is a different album's.
+**Album rows carry the album they name, and say whether this viewer may open it.** Three sources,
+and they are not the same field:
+
+| Row                    | `albumId` comes from | Also answers |
+| ---------------------- | -------------------- | ------------ |
+| `/peers`               | `Mapping.album_id`   | `canOpen` — from `visible_album_ids` on the admin's OWN credential |
+| `/me/albums`           | `Mapping.album_id`   | — (already filtered to what the caller can see) |
+| `/me/matches` a reunion row | `OwnedAlbum.id`, top-level like `mappingId` | — |
+
+`OwnedAlbum.id` is `#[serde(skip_serializing)]`; the other two are ordinary reads of the mapping.
+`canOpen` matters because `/albums/<id>` is answered by **Immich** for whoever follows it, and it
+refuses an album the follower is not a member of — an admin panel lists albums belonging to other
+people. The row still names its album and the title still links; clicking one this admin cannot open
+announces that instead of navigating.
 
 **The per-user routes answer as the caller.** `/me/albums` and `/me/matches` read Immich with the
 caller's own forwarded credential (`immich/access.rs` decides that once), so membership and

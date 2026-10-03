@@ -3,7 +3,7 @@ import { AlbumLink } from '../../lib/AlbumLink.tsx';
 import { Card } from '../../lib/Card.tsx';
 import type { Album } from './api.ts';
 
-export const SharedAlbums = ({ albums }: { albums: Album[] }) => (
+export const SharedAlbums = ({ albums, onDenied }: { albums: Album[]; onDenied: () => void }) => (
   <section class="isa-section">
     <h2 class="isa-section-title">Shared albums</h2>
     <Card>
@@ -14,7 +14,7 @@ export const SharedAlbums = ({ albums }: { albums: Album[] }) => (
           {albums.map(a => (
             <div class="isa-row" key={`${a.name}:${a.peer}:${a.role}`}>
               <div class="isa-row-main">
-                <AlbumLink albumId={a.albumId} name={a.name} />
+                <AlbumLink albumId={a.albumId} canOpen={a.canOpen} name={a.name} onDenied={onDenied} />
                 <div class="isa-row-sub">
                   {a.role === 'owner' ? 'shared out' : 'shared with us'} · {a.peer}
                   {a.via === 'invite' ? ' · invited' : ''}

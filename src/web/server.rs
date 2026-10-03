@@ -260,16 +260,24 @@ pub async fn serve(req: Request) -> Response {
 /// One row per linked server, with what the link is currently carrying. Admin-only: server links
 /// are admin-owned objects, not something a per-user surface scopes to the caller.
 async fn peers(headers: &HeaderMap) -> Response {
-    if let Some(refusal) = admin_refusal(headers, "see connected servers").await {
-        return refusal;
-    }
+    let admin = match admin_caller(headers, "see connected servers").await {
+        Ok(admin) => admin,
+        Err(refusal) => return refusal,
+    };
     let state = state();
+    // An admin is entitled to see every mapping on the server, but `/albums/<id>` is answered by
+    // IMMICH for the person following the link — and it refuses an album they are not a member of.
+    // So the list stays whole and only the rows they can open carry an id. A refused read is not
+    // "can open everything": `None` leaves every title plain, which costs a link and nothing else.
+    let openable =
+        crate::immich::access::visible_album_ids(&crate::immich::client::shared(), &admin.creds)
+            .await;
     json_response(
         StatusCode::OK,
         json!({
             "household": local_household(),
             "peers": linked_peers(state),
-            "albums": shared_albums(state),
+            "albums": shared_albums(state, openable.as_ref()),
         }),
     )
 }
@@ -517,19 +525,29 @@ async fn leave(headers: &HeaderMap, body: HttpBody) -> Response {
 /// unlinking households, and deleting other accounts' assets. A signed-in non-admin gets 403 rather
 /// than 401: they are not going to fix it by signing in again.
 async fn admin_refusal(headers: &HeaderMap, what: &str) -> Option<Response> {
-    let Some(caller) = caller_identity(headers).await else {
-        return Some(json_response(
+    admin_caller(headers, what).await.err()
+}
+
+/// The admin who is asking, WITH the credential — for a route that must also read what this person
+/// can see. The refusal is returned rather than taken, so a route needing both answers exactly as
+/// one needing only the check does.
+async fn admin_caller(
+    headers: &HeaderMap,
+    what: &str,
+) -> Result<crate::web::auth::SignedIn, Response> {
+    let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
+        return Err(json_response(
             StatusCode::UNAUTHORIZED,
             sign_in_required(what),
         ));
     };
-    if !caller.is_admin {
-        return Some(json_response(
+    if !signed_in.caller.is_admin {
+        return Err(json_response(
             StatusCode::FORBIDDEN,
             json!({ "error": format!("only an admin can {what}") }),
         ));
     }
-    None
+    Ok(signed_in)
 }
 
 /// `GET /me/albums` — the caller's shared albums, as IMMICH says they may see them.

@@ -81,9 +81,13 @@ confirm button out as a host `<button>` instead. Anything else that needs the no
   route, so an album opens where the rest of the person's library already lives.
 - **No `albumId` means plain text, not a broken link.** `/peers` and `/me/albums` read it from the
   mapping; a reunion row's is top-level on the row.
-- `OwnedAlbum.id` is `#[serde(skip_serializing)]`, so the id stays local — see `docs/http-router.md`.
-  It travels on the album rather than beside it, because two albums on one server can share a name
-  and a map keyed on the name links to whichever came last.
+- **`canOpen` keeps the link and explains itself.** An admin panel lists albums owned by other people,
+  and Immich refuses `/albums/<id>` for someone who is not a member — so a title this admin cannot
+  open is still a title, still a link, and pressing it announces the reason rather than navigating.
+  Demoting it to plain text would leave no sign the album was there at all.
+- The id travels on the album (`OwnedAlbum.id`, `#[serde(skip_serializing)]`, so it never reaches a
+  peer) rather than beside it: two albums on one server can share a name, and a map keyed on the name
+  links to whichever came last.
 
 ## The snackbar
 
