@@ -302,6 +302,7 @@ mod tests {
 
     fn album(name: &str, owner: &str, start: Option<&str>, end: Option<&str>) -> OwnedAlbum {
         OwnedAlbum {
+            id: String::new(),
             name: name.into(),
             asset_count: 5,
             start_date: start.map(str::to_string),

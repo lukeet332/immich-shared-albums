@@ -302,7 +302,62 @@ check('the admin stays at the root rather than being sent to a panel',
       layout.undersized.join(', ') || 'all 44px+');
   }
 
-  // 6d. THE SNACKBAR. Every action in the panel reports through it, so a bar that hugs its words
+  // 6d. AN ALBUM'S NAME OPENS THAT ALBUM. The id is checked against what the panel's own route
+  //     reported rather than a literal, and the click is followed into Immich — a link that points
+  //     somewhere real is the only thing this proves.
+  // Compared as a MULTISET of ids, never joined on name: the rig carries two albums that share a
+  // name and differ only by id, and matching on the name would pair a row with the wrong one.
+  const albumLinks = await phone.evaluate(async base => {
+    const said = await (await fetch(base + '/immich-shared-albums/peers', { credentials: 'include' })).json();
+    const rows = [...document.querySelectorAll('.isa-album-link')];
+    return {
+      said: (said.albums || []).map(a => ({ name: a.name, albumId: a.albumId })).sort((x, y) => x.name.localeCompare(y.name)),
+      rendered: rows.map(r => ({ name: r.textContent.trim(), href: r.getAttribute('href') })).sort((x, y) => x.name.localeCompare(y.name)),
+    };
+  }, B_PANEL_WEB).catch(() => null);
+  const saidIds = (albumLinks?.said || []).map(a => a.albumId).filter(Boolean).sort();
+  const renderedIds = (albumLinks?.rendered || []).map(r => r.href?.replace('/albums/', '')).sort();
+  check('every album on the panel carries the id its own route reported',
+    !!albumLinks && saidIds.length === renderedIds.length && saidIds.every((id, i) => id === renderedIds[i]),
+    albumLinks ? `${renderedIds.length} row(s), ids ${saidIds.length === renderedIds.length ? 'match' : 'DIFFER'}` : 'could not read the page');
+
+  const firstAlbum = phone.locator('a.isa-album-link').first();
+  if (await firstAlbum.count()) {
+    const wanted = await firstAlbum.getAttribute('href');
+    await firstAlbum.click();
+    await phone.waitForURL(new RegExp(`${wanted.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), { timeout: 15000 })
+      .then(() => true)
+      .catch(() => false);
+    check('and clicking it lands on that album in Immich',
+      new URL(phone.url()).pathname === wanted, `landed on ${new URL(phone.url()).pathname}, wanted ${wanted}`);
+    await phone.goto(`${B_PANEL_WEB}/immich-shared-albums/admin`, { waitUntil: 'networkidle' });
+  }
+
+  // An album this admin CANNOT open still carries its name, still links, and says so when pressed
+  // rather than navigating into an Immich error page. The rig's admin owns every album it lists,
+  // so the denial is staged by flipping the route's own `canOpen` — what is under test is the
+  // panel's answer to that verdict, not who may open what.
+  {
+    await phone.route('**/immich-shared-albums/peers', async route => {
+      const body = await (await route.fetch()).json();
+      body.albums = (body.albums || []).map((a, i) => (i === 0 ? { ...a, canOpen: false } : a));
+      await route.fulfill({ json: body });
+    });
+    await phone.goto(`${B_PANEL_WEB}/immich-shared-albums/admin`, { waitUntil: 'networkidle' });
+    const refusedTitle = await phone.locator('a.isa-album-link').first().innerText();
+    await phone.locator('a.isa-album-link').first().click();
+    const refused = await phone
+      .waitForSelector('#notice', { timeout: 8000 })
+      .then(() => phone.locator('#notice').innerText())
+      .catch(() => '');
+    check('a title that cannot be opened still links, and says why instead of navigating',
+      /access/i.test(refused) && new URL(phone.url()).pathname.endsWith('/admin'),
+      `"${refusedTitle}" -> ${JSON.stringify(refused.trim().slice(0, 60))}, url ${new URL(phone.url()).pathname}`);
+    await phone.unroute('**/immich-shared-albums/peers');
+    await phone.goto(`${B_PANEL_WEB}/immich-shared-albums/admin`, { waitUntil: 'networkidle' });
+  }
+
+  // 6e. THE SNACKBAR. Every action in the panel reports through it, so a bar that hugs its words
   //     wraps a one-line outcome into six, and a phone is the only place it is read. Minting a
   //     pairing link is a real action and the rig purges it, so this needs no mocking.
   await phone.goto(`${B_PANEL_WEB}/immich-shared-albums/admin`, { waitUntil: 'networkidle' });

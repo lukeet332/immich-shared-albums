@@ -1,6 +1,7 @@
 /** web/ui/pages/me/App.tsx — the per-user panel: your shared albums, the possible reunions and what
  *  can be done about each one, and the albums you have reunited. See ../../../http-router.md. */
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { AlbumLink } from '../../lib/AlbumLink.tsx';
 import { useAnnouncer } from '../../lib/announce.ts';
 import { Button } from '../../lib/Button.tsx';
 import { Card } from '../../lib/Card.tsx';
@@ -183,7 +184,7 @@ export const App = () => {
               {reunifiedAlbums.map(a => (
                 <div class="isa-row" key={a.mappingId}>
                   <div class="isa-row-main">
-                    <div class="isa-row-title">{a.name}</div>
+                    <AlbumLink albumId={a.albumId} name={a.name} />
                     <div class="isa-row-sub">
                       {a.adoptedByUs === false ? `reunited by ${a.peer}` : 'yours, reunited'}
                     </div>
@@ -230,7 +231,7 @@ export const App = () => {
               {matches.map(m => (
                 <div class="isa-row" key={rowKey(m)}>
                   <div class="isa-row-main">
-                    <div class="isa-row-title">{m.mine.name}</div>
+                    <AlbumLink albumId={m.albumId} name={m.mine.name} />
                     <div class="isa-row-sub">
                       yours: {m.mine.assetCount} {m.mine.assetCount === 1 ? 'photo' : 'photos'} ·{' '}
                       {m.theirs.ownerName} on {m.peerName}: {m.theirs.assetCount}{' '}
@@ -305,7 +306,7 @@ export const App = () => {
               {albums.map(a => (
                 <div class="isa-row" key={`${a.peer}:${a.name}`}>
                   <div class="isa-row-main">
-                    <div class="isa-row-title">{a.name}</div>
+                    <AlbumLink albumId={a.albumId} name={a.name} />
                     <div class="isa-row-sub">
                       {/* A reunion adopts the person's OWN album, so the mapping's role says how the
                           share arrived, not whose album this is — "shared with you" for an album you

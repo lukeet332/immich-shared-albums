@@ -11,6 +11,8 @@ const json = async (path: string, init?: RequestInit) => {
 
 export type MyAlbum = {
   name: string;
+  /** Absent when the server could not name the album; the title then stays plain text. */
+  albumId?: string;
   role: 'owner' | 'member';
   via: string;
   peer: string;
@@ -40,6 +42,8 @@ export type PeerMatch = {
   peerName: string;
   sameDates: boolean;
   why: string;
+  /** The CALLER's album, top-level like `mappingId`, so the row's title can open it. */
+  albumId?: string;
 };
 
 /** What this person can do about the pairing — the same four cases the server decides. */

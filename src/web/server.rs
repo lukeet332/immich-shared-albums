@@ -5,7 +5,7 @@ use crate::p2p::transport::transport;
 use crate::p2p::unlink::{linked_peers, local_household, shared_albums};
 use crate::settings::{Settings, TTL_MAX_MINUTES, TTL_MINUTES_MIN};
 use crate::state::state;
-use crate::web::auth::{caller_identity, sign_in_required};
+use crate::web::auth::{caller_creds, caller_identity, sign_in_required};
 use crate::web::frontend::{surface_for, Access, Body};
 use crate::web::{assets, frontend, interceptor, passthrough, query};
 use axum::body::Body as HttpBody;
@@ -264,12 +264,25 @@ async fn peers(headers: &HeaderMap) -> Response {
         return refusal;
     }
     let state = state();
+    // An admin is entitled to see every mapping on the server, but `/albums/<id>` is answered by
+    // IMMICH for the person following the link — and it refuses an album they are not a member of.
+    // So the list stays whole and each row carries whether THIS admin can open it.
+    //
+    // The credential comes from the same headers the refusal above just vetted, so the admin check
+    // is still made in exactly one place. No credential here cannot be reached — `admin_refusal`
+    // has already answered — but reading it as "opens nothing" keeps the fall-through total.
+    let openable = match caller_creds(headers) {
+        Some(creds) => {
+            crate::immich::access::visible_album_ids(crate::immich::client::shared(), &creds).await
+        }
+        None => None,
+    };
     json_response(
         StatusCode::OK,
         json!({
             "household": local_household(),
             "peers": linked_peers(state),
-            "albums": shared_albums(state),
+            "albums": shared_albums(state, openable.as_ref()),
         }),
     )
 }
@@ -568,6 +581,8 @@ async fn my_albums(headers: &HeaderMap) -> Response {
                     .unwrap_or_else(|| "a linked server".to_string());
                 let mut entry = json!({
                     "name": m.album_name,
+                    // The row title links to the album, so the row has to name it.
+                    "albumId": m.album_id,
                     "role": if m.role == crate::store::Role::Owner { "owner" } else { "member" },
                     "via": m.via,
                     "peer": peer,

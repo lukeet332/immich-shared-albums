@@ -75,6 +75,7 @@ mod tests {
 
     fn album(name: &str, asset_count: i64) -> OwnedAlbum {
         OwnedAlbum {
+            id: String::new(),
             name: name.to_string(),
             asset_count,
             start_date: Some("2024-06-10T00:00:00.000Z".into()),

@@ -28,6 +28,7 @@ page's CTA computes to `rgb(66, 80, 175)`. Changing the light accent changes tha
 | `Card`          | `<section class="isa-card isa-enter">` with an optional lede   | panel, me, root                                      |
 | `Setting`       | `<label class="isa-setting">` — text, description, control | panel `Settings.tsx`, me `App.tsx`                   |
 | `Switch`        | `<input type="checkbox" role="switch" class="isa-switch">` | panel `Settings.tsx`, me `App.tsx`                   |
+| `AlbumLink`     | `<a class="isa-album-link">` to `/albums/<albumId>`     | panel `SharedAlbums.tsx`, me `App.tsx`                 |
 | `Notice`        | `#notice`, the snackbar, `role=status`/`alert`            | me `App.tsx`, panel `App.tsx` and `LinkServer.tsx`     |
 | `useAnnouncer`  | the notice state, `announce()`, `dismiss()` and the success fade | me and panel, in place of two copies     |
 | `confirm.tsx`   | `Confirm` — the one dialog, `.isa-scrim` + `.isa-dialog`   | me, panel                                            |
@@ -73,6 +74,20 @@ confirm button out as a host `<button>` instead. Anything else that needs the no
   the switch answers a press by growing both its thumb and its halo.
 - `prefers-reduced-motion: reduce` collapses all of it, scoped to `.isa-page` — the class
   `Document.tsx` puts on `<body>` — so the rule cannot reach the framed Immich page under the banner.
+
+## Album names
+
+- `AlbumLink` takes a row title's place and points at `/albums/<albumId>` — Immich's own SPA
+  route, so an album opens where the rest of the person's library already lives.
+- **No `albumId` means plain text, not a broken link.** `/peers` and `/me/albums` read it from the
+  mapping; a reunion row's is top-level on the row.
+- **`canOpen` keeps the link and explains itself.** An admin panel lists albums owned by other people,
+  and Immich refuses `/albums/<id>` for someone who is not a member — so a title this admin cannot
+  open is still a title, still a link, and pressing it announces the reason rather than navigating.
+  Demoting it to plain text would leave no sign the album was there at all.
+- The id travels on the album (`OwnedAlbum.id`, `#[serde(skip_serializing)]`, so it never reaches a
+  peer) rather than beside it: two albums on one server can share a name, and a map keyed on the name
+  links to whichever came last.
 
 ## The snackbar
 

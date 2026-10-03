@@ -60,6 +60,13 @@ impl Role {
 #[serde(rename_all = "camelCase")]
 pub struct OwnedAlbum {
     pub name: String,
+    /// This album's id on ITS OWN server, so a panel row can open it.
+    ///
+    /// `skip_serializing` is the point: this is LOCAL by construction and the field exists only to
+    /// link a row on the machine that already has the album. A peer's index entry is somebody
+    /// else's local id, which opens nothing here and is nobody else's business to receive.
+    #[serde(default, skip_serializing)]
+    pub id: String,
     #[serde(default)]
     pub asset_count: i64,
     #[serde(default)]
@@ -898,6 +905,7 @@ impl Store {
         )?;
         let rows = stmt.query_map(rusqlite::params![peer, direction.as_str()], |r| {
             Ok(OwnedAlbum {
+                id: String::new(),
                 name: r.get(0)?,
                 asset_count: r.get(1)?,
                 start_date: r.get(2)?,
@@ -1707,6 +1715,7 @@ mod tests {
     fn published_albums_keep_directions_and_peers_apart() {
         let s = store();
         let album = |name: &str, owner: &str| OwnedAlbum {
+            id: String::new(),
             name: name.into(),
             asset_count: 3,
             start_date: Some("2026-01-01".into()),
@@ -1746,6 +1755,7 @@ mod tests {
     fn replacing_a_peers_whole_index_clears_an_owner_who_went_silent() {
         let s = store();
         let album = |name: &str, owner: &str| OwnedAlbum {
+            id: String::new(),
             name: name.into(),
             asset_count: 1,
             start_date: None,

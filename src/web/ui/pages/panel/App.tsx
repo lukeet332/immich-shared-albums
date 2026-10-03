@@ -26,6 +26,12 @@ export const App = () => {
     void load();
   }, []);
 
+  const refuseAlbum = () =>
+    announce({
+      kind: 'error',
+      text: "You don't have access to that album — it belongs to someone else on this server.",
+    });
+
   const unlink = (peer: Peer) => {
     setAsking({
       title: `Unlink “${peer.name}”?`,
@@ -80,7 +86,7 @@ export const App = () => {
       </p>
       {notice && <Notice key={notice.id} kind={notice.kind} text={notice.text} onDismiss={dismiss} />}
       <LinkServer onLinked={load} onOutcome={announce} />
-      <SharedAlbums albums={data.albums} />
+      <SharedAlbums albums={data.albums} onDenied={refuseAlbum} />
       <ConnectedServers peers={data.peers} onUnlink={unlink} unlinking={unlinking} />
       <Settings />
       <Confirm ask={asking} onClose={() => setAsking(null)} />
