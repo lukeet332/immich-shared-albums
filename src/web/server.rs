@@ -5,7 +5,7 @@ use crate::p2p::transport::transport;
 use crate::p2p::unlink::{linked_peers, local_household, shared_albums};
 use crate::settings::{Settings, TTL_MAX_MINUTES, TTL_MINUTES_MIN};
 use crate::state::state;
-use crate::web::auth::{caller_identity, sign_in_required};
+use crate::web::auth::{caller_creds, caller_identity, sign_in_required};
 use crate::web::frontend::{surface_for, Access, Body};
 use crate::web::{assets, frontend, interceptor, passthrough, query};
 use axum::body::Body as HttpBody;
@@ -260,18 +260,23 @@ pub async fn serve(req: Request) -> Response {
 /// One row per linked server, with what the link is currently carrying. Admin-only: server links
 /// are admin-owned objects, not something a per-user surface scopes to the caller.
 async fn peers(headers: &HeaderMap) -> Response {
-    let admin = match admin_caller(headers, "see connected servers").await {
-        Ok(admin) => admin,
-        Err(refusal) => return refusal,
-    };
+    if let Some(refusal) = admin_refusal(headers, "see connected servers").await {
+        return refusal;
+    }
     let state = state();
     // An admin is entitled to see every mapping on the server, but `/albums/<id>` is answered by
     // IMMICH for the person following the link — and it refuses an album they are not a member of.
-    // So the list stays whole and only the rows they can open carry an id. A refused read is not
-    // "can open everything": `None` leaves every title plain, which costs a link and nothing else.
-    let openable =
-        crate::immich::access::visible_album_ids(&crate::immich::client::shared(), &admin.creds)
-            .await;
+    // So the list stays whole and each row carries whether THIS admin can open it.
+    //
+    // The credential comes from the same headers the refusal above just vetted, so the admin check
+    // is still made in exactly one place. No credential here cannot be reached — `admin_refusal`
+    // has already answered — but reading it as "opens nothing" keeps the fall-through total.
+    let openable = match caller_creds(headers) {
+        Some(creds) => {
+            crate::immich::access::visible_album_ids(crate::immich::client::shared(), &creds).await
+        }
+        None => None,
+    };
     json_response(
         StatusCode::OK,
         json!({
@@ -525,29 +530,19 @@ async fn leave(headers: &HeaderMap, body: HttpBody) -> Response {
 /// unlinking households, and deleting other accounts' assets. A signed-in non-admin gets 403 rather
 /// than 401: they are not going to fix it by signing in again.
 async fn admin_refusal(headers: &HeaderMap, what: &str) -> Option<Response> {
-    admin_caller(headers, what).await.err()
-}
-
-/// The admin who is asking, WITH the credential — for a route that must also read what this person
-/// can see. The refusal is returned rather than taken, so a route needing both answers exactly as
-/// one needing only the check does.
-async fn admin_caller(
-    headers: &HeaderMap,
-    what: &str,
-) -> Result<crate::web::auth::SignedIn, Response> {
-    let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
-        return Err(json_response(
+    let Some(caller) = caller_identity(headers).await else {
+        return Some(json_response(
             StatusCode::UNAUTHORIZED,
             sign_in_required(what),
         ));
     };
-    if !signed_in.caller.is_admin {
-        return Err(json_response(
+    if !caller.is_admin {
+        return Some(json_response(
             StatusCode::FORBIDDEN,
             json!({ "error": format!("only an admin can {what}") }),
         ));
     }
-    Ok(signed_in)
+    None
 }
 
 /// `GET /me/albums` — the caller's shared albums, as IMMICH says they may see them.
