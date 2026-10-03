@@ -589,15 +589,17 @@ mod tests {
             owner_name: "Demo Nan".into(),
             owner_user_id: Some("me".into()),
         }];
-        let offered = serde_json::to_value(&mine).expect("an index entry serialises");
+        // The route's OWN expression, from `p2p/routes.rs`: `json!({ "albums": albums })`. Testing
+        // `to_value` instead would be testing a proxy for the thing that actually goes on the wire.
+        let offered = json!({ "albums": mine });
         assert!(
-            offered[0].get("id").is_none(),
+            offered["albums"][0].get("id").is_none(),
             "the id must not be published: {offered}"
         );
 
         // And nothing to inherit, so a peer's answer cannot arrive carrying one.
-        let theirs: crate::store::OwnedAlbum =
-            serde_json::from_value(offered[0].clone()).expect("an index entry deserialises");
+        let theirs: crate::store::OwnedAlbum = serde_json::from_value(offered["albums"][0].clone())
+            .expect("an index entry deserialises");
         assert_eq!(theirs.id, "", "nothing to inherit");
     }
 
