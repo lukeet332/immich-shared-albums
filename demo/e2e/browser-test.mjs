@@ -410,9 +410,18 @@ check('the admin stays at the root rather than being sent to a panel',
     // than no bar at all.
     const shortMoved = await swipeBy(20);
     await phone.waitForTimeout(500);
+    // Having MOVED is not having SPRUNG BACK. A regression that left `--notice-drag` at -20px
+    // would leave the bar on screen exactly as it is here, so the resting offset is read directly.
+    const offsetAtRest = await phone.evaluate(() => {
+      const snackbar = document.getElementById('notice');
+      if (!snackbar) return null;
+      return parseFloat(getComputedStyle(snackbar).getPropertyValue('--notice-drag')) || 0;
+    });
     check('a short swipe springs the snackbar back',
-      shortMoved && (await phone.locator('#notice').count()) === 1,
-      shortMoved ? 'moved, then sprang back' : 'the bar never moved — the gesture did not register');
+      shortMoved && offsetAtRest !== null && Math.abs(offsetAtRest) < 1 && (await phone.locator('#notice').count()) === 1,
+      shortMoved
+        ? `moved, then resting at ${offsetAtRest}px`
+        : 'the bar never moved — the gesture did not register');
     // A real one dismisses it.
     const longMoved = await swipeBy(Math.round(bar.width * 0.6));
     check('a real swipe takes it away',
