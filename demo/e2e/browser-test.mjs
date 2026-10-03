@@ -378,22 +378,49 @@ check('the admin stays at the root rather than being sent to a panel',
 
   if (noticed && gutter) {
     const bar = await phone.locator('#notice').boundingBox();
-    const midY = bar.y + bar.height / 2;
+    // Drag the bar `travelled` px and let go, reporting whether the GESTURE registered.
+    //
+    // Registering is asserted before the release because the alternative is worse than a flake: a
+    // synthetic `pointermove` that never arrives leaves the bar exactly where it was, which reads
+    // identically to "a swipe does nothing" — and, for the short swipe, to "a swipe sprang back".
+    const swipeBy = async travelled => {
+      const box = await phone.locator('#notice').boundingBox();
+      const midY = box.y + box.height / 2;
+      const fromX = box.x + box.width / 2;
+      await phone.mouse.move(fromX, midY);
+      await phone.mouse.down();
+      await phone.mouse.move(fromX - travelled, midY, { steps: 10 });
+      const registered = await phone
+        .waitForFunction(
+          px => {
+            const bar = document.getElementById('notice');
+            const moved = parseFloat(getComputedStyle(bar).getPropertyValue('--notice-drag')) || 0;
+            return Math.abs(moved) >= px;
+          },
+          Math.min(travelled - 1, 40),
+          { timeout: 5000 },
+        )
+        .then(() => true)
+        .catch(() => false);
+      await phone.mouse.up();
+      return registered;
+    };
+
     // A short drag must NOT take the message with it: a bar that vanishes under a slip is worse
     // than no bar at all.
-    await phone.mouse.move(bar.x + bar.width / 2, midY);
-    await phone.mouse.down();
-    await phone.mouse.move(bar.x + bar.width / 2 - 20, midY, { steps: 5 });
-    await phone.mouse.up();
-    await phone.waitForTimeout(400);
-    check('a short swipe springs the snackbar back', (await phone.locator('#notice').count()) === 1);
+    const shortMoved = await swipeBy(20);
+    await phone.waitForTimeout(500);
+    check('a short swipe springs the snackbar back',
+      shortMoved && (await phone.locator('#notice').count()) === 1,
+      shortMoved ? 'moved, then sprang back' : 'the bar never moved — the gesture did not register');
     // A real one dismisses it.
-    await phone.mouse.move(bar.x + bar.width / 2, midY);
-    await phone.mouse.down();
-    await phone.mouse.move(bar.x + bar.width / 2 - Math.round(bar.width * 0.6), midY, { steps: 10 });
-    await phone.mouse.up();
+    const longMoved = await swipeBy(Math.round(bar.width * 0.6));
     check('a real swipe takes it away',
-      await phone.waitForSelector('#notice', { state: 'detached', timeout: 5000 }).then(() => true).catch(() => false));
+      longMoved &&
+        (await phone.waitForSelector('#notice', { state: 'detached', timeout: 5000 })
+          .then(() => true)
+          .catch(() => false)),
+      longMoved ? 'moved, then left' : 'the bar never moved — the gesture did not register');
     // Escape is the keyboard's swipe, and a bar only a pointer can dismiss is a trap. Pressed more
     // than once on purpose: the listener is attached in an effect, so a press can land in the first
     // frame or two after the bar appears — a window no person can notice and a fast runner hits.
