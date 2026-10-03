@@ -568,6 +568,8 @@ async fn my_albums(headers: &HeaderMap) -> Response {
                     .unwrap_or_else(|| "a linked server".to_string());
                 let mut entry = json!({
                     "name": m.album_name,
+                    // The row title links to the album, so the row has to name it.
+                    "albumId": m.album_id,
                     "role": if m.role == crate::store::Role::Owner { "owner" } else { "member" },
                     "via": m.via,
                     "peer": peer,

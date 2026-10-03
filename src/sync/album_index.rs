@@ -40,6 +40,11 @@ fn owned_album_from(album: &Value, caller_user_id: &str) -> Option<OwnedAlbum> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
+        id: album
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
         asset_count: album
             .get("assetCount")
             .and_then(|v| v.as_i64())
@@ -423,6 +428,12 @@ fn match_entry(
 ) -> Value {
     let mut entry = serde_json::to_value(candidate).unwrap_or(Value::Null);
     if let Some(object) = entry.as_object_mut() {
+        // The caller's OWN album, so the row's title can open it. `id` is never serialised, so it
+        // is read off the album rather than from the serialised candidate. Absent means the row
+        // simply does not link — never a link to an album we could not name.
+        if !candidate.candidate.mine.id.is_empty() {
+            object.insert("albumId".into(), json!(candidate.candidate.mine.id));
+        }
         if let crate::sync::matches::ReunionStep::Accept { mapping_id } = step {
             object.insert("mappingId".into(), json!(mapping_id));
         }
@@ -517,6 +528,7 @@ mod tests {
             candidate: crate::sync::matches::AlbumCandidate {
                 mine: crate::store::OwnedAlbum {
                     name: "Holidays".into(),
+                    id: "album-1".into(),
                     asset_count: 2,
                     start_date: None,
                     end_date: None,
@@ -525,6 +537,8 @@ mod tests {
                 },
                 theirs: crate::store::OwnedAlbum {
                     name: "Holidays".into(),
+                    // A peer's id is never known to us — which is exactly why the row links `mine`.
+                    id: String::new(),
                     asset_count: 3,
                     start_date: None,
                     end_date: None,
@@ -552,4 +566,75 @@ mod tests {
         assert!(waiting.get("mappingId").is_none());
         assert_eq!(waiting["step"]["kind"], "waiting");
     }
+    #[test]
+    fn an_album_carries_its_own_id_so_a_row_can_open_it() {
+        let published = albums_i_publish(&[album("a-local-uuid", "owner", "me")], "me");
+        assert_eq!(published[0].id, "a-local-uuid", "the id travels with the album");
+    }
+
+    #[test]
+    fn an_albums_local_id_never_reaches_a_peer() {
+        // The id exists so a panel row can open an album HERE. `skip_serializing` is the point: a
+        // peer's index entry is somebody else's local id, which opens nothing on this server and is
+        // nobody else's business to receive.
+        let mine = vec![crate::store::OwnedAlbum {
+            name: "Holidays".into(),
+            id: "a-local-uuid".into(),
+            asset_count: 2,
+            start_date: None,
+            end_date: None,
+            owner_name: "Demo Nan".into(),
+            owner_user_id: Some("me".into()),
+        }];
+        let offered = serde_json::to_value(&mine).expect("an index entry serialises");
+        assert!(offered[0].get("id").is_none(), "the id must not be published: {offered}");
+
+        // And nothing to inherit, so a peer's answer cannot arrive carrying one.
+        let theirs: crate::store::OwnedAlbum =
+            serde_json::from_value(offered[0].clone()).expect("an index entry deserialises");
+        assert_eq!(theirs.id, "", "nothing to inherit");
+    }
+
+    #[test]
+    fn a_match_row_carries_the_callers_album_id_so_its_title_can_open_it() {
+        let candidate = crate::sync::matches::PeerMatch {
+            candidate: crate::sync::matches::AlbumCandidate {
+                mine: crate::store::OwnedAlbum {
+                    name: "Holidays".into(),
+                    id: "album-1".into(),
+                    asset_count: 2,
+                    start_date: None,
+                    end_date: None,
+                    owner_name: "Demo Nan".into(),
+                    owner_user_id: Some("me".into()),
+                },
+                theirs: crate::store::OwnedAlbum {
+                    name: "Holidays".into(),
+                    // A peer's id is never known here, which is why the row links `mine`.
+                    id: String::new(),
+                    asset_count: 3,
+                    start_date: None,
+                    end_date: None,
+                    owner_name: "Grandpa Joe".into(),
+                    owner_user_id: Some("them".into()),
+                },
+                same_dates: false,
+                why: "same album name".into(),
+            },
+            peer: "peer".into(),
+            peer_name: "Their household".into(),
+        };
+        let row = match_entry(&candidate, &crate::sync::matches::ReunionStep::Invite);
+        assert_eq!(row["albumId"], "album-1", "the row's title links to this");
+
+        // A row whose album this side cannot name must claim none, rather than linking to whatever.
+        let mut unnamed = candidate.clone();
+        unnamed.candidate.mine.id = String::new();
+        let unknown = match_entry(&unnamed, &crate::sync::matches::ReunionStep::Invite);
+        assert!(
+            unknown.get("albumId").is_none(),
+            "no id, no link: {unknown}"
+        );
+    }
+
 }

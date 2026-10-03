@@ -217,6 +217,8 @@ pub fn shared_albums(state: &State) -> Vec<Value> {
         .map(|m| {
             json!({
                 "name": m.album_name,
+                // The panel's row title links to the album, so the row has to name it.
+                "albumId": m.album_id,
                 "role": m.role.as_str(),
                 "via": m.via,
                 "peer": collections
@@ -397,6 +399,8 @@ mod tests {
         assert_eq!(albums[0]["name"], "Holidays");
         assert_eq!(albums[0]["role"], "member");
         assert_eq!(albums[0]["peer"], "Household B");
+        // Without this the panel can name an album but not open it.
+        assert_eq!(albums[0]["albumId"], "a1", "the id the mapping already holds");
         let _ = Creds {
             headers: Default::default(),
         };

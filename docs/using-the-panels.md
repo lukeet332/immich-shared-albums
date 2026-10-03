@@ -93,6 +93,13 @@ Those lines are visible as comments by default. **Album activity → Display bot
 `/immich-shared-albums/me` turns them off for you alone; everyone else in the album keeps seeing them,
 and nothing is deleted.
 
+## Opening an album
+
+An album's name is a link on both panels: the **Shared albums** list on the admin panel, and **Your
+shared albums** (including the reunified ones) on `/immich-shared-albums/me`. It opens the album in
+your own Immich, at the same `/albums/<id>` every other link to an album uses. A name the server
+could not attach an album to is plain text rather than a link to somewhere arbitrary.
+
 ## Related
 
 - [Setup guide](../deploy/SETUP.md) — installing and linking, step by step

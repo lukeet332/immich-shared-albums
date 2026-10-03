@@ -1,4 +1,5 @@
 /** web/ui/pages/panel/SharedAlbums.tsx — the albums currently shared in either direction. See ../../../http-router.md. */
+import { AlbumLink } from '../../lib/AlbumLink.tsx';
 import { Card } from '../../lib/Card.tsx';
 import type { Album } from './api.ts';
 
@@ -13,7 +14,7 @@ export const SharedAlbums = ({ albums }: { albums: Album[] }) => (
           {albums.map(a => (
             <div class="isa-row" key={`${a.name}:${a.peer}:${a.role}`}>
               <div class="isa-row-main">
-                <div class="isa-row-title">{a.name}</div>
+                <AlbumLink albumId={a.albumId} name={a.name} />
                 <div class="isa-row-sub">
                   {a.role === 'owner' ? 'shared out' : 'shared with us'} · {a.peer}
                   {a.via === 'invite' ? ' · invited' : ''}

@@ -22,7 +22,7 @@ export type Peer = {
   sharedToThem: number;
   sharedToUs: number;
 };
-export type Album = { name: string; role: string; via: string; peer: string };
+export type Album = { name: string; albumId?: string; role: string; via: string; peer: string };
 export type Overview = { household: { name: string }; peers: Peer[]; albums: Album[] };
 
 export const overview = () => json('/peers') as Promise<Overview>;

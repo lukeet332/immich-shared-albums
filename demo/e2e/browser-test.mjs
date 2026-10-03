@@ -302,7 +302,38 @@ check('the admin stays at the root rather than being sent to a panel',
       layout.undersized.join(', ') || 'all 44px+');
   }
 
-  // 6d. THE SNACKBAR. Every action in the panel reports through it, so a bar that hugs its words
+  // 6d. AN ALBUM'S NAME OPENS THAT ALBUM. The id is checked against what the panel's own route
+  //     reported rather than a literal, and the click is followed into Immich — a link that points
+  //     somewhere real is the only thing this proves.
+  const albumLinks = await phone.evaluate(async base => {
+    const said = await (await fetch(base + '/immich-shared-albums/peers', { credentials: 'include' })).json();
+    const rows = [...document.querySelectorAll('.isa-album-link')];
+    return {
+      said: (said.albums || []).map(a => ({ name: a.name, albumId: a.albumId })),
+      rendered: rows.map(r => ({ name: r.textContent.trim(), href: r.getAttribute('href') })),
+    };
+  }, B_PANEL_WEB).catch(() => null);
+  check('every album on the panel carries the id its own route reported',
+    !!albumLinks && albumLinks.rendered.length === albumLinks.said.length &&
+      albumLinks.rendered.every(r => {
+        const match = albumLinks.said.find(a => a.name === r.name);
+        return match && match.albumId && r.href === `/albums/${match.albumId}`;
+      }),
+    albumLinks ? `${albumLinks.rendered.length} row(s), first href ${albumLinks.rendered[0]?.href}` : 'could not read the page');
+
+  const firstAlbum = phone.locator('a.isa-album-link').first();
+  if (await firstAlbum.count()) {
+    const wanted = await firstAlbum.getAttribute('href');
+    await firstAlbum.click();
+    await phone.waitForURL(new RegExp(`${wanted.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), { timeout: 15000 })
+      .then(() => true)
+      .catch(() => false);
+    check('and clicking it lands on that album in Immich',
+      new URL(phone.url()).pathname === wanted, `landed on ${new URL(phone.url()).pathname}, wanted ${wanted}`);
+    await phone.goto(`${B_PANEL_WEB}/immich-shared-albums/admin`, { waitUntil: 'networkidle' });
+  }
+
+  // 6e. THE SNACKBAR. Every action in the panel reports through it, so a bar that hugs its words
   //     wraps a one-line outcome into six, and a phone is the only place it is read. Minting a
   //     pairing link is a real action and the rig purges it, so this needs no mocking.
   await phone.goto(`${B_PANEL_WEB}/immich-shared-albums/admin`, { waitUntil: 'networkidle' });
