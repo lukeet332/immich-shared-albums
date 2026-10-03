@@ -5,6 +5,19 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## [1.3.0](https://github.com/lukeet332/immich-shared-albums/compare/v1.2.2...v1.3.0) (2026-10-03)
+
+
+### Features
+
+* **ui:** an album's name opens that album ([#188](https://github.com/lukeet332/immich-shared-albums/issues/188)) ([50e00a5](https://github.com/lukeet332/immich-shared-albums/commit/50e00a54e9c6755179d18fa873286306a4b67a66))
+* **ui:** one Material design system, and native switches everywhere ([#182](https://github.com/lukeet332/immich-shared-albums/issues/182)) ([1f0acb2](https://github.com/lukeet332/immich-shared-albums/commit/1f0acb2bca75af0bbf756d35335a6f12faf18422))
+
+
+### Bug Fixes
+
+* **ui:** the snackbar fills the gutter, swipes away, and answers every action ([#184](https://github.com/lukeet332/immich-shared-albums/issues/184)) ([85e279e](https://github.com/lukeet332/immich-shared-albums/commit/85e279e68f54363e243f7f7dd465f5318285b589))
+
 ## [1.2.2](https://github.com/lukeet332/immich-shared-albums/compare/v1.2.1...v1.2.2) (2026-10-01)
 
 
