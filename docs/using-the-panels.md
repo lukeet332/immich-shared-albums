@@ -89,6 +89,10 @@ own account — **immich-shared-albums (bot)** — rather than by the person who
 record of what happened to the album, and it is there because the two albums were paired by name
 alone — which can be wrong, and only the people in the album can tell.
 
+Those lines are visible as comments by default. **Album activity → Display bot comments** on
+`/immich-shared-albums/me` turns them off for you alone; everyone else in the album keeps seeing them,
+and nothing is deleted.
+
 ## Related
 
 - [Setup guide](../deploy/SETUP.md) — installing and linking, step by step
