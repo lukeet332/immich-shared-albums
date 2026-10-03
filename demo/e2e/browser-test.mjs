@@ -301,6 +301,62 @@ check('the admin stays at the root rather than being sent to a panel',
     check(`${label}: every control is at least a thumb tall`, layout.undersized.length === 0,
       layout.undersized.join(', ') || 'all 44px+');
   }
+
+  // 6d. THE SNACKBAR. Every action in the panel reports through it, so a bar that hugs its words
+  //     wraps a one-line outcome into six, and a phone is the only place it is read. Minting a
+  //     pairing link is a real action and the rig purges it, so this needs no mocking.
+  await phone.goto(`${B_PANEL_WEB}/immich-shared-albums/admin`, { waitUntil: 'networkidle' });
+  await phone.getByRole('button', { name: 'Create a link' }).click();
+  const noticed = await phone.waitForSelector('#notice', { timeout: 15000 }).then(() => true).catch(() => false);
+  const gutter = await phone.evaluate(() => {
+    const bar = document.getElementById('notice');
+    if (!bar) return null;
+    const box = bar.getBoundingClientRect();
+    const root = getComputedStyle(document.documentElement);
+    return { width: box.width, viewport: window.innerWidth, gutter: parseFloat(root.getPropertyValue('--isa-gutter')) };
+  });
+  check('an action says so in the snackbar', noticed && gutter !== null,
+    gutter ? `${Math.round(gutter.width)}px` : 'no #notice appeared');
+  check('and the snackbar spans the gutter instead of hugging its words',
+    !!gutter && gutter.width >= gutter.viewport - 2 * gutter.gutter - 1,
+    gutter ? `${Math.round(gutter.width)}px in ${gutter.viewport}px` : '');
+
+  if (noticed && gutter) {
+    const bar = await phone.locator('#notice').boundingBox();
+    const midY = bar.y + bar.height / 2;
+    // A short drag must NOT take the message with it: a bar that vanishes under a slip is worse
+    // than no bar at all.
+    await phone.mouse.move(bar.x + bar.width / 2, midY);
+    await phone.mouse.down();
+    await phone.mouse.move(bar.x + bar.width / 2 - 20, midY, { steps: 5 });
+    await phone.mouse.up();
+    await phone.waitForTimeout(400);
+    check('a short swipe springs the snackbar back', (await phone.locator('#notice').count()) === 1);
+    // A real one dismisses it.
+    await phone.mouse.move(bar.x + bar.width / 2, midY);
+    await phone.mouse.down();
+    await phone.mouse.move(bar.x + bar.width / 2 - Math.round(bar.width * 0.6), midY, { steps: 10 });
+    await phone.mouse.up();
+    check('a real swipe takes it away',
+      await phone.waitForSelector('#notice', { state: 'detached', timeout: 5000 }).then(() => true).catch(() => false));
+    // Escape is the keyboard's swipe, and a bar only a pointer can dismiss is a trap. Pressed more
+    // than once on purpose: the listener is attached in an effect, so a press can land in the first
+    // frame or two after the bar appears — a window no person can notice and a fast runner hits.
+    // Retrying asserts the thing that matters (a keyboard CAN dismiss it) rather than a zero-width
+    // window; if Escape were broken every press would fail and the count below would say so.
+    await phone.getByRole('button', { name: 'Create a link' }).click();
+    await phone.waitForSelector('#notice', { timeout: 15000 }).catch(() => {});
+    let escapePressed = 0;
+    let escaped = false;
+    for (; escapePressed < 5 && !escaped; escapePressed++) {
+      await phone.keyboard.press('Escape');
+      escaped = await phone
+        .waitForSelector('#notice', { state: 'detached', timeout: 1500 })
+        .then(() => true)
+        .catch(() => false);
+    }
+    check('and Escape takes it away too', escaped, `gone after ${escapePressed} press(es)`);
+  }
   await designCtx.close();
 }
 

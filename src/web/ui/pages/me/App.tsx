@@ -1,6 +1,7 @@
 /** web/ui/pages/me/App.tsx — the per-user panel: your shared albums, the possible reunions and what
  *  can be done about each one, and the albums you have reunited. See ../../../http-router.md. */
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { useAnnouncer } from '../../lib/announce.ts';
 import { Button } from '../../lib/Button.tsx';
 import { Card } from '../../lib/Card.tsx';
 import { Notice } from '../../lib/Notice.tsx';
@@ -25,8 +26,6 @@ import {
 const rowKey = (m: ActionableMatch) =>
   `${m.peer}:${m.mine.name}:${m.theirs.ownerName}:${m.theirs.assetCount}:${m.theirs.startDate ?? ''}:${m.theirs.endDate ?? ''}`;
 
-const NOTICE_MS = 6000;
-
 export const App = () => {
   const [albums, setAlbums] = useState<MyAlbum[] | null>(null);
   const [household, setHousehold] = useState('');
@@ -39,9 +38,7 @@ export const App = () => {
   const [reuniting, setReuniting] = useState('');
   const [inviting, setInviting] = useState('');
   const [detaching, setDetaching] = useState('');
-  // An action's outcome, kept apart from the lists it describes: `kind` is what makes "done" and
-  // "refused" look different, which a bare string could not.
-  const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [notice, announce, dismiss] = useAnnouncer();
   const [asking, setAsking] = useState<Confirmation | null>(null);
   const refreshGeneration = useRef(0);
 
@@ -87,34 +84,27 @@ export const App = () => {
     if (freshAlbums.status === 'fulfilled') setAlbums(freshAlbums.value.albums);
   };
 
-  // A success fades; a failure stays, because it is asking for something.
-  useEffect(() => {
-    if (notice?.kind !== 'ok') return;
-    const timer = setTimeout(() => setNotice(null), NOTICE_MS);
-    return () => clearTimeout(timer);
-  }, [notice]);
-
   /** Optimistic, then corrected by the server's answer: the switch must not hang on a round trip,
    *  and a refusal has to put it back rather than leave the panel claiming a setting it did not save. */
   const onToggleAudit = async (next: boolean) => {
     setAuditVisible(next);
-    setNotice(null);
+    dismiss();
     try {
       const saved = await savePreferences({ auditVisibleInComments: next });
       setAuditVisible(saved.auditVisibleInComments);
     } catch (e) {
       setAuditVisible(!next);
-      setNotice({ kind: 'error', text: `Could not change that setting: ${(e as Error).message}` });
+      announce({ kind: 'error', text: `Could not change that setting: ${(e as Error).message}` });
     }
   };
 
   const onReunite = async (m: ActionableMatch) => {
     if (!m.mappingId) return; // no share to reunite: this pairing has never been shared
     setReuniting(rowKey(m));
-    setNotice(null);
+    dismiss();
     try {
       const r = await reunite(m.mappingId, m.mine.name);
-      setNotice({
+      announce({
         kind: 'ok',
         text: `Reunited into "${r.album}" — ${r.seeded} photo(s) were already there.`,
       });
@@ -122,7 +112,7 @@ export const App = () => {
       // refreshing only the matches leaves the albums below describing a state that no longer holds.
       await refreshBoth();
     } catch (e) {
-      setNotice({ kind: 'error', text: `Could not reunite: ${(e as Error).message}` });
+      announce({ kind: 'error', text: `Could not reunite: ${(e as Error).message}` });
     } finally {
       setReuniting('');
     }
@@ -132,16 +122,16 @@ export const App = () => {
    *  the other person then sees this pairing as an invitation they can accept. */
   const onInvite = async (m: ActionableMatch) => {
     setInviting(rowKey(m));
-    setNotice(null);
+    dismiss();
     try {
       const r = await invite(m.peer, m.mine.name, m.theirs.ownerUserId);
-      setNotice({
+      announce({
         kind: 'ok',
         text: `Invited ${r.invited} to reunite “${r.album}” — it is now in their panel to accept.`,
       });
       await refreshBoth();
     } catch (e) {
-      setNotice({ kind: 'error', text: `Could not invite: ${(e as Error).message}` });
+      announce({ kind: 'error', text: `Could not invite: ${(e as Error).message}` });
     } finally {
       setInviting('');
     }
@@ -149,16 +139,16 @@ export const App = () => {
 
   const onUnreunite = async (album: MyAlbum) => {
     setDetaching(album.mappingId);
-    setNotice(null);
+    dismiss();
     try {
       const r = await unreunite(album.mappingId);
-      setNotice({
+      announce({
         kind: 'ok',
         text: `"${r.left}" is yours again — ${r.purged} shared photo(s) removed from it.`,
       });
       await refreshBoth(); // same reason, the other way round
     } catch (e) {
-      setNotice({ kind: 'error', text: `Could not un-reunite: ${(e as Error).message}` });
+      announce({ kind: 'error', text: `Could not un-reunite: ${(e as Error).message}` });
     } finally {
       setDetaching('');
     }
@@ -183,7 +173,7 @@ export const App = () => {
           </>
         )}
       </p>
-      {notice && <Notice kind={notice.kind} text={notice.text} onDismiss={() => setNotice(null)} />}
+      {notice && <Notice key={notice.id} kind={notice.kind} text={notice.text} onDismiss={dismiss} />}
 
       {reunifiedAlbums.length > 0 && (
         <section class="isa-section">
@@ -342,8 +332,8 @@ export const App = () => {
         <h2 class="isa-section-title">Album activity</h2>
         <Card>
           <Setting
-            label="Show what immich-shared-albums did to this album"
-            description="Posted in the album as comments. Off hides them from you only — everyone else still sees them."
+            label="Display bot comments"
+            description="What the addon did is written into the album as comments. Off hides them from you only — everyone else still sees them."
           >
             <Switch id="audit-visible" checked={auditVisible} onChange={next => void onToggleAudit(next)} />
           </Setting>

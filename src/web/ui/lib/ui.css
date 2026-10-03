@@ -31,17 +31,6 @@
   font-size: 13px;
   margin-bottom: var(--isa-space-4);
 }
-/* A row's outcome line: neutral, because it carries progress, success and failure alike. */
-.isa-note {
-  font-size: 13px;
-  color: var(--isa-ink-muted);
-  min-height: 20px;
-  margin-top: var(--isa-space-3);
-  transition: color var(--isa-duration-medium) var(--isa-ease-standard);
-}
-.isa-note--error {
-  color: var(--isa-danger);
-}
 .isa-empty {
   color: var(--isa-ink-muted);
   font-size: 14px;
@@ -378,47 +367,66 @@ select.isa-field {
 }
 
 /* ── the notice (snackbar) ───────────────────────────────────────────────────────────────────── */
+/* Its OWN surface tokens rather than an inversion of the page's ink: inverting gives a glaring
+   white box on a dark page, which reads as a bug rather than as a message. Google's snackbar is
+   dark grey in both schemes, which is what these are. */
 .isa-notice {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--isa-space-6) + env(safe-area-inset-bottom));
+  bottom: calc(var(--isa-space-4) + env(safe-area-inset-bottom));
   translate: -50% 0;
   z-index: 20;
   display: flex;
   align-items: center;
   gap: var(--isa-space-3);
-  max-width: min(560px, calc(100vw - 2 * var(--isa-gutter)));
+  /* The full gutter, not a box that hugs its words: a narrow one wraps a two-word outcome into six
+     lines, and a message you have to read six lines of is a message you stop reading. */
+  width: min(560px, calc(100vw - 2 * var(--isa-gutter)));
   min-height: var(--isa-touch);
   box-sizing: border-box;
-  padding: var(--isa-space-3) var(--isa-space-4);
+  padding: var(--isa-space-3) var(--isa-space-3) var(--isa-space-3) var(--isa-space-4);
   border-radius: var(--isa-radius-sm);
-  background: var(--isa-ink);
-  color: var(--isa-bg);
+  background: var(--isa-notice-surface);
+  color: var(--isa-notice-ink);
   font-size: 14px;
+  line-height: 1.45;
   box-shadow: var(--isa-shadow-3);
-  animation: isa-notice-in var(--isa-duration-medium) var(--isa-ease-emphasized) both;
+  /* The drag offset and the fade live in custom properties, so the entrance animation (which owns
+     `translate` while it runs) and the gesture can share one property without fighting over it. */
+  translate: -50% var(--notice-drag, 0px);
+  opacity: var(--notice-dim, 1);
+  transition:
+    translate var(--isa-duration-medium) var(--isa-ease-emphasized),
+    opacity var(--isa-duration-medium) var(--isa-ease-standard);
+  /* A horizontal drag is the gesture, a vertical one is still the page's scroll. */
+  touch-action: pan-y;
+  user-select: none;
+  animation: isa-notice-in var(--isa-duration-medium) var(--isa-ease-emphasized);
+}
+/* Under the finger, with nothing easing behind it. */
+.isa-notice--grabbing {
+  transition: none;
+}
+.isa-notice--leaving {
+  animation: isa-notice-out var(--isa-duration-medium) var(--isa-ease-standard) forwards;
 }
 .isa-notice-badge {
   flex: none;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   font-size: 12px;
   font-weight: 700;
-  color: var(--isa-accent-ink);
-  background: var(--isa-accent);
 }
-/* The badge carries the outcome; the snackbar itself is one neutral surface either way, because a
-   failure that has to stay on screen should not repaint the page it is sitting over. */
 .isa-notice--ok .isa-notice-badge {
   background: var(--isa-ok);
-  color: var(--isa-surface);
+  color: var(--isa-notice-ink);
 }
 .isa-notice--error .isa-notice-badge {
   background: var(--isa-danger);
-  color: var(--isa-surface);
+  color: var(--isa-notice-ink);
 }
 .isa-notice-text {
   flex: 1 1 auto;
@@ -511,6 +519,13 @@ select.isa-field {
   from {
     opacity: 0;
     translate: -50% 16px;
+  }
+}
+/* Swiped away in the direction it went, so the message leaves the way the thumb sent it. */
+@keyframes isa-notice-out {
+  to {
+    opacity: 0;
+    translate: calc(-50% + var(--notice-drag, 0px)) 0;
   }
 }
 @keyframes isa-spin {

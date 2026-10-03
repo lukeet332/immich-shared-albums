@@ -29,6 +29,7 @@ const PAIRS = [
   // The switch's moving part against the track it moves on, in BOTH states: a shape, not a word.
   ['switch-thumb-off', 'switch-track-off', SHAPE],
   ['switch-thumb-on', 'switch-track-on', SHAPE],
+  ['notice-ink', 'notice-surface'],
 ];
 
 const css = fs.readFileSync(CSS, 'utf8');
