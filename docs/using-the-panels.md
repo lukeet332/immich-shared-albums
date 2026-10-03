@@ -95,9 +95,11 @@ and nothing is deleted.
 
 ## Opening an album
 
-An album's name is a link on both panels: the **Shared albums** list on the admin panel, and **Your
-shared albums** (including the reunified ones) on `/immich-shared-albums/me`. It opens the album in
-your own Immich, at the same `/albums/<id>` every other link to an album uses.
+An album's name is a link wherever the panels name one: the admin panel's **Shared albums**, and on
+`/immich-shared-albums/me` the **Your shared albums** and **Reunified albums** lists and the
+**Possible album reunions** rows. It opens the album in your own Immich, at the same `/albums/<id>`
+every other link to an album uses — and on a reunion row it is YOUR side of the pair, since the other
+album lives on the other server.
 
 The admin panel also lists albums belonging to *other* people on the server. Those names link too,
 and pressing one says you don't have access — Immich decides what you may open, and a shared album
