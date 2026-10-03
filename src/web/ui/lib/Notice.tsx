@@ -1,5 +1,5 @@
 /** web/ui/lib/Notice.tsx — the snackbar: what just happened, without moving what you were reading. See design-system.md. */
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 
 /** How far the bar has to travel before letting go counts as a dismissal, whichever is smaller:
  *  a third of the way across it, or a thumb's width. */
@@ -33,8 +33,9 @@ export const Notice = ({
   }, [leaving, onDismiss]);
 
   // Escape is the keyboard's swipe: a bar that can only be dismissed with a pointer is a bar a
-  // keyboard user is stuck with.
-  useEffect(() => {
+  // keyboard user is stuck with. LAYOUT, not effect, so the listener is live before the bar is
+  // painted — otherwise the first Escape in the first frame after it appears goes nowhere.
+  useLayoutEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setLeaving(true);
     };

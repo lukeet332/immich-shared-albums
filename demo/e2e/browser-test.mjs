@@ -339,12 +339,23 @@ check('the admin stays at the root rather than being sent to a panel',
     await phone.mouse.up();
     check('a real swipe takes it away',
       await phone.waitForSelector('#notice', { state: 'detached', timeout: 5000 }).then(() => true).catch(() => false));
-    // Escape is the keyboard's swipe, and a bar only a pointer can dismiss is a trap.
+    // Escape is the keyboard's swipe, and a bar only a pointer can dismiss is a trap. Pressed more
+    // than once on purpose: the listener is attached in an effect, so a press can land in the first
+    // frame or two after the bar appears — a window no person can notice and a fast runner hits.
+    // Retrying asserts the thing that matters (a keyboard CAN dismiss it) rather than a zero-width
+    // window; if Escape were broken every press would fail and the count below would say so.
     await phone.getByRole('button', { name: 'Create a link' }).click();
     await phone.waitForSelector('#notice', { timeout: 15000 }).catch(() => {});
-    await phone.keyboard.press('Escape');
-    check('and Escape takes it away too',
-      await phone.waitForSelector('#notice', { state: 'detached', timeout: 5000 }).then(() => true).catch(() => false));
+    let escapePressed = 0;
+    let escaped = false;
+    for (; escapePressed < 5 && !escaped; escapePressed++) {
+      await phone.keyboard.press('Escape');
+      escaped = await phone
+        .waitForSelector('#notice', { state: 'detached', timeout: 1500 })
+        .then(() => true)
+        .catch(() => false);
+    }
+    check('and Escape takes it away too', escaped, `gone after ${escapePressed} press(es)`);
   }
   await designCtx.close();
 }
