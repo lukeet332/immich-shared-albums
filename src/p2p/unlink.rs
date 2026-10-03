@@ -400,7 +400,10 @@ mod tests {
         assert_eq!(albums[0]["role"], "member");
         assert_eq!(albums[0]["peer"], "Household B");
         // Without this the panel can name an album but not open it.
-        assert_eq!(albums[0]["albumId"], "a1", "the id the mapping already holds");
+        assert_eq!(
+            albums[0]["albumId"], "a1",
+            "the id the mapping already holds"
+        );
         let _ = Creds {
             headers: Default::default(),
         };

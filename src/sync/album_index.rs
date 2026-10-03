@@ -569,7 +569,10 @@ mod tests {
     #[test]
     fn an_album_carries_its_own_id_so_a_row_can_open_it() {
         let published = albums_i_publish(&[album("a-local-uuid", "owner", "me")], "me");
-        assert_eq!(published[0].id, "a-local-uuid", "the id travels with the album");
+        assert_eq!(
+            published[0].id, "a-local-uuid",
+            "the id travels with the album"
+        );
     }
 
     #[test]
@@ -587,7 +590,10 @@ mod tests {
             owner_user_id: Some("me".into()),
         }];
         let offered = serde_json::to_value(&mine).expect("an index entry serialises");
-        assert!(offered[0].get("id").is_none(), "the id must not be published: {offered}");
+        assert!(
+            offered[0].get("id").is_none(),
+            "the id must not be published: {offered}"
+        );
 
         // And nothing to inherit, so a peer's answer cannot arrive carrying one.
         let theirs: crate::store::OwnedAlbum =
@@ -636,5 +642,4 @@ mod tests {
             "no id, no link: {unknown}"
         );
     }
-
 }
