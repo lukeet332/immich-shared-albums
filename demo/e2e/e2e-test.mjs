@@ -1339,6 +1339,16 @@ stage('native album invitations, per person (no share link)');
         check('un-reunifying gives the share back as a mirror, so the invitation is still live',
               !!remirrored, remirrored ? `mirror ${remirrored.album.id.slice(0, 8)}` : 'no mirror re-created');
 
+        // AND THE INVITER STOPS CLAIMING THE REUNION. `reunified` is the inviter's own fact about the
+        // share it handed over — recorded when the accept happened — so nothing on this side can
+        // clear it, and a panel left saying "reunited" about a reunion that is over is the misleading
+        // half of the undo. It also has to be cleared BEFORE the re-mirror above, or the fresh mirror
+        // is born carrying the claim.
+        const inviterMine = (await api(A, AKEY, '/immich-shared-albums/me/albums')).albums || [];
+        const stillReunited = inviterMine.filter(x => x.name === 'natively invited album' && x.reunified);
+        check('the inviter no longer reports the share as reunited', stillReunited.length === 0,
+              stillReunited.length ? JSON.stringify(stillReunited) : '(cleared)');
+
         // WAITED FOR, not sampled. The mirror's EXISTENCE and its human membership are two
         // different moments: the sidecar creates the album and then adds the people it is for, so a
         // read taken as soon as the album appears can legitimately find it empty. Sampling once here

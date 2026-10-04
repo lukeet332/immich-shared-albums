@@ -942,6 +942,52 @@ check("and the pair leaves the inviter's list once it is done", goneNow,
     bShape.total === 2 && bShape.stubs === 1, JSON.stringify(bShape));
 }
 
+// ── UN-REUNITE, with every sweep STILL HELD ──────────────────────────────────────────────────────
+// The undo has to give the share back as an ordinary mirror, and with the loops held the only thing
+// that can produce it is the un-reunify's own invitation pull — a lane that was merely woken returns
+// without working. Clicked on the ACCEPTING side, which is the one holding the adoption; the inviter
+// is deliberately offered no Un-reunite, having no adoption to undo.
+const unreuniteOffered = await waitForRowButton(cPanel.p, 'Un-reunite', inviteName, 20000);
+check('the side that adopted is offered Un-reunite', unreuniteOffered,
+  (await panelText(cPanel.p)).split('\n').filter(l => /Un-reunite|Reunited/.test(l)).slice(0, 2).join(' | ') || '(no row)');
+check('Un-reunite was clicked', await clickInRow(cPanel.p, 'Un-reunite', inviteName),
+  await clickDetail(cPanel.p, 'Un-reunite', inviteName));
+check('and it asked first, rather than undoing on the click alone', await confirmDialog(cPanel.p, 'Un-reunite'));
+
+const saidYoursAgain = await (async () => {
+  for (let i = 0; i < 40; i++) {
+    if (/is yours again/.test(await panelText(cPanel.p))) return true;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+})();
+check('the panel says the album is theirs again', saidYoursAgain,
+  (await panelText(cPanel.p)).split('\n').find(l => /yours again|Could not/.test(l)) || '(no notice)');
+
+// A MIRROR, not the album it was adopted into: the stand-in owns the mirror, the person owns their
+// own album — and the two carry the SAME name, so the owner is the only thing that tells them apart.
+const standInMirrorNamedAlbum = async () => {
+  const albums = await (await fetch(`${C}/api/albums`, { headers: { 'x-api-key': CKEY } })).json();
+  return (albums || []).find(a =>
+    a.albumName === inviteName &&
+    (a.albumUsers || []).some(au => au.role === 'owner' && String(au.user?.email || '').endsWith('@immich-shared-albums.internal')));
+};
+let remirrored = null;
+for (let i = 0; i < 40 && !remirrored; i++) {
+  remirrored = await standInMirrorNamedAlbum();
+  if (!remirrored) await new Promise((r) => setTimeout(r, 500));
+}
+check('and the share comes back as a mirror with every sweep still held — the undo pulls, it does not wait',
+  !!remirrored, remirrored ? `mirror ${remirrored.id.slice(0, 8)}` : 'no mirror within 20s');
+
+// The INVITER stops calling the pair reunited. That fact is theirs — it was recorded when the accept
+// happened — so only the undo signal clears it, and a panel that goes on claiming a reunion which is
+// over is the misleading half of this bug.
+const inviterAlbums = await (await fetch(`${B_PANEL_WEB}/immich-shared-albums/me/albums`, { headers: bAuthForHooks })).json();
+const stillReunited = (inviterAlbums.albums || []).find(a => a.name === inviteName && a.reunified);
+check('the inviter no longer reports the pair as reunited', !stillReunited,
+  stillReunited ? `still reunified: ${JSON.stringify(stillReunited)}` : 'cleared');
+
 // The ticks are read BEFORE the release: releasing is what lets a tick fire, so reading afterwards
 // would fold the first tick of the resumed loop into a claim about the held ones.
 const ticksAfter = {
