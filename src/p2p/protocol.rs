@@ -945,6 +945,47 @@ fn admin_auth() -> crate::immich::client::Auth<'static> {
 /// to view-only mirrors — and since content then only ever arrived via the manifest pull, the
 /// origin re-pushed every cycle forever. Only an OWNER mapping's `permissions` speaks for what the
 /// link granted the peer.
+/// The OWNER reporting what a membership of its album is now worth.
+///
+/// A FACT, not a command, applied only to a mapping of THIS album with the REPORTING peer: a peer
+/// cannot escalate by claiming a permission on an album it does not own, because the mapping it
+/// would be writing is the one that peer shares with us.
+///
+/// On taking it, this side RE-BROADCASTS to the households that hold this album onward. That is what
+/// makes a permission travel a chain (B changes a role, C records it and re-broadcasts, D records
+/// it) rather than a single hop. The album id in the report is the OWNER's; this side's own mirror
+/// of it is what its downstream peers know it as, so the outbound hop carries the LOCAL id.
+pub async fn handle_permissions(caller_pub: &str, body: &[u8]) -> (u16, Value) {
+    let state = crate::state::state();
+    if !crate::p2p::entitlement::is_enrolled(state, caller_pub) {
+        return (
+            403,
+            json!({ "error": "unknown peer", "code": "unknown_peer" }),
+        );
+    }
+    let asked: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let (Some(album_id), Some(permissions)) = (
+        asked.get("albumId").and_then(|v| v.as_str()),
+        asked.get("permissions").and_then(|v| v.as_str()),
+    ) else {
+        return (
+            400,
+            json!({ "error": "albumId and permissions are required" }),
+        );
+    };
+    crate::sync::permissions::apply_owner_report(state, caller_pub, album_id, permissions);
+    // The chain hop: this side's LOCAL album id for the reported origin, then broadcast on.
+    if let Some(local_album_id) =
+        crate::sync::permissions::local_mirror_of(state, caller_pub, album_id)
+    {
+        let role = crate::sync::permissions::role_of(permissions);
+        crate::sync::permissions::broadcast(state, &local_album_id, role).await;
+    }
+    // Answered even when nothing changed: a retry is a no-op, and 404 would make a sender retry for
+    // ever over an album this side no longer mirrors.
+    (200, json!({ "ok": true }))
+}
+
 pub async fn handle_refs(caller_pub: &str, album_mapping_id: &str, body: &[u8]) -> (u16, Value) {
     let state = crate::state::state();
     if !crate::p2p::entitlement::is_enrolled(state, caller_pub) {

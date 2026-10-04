@@ -7,6 +7,7 @@ use crate::state::State;
 use crate::store::{Mapping, Peer, Role};
 use crate::sync::peer_mapping_id::peer_of;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 /// What a mirror is asked to become. Only the facts the origin supplied.
 pub struct MirrorRequest<'a> {
@@ -114,26 +115,50 @@ async fn add_local_members(
         .await
         .map_err(|e| e.message())?
         .unwrap_or(Value::Null);
-    let already: Vec<String> = album
+    let already: HashMap<String, String> = album
         .get("albumUsers")
         .and_then(|a| a.as_array())
         .map(|users| {
             users
                 .iter()
                 .filter_map(|u| {
-                    u.get("user")
-                        .and_then(|x| x.get("id"))
-                        .and_then(|v| v.as_str())
+                    Some((
+                        u.pointer("/user/id")?.as_str()?.to_string(),
+                        u.get("role")?.as_str()?.to_string(),
+                    ))
                 })
-                .map(str::to_string)
                 .collect()
         })
         .unwrap_or_default();
-    wanted.retain(|id| !already.contains(id));
-    if wanted.is_empty() {
-        return Ok(0);
+
+    // A member whose ROLE changed is not the same as a member who is missing. Adding is one call and
+    // re-adding an existing member is silently ignored, so a permission the owner lowered would be
+    // recorded correctly and never applied — the mirror kept granting what was taken away.
+    let (to_set, to_add): (Vec<String>, Vec<String>) =
+        wanted.into_iter().partition(|id| already.contains_key(id));
+    let mut changed = 0usize;
+    for id in &to_set {
+        if already.get(id).map(String::as_str) == Some(role) {
+            continue;
+        }
+        if client
+            .json(
+                reqwest::Method::PUT,
+                &format!("/albums/{album_id}/user/{id}"),
+                &Auth::Key(host_key),
+                Some(&json!({ "role": role })),
+            )
+            .await
+            .map_err(|e| e.message())?
+            .is_some()
+        {
+            changed += 1;
+        }
     }
-    let members: Vec<Value> = wanted
+    if to_add.is_empty() {
+        return Ok(changed);
+    }
+    let members: Vec<Value> = to_add
         .iter()
         .map(|id| json!({ "userId": id, "role": role }))
         .collect();
@@ -146,7 +171,7 @@ async fn add_local_members(
         )
         .await
         .map_err(|e| e.message())?;
-    Ok(members.len())
+    Ok(changed + members.len())
 }
 
 /// The checksums the peer already holds for this share — what an adoption must NOT offer back.

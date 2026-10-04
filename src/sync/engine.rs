@@ -710,6 +710,19 @@ pub async fn watch_once(state: &State, client: &Client) {
         }
     }
     reconcile_once(state, client).await;
+    reconcile_permissions(state, client).await;
+}
+
+/// What a person changed about an album's people, in Immich's own UI, and the peer told.
+///
+/// Only the OWNER side can drift: it is the only side whose credential can change a membership, so
+/// it is the only side that watches. Run beside `reconcile_once` rather than inside it, because the
+/// albums here are owner mappings and that walk is members only.
+/// Run the permission reconcile for the owner side. The chain logic lives in
+/// `permissions.rs` so the same broadcast runs whether it is reached from here or from receiving a
+/// peer's report.
+pub async fn reconcile_permissions(state: &State, client: &Client) {
+    crate::sync::permissions::reconcile_owner_side(state, client).await;
 }
 
 /// Has the last human member left this mirror? A NATIVE leave — album settings -> Leave album in the

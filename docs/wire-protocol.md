@@ -41,7 +41,7 @@ certificates, and no listening HTTP surface for peers at all.
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `p2p/transport.rs`   | The iroh endpoint: lifecycle (the endpoint secret IS the household key's seed), dial-by-key with self-refreshing hints, the frame codec, `peerRequest`/`peerByteRequest`.                                                                                                                                                                                                                                                                                                                                     |
 | `p2p/routes.rs`      | The peer route table, served from the accept loop — the only place peer operations exist. Gates `/invites/redeem` on the panel's `shareLinkJoin` setting.                                                                                                                                                                                                                                                                                                                                                     |
-| `p2p/protocol.rs`    | Inbound handlers, mostly owner-side. `handleRedeem` turns a share key into a pinned peer + mapping and returns the manifest; `handleRefs` accepts pushed photos; `handleVersion`/`handleManifest` answer the cheap handshake and the full offer set; `handleNudge` reacts to "something moved, pull now". Each returns `[status, jsonBody]` for `p2p/routes.rs` to frame.                                                                                                                                         |
+| `p2p/protocol.rs`    | Inbound handlers, mostly owner-side. `handleRedeem` turns a share key into a pinned peer + mapping and returns the manifest; `handleRefs` accepts pushed photos; `handleVersion`/`handleManifest` answer the cheap handshake and the full offer set; `handleNudge` reacts to "something moved, pull now"; `handlePermissions` applies an owner's permission change and re-broadcasts it onward. Each returns `[status, jsonBody]` for `p2p/routes.rs` to frame.                                                                                                                                         |
 | `p2p/pair.rs`        | Linking two servers as its own act. Mints an `isa2-…` ticket — this endpoint's key + dial hints + a single-use, 15-minute, 32-byte secret — and `handlePair` burns the secret **before** answering, so a replay finds nothing. The redeeming side dials the ticket's key, and the dial only succeeds if the far end holds it: identity is verified by connecting. Pairing conveys **no album access** — what the two servers may see of each other is decided afterwards, per person, in Immich's own picker. |
 | `p2p/join.rs`        | The **member side** of joining. Dials the endpoint carried by the invite, redeems the share key, pins the peer (refusing an origin that answers with a different identity than the invite named), creates the local mirror, and kicks off the first reconcile. Idempotent — re-joining adds the user to the existing mirror.                                                                                                                                                                                  |
 | `sync/mirror.rs`      | Creating the local mirror of a remote album — the account-owner, local members as editors, the mapping, and the background fill. Shared by `p2p/join.rs` (share link) and `sync/invites.rs` (native invitation): two ways to acquire an album, one way to mirror it.                                                                                                                                                                                                                                              |
@@ -160,6 +160,27 @@ behaviour, not an oversight (iron rule 8 in ARCHITECTURE.md): same-server and cr
 users operate identically, and the origin's leverage is the same as vanilla Immich's — share
 with view-only, or unshare. The cross-server delta worth knowing: the origin cannot SEE a
 mirror's member list, so an onward share is invisible to it.
+
+## A permission follows the album down the chain
+
+`PUT /albums/permissions`, body `{ albumId, permissions }`, where `albumId` is the **ORIGIN's**
+album id and `permissions` is `contribute`/`view`. The receiver's matching mapping is the one with
+`role = member`, `remoteAlbumId = albumId` and that peer — so a peer can only ever move a mapping of
+the album it shares with us, never one it does not.
+
+- The owner's reconcile reads the real member role out of Immich (`owner_side_drift`), records it
+  (`record`), then `broadcast`s to the peers of its OWNER mappings for that album
+  (`downstream_peers`). The query is the sender's view: an origin has no `remoteAlbumId` equal to an
+  album it originates, so the receiver-side query finds nothing.
+- The receiver re-broadcasts from its own mirror (`local_mirror_of`, then `broadcast`), which is what
+  carries B → C → D rather than a single hop. The outbound body carries the **local** album id,
+  because that is the id the next peer knows the album by.
+- The owner is authoritative: this records rather than argues, since only the owner's credential can
+  change a membership. Broadcast is idempotent on the receiver and runs every cycle, so a notify
+  dropped before the p2p transport is up is re-sent rather than lost.
+
+Distinct from the nudges in `p2p/nudges.rs`: those are hints a peer sends itself, this is a fact
+pushed because a role moved.
 
 ## View-only governs photos, not conversation
 
