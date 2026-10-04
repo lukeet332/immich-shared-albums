@@ -194,30 +194,42 @@ pub fn apply_owner_report(
     changed
 }
 
-/// Tell the peer its album's permission changed. A FACT rather than a command: the receiver records
-/// it and answers what it did, so a retry is a no-op rather than a second write.
-pub async fn notify_peer(state: &State, drift: &Drift) -> bool {
-    let Some(peer) = state
-        .collections()
+/// Every peer that holds `album_id` — a mapping whose `remoteAlbumId` is this album, i.e. a mirror
+/// of it. This is the OUTWARD edge of the sharing graph, and it is what makes a permission go down
+/// a CHAIN rather than one hop: whoever holds an album is told, and on their side the same rule
+/// finds their downstream, so B changes a role, C records it and re-broadcasts, D records it.
+pub fn holders_of(state: &State, album_id: &str) -> Vec<crate::store::Peer> {
+    let collections = state.collections();
+    let mut pubs: Vec<&str> = collections
+        .mappings
+        .iter()
+        .filter(|m| !m.dead && m.remote_album_id.as_deref() == Some(album_id))
+        .map(|m| m.peer.as_str())
+        .collect();
+    pubs.sort_unstable();
+    pubs.dedup();
+    collections
         .peers
         .iter()
-        .find(|p| p.pub_key == drift.peer)
+        .filter(|p| pubs.contains(&p.pub_key.as_str()))
         .cloned()
-    else {
-        return false;
-    };
+        .collect()
+}
+
+/// Tell one peer that `album_id` is now worth `permissions`. A FACT rather than a command: the
+/// receiver records it and answers what it did, so a retry is a no-op rather than a second write.
+pub async fn tell_peer(peer: &crate::store::Peer, album_id: &str, role: &str) -> bool {
     let Some(transport) = transport() else {
         return false;
     };
-    let body =
-        serde_json::json!({ "albumId": drift.album_id, "permissions": permissions_for(&drift.role) })
-            .to_string();
+    let body = serde_json::json!({ "albumId": album_id, "permissions": permissions_for(role) })
+        .to_string();
     let header = RequestHeader {
         path: PERMISSIONS_PATH.to_string(),
         ..Default::default()
     };
     match transport
-        .round_trip(&peer, &header, Some(body.as_bytes()))
+        .round_trip(peer, &header, Some(body.as_bytes()))
         .await
     {
         Ok((head, _)) => head.status < 400,
@@ -228,51 +240,138 @@ pub async fn notify_peer(state: &State, drift: &Drift) -> bool {
     }
 }
 
+/// Broadcast a permission change to every household that holds this album, so the change travels
+/// the whole chain. Best effort per peer: one unreachable household does not stop the rest, and the
+/// next reconcile re-nudges whoever did not take it.
+pub async fn broadcast(state: &State, album_id: &str, role: &str) {
+    for peer in holders_of(state, album_id) {
+        tell_peer(&peer, album_id, role).await;
+    }
+}
+
+/// The owner's own reconcile: record what Immich says, then broadcast it outward. Run by the watcher
+/// beside `reconcile_once` — those albums are OWNER mappings and that walk is members only.
+pub async fn reconcile_owner_side(state: &State, client: &Client) {
+    for drift in owner_side_drift(state, client).await {
+        // RECORD BEFORE the broadcast. A broadcast that fails leaves this side true and the peer
+        // stale, which the next pass repairs; the reverse leaves a peer believing a change this side
+        // no longer has, and nothing would ever contradict it.
+        if record(state, &drift) {
+            crate::log!(
+                "\"{}\" is now \"{}\" — permission updated",
+                drift.album_name,
+                drift.role
+            );
+        }
+        broadcast(state, &drift.album_id, &drift.role).await;
+    }
+}
+
+/// This side's LOCAL album id for a peer's album, for the chain hop. `remoteAlbumId` is the id the
+/// ORIGIN knew it by; the households downstream of us know it by OUR id, so the outbound hop carries
+/// this, not the id that arrived.
+pub fn local_mirror_of(
+    state: &State,
+    reporting_peer: &str,
+    owner_album_id: &str,
+) -> Option<String> {
+    state
+        .collections()
+        .mappings
+        .iter()
+        .find(|m| {
+            !m.dead
+                && m.peer == reporting_peer
+                && m.remote_album_id.as_deref() == Some(owner_album_id)
+        })
+        .map(|m| m.album_id.clone())
+}
+
+/// The Immich role a stored share permission speaks for, so a broadcast can carry either.
+pub fn role_of(permissions: &str) -> &'static str {
+    crate::sync::mirror::member_role(permissions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::Collections;
+    use crate::store::{Mapping, Role};
 
-    fn album_with(member: &str, role: &str) -> Value {
-        serde_json::json!({
-            "albumUsers": [{ "role": role, "user": { "id": member } }]
-        })
+    fn member(role: &str, id: &str) -> Value {
+        serde_json::json!({ "role": role, "user": { "id": id } })
+    }
+
+    fn peer(pub_key: &str) -> crate::store::Peer {
+        crate::store::Peer {
+            pub_key: pub_key.into(),
+            name: format!("household {pub_key}"),
+            version: None,
+            protocol: None,
+            features: None,
+            via: "link".into(),
+            first_seen_at: "now".into(),
+            relay_hint: None,
+            last_addrs: None,
+            advertised_host: None,
+        }
+    }
+
+    fn member_mapping(peer_key: &str, album: &str, remote: &str) -> Mapping {
+        Mapping {
+            id: format!("m-{album}"),
+            role: Role::Member,
+            album_id: album.into(),
+            album_name: album.into(),
+            peer: peer_key.into(),
+            remote_album_id: Some(remote.into()),
+            remote_mapping_id: None,
+            permissions: "contribute".into(),
+            host_slug: None,
+            via: "link".into(),
+            for_peer_user_ids: None,
+            album_owner_name: None,
+            album_owner_id: None,
+            adopted: None,
+            reunified: None,
+            dead: false,
+            dead_at: None,
+            dead_reason: None,
+            fail_count: None,
+            local_version: None,
+            remote_version: None,
+            comment_count: None,
+            remote_comment_count: None,
+        }
     }
 
     #[test]
     fn a_role_is_read_from_the_member_it_belongs_to() {
-        let album = serde_json::json!({
-            "albumUsers": [
-                { "role": "owner", "user": { "id": "owner-1" } },
-                { "role": "viewer", "user": { "id": "person-1" } }
-            ]
-        });
-        assert_eq!(
-            member_role_in(&album, "person-1").as_deref(),
-            Some("viewer")
-        );
-        assert_eq!(member_role_in(&album, "owner-1").as_deref(), Some("owner"));
+        let album =
+            serde_json::json!({ "albumUsers": [member("owner", "o1"), member("viewer", "p1")] });
+        assert_eq!(member_role_in(&album, "p1").as_deref(), Some("viewer"));
+        assert_eq!(member_role_in(&album, "o1").as_deref(), Some("owner"));
     }
 
     #[test]
     fn an_unreadable_member_list_is_not_evidence_about_anyone() {
-        // The direction that matters: writing over a known permission because a read came back empty
-        // would hand a view-only share away on a transient error.
-        assert_eq!(member_role_in(&serde_json::json!({}), "person-1"), None);
+        // Writing a known permission over because a read came back empty would hand a view-only
+        // share away on a transient error.
+        assert_eq!(member_role_in(&serde_json::json!({}), "p1"), None);
         assert_eq!(
             member_role_in(&serde_json::json!({ "albumUsers": null }), "p"),
             None
         );
         assert_eq!(
-            member_role_in(&album_with("someone-else", "editor"), "person-1"),
+            member_role_in(
+                &serde_json::json!({ "albumUsers": [member("editor", "other")] }),
+                "p1"
+            ),
             None
         );
     }
 
     #[test]
     fn an_immich_role_survives_being_stored_as_a_share_permission() {
-        // The round trip is the invariant, not the strings: an owner watching their album learns
-        // nothing if a role recorded as `contribute` reads back as anything but `editor`.
         for role in ["editor", "viewer"] {
             assert_eq!(
                 crate::sync::mirror::member_role(permissions_for(role)),
@@ -282,44 +381,73 @@ mod tests {
         }
     }
 
-    fn collections_with(people: Vec<(&str, &str, &str)>) -> Collections {
-        // (slug, local user id, the person's id on their own server); `viaPeer` pairs each with its
-        // own slug so a household's "person-a" and another household's never collide.
-        Collections {
-            contributors: people
-                .into_iter()
-                .map(|(slug, user_id, peer_user_id)| {
-                    (
-                        slug.to_string(),
-                        crate::store::Contributor {
-                            user_id: user_id.to_string(),
-                            api_key: "key".into(),
-                            password: None,
-                            avatar_done: true,
-                            via_peer: Some(slug.to_string()),
-                            peer_user_id: Some(peer_user_id.to_string()),
-                            home_peer: None,
-                        },
-                    )
-                })
-                .collect(),
-            ..Default::default()
+    fn state_with(mappings: Vec<Mapping>, peers: Vec<crate::store::Peer>) -> State {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        {
+            let mut c = store.state.lock().unwrap();
+            c.peers = peers;
+            c.mappings = mappings;
         }
+        State::for_test(store)
     }
 
     #[test]
-    fn a_person_is_looked_up_by_their_id_on_their_own_server_plus_the_peer() {
-        // Two households both have a "user id"; only the pair identifies which person is meant.
-        let collections = collections_with(vec![
-            ("peer-a", "local-a", "person-a"),
-            ("peer-b", "local-b", "person-a"),
-        ]);
-        let ids = vec!["person-a".to_string()];
-        assert_eq!(
-            local_person_id(&collections, "peer-a", Some(&ids)).as_deref(),
-            Some("local-a"),
-            "the same id from the other peer must not resolve"
+    fn holders_are_the_peers_that_mirror_this_album() {
+        // The OUTWARD edge: whoever holds an album is told, and on their side the same rule finds
+        // their downstream — which is what carries a permission down a chain rather than one hop.
+        let state = state_with(
+            vec![
+                member_mapping("p1", "mirror-1", "origin-album"),
+                member_mapping("p2", "mirror-2", "origin-album"),
+                member_mapping("p3", "other", "some-other-album"),
+            ],
+            vec![peer("p1"), peer("p2"), peer("p3")],
         );
-        assert_eq!(local_person_id(&collections, "peer-z", Some(&ids)), None);
+        let mut held = holders_of(&state, "origin-album");
+        held.sort_by(|a, b| a.pub_key.cmp(&b.pub_key));
+        assert_eq!(
+            held.iter().map(|p| p.pub_key.as_str()).collect::<Vec<_>>(),
+            vec!["p1", "p2"],
+            "p3 holds a different album and must not be told about this one"
+        );
+    }
+
+    #[test]
+    fn the_chain_hop_carries_the_local_album_id_not_the_arriving_one() {
+        // B reports "origin-album"; C's downstream peers know C's mirror as "mirror-1", so the
+        // outbound hop must carry the id C knows it by.
+        let state = state_with(
+            vec![member_mapping("p1", "mirror-1", "origin-album")],
+            vec![peer("p1")],
+        );
+        assert_eq!(
+            local_mirror_of(&state, "p1", "origin-album").as_deref(),
+            Some("mirror-1"),
+            "the hop carries the local id"
+        );
+        assert_eq!(local_mirror_of(&state, "p1", "not-ours"), None);
+    }
+
+    #[test]
+    fn only_the_reporting_peer_can_move_a_mapping_of_its_album() {
+        // A peer cannot escalate by claiming a permission on an album it does not own: the mapping
+        // it would be writing is the one THAT peer shares with us, so p2 must be refused p1's album.
+        let state = state_with(
+            vec![member_mapping("p1", "mirror-1", "origin-album")],
+            vec![peer("p1"), peer("p2")],
+        );
+        assert!(
+            !apply_owner_report(&state, "p2", "origin-album", "view"),
+            "p2 does not hold this album — its claim must be refused"
+        );
+        let still = state.collections().mappings[0].permissions.clone();
+        assert_eq!(still, "contribute", "refused, so nothing changed");
+
+        // The peer that DOES hold it moves it, and the change sticks.
+        assert!(
+            apply_owner_report(&state, "p1", "origin-album", "view"),
+            "p1 holds this album and is its owner"
+        );
+        assert_eq!(state.collections().mappings[0].permissions, "view");
     }
 }

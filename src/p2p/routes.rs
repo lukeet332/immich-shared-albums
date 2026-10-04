@@ -46,6 +46,13 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
         // connection can never address someone else's album, and each answers 410 for a withdrawn
         // share so a receiver tears its side down instead of retrying forever.
         // What a peer is pushing. Before the reads, because a push is the route that does work.
+        // An owner reporting a membership change, and the chain hop onward. On its own path rather
+        // than `/albums/:id/…`, because an owner holds no remote mapping id for an album it owns —
+        // the album travels in the body as the id this side stores as `remoteAlbumId`.
+        p if p.ends_with(crate::sync::permissions::PERMISSIONS_PATH) => {
+            let (status, value) = crate::p2p::protocol::handle_permissions(caller, body).await;
+            json_answer(status, value)
+        }
         p if p.ends_with("/refs") => {
             let id = album_mapping_id(p, "/refs");
             let (status, value) = crate::p2p::protocol::handle_refs(caller, &id, body).await;
