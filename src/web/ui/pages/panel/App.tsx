@@ -1,5 +1,5 @@
 /** web/ui/pages/panel/App.tsx — composition root of the admin panel. See ../../../http-router.md. */
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { followServerHints } from '../../lib/live.ts';
 import { useAnnouncer } from '../../lib/announce.ts';
 import { Card } from '../../lib/Card.tsx';
@@ -17,11 +17,21 @@ export const App = () => {
   const [asking, setAsking] = useState<Confirmation | null>(null);
   const [unlinking, setUnlinking] = useState('');
   const [notice, announce, dismiss] = useAnnouncer();
+  const loadGeneration = useRef(0);
 
-  const load = () =>
-    overview()
-      .then(setData)
-      .catch(e => setError((e as Error).message));
+  const load = () => {
+    // GENERATION-GUARDED: the live channel can fire another read while this one is in flight, and a
+    // slower earlier answer landing last would put the page back to a state it has moved past — the
+    // peer the hint was about would then be missing until something else reloaded the list.
+    const generation = ++loadGeneration.current;
+    return overview()
+      .then(fresh => {
+        if (generation === loadGeneration.current) setData(fresh);
+      })
+      .catch(e => {
+        if (generation === loadGeneration.current) setError((e as Error).message);
+      });
+  };
 
   useEffect(() => {
     void load();
