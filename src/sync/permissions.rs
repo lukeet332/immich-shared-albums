@@ -242,7 +242,12 @@ pub async fn tell_peer(peer: &crate::store::Peer, album_id: &str, role: &str) ->
 /// the whole chain. Best effort per peer: one unreachable household does not stop the rest, and the
 /// next reconcile re-nudges whoever did not take it.
 pub async fn broadcast(state: &State, album_id: &str, role: &str) {
-    for peer in downstream_peers(state, album_id) {
+    let peers = downstream_peers(state, album_id);
+    crate::log!(
+        "permission broadcast: {} peer(s) for {album_id}",
+        peers.len()
+    );
+    for peer in peers {
         tell_peer(&peer, album_id, role).await;
     }
 }
@@ -250,7 +255,9 @@ pub async fn broadcast(state: &State, album_id: &str, role: &str) {
 /// The owner's own reconcile: record what Immich says, then broadcast it outward. Run by the watcher
 /// beside `reconcile_once` — those albums are OWNER mappings and that walk is members only.
 pub async fn reconcile_owner_side(state: &State, client: &Client) {
-    for drift in owner_side_drift(state, client).await {
+    let all = owner_side_drift(state, client).await;
+    crate::log!("permission reconcile: {} owner album(s)", all.len());
+    for drift in all {
         // RECORD BEFORE the broadcast. A broadcast that fails leaves this side true and the peer
         // stale, which the next pass repairs; the reverse leaves a peer believing a change this side
         // no longer has, and nothing would ever contradict it.
