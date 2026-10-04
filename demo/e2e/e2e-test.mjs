@@ -394,6 +394,15 @@ check('that account is named for the person', !!ownerUtility && ownerUtility.nam
       ownerUtility?.name || 'no account');
 const mirrorAssets = await until(async () => { const x = await albumAssets(B, BKEY, mirror.id); return x.length === 4 ? x : null; });
 check('mirror has 4 assets', !!mirrorAssets, mirrorAssets ? '' : 'timed out');
+// ONE SHARE IS ONE MIRROR, counted AFTER the content settles. The invites lane's own tick and a
+// peer's invitation nudge pull the same offers, and running at once each saw no mapping for the
+// share and each mirrored it: two albums, six milliseconds apart, named the same thing. Every other
+// lookup here is by name and finds the first, so nothing else in the suite would notice a second.
+// Read fresh rather than reused: a duplicate created while the photos were still arriving would not
+// be in a list fetched before them.
+const namedAlbums = (await api(B, BKEY, '/albums')).filter(a => a.albumName === joinRes.album);
+check('the share produced exactly ONE mirror album, not two', namedAlbums.length === 1,
+      `${namedAlbums.length} album(s) named "${joinRes.album}"`);
 if (mirrorAssets) {
   const humanIds = bUsers.filter(u => !isBot(u.email)).map(u => u.id);
   check('no mirror asset owned by a human on B', mirrorAssets.every(a => !humanIds.includes(a.ownerId)));

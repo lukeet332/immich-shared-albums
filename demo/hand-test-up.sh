@@ -48,7 +48,19 @@ install_one() { # install_one <label> <network> <immich url> <household> <port> 
   local label=$1 net=$2 url=$3 household=$4 port=$5 key=$6 dir=$7 project=$8
   say "installing $label through deploy/install.sh (port $port)"
   # A previous run's identity volume would keep a stale pairing: this is the reset, not `down`.
+  # `down -v` reaches the volume only while the install dir and its compose file are still there —
+  # against a missing dir it does nothing at all, silently, and the `up` below reuses the orphan. The
+  # sidecar then comes up on another run's identity, peer links and bot keys, which reads as a
+  # product bug for hours. So the volume is removed BY NAME, and a survivor is FATAL: installing onto
+  # somebody else's state is never the lesser evil.
   ( cd "$dir" 2>/dev/null && docker compose -p "$project" down -v >/dev/null 2>&1 ) || true
+  docker volume rm "${project}_isa-data" >/dev/null 2>&1 || true
+  # `inspect` on the exact name, NOT `volume ls --filter name=`: that filter matches all or part of a
+  # name (`name=rose` finds `rosemary`), so an anchored pattern is searched for literally, matches
+  # nothing, and this guard would never fire — the one failure it exists to catch.
+  if docker volume inspect "${project}_isa-data" >/dev/null 2>&1; then
+    fail "${project}_isa-data survived the reset — refusing to install onto another run's state"
+  fi
   rm -rf "$dir"
   # The prompts, in order: network, immich url, household name, host port, API key, reverse proxy,
   # public-proxy, install dir. Answering them IS the test.

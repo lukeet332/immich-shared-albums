@@ -233,7 +233,11 @@ pub fn nudge_peers(state: &State, album_id: &str, except_peer_pub: Option<&str>)
             })
             .collect()
     };
-    crate::p2p::nudges::broadcast(targets, &crate::p2p::nudges::album_path(album_id));
+    // THE COMMENT LANE'S OWN NUDGE, not the album's. What moved is the conversation, and waking that
+    // lane runs the comment sweep, which is precisely the pull for it — the album nudge would force
+    // a full reconcile of every recipient's mirror to deliver a message. This tell had a route, a
+    // handler and a lane waiting on it, and nothing ever sent it.
+    crate::p2p::nudges::broadcast(targets, crate::p2p::nudges::COMMENTS);
 }
 
 /// `POST /albums/:id/activity` — a peer hands us comments to place in our album.
