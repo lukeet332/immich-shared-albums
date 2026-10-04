@@ -710,6 +710,41 @@ pub async fn watch_once(state: &State, client: &Client) {
         }
     }
     reconcile_once(state, client).await;
+    reconcile_permissions(state, client).await;
+}
+
+/// What a person changed about an album's people, in Immich's own UI, and the peer told.
+///
+/// Only the OWNER side can drift: it is the only side whose credential can change a membership, so
+/// it is the only side that watches. Run beside `reconcile_once` rather than inside it, because the
+/// albums here are owner mappings and that walk is members only.
+pub async fn reconcile_permissions(state: &State, client: &Client) {
+    for drift in crate::sync::permissions::owner_side_drift(state, client).await {
+        // RECORD FIRST. A notification that fails leaves the owner's own record true and the peer
+        // stale, which the next pass repairs — the reverse leaves the peer believing a change this
+        // side no longer has, and nothing would ever contradict it.
+        let changed = crate::sync::permissions::record(state, &drift);
+        if changed {
+            crate::log!(
+                "\"{}\" is now \"{}\" for \"{}\" — permission updated",
+                drift.album_name,
+                drift.role,
+                state
+                    .collections()
+                    .peers
+                    .iter()
+                    .find(|p| p.pub_key == drift.peer)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "a linked server".to_string())
+            );
+        }
+        if !crate::sync::permissions::notify_peer(state, &drift).await {
+            crate::log!(
+                "could not tell the peer about \"{}\"'s new permission — will retry",
+                drift.album_name
+            );
+        }
+    }
 }
 
 /// Has the last human member left this mirror? A NATIVE leave — album settings -> Leave album in the
