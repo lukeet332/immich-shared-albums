@@ -93,16 +93,11 @@ pub async fn owner_side_drift(state: &State, client: &Client) -> Vec<Drift> {
         let Some(role) = member_role_in(&album, &person) else {
             continue;
         };
-        let still_recorded = state
-            .collections()
-            .mappings
-            .iter()
-            .find(|m| m.id == mapping_id)
-            .map(|m| role.as_str() == crate::sync::mirror::member_role(&m.permissions))
-            .unwrap_or(false);
-        if still_recorded {
-            continue;
-        }
+        // Every owner mapping is returned, not only ones whose LOCAL record disagrees. The
+        // reconcile broadcasts every cycle so a notify that was dropped (transport not up yet) is
+        // re-sent; filtering to "newly changed" here is exactly what made a single dropped notify
+        // permanent. The receiver applies idempotently, so a redundant send costs a round trip and
+        // changes nothing.
         drifted.push(Drift {
             mapping_id,
             peer,
