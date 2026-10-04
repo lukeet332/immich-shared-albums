@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p src/web/ui",
+    "check:rust": "cargo check --lib",
     "lint": "eslint src/web/ui",
     "lint:fix": "eslint src --fix",
     "format": "prettier --write \"src/web/ui/**/*.{ts,tsx,css}\" \"scripts/**/*.mjs\" \"*.json\"",

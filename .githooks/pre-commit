@@ -3,6 +3,18 @@
 set -e
 echo "pre-commit: verify:fast (bundles, format, lint, types, cycles)"
 npm run --silent verify:fast || exit 1
+# The Rust half of "does it build". `cargo check` is the compile-only gate — no codegen, and about a
+# second on a warm target — so it belongs here rather than only in CI, where the same break costs a
+# push and a red run to find.
+#
+# Skipped, loudly, when cargo is absent: a hook that refuses to commit on a machine without a Rust
+# toolchain is a hook people bypass, and CI still runs fmt, clippy and the tests.
+if command -v cargo >/dev/null 2>&1; then
+  echo "pre-commit: check:rust (cargo check --lib)"
+  npm run --silent check:rust || exit 1
+else
+  echo "pre-commit: no cargo on PATH — SKIPPING the Rust compile check (CI still runs it)"
+fi
 # build:web regenerated dist; stage it or the commit ships stale UI.
 git add src/web/dist
 echo "pre-commit: ok"
