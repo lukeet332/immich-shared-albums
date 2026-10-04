@@ -110,10 +110,15 @@ worse without saying so.**
   Squash-merge makes the **PR title** the commit release-please reads; CI rejects a
   non-conventional title.
 - **CI runs the fast checks and both e2e lanes on every PR**; the pre-commit hook (enabled by
-  `npm install`) runs `verify:fast` on every commit. To get the same result locally before pushing:
+  `npm install`) runs `verify:fast` — bundles, format, lint, types and the two token checks — then
+  `check:rust` (`cargo check --lib`) when cargo is on PATH, and skips that one loudly when it is not.
+  To get the same result locally before pushing:
   `npm run verify`, `bash demo/run-mock-e2e.sh` (API lane, purges its rig first), and
   `demo/e2e/browser-test.mjs` (browser lane — the only coverage that loads a page).
   The e2e suite is deliberately NOT in the hook: a seven-minute hook is a hook people bypass.
+  `cargo check` is not that — compile-only, no codegen, about a second on a warm target — which is why
+  a commit that does not build no longer escapes the hook. CI still runs the full
+  `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --locked --lib`.
 - **Two reviewers run on every PR, both advisory only.** CodeRabbit is configured by
   `.coderabbit.yaml` and reviews against this file, ingested through its
   `knowledge_base.code_guidelines` setting — so a rule changed here changes what it enforces, with no
