@@ -1,10 +1,11 @@
 /** web/ui/pages/panel/App.tsx — composition root of the admin panel. See ../../../http-router.md. */
 import { useEffect, useState } from 'preact/hooks';
+import { followServerHints } from '../../lib/live.ts';
 import { useAnnouncer } from '../../lib/announce.ts';
 import { Card } from '../../lib/Card.tsx';
 import { Notice } from '../../lib/Notice.tsx';
 import { Confirm, type Confirmation } from '../../lib/confirm.tsx';
-import { overview, unlinkPeer, type Overview, type Peer } from './api.ts';
+import { overview, unlinkPeer, ROUTE_PREFIX, type Overview, type Peer } from './api.ts';
 import { LinkServer } from './LinkServer.tsx';
 import { ConnectedServers } from './ConnectedServers.tsx';
 import { SharedAlbums } from './SharedAlbums.tsx';
@@ -25,6 +26,11 @@ export const App = () => {
   useEffect(() => {
     void load();
   }, []);
+
+  // LIVE, because the person doing the acting may be on the OTHER server: their household redeeming
+  // this server's link, inviting somebody, or a reunion finishing on the wire. Without this the page
+  // that MINTED the link is the one place that never shows it took.
+  useEffect(() => followServerHints(ROUTE_PREFIX, () => void load()), []);
 
   const refuseAlbum = () =>
     announce({

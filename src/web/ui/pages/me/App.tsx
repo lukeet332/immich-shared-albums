@@ -5,6 +5,7 @@ import { AlbumLink } from '../../lib/AlbumLink.tsx';
 import { useAnnouncer } from '../../lib/announce.ts';
 import { Button } from '../../lib/Button.tsx';
 import { Card } from '../../lib/Card.tsx';
+import { followServerHints } from '../../lib/live.ts';
 import { Notice } from '../../lib/Notice.tsx';
 import { Setting } from '../../lib/Setting.tsx';
 import { Switch } from '../../lib/Switch.tsx';
@@ -63,13 +64,8 @@ export const App = () => {
   // LIVE, because the other household acts on their own server: an invitation they send, a pair
   // their panel publishes, a reunion finishing on the wire. The event is a HINT and carries nothing
   // — every list below is re-read as this caller, so a hint can never show them anything they could
-  // not fetch themselves. EventSource reconnects on its own, and a sidecar that predates the route
-  // simply answers 404 and the panel behaves exactly as it did before.
-  useEffect(() => {
-    const events = new EventSource(`${ROUTE_PREFIX}/events`);
-    events.onmessage = () => void refreshBoth();
-    return () => events.close();
-  }, []);
+  // not fetch themselves.
+  useEffect(() => followServerHints(ROUTE_PREFIX, () => void refreshBoth()), []);
 
   /** One reload for both lists: they describe one state, and a mutation changes both.
    *
