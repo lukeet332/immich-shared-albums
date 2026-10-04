@@ -1344,7 +1344,11 @@ stage('native album invitations, per person (no share link)');
         // clear it, and a panel left saying "reunited" about a reunion that is over is the misleading
         // half of the undo. It also has to be cleared BEFORE the re-mirror above, or the fresh mirror
         // is born carrying the claim.
-        const inviterMine = (await api(A, AKEY, '/immich-shared-albums/me/albums')).albums || [];
+        // Panel routes are NOT under /api, so this is a bare fetch against the origin's sidecar
+        // rather than the `api()` helper, which prefixes every path it is given.
+        const inviterMine = (await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/albums`, {
+          headers: { 'x-api-key': AKEY },
+        })).json()).albums || [];
         const stillReunited = inviterMine.filter(x => x.name === 'natively invited album' && x.reunified);
         check('the inviter no longer reports the share as reunited', stillReunited.length === 0,
               stillReunited.length ? JSON.stringify(stillReunited) : '(cleared)');
