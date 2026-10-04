@@ -752,6 +752,12 @@ pub fn handle_nudge(caller_pub: &str, album_mapping_id: &str) -> (u16, Value) {
             crate::sync::comments::pull_canonical_comments(&owned_state, client, &mapping, &origin)
                 .await;
         }
+        // THE WATCHER LAST, never before the forced pull above. `reconcile_mapping` SKIPS a mapping
+        // another reconcile already holds, so a watcher woken first can claim this album with its
+        // own unforced sweep and make the forced pull a no-op — and a forced pull is the only thing
+        // that sees a caption edit, which moves no album row. Woken here it still carries our own
+        // half of the change back, with no window in which it can eat the pull.
+        crate::sync::wakes::wake(crate::sync::wakes::Lane::Watch);
     });
     (200, json!({ "ok": true }))
 }
@@ -1048,6 +1054,10 @@ pub async fn handle_refs(caller_pub: &str, album_mapping_id: &str, body: &[u8]) 
     // PARTIAL SUCCESS is the contract: the sender re-offers only the failed refs next cycle, so one
     // bad photo cannot wedge an album. Removals are NOT retried by the sender — a purge that was
     // refused stays and is logged, because retrying a refusal would only refuse again.
+    //
+    // The watcher is woken because a push is a change to the shared album, and the watcher is what
+    // carries OUR half back the other way. A push alone leaves our own new refs for the backstop.
+    crate::sync::wakes::wake(crate::sync::wakes::Lane::Watch);
     (
         200,
         json!({ "ok": failed.is_empty(), "failed": failed, "removed": removed }),

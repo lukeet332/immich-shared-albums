@@ -247,10 +247,20 @@ pub async fn handle_pair(transport: &Transport, caller_pub: &str, body: &[u8]) -
     let _ = state().save();
     crate::log!("paired with \"{household_name}\" — their people can now be invited to albums");
 
-    // A LINK IS USEFUL THE MOMENT IT EXISTS: offer the admin account's own albums to the peer that
-    // just paired, before anyone opens a panel. Not ported yet (album-index), so it is LOGGED
-    // rather than silently skipped — the panel's first visit offers them anyway.
-    crate::log!("note: offering this server's albums to the new peer is not ported yet");
+    // THE MINTING HALF OF WHAT THE REDEEM ROUTE DOES for the joining half. The household that
+    // shared the link is otherwise the only one that learns nothing: no panel is told, and no album
+    // is offered, so the peer's reunion list stays empty until somebody happens to open a panel here.
+    crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Shares);
+    // The directory lane is what lists the peer's people here. Waking it puts them in this
+    // household's Immich picker now instead of at the next backstop sweep.
+    crate::sync::wakes::wake(crate::sync::wakes::Lane::Invites);
+    // A LINK IS USEFUL THE MOMENT IT EXISTS: read the admin account's own albums and offer them, so
+    // the peer has something to match against before anyone opens a panel. Deliberately unawaited —
+    // the pairing answer must not wait on an album read.
+    let owned_state = state().clone();
+    tokio::spawn(async move {
+        crate::sync::index_freshness::offer_admin_albums(&owned_state).await;
+    });
 
     let _ = transport;
     (

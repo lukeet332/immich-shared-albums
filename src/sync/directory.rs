@@ -277,7 +277,10 @@ pub fn start_directory_loop(state: std::sync::Arc<State>) {
             // without this, an invitation is mirrored only if a nudge happens to arrive, and the
             // suite's reach depends on timing. That is exactly the run-to-run variance this port
             // was measuring: 211 checks when the nudge fired, 181 when it did not.
-            crate::sync::invites::pull_invitations_once(&state, client).await;
+            //
+            // Through the SINGLE-FLIGHT entry point, not the bare pull: a nudge answering the same
+            // invitation at the same moment would otherwise mirror the share a second time.
+            crate::sync::invites::pull_invitations_now(&state, client).await;
             // The ledger's last resort, self-throttled inside (`reclaim_when_due`): stubs whose
             // mapping is gone are collected here because this lane already runs on the cheapest
             // cadence, and the sweep gate means a fourth lane would starve the others.

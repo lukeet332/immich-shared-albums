@@ -54,7 +54,8 @@ picker, for the same reason. Known costs; do not make either worse without sayin
 | `p2p/entitlement.rs` | what a linked household may reach |
 | `p2p/frame.rs` | the length-prefixed frame codec (`isa/2`) |
 | `p2p/join.rs`, `pair.rs`, `unlink.rs` | joining a share, pairing two servers, severing a link |
-| `p2p/protocol.rs` | `PROTOCOL_VERSION`, `PROTOCOL_FEATURES`, `SIDECAR_VERSION`, peer lookups and nudges |
+| `p2p/protocol.rs` | `PROTOCOL_VERSION`, `PROTOCOL_FEATURES`, `SIDECAR_VERSION`, peer lookups and the nudge handlers |
+| `p2p/nudges.rs` | the nudge paths and the only place one is sent; `p2p/routes.rs` matches the same constants |
 | `p2p/routes.rs` | the peer routes, in match order |
 | `p2p/advertise.rs` | the addresses a pairing ticket or share token carries: `ISA_ADVERTISE_ADDR` first, then the endpoint's own |
 | `p2p/transport.rs` | the iroh endpoint and dialing |
