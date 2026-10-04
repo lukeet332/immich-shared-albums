@@ -242,12 +242,7 @@ pub async fn tell_peer(peer: &crate::store::Peer, album_id: &str, role: &str) ->
 /// the whole chain. Best effort per peer: one unreachable household does not stop the rest, and the
 /// next reconcile re-nudges whoever did not take it.
 pub async fn broadcast(state: &State, album_id: &str, role: &str) {
-    let peers = downstream_peers(state, album_id);
-    crate::log!(
-        "permission broadcast: {} peer(s) for {album_id}",
-        peers.len()
-    );
-    for peer in peers {
+    for peer in downstream_peers(state, album_id) {
         tell_peer(&peer, album_id, role).await;
     }
 }
@@ -255,9 +250,7 @@ pub async fn broadcast(state: &State, album_id: &str, role: &str) {
 /// The owner's own reconcile: record what Immich says, then broadcast it outward. Run by the watcher
 /// beside `reconcile_once` — those albums are OWNER mappings and that walk is members only.
 pub async fn reconcile_owner_side(state: &State, client: &Client) {
-    let all = owner_side_drift(state, client).await;
-    crate::log!("permission reconcile: {} owner album(s)", all.len());
-    for drift in all {
+    for drift in owner_side_drift(state, client).await {
         // RECORD BEFORE the broadcast. A broadcast that fails leaves this side true and the peer
         // stale, which the next pass repairs; the reverse leaves a peer believing a change this side
         // no longer has, and nothing would ever contradict it.
@@ -412,6 +405,30 @@ mod tests {
             held.iter().map(|p| p.pub_key.as_str()).collect::<Vec<_>>(),
             vec!["p1"],
             "only the household our owner mapping points at"
+        );
+    }
+
+    #[test]
+    fn the_owner_notifies_the_household_its_album_reached() {
+        // THE RIG, verbatim: B owns the album and shared it onward, so B's OWNER mapping is what
+        // names C. The send-side query is the one that finds it — an owner mapping whose `albumId`
+        // is the album, NOT a `remoteAlbumId` match (which is empty on the sender and was why
+        // nothing was ever sent).
+        let mut owner = member_mapping("peer-c", "origin-album", "ignored");
+        owner.role = Role::Owner;
+        owner.remote_album_id = None;
+        let state = state_with(
+            vec![owner, member_mapping("peer-d", "downstream", "somewhere")],
+            vec![peer("peer-c"), peer("peer-d")],
+        );
+        let reached = downstream_peers(&state, "origin-album");
+        assert_eq!(
+            reached
+                .iter()
+                .map(|p| p.pub_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["peer-c"],
+            "the album's holder is found and the unrelated household is not"
         );
     }
 
