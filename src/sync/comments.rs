@@ -210,12 +210,9 @@ fn cannot_succeed(message: &str) -> bool {
 
 /// Tell every OTHER linked household that this album's conversation moved.
 ///
-/// Fire-and-forget by contract: a nudge says "look again" and can never say what to look at, so
-/// losing one costs the latency of the next sweep and nothing else. Only OWNER mappings nudge — a
-/// member's mirror is not the source of truth, and nudging from it would have every household
-/// telling every other one to re-read.
+/// Only OWNER mappings nudge — a member's mirror is not the source of truth, and nudging from it
+/// would have every household telling every other one to re-read.
 pub fn nudge_peers(state: &State, album_id: &str, except_peer_pub: Option<&str>) {
-    let Some(transport) = transport() else { return };
     let targets: Vec<Peer> = {
         let collections = state.collections();
         collections
@@ -236,19 +233,7 @@ pub fn nudge_peers(state: &State, album_id: &str, except_peer_pub: Option<&str>)
             })
             .collect()
     };
-    for peer in targets {
-        let transport = transport.clone();
-        let path = format!("/albums/{album_id}/nudge");
-        // Deliberately NOT awaited: the caller is answering a peer, and a nudge that blocks that
-        // answer would make one household's latency another's.
-        tokio::spawn(async move {
-            let header = RequestHeader {
-                path,
-                ..Default::default()
-            };
-            let _ = transport.round_trip(&peer, &header, None).await;
-        });
-    }
+    crate::p2p::nudges::broadcast(targets, &crate::p2p::nudges::album_path(album_id));
 }
 
 /// `POST /albums/:id/activity` — a peer hands us comments to place in our album.

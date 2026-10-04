@@ -131,19 +131,8 @@ pub async fn albums_as_marker(
 }
 
 /// Ask a peer to re-read its invitations now, rather than at its next sweep.
-///
-/// Fire-and-forget by contract: a nudge says "look again" and can never say what to look at, so
-/// losing one costs the latency of the next tick and nothing else.
 pub fn nudge_peer_invitations(peer: &Peer) {
-    let Some(transport) = transport() else { return };
-    let peer = peer.clone();
-    tokio::spawn(async move {
-        let header = RequestHeader {
-            path: "/invitations/nudge".into(),
-            ..Default::default()
-        };
-        let _ = transport.round_trip(&peer, &header, None).await;
-    });
+    crate::p2p::nudges::send(peer, crate::p2p::nudges::INVITATIONS.to_string());
 }
 
 /// The union of every marker's album views, for a confirming read: which albums are seen at all.
@@ -308,6 +297,10 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
                 // THE PERSON IT IS FOR SHOULD NOT HAVE TO WAIT FOR A SWEEP: tell their household to
                 // pull now, the moment the share exists.
                 nudge_peer_invitations(&peer);
+                // AND PUSH OUR OWN CONTENT NOW. The watcher is the lane that carries this album's
+                // refs to the peer, and nothing else wakes it here — without this the share is
+                // visible on the other server while its photos wait out the backstop.
+                crate::sync::wakes::wake(crate::sync::wakes::Lane::Watch);
                 crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Shares);
                 crate::log!(
                     "invited {} person(s) at \"{}\" to \"{}\" ({}) — shared natively, no link needed",
@@ -426,6 +419,9 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
             }
             let _ = state.save();
             nudge_peer_invitations(&peer);
+            // The watcher collects what a retired mapping leaves behind — its refs here and the
+            // peer's view of them — so a withdrawal settles now rather than at the backstop.
+            crate::sync::wakes::wake(crate::sync::wakes::Lane::Watch);
             crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Shares);
             crate::log!(
                 "invitation withdrawn: \"{}\" removed from \"{}\" — no longer syncing it (invited={} visible={})",
@@ -583,38 +579,47 @@ fn refused_memberships() -> &'static std::sync::Mutex<std::collections::HashSet<
 static PULL_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static PULL_QUEUED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Pull now, because a peer said something changed.
+/// Pull now, because a peer said something changed — or because the invites lane reached its turn.
 ///
-/// NOT the invite lane's tick, and deliberately not gated by `sweeps_are_paused`: a nudge is the
-/// PUSH half of the protocol, so a member learns about an invitation even while every sweep is held —
-/// which is what the browser lane's no-reload case holds them to prove.
-pub fn pull_invitations_soon(state: &std::sync::Arc<State>) {
+/// NOT gated by `sweeps_are_paused`: a nudge is the PUSH half of the protocol, so a member learns
+/// about an invitation even while every sweep is held — which is what the browser lane's no-reload
+/// case holds them to prove.
+///
+/// BOTH callers go through here, and that is the point: a nudge and a lane sweep pulling at the same
+/// moment is how ONE share becomes TWO mirror albums. Neither pull sees the mapping the other is
+/// about to write, so both mirror the share and the household gets the album twice. The claim below
+/// is what makes the two callers one sequence.
+pub async fn pull_invitations_now(state: &State, client: &Client) {
     use std::sync::atomic::Ordering;
-    // The flag is cleared by this guard however the task ends, so one failed pull can never wedge
-    // the route into "coalesced" for ever — a state where the sidecar still answers a nudge with
+    // The flag is cleared by this guard however the pull ends, so one failed pull can never wedge
+    // this into "coalesced" for ever — a state where the sidecar still answers a nudge with
     // `{ok:true}` and then never looks.
     let Some(_running) = crate::sync::sweeps::RunningFlagGuard::claim(&PULL_RUNNING) else {
         PULL_QUEUED.store(true, Ordering::SeqCst);
         return;
     };
+    loop {
+        // Cleared BEFORE the pull, so a change that arrives mid-pull is seen as a follow-up rather
+        // than dropped.
+        PULL_QUEUED.store(false, Ordering::SeqCst);
+        pull_invitations_once(state, client).await;
+        if !PULL_QUEUED.swap(false, Ordering::SeqCst) {
+            break;
+        }
+    }
+}
+
+/// The same pull, without waiting for it: unawaited, because the route answering a nudge must not
+/// block on a sweep of every linked peer.
+pub fn pull_invitations_soon(state: &std::sync::Arc<State>) {
     let state = state.clone();
     tokio::spawn(async move {
-        let _running = _running;
-        let client = crate::immich::client::shared();
-        loop {
-            // Cleared BEFORE the pull, so a change that arrives mid-pull is seen as a follow-up
-            // rather than dropped.
-            PULL_QUEUED.store(false, Ordering::SeqCst);
-            pull_invitations_once(&state, client).await;
-            if !PULL_QUEUED.swap(false, Ordering::SeqCst) {
-                break;
-            }
-        }
+        pull_invitations_now(&state, crate::immich::client::shared()).await;
     });
 }
 
 /// The member side: mirror what a peer has invited us to, and drop what it has withdrawn.
-pub async fn pull_invitations_once(state: &State, client: &Client) {
+async fn pull_invitations_once(state: &State, client: &Client) {
     let started = std::time::Instant::now();
     let peers: Vec<Peer> = state.collections().peers.clone();
     let mut changed = false;
@@ -779,6 +784,11 @@ pub async fn pull_invitations_once(state: &State, client: &Client) {
                             album_name,
                             permissions
                         );
+                        // THE MIRROR IS EMPTY UNTIL THE WATCHER FILLS IT, and this lane is the
+                        // invites lane: nothing else wakes the watcher for an invitation that just
+                        // arrived, so without this the album shows up bare and its photos land at
+                        // the next backstop sweep — minutes of an album that looks broken.
+                        crate::sync::wakes::wake(crate::sync::wakes::Lane::Watch);
                     }
                 }
                 Err(e) => crate::log!("could not mirror invitation \"{album_name}\": {e}"),

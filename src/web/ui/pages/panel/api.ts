@@ -1,5 +1,5 @@
 /** web/ui/pages/panel/api.ts — The panel's whole server surface. Every route here is admin-only. See ../../../http-router.md. */
-const ROUTE_PREFIX = '/immich-shared-albums';
+export const ROUTE_PREFIX = '/immich-shared-albums';
 
 const json = async (path: string, init?: RequestInit) => {
   const r = await fetch(ROUTE_PREFIX + path, init);

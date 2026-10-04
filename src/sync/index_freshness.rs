@@ -310,15 +310,5 @@ fn offer_to_every_peer(state: &State, mine: &[OwnedAlbum], owner_user_id: &str) 
 /// Tell a peer its view of what we offer may have changed, so it re-reads rather than waiting for its
 /// next sweep. Carries nothing: the peer re-reads what we already publish for it.
 fn nudge_peer_index(peer: &Peer) {
-    let Some(transport) = crate::p2p::transport::transport() else {
-        return;
-    };
-    let peer = peer.clone();
-    tokio::spawn(async move {
-        let header = crate::p2p::frame::RequestHeader {
-            path: "/index/nudge".into(),
-            ..Default::default()
-        };
-        let _ = transport.round_trip(&peer, &header, None).await;
-    });
+    crate::p2p::nudges::send(peer, crate::p2p::nudges::INDEX.to_string());
 }

@@ -1,10 +1,11 @@
 /** web/ui/pages/panel/App.tsx — composition root of the admin panel. See ../../../http-router.md. */
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { followServerHints } from '../../lib/live.ts';
 import { useAnnouncer } from '../../lib/announce.ts';
 import { Card } from '../../lib/Card.tsx';
 import { Notice } from '../../lib/Notice.tsx';
 import { Confirm, type Confirmation } from '../../lib/confirm.tsx';
-import { overview, unlinkPeer, type Overview, type Peer } from './api.ts';
+import { overview, unlinkPeer, ROUTE_PREFIX, type Overview, type Peer } from './api.ts';
 import { LinkServer } from './LinkServer.tsx';
 import { ConnectedServers } from './ConnectedServers.tsx';
 import { SharedAlbums } from './SharedAlbums.tsx';
@@ -16,15 +17,30 @@ export const App = () => {
   const [asking, setAsking] = useState<Confirmation | null>(null);
   const [unlinking, setUnlinking] = useState('');
   const [notice, announce, dismiss] = useAnnouncer();
+  const loadGeneration = useRef(0);
 
-  const load = () =>
-    overview()
-      .then(setData)
-      .catch(e => setError((e as Error).message));
+  const load = () => {
+    // GENERATION-GUARDED: the live channel can fire another read while this one is in flight, and a
+    // slower earlier answer landing last would put the page back to a state it has moved past — the
+    // peer the hint was about would then be missing until something else reloaded the list.
+    const generation = ++loadGeneration.current;
+    return overview()
+      .then(fresh => {
+        if (generation === loadGeneration.current) setData(fresh);
+      })
+      .catch(e => {
+        if (generation === loadGeneration.current) setError((e as Error).message);
+      });
+  };
 
   useEffect(() => {
     void load();
   }, []);
+
+  // LIVE, because the person doing the acting may be on the OTHER server: their household redeeming
+  // this server's link, inviting somebody, or a reunion finishing on the wire. Without this the page
+  // that MINTED the link is the one place that never shows it took.
+  useEffect(() => followServerHints(ROUTE_PREFIX, () => void load()), []);
 
   const refuseAlbum = () =>
     announce({
