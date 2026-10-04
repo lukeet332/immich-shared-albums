@@ -46,7 +46,6 @@ SKIP_BUILD=1 RIG_MOCKS_ONLY=1 ISA_DOCKERFILE="$DOCKERFILE" bash demo/run-mock-e2
 
 install_one() { # install_one <label> <network> <immich url> <household> <port> <key> <dir> <project>
   local label=$1 net=$2 url=$3 household=$4 port=$5 key=$6 dir=$7 project=$8
-  local leftover
   say "installing $label through deploy/install.sh (port $port)"
   # A previous run's identity volume would keep a stale pairing: this is the reset, not `down`.
   # `down -v` reaches the volume only while the install dir and its compose file are still there —
@@ -56,8 +55,12 @@ install_one() { # install_one <label> <network> <immich url> <household> <port> 
   # somebody else's state is never the lesser evil.
   ( cd "$dir" 2>/dev/null && docker compose -p "$project" down -v >/dev/null 2>&1 ) || true
   docker volume rm "${project}_isa-data" >/dev/null 2>&1 || true
-  leftover=$(docker volume ls -q --filter "name=^${project}_isa-data\$")
-  [ -z "$leftover" ] || fail "$leftover survived the reset — refusing to install onto another run's state"
+  # `inspect` on the exact name, NOT `volume ls --filter name=`: that filter matches all or part of a
+  # name (`name=rose` finds `rosemary`), so an anchored pattern is searched for literally, matches
+  # nothing, and this guard would never fire — the one failure it exists to catch.
+  if docker volume inspect "${project}_isa-data" >/dev/null 2>&1; then
+    fail "${project}_isa-data survived the reset — refusing to install onto another run's state"
+  fi
   rm -rf "$dir"
   # The prompts, in order: network, immich url, household name, host port, API key, reverse proxy,
   # public-proxy, install dir. Answering them IS the test.
