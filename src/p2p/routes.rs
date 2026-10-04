@@ -88,8 +88,9 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
             json_answer(200, serde_json::json!({ "invitations": invitations }))
         }
         // "Look at your invitations again now." Says nothing about what changed, and losing it costs
-        // the latency of the next sweep.
-        p if p.ends_with("/invitations/nudge") => {
+        // the latency of the next sweep. Matched through the SENDER's constant like the exact arms
+        // above: a suffix arm with its own literal is exactly the drift this module exists to stop.
+        p if p.ends_with(crate::p2p::nudges::INVITATIONS) => {
             let state = crate::state::state();
             let (status, value) = crate::sync::invites::handle_invitations_nudge(state, caller);
             json_answer(status, value)
@@ -348,6 +349,9 @@ mod tests {
             crate::p2p::nudges::INDEX,
             crate::p2p::nudges::COMMENTS,
             crate::p2p::nudges::DIRECTORY,
+            // The invitations path is a SUFFIX arm, so it is the one most able to keep a literal of
+            // its own: pinned here so a sender's constant and this route cannot drift apart.
+            crate::p2p::nudges::INVITATIONS,
         ] {
             let (status, body) = ask(path);
             assert_eq!(
