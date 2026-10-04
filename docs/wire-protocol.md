@@ -63,6 +63,14 @@ pairing it has already had in its own panel. Sent best-effort under `TELL_ORIGIN
 the person who accepted has already succeeded locally. An older origin answers 404, which costs a
 stale row there and nothing here.
 
+**And the undo is reported the same way** — `POST /albums/:mappingId/unreunited`
+(`handleUnreunited`) — because `reunified` is the ORIGIN's record of the share it handed over, and
+only the origin can withdraw it. Left set, the origin's panel keeps offering a pairing it has already
+had, and the mirror the receiver re-creates after the undo is born carrying the claim, which is what
+hides that mirror's own controls. Its own route rather than a body on the one above, so an origin
+that knows only `/reunified` is never sent something it would read as the reunion still being on. It
+is not a leave: the share stays live and the invitation is not withdrawn.
+
 **The album index is published, not derived.** `GET /albums` on the wire answers what the
 caller's people have _published_: each album's owner asked their own server for the albums it says
 they own, because the sidecar holds no credential for a human and Immich scopes `GET /albums` to

@@ -641,6 +641,48 @@ pub fn handle_reunified(state: &State, caller_pub: &str, album_mapping_id: &str)
     (200, json!({ "ok": true }))
 }
 
+/// A peer reporting that the reunion here has been UNDONE — the inverse of `handle_reunified`.
+///
+/// `reunified` is this household's fact about a share it handed over, and only the receiving side can
+/// observe the adoption ending, so this is the one way the flag is ever cleared. Left set, this panel
+/// keeps calling a share reunified that is not, and the mirror the peer re-creates inherits the claim
+/// — which is what hides its own controls and mislabels it.
+pub fn handle_unreunited(state: &State, caller_pub: &str, album_mapping_id: &str) -> (u16, Value) {
+    let Some(peer) = state
+        .collections()
+        .peers
+        .iter()
+        .find(|p| p.pub_key == caller_pub)
+        .cloned()
+    else {
+        return (
+            403,
+            json!({ "error": "unknown peer", "code": "unknown_peer" }),
+        );
+    };
+    let Some(mapping) = mapping_for(state, &peer.pub_key, album_mapping_id, Some(Role::Owner))
+    else {
+        return gone_or_404(state, &peer.pub_key, album_mapping_id);
+    };
+    if mapping.dead {
+        return gone_or_404(state, &peer.pub_key, album_mapping_id);
+    }
+    {
+        let mut collections = state.collections();
+        if let Some(live) = collections.mappings.iter_mut().find(|m| m.id == mapping.id) {
+            live.reunified = None;
+        }
+    }
+    let _ = state.save();
+    crate::log!(
+        "\"{}\" un-reunited the share of \"{}\" — it is a possible reunion again",
+        peer.name,
+        mapping.album_name
+    );
+    crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Shares);
+    (200, json!({ "ok": true }))
+}
+
 /// Ask every linked peer what it can do, and record the answer on the peer row.
 ///
 /// A peer too old to know `/hello` answers 404, which reads as protocol 2 with no features — the

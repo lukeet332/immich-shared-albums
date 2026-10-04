@@ -126,6 +126,15 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
             let (status, value) = crate::p2p::protocol::handle_reunified(state, caller, &id);
             json_answer(status, value)
         }
+        // The same fact withdrawn. Its own arm, not a payload on the one above: the two are separate
+        // moments on the wire and an older peer that knows only `/reunified` must not be sent a body
+        // it would read as the reunion still being on.
+        p if p.ends_with("/unreunited") => {
+            let id = album_mapping_id(p, "/unreunited");
+            let state = crate::state::state();
+            let (status, value) = crate::p2p::protocol::handle_unreunited(state, caller, &id);
+            json_answer(status, value)
+        }
         p if p.ends_with("/version") => {
             let id = album_mapping_id(p, "/version");
             let (status, value) = crate::p2p::protocol::handle_version(caller, &id).await;

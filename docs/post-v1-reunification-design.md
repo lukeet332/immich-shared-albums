@@ -351,10 +351,12 @@ choice. This also removes the wrinkle that **Immich has no native per-user-priva
 - **Each side posts its own copy** as the coordinated event completes — both servers know the
   request (`invited`), the accept (`accepted`) and the merge (`reunited`) from the peer protocol, so
   no trail line is ever transmitted and each side's thread ends up showing the same events. The
-  **withdrawal is the exception**: un-reuniting is local to the adopter's album and the origin is
-  deliberately NOT told (`/me/unreunite` passes `notifyOrigin: false` so the share stays live and
-  returns as an ordinary mirror), so `unreunited` is written on that one album, by the request that
-  carries the owner's credential, before `strip_album_bots` takes the bot's membership away.
+  **withdrawal is the exception**: un-reuniting is local to the adopter's album, and the origin is
+  told the REUNION is over (`/albums/:mappingId/unreunited`, which clears the `reunified` fact only
+  the origin owns) but never told to stop sharing — `/me/unreunite` still passes `notifyOrigin: false`,
+  so no `/leave` is sent, the share stays live and returns as an ordinary mirror — so `unreunited` is
+  written on that one album, by the request that carries the owner's credential, before
+  `strip_album_bots` takes the bot's membership away.
 - **Idempotent by ledger, not by hope**: a line is written once per event, tagged through
   `seen_act_add`/`seen_act_has`, because the loops retry a step until it settles and a naive write
   would accumulate a second "Repair requested by Alice" on every pass. `sync/audit.rs` is where this

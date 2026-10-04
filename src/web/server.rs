@@ -755,6 +755,13 @@ async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
 
     let album_id = mapping.album_id.clone();
     let album_name = mapping.album_name.clone();
+    // Held BEFORE the teardown, which retires the mapping these two facts are read off.
+    let origin = state()
+        .collections()
+        .peers
+        .iter()
+        .find(|p| p.pub_key == mapping.peer)
+        .cloned();
     // Purge the peer's stubs FIRST, while our accounts still hold the memberships they were granted,
     // then take those accounts off — only the owner can, and the caller IS the owner here.
     let outcome = match crate::sync::leave::leave_album(state(), client, mapping_id, false).await {
@@ -785,6 +792,18 @@ async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
     // Reported, never swallowed: the owner's credential is gone the moment this request ends, so an
     // account we failed to remove keeps reading a private album and NOTHING can retry it.
     crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Shares);
+    // THE SHARE COMES BACK AS AN ORDINARY MIRROR, and this household's own invitation pull is the
+    // only thing that makes it: un-reunify deliberately never tells the origin to stop offering, so
+    // the offer is still there and the pull is what re-mirrors it. Run NOW rather than at the next
+    // sweep — the person has just watched their album be handed back, and an empty panel for up to a
+    // backstop is the whole difference between an undo and a break. The nudge path's own entry point,
+    // so it also runs while sweeps are held.
+    // The origin is told FIRST, so the mirror is created against a share that no longer claims to be
+    // reunified — otherwise the fresh mirror is born with the flag and only a later pull heals it.
+    if let Some(origin) = origin.as_ref() {
+        crate::sync::mirror::tell_origin_unreunited(&mapping, origin).await;
+    }
+    crate::sync::invites::pull_invitations_soon(state());
     let (stripped, strip_failed) =
         crate::sync::album_grant::strip_album_bots(state(), client, &album_id, &signed_in.creds)
             .await;
