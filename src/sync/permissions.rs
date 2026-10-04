@@ -230,7 +230,17 @@ pub async fn tell_peer(peer: &crate::store::Peer, album_id: &str, role: &str) ->
         .round_trip(peer, &header, Some(body.as_bytes()))
         .await
     {
-        Ok((head, _)) => head.status < 400,
+        // A peer that ANSWERS with a refusal is as un-notified as one that could not be dialled, and
+        // silence there would read as success. The next cycle re-sends either way.
+        Ok((head, _)) if head.status >= 400 => {
+            crate::log!(
+                "permission notify to \"{}\" refused: {}",
+                peer.name,
+                head.status
+            );
+            false
+        }
+        Ok(_) => true,
         Err(e) => {
             crate::log!("permission notify to \"{}\" failed: {e}", peer.name);
             false
