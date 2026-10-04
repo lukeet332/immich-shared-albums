@@ -1100,6 +1100,9 @@ stage('native album invitations, per person (no share link)');
         const r = irohProbe(bKeys, originEp, '/invitations');
         return r.status === 200 ? (r.json?.invitations || []) : null;
       };
+      // Assigned from inside the reunion block below (it is read while the reunion is live) and read
+      // by the contract checks after it, so it is declared at THIS scope rather than that one.
+      let reunitedInvitation = null;
 
       // AND IT ARRIVES BECAUSE THE WIRE SAID SO. The rig's cadence is a second, so latency cannot
       // tell a nudge from the sweep — the counter can: the sidecar counts nudges RECEIVED, so this
@@ -1293,7 +1296,7 @@ stage('native album invitations, per person (no share link)');
           // that CLEARS the `reunified` category on the invitation it offers — so a read taken
           // afterwards is a read of an ordinary share and says nothing about the report the accept
           // sends. The reader is the one declared above the detach.
-          const reunitedInvitation = await until(async () => {
+          reunitedInvitation = await until(async () => {
             const list = await invitationsNow();
             return list?.some(x => x.album?.name === 'natively invited album' && x.reunified === true)
               ? list
