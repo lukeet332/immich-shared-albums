@@ -189,16 +189,19 @@ pub fn apply_owner_report(
     changed
 }
 
-/// Every peer that holds `album_id` — a mapping whose `remoteAlbumId` is this album, i.e. a mirror
-/// of it. This is the OUTWARD edge of the sharing graph, and it is what makes a permission go down
-/// a CHAIN rather than one hop: whoever holds an album is told, and on their side the same rule
-/// finds their downstream, so B changes a role, C records it and re-broadcasts, D records it.
-pub fn holders_of(state: &State, album_id: &str) -> Vec<crate::store::Peer> {
+/// The peers this side shared `album_id` ONWARD to — the peers of its OWNER mappings for that
+/// album. This is the sender's view of the outward edge: an owner mapping says "this household holds
+/// this album", and that household must be told when the permission moves.
+///
+/// It is deliberately NOT the reverse query (peers whose `remoteAlbumId` is this album): that is the
+/// RECEIVER's view and is empty on the sender, because no one on this side has a remote id equal to
+/// an album we originate. Using it here sent nothing at all.
+pub fn downstream_peers(state: &State, album_id: &str) -> Vec<crate::store::Peer> {
     let collections = state.collections();
     let mut pubs: Vec<&str> = collections
         .mappings
         .iter()
-        .filter(|m| !m.dead && m.remote_album_id.as_deref() == Some(album_id))
+        .filter(|m| !m.dead && m.role == crate::store::Role::Owner && m.album_id == album_id)
         .map(|m| m.peer.as_str())
         .collect();
     pubs.sort_unstable();
@@ -239,7 +242,7 @@ pub async fn tell_peer(peer: &crate::store::Peer, album_id: &str, role: &str) ->
 /// the whole chain. Best effort per peer: one unreachable household does not stop the rest, and the
 /// next reconcile re-nudges whoever did not take it.
 pub async fn broadcast(state: &State, album_id: &str, role: &str) {
-    for peer in holders_of(state, album_id) {
+    for peer in downstream_peers(state, album_id) {
         tell_peer(&peer, album_id, role).await;
     }
 }
@@ -387,23 +390,21 @@ mod tests {
     }
 
     #[test]
-    fn holders_are_the_peers_that_mirror_this_album() {
-        // The OUTWARD edge: whoever holds an album is told, and on their side the same rule finds
-        // their downstream — which is what carries a permission down a chain rather than one hop.
+    fn downstream_are_the_peers_we_shared_the_album_onward_to() {
+        // The SENDER's view: our OWNER mappings name the households holding the album. A member
+        // mapping (the album came from elsewhere) is not something we can push a permission about.
+        let mut onward = member_mapping("p1", "origin-album", "upstream");
+        onward.role = Role::Owner;
+        onward.remote_album_id = None;
         let state = state_with(
-            vec![
-                member_mapping("p1", "mirror-1", "origin-album"),
-                member_mapping("p2", "mirror-2", "origin-album"),
-                member_mapping("p3", "other", "some-other-album"),
-            ],
+            vec![onward, member_mapping("p3", "other", "upstream")],
             vec![peer("p1"), peer("p2"), peer("p3")],
         );
-        let mut held = holders_of(&state, "origin-album");
-        held.sort_by(|a, b| a.pub_key.cmp(&b.pub_key));
+        let held = downstream_peers(&state, "origin-album");
         assert_eq!(
             held.iter().map(|p| p.pub_key.as_str()).collect::<Vec<_>>(),
-            vec!["p1", "p2"],
-            "p3 holds a different album and must not be told about this one"
+            vec!["p1"],
+            "only the household our owner mapping points at"
         );
     }
 
