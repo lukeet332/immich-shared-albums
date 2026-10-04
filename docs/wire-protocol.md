@@ -151,6 +151,10 @@ whatever arrives mid-sweep into ONE follow-up, so a burst never stampedes. A los
 nothing: the scheduled handshake catches everything regardless, so this is fail-open by design and
 must never be made blocking.
 
+The paths are declared once, in `p2p/nudges.rs`, and `p2p/routes.rs` matches those same constants —
+a sender cannot address a route that no longer exists. That module is also the only place a nudge is
+sent, so a new one inherits the contract above instead of restating it.
+
 ## Re-sharing onward follows Immich's roles
 
 A household that received an album CAN extend it to a third household: its humans hold the

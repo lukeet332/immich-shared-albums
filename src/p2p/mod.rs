@@ -3,6 +3,7 @@ pub mod advertise;
 pub mod entitlement;
 pub mod frame;
 pub mod join;
+pub mod nudges;
 pub mod pair;
 pub mod protocol;
 pub mod routes;

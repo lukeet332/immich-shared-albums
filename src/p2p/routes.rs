@@ -28,15 +28,15 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
         // `ends_with("/comments")` takes `/nudge/comments` as an album route with a garbage
         // mapping id, and `ends_with("/nudge")` takes `/index/nudge` as a mapping nudge for an
         // album called "index".
-        "/index/nudge" => {
+        crate::p2p::nudges::INDEX => {
             let (status, value) = crate::p2p::protocol::handle_index_nudge(caller);
             json_answer(status, value)
         }
-        "/nudge/directory" => {
+        crate::p2p::nudges::DIRECTORY => {
             let (status, value) = crate::p2p::protocol::handle_directory_nudge(caller);
             json_answer(status, value)
         }
-        "/nudge/comments" => {
+        crate::p2p::nudges::COMMENTS => {
             let (status, value) = crate::p2p::protocol::handle_comments_nudge(caller);
             json_answer(status, value)
         }
@@ -344,7 +344,11 @@ mod tests {
             Ok(state) => crate::state::install(state),
             Err(e) => panic!("could not boot a state for the dispatch test: {e}"),
         }
-        for path in ["/index/nudge", "/nudge/comments", "/nudge/directory"] {
+        for path in [
+            crate::p2p::nudges::INDEX,
+            crate::p2p::nudges::COMMENTS,
+            crate::p2p::nudges::DIRECTORY,
+        ] {
             let (status, body) = ask(path);
             assert_eq!(
                 status, 403,
