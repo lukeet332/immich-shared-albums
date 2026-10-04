@@ -1091,6 +1091,19 @@ stage('native album invitations, per person (no share link)');
       check('marker is really a member after the invite',
             (back.albumUsers || []).some(au => au.user?.id === nan.id && au.role === 'editor'));
 
+      // Read against the /invitations CONTRACT rather than state.db: the running process is the
+      // authoritative view, and the runner deletes state.db from under a live sidecar during purge,
+      // so a host-side file read is not a reliable oracle here. Declared HERE, above the detach, so
+      // the sample taken while the reunion is live and the reads after it use one reader.
+      const originEp = await endpointOf(ORIGIN_DIRECT);
+      const invitationsNow = async () => {
+        const r = irohProbe(bKeys, originEp, '/invitations');
+        return r.status === 200 ? (r.json?.invitations || []) : null;
+      };
+      // Assigned from inside the reunion block below (it is read while the reunion is live) and read
+      // by the contract checks after it, so it is declared at THIS scope rather than that one.
+      let reunitedInvitation = null;
+
       // AND IT ARRIVES BECAUSE THE WIRE SAID SO. The rig's cadence is a second, so latency cannot
       // tell a nudge from the sweep — the counter can: the sidecar counts nudges RECEIVED, so this
       // is the assertion that the share reached B as a nudge rather than only as a timer coming
@@ -1279,6 +1292,16 @@ stage('native album invitations, per person (no share link)');
                 `${aForeign.length} foreign: ${aForeign.map(x => aUsers[x.ownerId]).join(', ')}`);
 
           // ── DETACH ─────────────────────────────────────────────────────────────────────────
+          // SAMPLED WITH THE REUNION STILL LIVE. The detach tells the origin the reunion is over, and
+          // that CLEARS the `reunified` category on the invitation it offers — so a read taken
+          // afterwards is a read of an ordinary share and says nothing about the report the accept
+          // sends. The reader is the one declared above the detach.
+          reunitedInvitation = await until(async () => {
+            const list = await invitationsNow();
+            return list?.some(x => x.album?.name === 'natively invited album' && x.reunified === true)
+              ? list
+              : null;
+          }, 30000);
           // Snapshot, un-reunify, and require the album to be exactly as it was: the assertion that
           // makes name-only matching acceptable.
           const idsBefore = (await albumAssets(B, BKEY, bOwnBefore.id)).map(a => a.id).sort();
@@ -1338,6 +1361,20 @@ stage('native album invitations, per person (no share link)');
         if (remirrored) mirrored = remirrored;
         check('un-reunifying gives the share back as a mirror, so the invitation is still live',
               !!remirrored, remirrored ? `mirror ${remirrored.album.id.slice(0, 8)}` : 'no mirror re-created');
+
+        // AND THE INVITER STOPS CLAIMING THE REUNION. `reunified` is the inviter's own fact about the
+        // share it handed over — recorded when the accept happened — so nothing on this side can
+        // clear it, and a panel left saying "reunited" about a reunion that is over is the misleading
+        // half of the undo. It also has to be cleared BEFORE the re-mirror above, or the fresh mirror
+        // is born carrying the claim.
+        // Panel routes are NOT under /api, so this is a bare fetch against the origin's sidecar
+        // rather than the `api()` helper, which prefixes every path it is given.
+        const inviterMine = (await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/albums`, {
+          headers: { 'x-api-key': AKEY },
+        })).json()).albums || [];
+        const stillReunited = inviterMine.filter(x => x.name === 'natively invited album' && x.reunified);
+        check('the inviter no longer reports the share as reunited', stillReunited.length === 0,
+              stillReunited.length ? JSON.stringify(stillReunited) : '(cleared)');
 
         // WAITED FOR, not sampled. The mirror's EXISTENCE and its human membership are two
         // different moments: the sidecar creates the album and then adds the people it is for, so a
@@ -1434,15 +1471,9 @@ stage('native album invitations, per person (no share link)');
               `joined but not owned: ${joinedHalves.map(a => a.albumName).join(', ') || 'none'}`);
       }
 
-      // Withdrawal is asserted against the /invitations CONTRACT rather than state.db: the running
-      // process is the authoritative view, and the runner deletes state.db from under a live
-      // sidecar during purge, so a host-side file read is not a reliable oracle here.
-      const originEp = await endpointOf(ORIGIN_DIRECT);
-      const invitations = async () => {
-        const r = irohProbe(bKeys, originEp, '/invitations');
-        return r.status === 200 ? (r.json?.invitations || []) : null;
-      };
-      const listedBefore = await invitations();
+      // The reunified category is ADDITIVE: absent means "an ordinary share", and the sample below
+      // is the one taken with the reunion live.
+      const listedBefore = await invitationsNow();
       check('the invited album is offered on /invitations',
             !!listedBefore?.some(i => i.album?.name === 'natively invited album'),
             JSON.stringify(listedBefore?.map(i => i.album?.name)));
@@ -1459,10 +1490,11 @@ stage('native album invitations, per person (no share link)');
             !!ordinaryInvitation?.length && ordinaryInvitation.every(i => !('reunified' in i)),
             JSON.stringify(ordinaryInvitation?.map(i => Object.keys(i).sort())));
       // And the present case: after the adoption above, the receiver reports the reunion back, so
-      // the ORIGIN's own invitation carries the category — which is what clears its panel row.
+      // the ORIGIN's own invitation carries the category — which is what clears its panel row. Read
+      // from the sample taken BEFORE the detach, because the detach is what clears it again.
       check('a reunited invitation carries the category, so the origin learns it happened',
-            !!listedBefore?.some(i => i.album?.name === 'natively invited album' && i.reunified === true),
-            JSON.stringify(listedBefore?.map(i => [i.album?.name, i.reunified])));
+            !!reunitedInvitation?.some(i => i.album?.name === 'natively invited album' && i.reunified === true),
+            JSON.stringify(reunitedInvitation?.map(i => [i.album?.name, i.reunified])));
       check('an invitation names the people it is for, not just the household',
             !!listedBefore?.[0]?.forUserIds?.length, JSON.stringify(listedBefore?.[0]?.forUserIds));
 
@@ -1621,7 +1653,7 @@ stage('native album invitations, per person (no share link)');
       }
 
       const retired = await until(async () => {
-        const list = await invitations();
+        const list = await invitationsNow();
         return list && !list.some(i => i.album?.name === 'natively invited album') ? true : null;
       }, 90000);
       check('withdrawing the invite stops it being offered', !!retired, retired ? '' : 'still offered');

@@ -310,6 +310,31 @@ pub async fn tell_origin_reunited(mapping: &Mapping, peer: &Peer) {
     .await;
 }
 
+/// Tell the origin a reunion here has been undone — the inverse of `tell_origin_reunited`.
+///
+/// Needed for the same reason that one is: `reunified` is the ORIGIN's fact about a share it handed
+/// over, so only the origin can clear it. Left set, its panel goes on calling the share reunified,
+/// and the mirror this side re-creates after the undo inherits the claim.
+pub async fn tell_origin_unreunited(mapping: &Mapping, peer: &Peer) {
+    let Some(remote_id) = crate::sync::peer_mapping_id::remote_target(mapping) else {
+        return;
+    };
+    let Some(transport) = crate::p2p::transport::transport() else {
+        return;
+    };
+    let header = crate::p2p::frame::RequestHeader {
+        path: format!("/albums/{remote_id}/unreunited"),
+        ..Default::default()
+    };
+    // Bounded and best effort, exactly like the reunite tell: the teardown has already succeeded
+    // locally, and a peer that is down must not turn a completed act into a failure.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(3_000),
+        transport.round_trip(peer, &header, None),
+    )
+    .await;
+}
+
 /// Replace a share's mirror with an album the person already owns — the panel's Reunite.
 ///
 /// Distinct from adopting at acquisition time: the share already exists, so this MOVES a mapping
@@ -607,6 +632,27 @@ pub async fn ensure_mirror(
     let role = member_role(req.permissions);
 
     if let Some(existing) = existing_mirror(state, &req.peer.pub_key, req.album_id) {
+        // A REUNION IS AN ADOPTION, and this mapping is NOT one — a mirror is what we hold when there
+        // is no adoption. So a `reunified` flag on it describes a reunion that has ended on this side
+        // (the person un-reunited, or this install lost the adoption), and leaving it set keeps a
+        // plain mirror labelled "reunited by …", which is also what hides its own row controls.
+        if existing.reunified == Some(true) && existing.adopted != Some(true) {
+            {
+                let mut collections = state.collections();
+                if let Some(live) = collections
+                    .mappings
+                    .iter_mut()
+                    .find(|m| m.id == existing.id)
+                {
+                    live.reunified = None;
+                }
+            }
+            let _ = state.save();
+            crate::log!(
+                "\"{}\" is an ordinary mirror again — the reunion it carried is over",
+                existing.album_name
+            );
+        }
         let added = add_local_members(
             client,
             &existing.album_id,
