@@ -70,14 +70,16 @@ had, and the mirror the receiver re-creates after the undo is born carrying the 
 hides that mirror's own controls. Its own route rather than a body on the one above, so an origin
 that knows only `/reunified` is never sent something it would read as the reunion still being on.
 
-**It restores BOTH albums.** The reunion merged both ways, so the origin's album holds the adopter's
-half as stubs, and only the origin may take those back out — `handleUnreunited` runs
-`leave::restore_shared_album` before it clears the claim, and a purge that fails leaves the claim
-standing so the adopter retries rather than the two sides disagreeing about whether the reunion is
-over. It is not a leave: no `/leave` is sent, the share stays live and the invitation is not
-withdrawn. Left in place, the union outlives the reunion and the mirror the adopter re-creates is
-offered its OWN photos back, which cannot be materialised where those originals already live and is
-retried every sweep.
+**It restores BOTH albums, and either half may send it.** A reunion merged both ways, so each album
+holds the other's half as stubs, and only the household that owns an album may take them back out.
+The sender gives its own back first — `leave::restore_shared_album` on an owner mapping,
+`leave::leave_album` on an adopted one, and `album_teardown` answers `delete_album: false` for both,
+so the album, its own photos and its ownership all stay — and the message then means the same thing
+in either direction: the reunion is over, restore your side. `handleUnreunited` runs that restore
+before it clears the `reunified` claim, and a purge that fails leaves the claim standing so the other
+side retries rather than the two disagreeing about whether the reunion is over. The receiving side
+runs with this household's own admin credential, since no human's travels with the request. It is not
+a leave: no `/leave` is sent, the share stays live and the invitation is not withdrawn.
 
 **The album index is published, not derived.** `GET /albums` on the wire answers what the
 caller's people have _published_: each album's owner asked their own server for the albums it says

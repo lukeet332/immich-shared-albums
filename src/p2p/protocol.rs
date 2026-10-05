@@ -664,12 +664,53 @@ pub async fn handle_unreunited(
             json!({ "error": "unknown peer", "code": "unknown_peer" }),
         );
     };
-    let Some(mapping) = mapping_for(state, &peer.pub_key, album_mapping_id, Some(Role::Owner))
-    else {
+    let Some(mapping) = mapping_for(state, &peer.pub_key, album_mapping_id, None) else {
         return gone_or_404(state, &peer.pub_key, album_mapping_id);
     };
     if mapping.dead {
         return gone_or_404(state, &peer.pub_key, album_mapping_id);
+    }
+    // A MEMBER mapping is the ADOPTER's side, undone on request: the peer ended the reunion, so our
+    // album gives their half back and the share returns as an ordinary mirror. The album is KEPT
+    // (`album_teardown` answers `delete_album: false` for an adopted mapping) and every photo of our
+    // own stays — the same undo the panel's own button runs, with no human to click it.
+    if mapping.role != Role::Owner {
+        let album_id = mapping.album_id.clone();
+        let album_name = mapping.album_name.clone();
+        let client = crate::immich::client::shared();
+        let outcome = match crate::sync::leave::leave_album(state, client, &mapping.id, false).await
+        {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                crate::log!("could not undo the reunion on \"{album_name}\": {e}");
+                return (
+                    500,
+                    json!({ "error": "could not undo this side's adoption" }),
+                );
+            }
+        };
+        // This household's own admin credential: the request carries no human's, and the album
+        // belongs to this household. A failure is REPORTED rather than swallowed — an account we
+        // cannot take off keeps reading a private album and nothing can retry it.
+        let (stripped, strip_failed) = crate::sync::album_grant::strip_album_bots(
+            state,
+            client,
+            &album_id,
+            &crate::sync::invites::key_creds(state, &crate::config::cfg().api_key),
+        )
+        .await;
+        if !strip_failed.is_empty() {
+            crate::log!(
+                "undoing the reunion left {} of our account(s) on \"{album_name}\" — remove them in Immich",
+                strip_failed.len()
+            );
+        }
+        crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Shares);
+        crate::sync::invites::pull_invitations_soon(crate::state::state());
+        return (
+            200,
+            json!({ "ok": true, "purged": outcome.purged, "stripped": stripped }),
+        );
     }
     // UNDO THE UNION ON THIS SIDE TOO, before clearing the claim. Only the origin can give its own
     // album back, and what the reunion put here is exactly this mapping's stubs. A purge that fails

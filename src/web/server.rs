@@ -673,11 +673,12 @@ async fn unlink(headers: &HeaderMap, body: HttpBody) -> Response {
     }
 }
 
-/// `POST /me/unreunite` — undo the adoption, not the share.
+/// `POST /me/unreunite` — undo a reunion from EITHER half, without ending the share.
 ///
-/// The album and its own photos stay; the peer's stubs go; the share returns to an ordinary mirror.
-/// The origin is deliberately NOT told to stop, so it keeps offering the invitation and the member's
-/// own invite poll turns it back into a mirror.
+/// The album and its own photos stay; the other side's stubs go; the share returns to an ordinary
+/// mirror on the adopter's side. Whichever half asks, the other is told the reunion is over and gives
+/// its own half back. Neither is told to STOP, so the invitation stays offered and the member's own
+/// invite poll turns it back into a mirror.
 async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
     let Some(signed_in) = crate::web::auth::caller_signed_in(headers).await else {
         return json_response(
@@ -695,14 +696,21 @@ async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
             json!({ "error": "name the share to un-reunite" }),
         );
     };
-    // ONLY AN ADOPTION, and only its album's owner. Membership is not authority here: on a mapping
-    // that is not an adoption `leave_album` DELETES the album, so an un-reunify that accepted one
-    // would be a leave button wearing the wrong label.
+    // ONLY A REUNION, and only its album's owner. Membership is not authority here: `album_teardown`
+    // answers `delete_album: true` for a mapping that is neither an adoption nor an owner mapping —
+    // a plain mirror this sidecar created — so an un-reunify that accepted one would be a leave
+    // button wearing the wrong label. Both halves of a reunion qualify: the ADOPTION (the peer's
+    // album was merged into ours) and the OWNER mapping whose share says it is reunified.
     let mapping = state()
         .collections()
         .mappings
         .iter()
-        .find(|m| m.id == mapping_id && !m.dead && m.adopted == Some(true))
+        .find(|m| {
+            m.id == mapping_id
+                && !m.dead
+                && (m.adopted == Some(true)
+                    || (m.role == crate::store::Role::Owner && m.reunified == Some(true)))
+        })
         .cloned();
     let Some(mapping) = mapping else {
         return json_response(
@@ -750,6 +758,42 @@ async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
         return json_response(
             StatusCode::FORBIDDEN,
             json!({ "error": "only the album's owner can un-reunite it" }),
+        );
+    }
+
+    // THE INVITER'S OWN UNDO. The reunion put the peer's photos in OUR album as stubs, and giving
+    // them back is a purge of exactly those rows: `restore_shared_album` is `leave_album` without the
+    // parts that end a share, so the album, its own photos, its ownership and the mapping all stay.
+    if mapping.role == crate::store::Role::Owner {
+        let purged =
+            match crate::sync::leave::restore_shared_album(state(), client, mapping_id).await {
+                Ok(purged) => purged,
+                Err(e) => return json_response(StatusCode::BAD_GATEWAY, json!({ "error": e })),
+            };
+        // Bound to a local, NOT read inside the `if let` scrutinee: an `if let` keeps its temporaries
+        // alive for the whole body, so a `collections()` guard there would live across the await
+        // below and make this whole request future `!Send` — which axum answers by refusing `serve`.
+        let peer = state()
+            .collections()
+            .peers
+            .iter()
+            .find(|p| p.pub_key == mapping.peer)
+            .cloned();
+        // Then the peer is told, so THEIR album gives our half back too. The report means the same
+        // thing in both directions: the reunion is over, restore your side.
+        if let Some(peer) = peer {
+            crate::sync::mirror::tell_peer_unreunited(&mapping, &peer).await;
+        }
+        crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Shares);
+        return json_response(
+            StatusCode::OK,
+            json!({
+                "left": mapping.album_name,
+                "purged": purged,
+                "refused": 0,
+                "failed": 0,
+                "stripped": 0,
+            }),
         );
     }
 
@@ -801,7 +845,7 @@ async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
     // The origin is told FIRST, so the mirror is created against a share that no longer claims to be
     // reunified — otherwise the fresh mirror is born with the flag and only a later pull heals it.
     if let Some(origin) = origin.as_ref() {
-        crate::sync::mirror::tell_origin_unreunited(&mapping, origin).await;
+        crate::sync::mirror::tell_peer_unreunited(&mapping, origin).await;
     }
     crate::sync::invites::pull_invitations_soon(state());
     let (stripped, strip_failed) =

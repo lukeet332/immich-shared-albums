@@ -185,32 +185,25 @@ export const App = () => {
                       {a.adoptedByUs === false ? `reunited by ${a.peer}` : 'yours, reunited'}
                     </div>
                   </div>
-                  {a.adoptedByUs === false ? (
-                    // They adopted the share this household gave them, so there is no adoption of
-                    // ours to undo — an Un-reunite click here would answer 404. Undoing an
-                    // invitation is withdrawing the share, which is Immich's own album settings.
-                    <div class="isa-row-text">
-                      Merged into their album. To undo, remove their access to this album in Immich's sharing
-                      settings.
-                    </div>
-                  ) : (
-                    <div class="isa-row-action">
-                      <Button
-                        disabled={!!detaching}
-                        onClick={() =>
-                          setAsking({
-                            title: 'Un-reunite?',
-                            body: 'Your album keeps your photos. Only theirs are removed.',
-                            confirm: 'Un-reunite',
-                            danger: true,
-                            onConfirm: () => onUnreunite(a),
-                          })
-                        }
-                      >
-                        {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite'}
-                      </Button>
-                    </div>
-                  )}
+                  {/* BOTH HALVES OF A REUNION CAN UNDO IT. `adoptedByUs` only says whose album the
+                      other half was merged INTO, and each side gives back the same thing from its own
+                      album, so the row reads the same either way. */}
+                  <div class="isa-row-action">
+                    <Button
+                      disabled={!!detaching}
+                      onClick={() =>
+                        setAsking({
+                          title: 'Un-reunite?',
+                          body: 'Your album keeps your photos. Only theirs are removed.',
+                          confirm: 'Un-reunite',
+                          danger: true,
+                          onConfirm: () => onUnreunite(a),
+                        })
+                      }
+                    >
+                      {detaching === a.mappingId ? 'Un-reuniting…' : 'Un-reunite'}
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

@@ -1291,6 +1291,19 @@ stage('native album invitations, per person (no share link)');
                 aForeign.length > 0 && aForeign.every(x => isBot(aUsers[x.ownerId])),
                 `${aForeign.length} foreign: ${aForeign.map(x => aUsers[x.ownerId]).join(', ')}`);
 
+          // AND THE INVITER CAN END IT TOO. A reunion merges both ways, so ITS row carries the
+          // button as well — asserted here because the reunion is live, read from the endpoint the
+          // button itself uses. `adoptedByUs: false` is what makes the row the inviter's. What the
+          // click then does (both albums back to exactly their own photos) is measured on the rig
+          // and asserted in the browser lane; undoing here would change the albums the detach below
+          // is about to assert on.
+          const inviterRow = (((await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/albums`, {
+            headers: { 'x-api-key': AKEY },
+          })).json()).albums) || []).find(a => a.name === 'natively invited album' && a.reunified === true);
+          check('the inviter is offered Un-reunite for the reunion it is half of',
+                !!inviterRow?.mappingId && inviterRow.adoptedByUs === false,
+                inviterRow ? `reunified=${inviterRow.reunified} adoptedByUs=${inviterRow.adoptedByUs}` : '(no row)');
+
           // ── DETACH ─────────────────────────────────────────────────────────────────────────
           // SAMPLED WITH THE REUNION STILL LIVE. The detach tells the origin the reunion is over, and
           // that CLEARS the `reunified` category on the invitation it offers — so a read taken
@@ -1387,6 +1400,7 @@ stage('native album invitations, per person (no share link)');
         const stillReunited = inviterMine.filter(x => x.name === 'natively invited album' && x.reunified);
         check('the inviter no longer reports the share as reunited', stillReunited.length === 0,
               stillReunited.length ? JSON.stringify(stillReunited) : '(cleared)');
+
 
         // WAITED FOR, not sampled. The mirror's EXISTENCE and its human membership are two
         // different moments: the sidecar creates the album and then adds the people it is for, so a

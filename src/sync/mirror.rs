@@ -310,15 +310,17 @@ pub async fn tell_origin_reunited(mapping: &Mapping, peer: &Peer) {
     .await;
 }
 
-/// Tell the origin a reunion here has been undone — the inverse of `tell_origin_reunited`.
+/// Tell the peer a reunion we are half of has been undone — the inverse of `tell_origin_reunited`.
 ///
-/// Needed for the same reason that one is: `reunified` is the ORIGIN's fact about a share it handed
-/// over, so only the origin can clear it. Left set, its panel goes on calling the share reunified,
-/// and the mirror this side re-creates after the undo inherits the claim.
-pub async fn tell_origin_unreunited(mapping: &Mapping, peer: &Peer) {
-    let Some(remote_id) = crate::sync::peer_mapping_id::remote_target(mapping) else {
+/// `peer_album_mapping_id` and NOT `remote_target`: this is sent from BOTH halves now, and an owner
+/// mapping carries no remote id — its own album id is what the peer's mapping knows it by, which is
+/// exactly what that helper answers for each role. Addressed to the wrong id the tell is a silent
+/// no-op, leaving the peer's album merged while ours is restored.
+pub async fn tell_peer_unreunited(mapping: &Mapping, peer: &Peer) {
+    let remote_id = crate::sync::peer_mapping_id::peer_album_mapping_id(mapping);
+    if remote_id.is_empty() {
         return;
-    };
+    }
     let Some(transport) = crate::p2p::transport::transport() else {
         return;
     };

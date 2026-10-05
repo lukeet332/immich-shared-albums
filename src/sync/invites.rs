@@ -437,7 +437,7 @@ pub async fn detect_invites_once(state: &State, client: &Client) -> usize {
 }
 
 /// A caller's forwarded key as credentials, for reading as that marker.
-fn key_creds(_state: &State, key: &str) -> Creds {
+pub(crate) fn key_creds(_state: &State, key: &str) -> Creds {
     let mut headers = std::collections::HashMap::new();
     headers.insert("x-api-key".to_string(), key.to_string());
     Creds { headers }
