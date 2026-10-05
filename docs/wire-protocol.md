@@ -68,8 +68,16 @@ stale row there and nothing here.
 only the origin can withdraw it. Left set, the origin's panel keeps offering a pairing it has already
 had, and the mirror the receiver re-creates after the undo is born carrying the claim, which is what
 hides that mirror's own controls. Its own route rather than a body on the one above, so an origin
-that knows only `/reunified` is never sent something it would read as the reunion still being on. It
-is not a leave: the share stays live and the invitation is not withdrawn.
+that knows only `/reunified` is never sent something it would read as the reunion still being on.
+
+**It restores BOTH albums.** The reunion merged both ways, so the origin's album holds the adopter's
+half as stubs, and only the origin may take those back out — `handleUnreunited` runs
+`leave::restore_shared_album` before it clears the claim, and a purge that fails leaves the claim
+standing so the adopter retries rather than the two sides disagreeing about whether the reunion is
+over. It is not a leave: no `/leave` is sent, the share stays live and the invitation is not
+withdrawn. Left in place, the union outlives the reunion and the mirror the adopter re-creates is
+offered its OWN photos back, which cannot be materialised where those originals already live and is
+retried every sweep.
 
 **The album index is published, not derived.** `GET /albums` on the wire answers what the
 caller's people have _published_: each album's owner asked their own server for the albums it says
