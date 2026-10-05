@@ -3029,7 +3029,12 @@ stage("un-reunite from the INVITER's side restores both albums");
       headers: { 'Content-Type': 'application/json', 'x-api-key': key },
       body: JSON.stringify({ peer: peerPub }),
     }).then(async r => ({ status: r.status, json: await r.json().catch(() => null) }));
-  const offered = [await publishTo(BS, BKEY, adopterPeers[0].pub), await publishTo(cSidecar, AKEY, inviterPeers[0].pub)];
+  // Each side addresses the peer AS IT KNOWS IT: B's own entry for C, and C's own entry for B. They
+  // are different keys — a peer record holds the OTHER household's identity — and crossing them
+  // answers `unknown_peer`, which is not a failure of anything this stage is about.
+  const peerBKnowsC = inviterPeers[0].pub;
+  const peerCKnowsB = adopterPeers[0].pub;
+  const offered = [await publishTo(BS, BKEY, peerBKnowsC), await publishTo(cSidecar, AKEY, peerCKnowsB)];
   check('both sides offered their albums first, as a panel visit does',
         offered.every(o => o.status === 200),
         JSON.stringify(offered.map(o => `${o.status}:${o.json?.published}`)));
@@ -3037,7 +3042,7 @@ stage("un-reunite from the INVITER's side restores both albums");
   const shared = await fetch(`${BS}/immich-shared-albums/me/invite`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
-    body: JSON.stringify({ peer: adopterPeers[0].pub, albumName: name, ownerUserId: aMe.id }),
+    body: JSON.stringify({ peer: peerBKnowsC, albumName: name, ownerUserId: aMe.id }),
   });
   check('the inviter shares its album with the person who owns the other half',
         shared.ok, `status=${shared.status} ${JSON.stringify(await shared.json().catch(() => null))}`);
