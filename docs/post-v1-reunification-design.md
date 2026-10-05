@@ -352,8 +352,9 @@ choice. This also removes the wrinkle that **Immich has no native per-user-priva
   request (`invited`), the accept (`accepted`) and the merge (`reunited`) from the peer protocol, so
   no trail line is ever transmitted and each side's thread ends up showing the same events. The
   **withdrawal is the exception**: un-reuniting restores BOTH albums — each side takes back the half
-  the reunion put in it (`leave_album` on the adopter's, `restore_shared_album` on the origin's, which
-  `handle_unreunited` runs when the adopter reports the undo) — while the SHARE survives:
+  the reunion put in it (`leave_album` on an adopted mapping, `restore_shared_album` on an owner one),
+  and EITHER half may start it, since the other is told through `/albums/:mappingId/unreunited` —
+  while the SHARE survives:
   `/me/unreunite` still passes `notifyOrigin: false`, so no `/leave` is sent, the invitation stays
   offered and the adopter goes back to an ordinary mirror. Only the origin can clear its own
   `reunified` fact, so the same report carries that. `unreunited` is written on the adopter's album,

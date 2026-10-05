@@ -945,8 +945,13 @@ check("and the pair leaves the inviter's list once it is done", goneNow,
 // ── UN-REUNITE, with every sweep STILL HELD ──────────────────────────────────────────────────────
 // The undo has to give the share back as an ordinary mirror, and with the loops held the only thing
 // that can produce it is the un-reunify's own invitation pull — a lane that was merely woken returns
-// without working. Clicked on the ACCEPTING side, which is the one holding the adoption; the inviter
-// is deliberately offered no Un-reunite, having no adoption to undo.
+// without working. Clicked on the ACCEPTING side, which is the one holding the adoption.
+// BOTH rows carry the button: a reunion is symmetric, so either half may end it, and the inviter's
+// half is asserted here because the page is the only thing that shows it. What the inviter's click
+// then DOES (both albums back to their own photos) is asserted in the API lane, where the albums are.
+const inviterOffered = await waitForRowButton(bPanel.p, 'Un-reunite', inviteName, 20000);
+check('the inviter is offered Un-reunite too, for the reunion it is half of', inviterOffered,
+  (await panelText(bPanel.p)).split('\n').filter(l => /Un-reunite|Reunited/.test(l)).slice(0, 2).join(' | ') || '(no row)');
 const unreuniteOffered = await waitForRowButton(cPanel.p, 'Un-reunite', inviteName, 20000);
 check('the side that adopted is offered Un-reunite', unreuniteOffered,
   (await panelText(cPanel.p)).split('\n').filter(l => /Un-reunite|Reunited/.test(l)).slice(0, 2).join(' | ') || '(no row)');

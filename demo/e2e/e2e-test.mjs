@@ -1388,6 +1388,64 @@ stage('native album invitations, per person (no share link)');
         check('the inviter no longer reports the share as reunited', stillReunited.length === 0,
               stillReunited.length ? JSON.stringify(stillReunited) : '(cleared)');
 
+        // ── THE OTHER HALF CAN END IT TOO ────────────────────────────────────────────────────────
+        // A reunion is symmetric, so the INVITER can un-reunite: its album gives the adopter's half
+        // back, and the adopter is told to give ours back. Both albums end up holding only their own
+        // photos again, and the share is an ordinary mirror — the same end state the adopter's own
+        // button produces, reached from the other end.
+        const reMatch = (((await (await fetch(`${BS}/immich-shared-albums/me/matches`, {
+          headers: { 'x-api-key': BKEY },
+        })).json()).matches) || []).find(m => m.step.kind === 'accept' || m.step.kind === 'reunited');
+        check('the pair is offered for reunion again after an undo', !!reMatch,
+              reMatch ? reMatch.step.kind : '(no match)');
+        if (reMatch) {
+          await fetch(`${BS}/immich-shared-albums/me/reunite`, {
+            method: 'POST',
+            headers: { 'x-api-key': BKEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mappingId: reMatch.mappingId, albumName: 'natively invited album' }),
+          });
+        }
+        const originAdminId = (await api(A, AKEY, '/users/me')).id;
+        const unionAgain = await until(async () => {
+          const items = await albumAssets(A, AKEY, invAlb);
+          return items.some(x => x.ownerId !== originAdminId) ? items : null;
+        }, 60000);
+        check('the reunion can be made again from the same invitation', !!unionAgain,
+              unionAgain ? `${unionAgain.length} asset(s)` : 'the union never came back');
+
+        const inviterRow = (((await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/albums`, {
+          headers: { 'x-api-key': AKEY },
+        })).json()).albums) || []).find(a => a.name === 'natively invited album' && a.reunified);
+        check('the inviter is offered Un-reunite for the reunion it is half of',
+              !!inviterRow?.mappingId,
+              inviterRow ? `reunified=${inviterRow.reunified}` : '(no row)');
+        const undoneByInviter = await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/unreunite`, {
+          method: 'POST',
+          headers: { 'x-api-key': AKEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mappingId: inviterRow?.mappingId }),
+        })).json();
+        check('the inviter can un-reunite, and it reports what it gave back',
+              !undoneByInviter.error && undoneByInviter.failed === 0, JSON.stringify(undoneByInviter));
+
+        const originOnly = await until(async () => {
+          const items = await albumAssets(A, AKEY, invAlb);
+          return items.length > 0 && items.every(x => x.ownerId === originAdminId) ? items : null;
+        }, 60000);
+        check("the inviter's album goes back to its own photos",
+              !!originOnly,
+              originOnly ? '' : `still ${(await albumAssets(A, AKEY, invAlb)).length} asset(s)`);
+        const adopterOnly = await until(async () => {
+          const items = await albumAssets(B, BKEY, bOwnBefore.id);
+          return items.length > 0 && items.every(x => x.ownerId === bAdmin.id) ? items : null;
+        }, 90000);
+        check("and so does the adopter's, undone on request rather than by a click",
+              !!adopterOnly,
+              adopterOnly ? '' : `still ${(await albumAssets(B, BKEY, bOwnBefore.id)).length} asset(s)`);
+        const mirrorAfterInviterUndo = await until(standInOwnedMirror, 90000);
+        check('and the share is an ordinary mirror again, not a reunion',
+              !!mirrorAfterInviterUndo,
+              mirrorAfterInviterUndo ? `mirror ${mirrorAfterInviterUndo.album.id.slice(0, 8)}` : 'no mirror');
+
         // WAITED FOR, not sampled. The mirror's EXISTENCE and its human membership are two
         // different moments: the sidecar creates the album and then adds the people it is for, so a
         // read taken as soon as the album appears can legitimately find it empty. Sampling once here

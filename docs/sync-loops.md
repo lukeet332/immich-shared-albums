@@ -38,7 +38,8 @@ side never woke sits empty until the backstop; a peer nudge (`handle_nudge`) and
 (`handle_refs`) wake it as well, so the half travelling back does not wait out the timer. A sweep
 cadence that is a clean multiple of `ISA_SYNC_POLL_MS` is the backstop firing with no nudges between.
 
-**A local undo runs its own pull.** `POST /me/unreunite` (`src/web/server.rs`) gives the share back as
+**A local undo runs its own pull.** `POST /me/unreunite` (`src/web/server.rs`) serves BOTH halves of a
+reunion — the adopter's adoption and the inviter's owner mapping — and gives the share back as
 an ordinary mirror by running `invites::pull_invitations_soon` — the same ungated entry a peer's
 `/invitations/nudge` uses — rather than waking the invites lane and waiting for its sweep: the person
 has just watched their album handed back, the origin deliberately never stops offering, and the pull
