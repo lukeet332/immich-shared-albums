@@ -1388,63 +1388,6 @@ stage('native album invitations, per person (no share link)');
         check('the inviter no longer reports the share as reunited', stillReunited.length === 0,
               stillReunited.length ? JSON.stringify(stillReunited) : '(cleared)');
 
-        // ── THE OTHER HALF CAN END IT TOO ────────────────────────────────────────────────────────
-        // A reunion is symmetric, so the INVITER can un-reunite: its album gives the adopter's half
-        // back, and the adopter is told to give ours back. Both albums end up holding only their own
-        // photos again, and the share is an ordinary mirror — the same end state the adopter's own
-        // button produces, reached from the other end.
-        const reMatch = (((await (await fetch(`${BS}/immich-shared-albums/me/matches`, {
-          headers: { 'x-api-key': BKEY },
-        })).json()).matches) || []).find(m => m.step.kind === 'accept' || m.step.kind === 'reunited');
-        check('the pair is offered for reunion again after an undo', !!reMatch,
-              reMatch ? reMatch.step.kind : '(no match)');
-        if (reMatch) {
-          await fetch(`${BS}/immich-shared-albums/me/reunite`, {
-            method: 'POST',
-            headers: { 'x-api-key': BKEY, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mappingId: reMatch.mappingId, albumName: 'natively invited album' }),
-          });
-        }
-        const originAdminId = (await api(A, AKEY, '/users/me')).id;
-        const unionAgain = await until(async () => {
-          const items = await albumAssets(A, AKEY, invAlb);
-          return items.some(x => x.ownerId !== originAdminId) ? items : null;
-        }, 60000);
-        check('the reunion can be made again from the same invitation', !!unionAgain,
-              unionAgain ? `${unionAgain.length} asset(s)` : 'the union never came back');
-
-        const inviterRow = (((await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/albums`, {
-          headers: { 'x-api-key': AKEY },
-        })).json()).albums) || []).find(a => a.name === 'natively invited album' && a.reunified);
-        check('the inviter is offered Un-reunite for the reunion it is half of',
-              !!inviterRow?.mappingId,
-              inviterRow ? `reunified=${inviterRow.reunified}` : '(no row)');
-        const undoneByInviter = await (await fetch(`${ORIGIN_DIRECT}/immich-shared-albums/me/unreunite`, {
-          method: 'POST',
-          headers: { 'x-api-key': AKEY, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mappingId: inviterRow?.mappingId }),
-        })).json();
-        check('the inviter can un-reunite, and it reports what it gave back',
-              !undoneByInviter.error && undoneByInviter.failed === 0, JSON.stringify(undoneByInviter));
-
-        const originOnly = await until(async () => {
-          const items = await albumAssets(A, AKEY, invAlb);
-          return items.length > 0 && items.every(x => x.ownerId === originAdminId) ? items : null;
-        }, 60000);
-        check("the inviter's album goes back to its own photos",
-              !!originOnly,
-              originOnly ? '' : `still ${(await albumAssets(A, AKEY, invAlb)).length} asset(s)`);
-        const adopterOnly = await until(async () => {
-          const items = await albumAssets(B, BKEY, bOwnBefore.id);
-          return items.length > 0 && items.every(x => x.ownerId === bAdmin.id) ? items : null;
-        }, 90000);
-        check("and so does the adopter's, undone on request rather than by a click",
-              !!adopterOnly,
-              adopterOnly ? '' : `still ${(await albumAssets(B, BKEY, bOwnBefore.id)).length} asset(s)`);
-        const mirrorAfterInviterUndo = await until(standInOwnedMirror, 90000);
-        check('and the share is an ordinary mirror again, not a reunion',
-              !!mirrorAfterInviterUndo,
-              mirrorAfterInviterUndo ? `mirror ${mirrorAfterInviterUndo.album.id.slice(0, 8)}` : 'no mirror');
 
         // WAITED FOR, not sampled. The mirror's EXISTENCE and its human membership are two
         // different moments: the sidecar creates the album and then adds the people it is for, so a
@@ -2994,6 +2937,100 @@ stage('rust: a like crosses servers and is attributed to the person who made it'
           onOrigin ? `${onOrigin.user?.name} liked it` : 'no like within 2 min');
   } else {
     requireState('the mirror the like stage reads and likes');
+  }
+}
+
+stage("un-reunite from the INVITER's side restores both albums");
+{
+  // A reunion merges BOTH ways, so either half may end it — and only the inviter can take the
+  // adopter's half back out of its own album. Driven through the panel endpoints, because that is
+  // what the button calls. Its own stage, at the END: undoing a reunion changes both albums, and the
+  // stages above assert on albums this would disturb. Fresh pairing first, because they leave the
+  // invitation withdrawn and a mirror torn down.
+  const panelGet = (base, key, path) =>
+    fetch(`${base}/immich-shared-albums${path}`, { headers: { 'x-api-key': key } })
+      .then(r => r.json().catch(() => ({})));
+  const panelPost = (base, key, path, body) =>
+    fetch(`${base}/immich-shared-albums${path}`, {
+      method: 'POST',
+      headers: { 'x-api-key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json().catch(() => ({})));
+  // The album a PERSON owns, not the stand-in mirror: all three carry the same name.
+  const humanOwnedAlbum = async (base, key) => {
+    for (const a of ((await api(base, key, '/albums')) || []).filter(x => x.albumName === 'natively invited album')) {
+      const full = await api(base, key, `/albums/${a.id}`);
+      if ((full.albumUsers || []).some(u => u.role === 'owner' && !isBot(u.user?.email))) return a;
+    }
+    return null;
+  };
+
+  for (const [base, key] of [[A, AKEY], [B, BKEY]]) {
+    for (const peer of ((await panelGet(base, key, '/peers')).peers || [])) {
+      await panelPost(base, key, '/unlink', { pub: peer.pub });
+    }
+  }
+  const minted = await panelPost(A, AKEY, '/pairings', {});
+  await panelPost(B, BKEY, '/pair', { link: minted.link });
+  const originAlbum = await until(humanOwnedAlbum.bind(null, A, AKEY), 60000);
+  const adopterAlbum = await until(humanOwnedAlbum.bind(null, B, BKEY), 60000);
+  check('both albums are there to reunite again', !!originAlbum && !!adopterAlbum,
+        `${originAlbum?.id?.slice(0, 8) || 'none'} / ${adopterAlbum?.id?.slice(0, 8) || 'none'}`);
+  if (!originAlbum || !adopterAlbum) {
+    requireState('an album on each server to reunite');
+  } else {
+    const originAdminId = (await api(A, AKEY, '/users/me')).id;
+    const adopterAdminId = (await api(B, BKEY, '/users/me')).id;
+    const match = ((await panelGet(A, AKEY, '/me/matches')).matches || [])
+      .find(m => m.mine.name === 'natively invited album');
+    check('the inviter can invite the same pair again', !!match?.theirs?.ownerUserId,
+          match ? match.theirs.ownerName : '(no match)');
+    if (match) {
+      await panelPost(A, AKEY, '/me/invite', {
+        peer: match.peer, albumName: 'natively invited album', ownerUserId: match.theirs.ownerUserId,
+      });
+    }
+    const accept = await until(async () => {
+      const m = ((await panelGet(B, BKEY, '/me/matches')).matches || [])
+        .find(x => x.step?.kind === 'accept');
+      return m || null;
+    }, 90000);
+    check('the adopter is offered the invitation again', !!accept, accept ? accept.step.kind : '(none)');
+    if (accept) {
+      await panelPost(B, BKEY, '/me/reunite', { mappingId: accept.mappingId, albumName: 'natively invited album' });
+    }
+    const union = await until(async () => {
+      const items = await albumAssets(A, AKEY, originAlbum.id);
+      return items.some(x => x.ownerId !== originAdminId) ? items : null;
+    }, 90000);
+    check('the reunion merges both ways again', !!union, union ? `${union.length} asset(s)` : 'no union');
+
+    const inviterRow = ((await panelGet(A, AKEY, '/me/albums')).albums || [])
+      .find(x => x.name === 'natively invited album' && x.reunified === true);
+    check('the inviter is offered Un-reunite for the reunion it is half of', !!inviterRow?.mappingId,
+          inviterRow ? `reunified=${inviterRow.reunified}` : '(no row)');
+    const undone = inviterRow?.mappingId
+      ? await panelPost(A, AKEY, '/me/unreunite', { mappingId: inviterRow.mappingId })
+      : { error: 'no row to un-reunite' };
+    check('the inviter can un-reunite its own album', !undone.error && undone.failed === 0,
+          JSON.stringify(undone));
+
+    const originOnly = await until(async () => {
+      const items = await albumAssets(A, AKEY, originAlbum.id);
+      return items.length > 0 && items.every(x => x.ownerId === originAdminId) ? items : null;
+    }, 60000);
+    check("the inviter's album goes back to its own photos", !!originOnly,
+          originOnly ? '' : `still ${(await albumAssets(A, AKEY, originAlbum.id)).length} asset(s)`);
+    const adopterOnly = await until(async () => {
+      const items = await albumAssets(B, BKEY, adopterAlbum.id);
+      return items.length > 0 && items.every(x => x.ownerId === adopterAdminId) ? items : null;
+    }, 90000);
+    check("and the adopter's does too, undone on request rather than by a click", !!adopterOnly,
+          adopterOnly ? '' : `still ${(await albumAssets(B, BKEY, adopterAlbum.id)).length} asset(s)`);
+    const stillReunited = ((await panelGet(A, AKEY, '/me/albums')).albums || [])
+      .some(x => x.name === 'natively invited album' && x.reunified === true);
+    check('and the inviter stops claiming the reunion is on', !stillReunited,
+          stillReunited ? 'still reunified' : '(cleared)');
   }
 }
 
