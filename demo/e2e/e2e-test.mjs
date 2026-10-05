@@ -2953,6 +2953,135 @@ stage('rust: a like crosses servers and is attributed to the person who made it'
   }
 }
 
+stage("un-reunite from the INVITER's side restores both albums");
+{
+  // A reunion merges BOTH ways, so either half may end it — and only the inviter can take the
+  // adopter's half back out of its own album. Its own stage: undoing a reunion changes both albums,
+  // and the stages above assert on albums this would disturb.
+  //
+  // The pair is built here rather than taken from an earlier stage, and built WITH PHOTOS: an undo
+  // with nothing to give back proves nothing, and the bug this exists to catch was a purge that
+  // silently did not happen. Invited through the panel routes an actual panel calls — publish, then
+  // `POST /me/invite` — so no reunion MATCH is needed, which the end of this run no longer offers.
+  const cSidecar = process.env.C_SIDECAR || `http://localhost:${PORT('PORT_SIDECAR_C', 8302)}`;
+  const name = `Undo both ways ${Date.now() % 100000}`;
+  const aMe = await api(A, AKEY, '/users/me');
+  const bMe = await api(B, BKEY, '/users/me');
+  const peersOn = async (sidecar, key) =>
+    ((await (await fetch(`${sidecar}/immich-shared-albums/peers`, { headers: { 'x-api-key': key } })).json()).peers) || [];
+  let inviterPeers = await peersOn(BS, BKEY);
+  let adopterPeers = await peersOn(cSidecar, AKEY);
+  if (!inviterPeers.length || !adopterPeers.length) {
+    // The stages above unlink ON PURPOSE, so the pairing this needs is made here rather than
+    // assumed: mint on the inviter's side and redeem on the other, as a person would.
+    const minted = await (await fetch(`${BS}/immich-shared-albums/pairings`, {
+      method: 'POST',
+      headers: { 'x-api-key': BKEY },
+    })).json();
+    await fetch(`${cSidecar}/immich-shared-albums/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': AKEY },
+      body: JSON.stringify({ link: minted.link }),
+    });
+    await until(async () => (await peersOn(BS, BKEY)).length > 0, 60000);
+    inviterPeers = await peersOn(BS, BKEY);
+    adopterPeers = await peersOn(cSidecar, AKEY);
+  }
+  check('the two households are linked for the inviter-side undo',
+        inviterPeers.length > 0 && adopterPeers.length > 0,
+        `${inviterPeers.length}/${adopterPeers.length} peer(s) — paired here if the stages above unlinked`);
+
+  const albumWithPhotos = async (base, key, albumName) => {
+    const album = await api(base, key, '/albums', j({ albumName }));
+    const source = ((await api(base, key, '/albums')) || [])
+      .find(x => x.id !== album.id && (x.assetCount || 0) > 0);
+    const ids = source ? (await albumAssets(base, key, source.id)).slice(0, 2).map(x => x.id) : [];
+    if (ids.length) {
+      await api(base, key, `/albums/${album.id}/assets`, { ...j({ ids }), method: 'PUT' });
+    }
+    return { album, ids };
+  };
+  const inviterAlbum = await albumWithPhotos(B, BKEY, name);
+  const adopterAlbum = await albumWithPhotos(A, AKEY, name);
+  check('each side has an album holding photos to merge',
+        inviterAlbum.ids.length > 0 && adopterAlbum.ids.length > 0,
+        `${inviterAlbum.ids.length} and ${adopterAlbum.ids.length} photo(s)`);
+
+  const publishTo = (sidecar, key, peerPub) =>
+    fetch(`${sidecar}/immich-shared-albums/me/albums/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({ peer: peerPub }),
+    }).then(async r => ({ status: r.status, json: await r.json().catch(() => null) }));
+  const offered = [await publishTo(BS, BKEY, adopterPeers[0].pub), await publishTo(cSidecar, AKEY, inviterPeers[0].pub)];
+  check('both sides offered their albums first, as a panel visit does',
+        offered.every(o => o.status === 200),
+        JSON.stringify(offered.map(o => `${o.status}:${o.json?.published}`)));
+
+  const shared = await fetch(`${BS}/immich-shared-albums/me/invite`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+    body: JSON.stringify({ peer: adopterPeers[0].pub, albumName: name, ownerUserId: aMe.id }),
+  });
+  check('the inviter shares its album with the person who owns the other half',
+        shared.ok, `status=${shared.status} ${JSON.stringify(await shared.json().catch(() => null))}`);
+
+  const accept = await until(async () => {
+    const list = ((await (await fetch(`${cSidecar}/immich-shared-albums/me/matches`, {
+      headers: { 'x-api-key': AKEY },
+    })).json()).matches) || [];
+    return list.find(x => x.mine.name === name && x.step?.kind === 'accept') || null;
+  }, 90000);
+  check('the other side is offered the invitation', !!accept,
+        accept ? `mapping=${String(accept.mappingId).slice(0, 8)}` : '(none)');
+  if (accept) {
+    const taken = await fetch(`${cSidecar}/immich-shared-albums/me/reunite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': AKEY },
+      body: JSON.stringify({ mappingId: accept.mappingId, albumName: name }),
+    });
+    check('accepting it reunites the pair', taken.ok, `status=${taken.status}`);
+  }
+
+  const union = await until(async () => {
+    const items = await albumAssets(B, BKEY, inviterAlbum.album.id);
+    return items.some(x => x.ownerId !== bMe.id) ? items : null;
+  }, 90000);
+  check('the reunion merges both ways, so the inviter holds the other half',
+        !!union, union ? `${union.length} asset(s)` : 'no union');
+
+  const inviterRow = (((await (await fetch(`${BS}/immich-shared-albums/me/albums`, {
+    headers: { 'x-api-key': BKEY },
+  })).json()).albums) || []).find(x => x.name === name && x.reunified === true);
+  check('the inviter is offered Un-reunite for the reunion it is half of',
+        !!inviterRow?.mappingId && inviterRow.adoptedByUs === false,
+        inviterRow ? `reunified=${inviterRow.reunified} adoptedByUs=${inviterRow.adoptedByUs}` : '(no row)');
+  const undone = inviterRow?.mappingId
+    ? await (await fetch(`${BS}/immich-shared-albums/me/unreunite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': BKEY },
+        body: JSON.stringify({ mappingId: inviterRow.mappingId }),
+      })).json()
+    : { error: 'no row to un-reunite' };
+  check('the inviter can un-reunite its own album',
+        !undone.error && undone.failed === 0, JSON.stringify(undone));
+
+  // EXACTLY what each album held before, not merely "only our own": that is the state a person
+  // expects an undo to leave, and it cannot be tripped by leftovers from the stages above.
+  const heldExactly = async (base, key, albumId, before) => {
+    const items = await albumAssets(base, key, albumId);
+    return JSON.stringify(items.map(x => x.id).sort()) === JSON.stringify(before) ? items : null;
+  };
+  const inviterBack = await until(
+    heldExactly.bind(null, B, BKEY, inviterAlbum.album.id, inviterAlbum.ids.slice().sort()), 60000);
+  check("the inviter's album holds exactly its own photos again", !!inviterBack,
+        inviterBack ? '' : `${(await albumAssets(B, BKEY, inviterAlbum.album.id)).length} asset(s), was ${inviterAlbum.ids.length}`);
+  const adopterBack = await until(
+    heldExactly.bind(null, A, AKEY, adopterAlbum.album.id, adopterAlbum.ids.slice().sort()), 90000);
+  check("and the adopter's does too, undone on request rather than by a click", !!adopterBack,
+        adopterBack ? '' : `${(await albumAssets(A, AKEY, adopterAlbum.album.id)).length} asset(s), was ${adopterAlbum.ids.length}`);
+}
+
 if (process.env.E2E_PROFILE) {
   const total = WAITS.reduce((s, w) => s + w.ms, 0);
   const polls = WAITS.reduce((s, w) => s + w.polls, 0);
