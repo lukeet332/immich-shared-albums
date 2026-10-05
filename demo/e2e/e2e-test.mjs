@@ -2969,27 +2969,37 @@ stage("un-reunite from the INVITER's side restores both albums");
   const bMe = await api(B, BKEY, '/users/me');
   const peersOn = async (sidecar, key) =>
     ((await (await fetch(`${sidecar}/immich-shared-albums/peers`, { headers: { 'x-api-key': key } })).json()).peers) || [];
-  let inviterPeers = await peersOn(BS, BKEY);
-  let adopterPeers = await peersOn(cSidecar, AKEY);
-  if (!inviterPeers.length || !adopterPeers.length) {
-    // The stages above unlink ON PURPOSE, so the pairing this needs is made here rather than
-    // assumed: mint on the inviter's side and redeem on the other, as a person would.
-    const minted = await (await fetch(`${BS}/immich-shared-albums/pairings`, {
-      method: 'POST',
-      headers: { 'x-api-key': BKEY },
-    })).json();
-    await fetch(`${cSidecar}/immich-shared-albums/pair`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': AKEY },
-      body: JSON.stringify({ link: minted.link }),
-    });
-    await until(async () => (await peersOn(BS, BKEY)).length > 0, 60000);
-    inviterPeers = await peersOn(BS, BKEY);
-    adopterPeers = await peersOn(cSidecar, AKEY);
-  }
-  check('the two households are linked for the inviter-side undo',
-        inviterPeers.length > 0 && adopterPeers.length > 0,
-        `${inviterPeers.length}/${adopterPeers.length} peer(s) — paired here if the stages above unlinked`);
+  // ONE pairing, made here. The stages above link and unlink in several combinations, so "the first
+  // peer on the list" is not reliably the other household — publishing to the wrong one answers
+  // `unknown_peer`, and every assertion behind it fails for a reason that is not the code under test.
+  const unlinkAll = async (sidecar, key) => {
+    for (const peer of await peersOn(sidecar, key)) {
+      await fetch(`${sidecar}/immich-shared-albums/unlink`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+        body: JSON.stringify({ pub: peer.pub }),
+      });
+    }
+  };
+  await unlinkAll(BS, BKEY);
+  await unlinkAll(cSidecar, AKEY);
+  const minted = await (await fetch(`${BS}/immich-shared-albums/pairings`, {
+    method: 'POST',
+    headers: { 'x-api-key': BKEY },
+  })).json();
+  await fetch(`${cSidecar}/immich-shared-albums/pair`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': AKEY },
+    body: JSON.stringify({ link: minted.link }),
+  });
+  const inviterPeers = (await until(async () => {
+    const list = await peersOn(BS, BKEY);
+    return list.length === 1 ? list : null;
+  }, 90000)) || [];
+  const adopterPeers = await peersOn(cSidecar, AKEY);
+  check('the two households are linked, exactly one peer each, paired here',
+        inviterPeers.length === 1 && adopterPeers.length === 1,
+        `${inviterPeers.length}/${adopterPeers.length} peer(s)`);
 
   const albumWithPhotos = async (base, key, albumName) => {
     const album = await api(base, key, '/albums', j({ albumName }));
@@ -2999,13 +3009,19 @@ stage("un-reunite from the INVITER's side restores both albums");
     if (ids.length) {
       await api(base, key, `/albums/${album.id}/assets`, { ...j({ ids }), method: 'PUT' });
     }
-    return { album, ids };
+    // WAITED FOR: `GET /albums/:id` reflects the add a moment later, and an album read too early
+    // looks empty — which is the state this whole stage exists to tell apart from a failed purge.
+    const held = await until(async () => {
+      const items = await albumAssets(base, key, album.id);
+      return ids.length && ids.every(id => items.some(x => x.id === id)) ? items : null;
+    }, 60000);
+    return { album, ids, held: !!held };
   };
   const inviterAlbum = await albumWithPhotos(B, BKEY, name);
   const adopterAlbum = await albumWithPhotos(A, AKEY, name);
   check('each side has an album holding photos to merge',
-        inviterAlbum.ids.length > 0 && adopterAlbum.ids.length > 0,
-        `${inviterAlbum.ids.length} and ${adopterAlbum.ids.length} photo(s)`);
+        inviterAlbum.held && adopterAlbum.held,
+        `inviter ${inviterAlbum.ids.length} (held=${inviterAlbum.held}), adopter ${adopterAlbum.ids.length} (held=${adopterAlbum.held})`);
 
   const publishTo = (sidecar, key, peerPub) =>
     fetch(`${sidecar}/immich-shared-albums/me/albums/publish`, {
