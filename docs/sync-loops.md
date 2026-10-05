@@ -43,7 +43,7 @@ reunion — the adopter's adoption and the inviter's owner mapping — and gives
 an ordinary mirror by running `invites::pull_invitations_soon` — the same ungated entry a peer's
 `/invitations/nudge` uses — rather than waking the invites lane and waiting for its sweep: the person
 has just watched their album handed back, the origin deliberately never stops offering, and the pull
-IS the restore. It tells the origin the reunion is over first (`mirror::tell_origin_unreunited` →
+IS the restore. It tells the peer the reunion is over first (`mirror::tell_peer_unreunited` →
 `/albums/:mappingId/unreunited`), so the mirror is not born carrying the origin's stale claim.
 
 **A link announces itself on both sides.** Redeeming a ticket and `handle_pair` — the household that

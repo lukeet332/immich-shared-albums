@@ -678,11 +678,15 @@ pub async fn handle_unreunited(
         let album_id = mapping.album_id.clone();
         let album_name = mapping.album_name.clone();
         let client = crate::immich::client::shared();
-        let outcome = match crate::sync::leave::leave_album(state, client, &mapping.id, false).await {
+        let outcome = match crate::sync::leave::leave_album(state, client, &mapping.id, false).await
+        {
             Ok(outcome) => outcome,
             Err(e) => {
                 crate::log!("could not undo the reunion on \"{album_name}\": {e}");
-                return (500, json!({ "error": "could not undo this side's adoption" }));
+                return (
+                    500,
+                    json!({ "error": "could not undo this side's adoption" }),
+                );
             }
         };
         // This household's own admin credential: the request carries no human's, and the album

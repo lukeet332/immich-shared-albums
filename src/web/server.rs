@@ -765,11 +765,11 @@ async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
     // them back is a purge of exactly those rows: `restore_shared_album` is `leave_album` without the
     // parts that end a share, so the album, its own photos, its ownership and the mapping all stay.
     if mapping.role == crate::store::Role::Owner {
-        let purged = match crate::sync::leave::restore_shared_album(state(), client, mapping_id).await
-        {
-            Ok(purged) => purged,
-            Err(e) => return json_response(StatusCode::BAD_GATEWAY, json!({ "error": e })),
-        };
+        let purged =
+            match crate::sync::leave::restore_shared_album(state(), client, mapping_id).await {
+                Ok(purged) => purged,
+                Err(e) => return json_response(StatusCode::BAD_GATEWAY, json!({ "error": e })),
+            };
         // Bound to a local, NOT read inside the `if let` scrutinee: an `if let` keeps its temporaries
         // alive for the whole body, so a `collections()` guard there would live across the await
         // below and make this whole request future `!Send` — which axum answers by refusing `serve`.
@@ -782,7 +782,7 @@ async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
         // Then the peer is told, so THEIR album gives our half back too. The report means the same
         // thing in both directions: the reunion is over, restore your side.
         if let Some(peer) = peer {
-            crate::sync::mirror::tell_origin_unreunited(&mapping, &peer).await;
+            crate::sync::mirror::tell_peer_unreunited(&mapping, &peer).await;
         }
         crate::web::panel_events::emit(crate::web::panel_events::PanelEvent::Shares);
         return json_response(
@@ -845,7 +845,7 @@ async fn unreunite(headers: &HeaderMap, body: HttpBody) -> Response {
     // The origin is told FIRST, so the mirror is created against a share that no longer claims to be
     // reunified — otherwise the fresh mirror is born with the flag and only a later pull heals it.
     if let Some(origin) = origin.as_ref() {
-        crate::sync::mirror::tell_origin_unreunited(&mapping, origin).await;
+        crate::sync::mirror::tell_peer_unreunited(&mapping, origin).await;
     }
     crate::sync::invites::pull_invitations_soon(state());
     let (stripped, strip_failed) =
