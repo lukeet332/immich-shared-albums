@@ -2980,9 +2980,13 @@ stage("un-reunite from the INVITER's side restores both albums");
     requireState('an album on each server to reunite');
   } else {
     const originAdminId = (await api(A, AKEY, '/users/me')).id;
-    const adopterAdminId = (await api(B, BKEY, '/users/me')).id;
-    const match = ((await panelGet(A, AKEY, '/me/matches')).matches || [])
-      .find(m => m.mine.name === 'natively invited album');
+    // WAITED FOR: a match exists only once the other side's album index has been published, which is
+    // a directory cycle away from the pairing — sampling once right after `pair` finds nothing.
+    const match = await until(async () => {
+      const m = ((await panelGet(A, AKEY, '/me/matches')).matches || [])
+        .find(x => x.mine.name === 'natively invited album');
+      return m || null;
+    }, 90000);
     check('the inviter can invite the same pair again', !!match?.theirs?.ownerUserId,
           match ? match.theirs.ownerName : '(no match)');
     if (match) {
@@ -2999,6 +3003,8 @@ stage("un-reunite from the INVITER's side restores both albums");
     if (accept) {
       await panelPost(B, BKEY, '/me/reunite', { mappingId: accept.mappingId, albumName: 'natively invited album' });
     }
+    const originBefore = (await albumAssets(A, AKEY, originAlbum.id)).map(x => x.id).sort();
+    const adopterBefore = (await albumAssets(B, BKEY, adopterAlbum.id)).map(x => x.id).sort();
     const union = await until(async () => {
       const items = await albumAssets(A, AKEY, originAlbum.id);
       return items.some(x => x.ownerId !== originAdminId) ? items : null;
@@ -3015,18 +3021,18 @@ stage("un-reunite from the INVITER's side restores both albums");
     check('the inviter can un-reunite its own album', !undone.error && undone.failed === 0,
           JSON.stringify(undone));
 
-    const originOnly = await until(async () => {
-      const items = await albumAssets(A, AKEY, originAlbum.id);
-      return items.length > 0 && items.every(x => x.ownerId === originAdminId) ? items : null;
-    }, 60000);
-    check("the inviter's album goes back to its own photos", !!originOnly,
-          originOnly ? '' : `still ${(await albumAssets(A, AKEY, originAlbum.id)).length} asset(s)`);
-    const adopterOnly = await until(async () => {
-      const items = await albumAssets(B, BKEY, adopterAlbum.id);
-      return items.length > 0 && items.every(x => x.ownerId === adopterAdminId) ? items : null;
-    }, 90000);
-    check("and the adopter's does too, undone on request rather than by a click", !!adopterOnly,
-          adopterOnly ? '' : `still ${(await albumAssets(B, BKEY, adopterAlbum.id)).length} asset(s)`);
+    // EXACTLY what it held before, not merely "only our own": that is the state a person expects an
+    // undo to leave, and it cannot be tripped by whatever the stages above left lying around.
+    const heldExactly = async (base, key, albumId, before) => {
+      const items = await albumAssets(base, key, albumId);
+      return JSON.stringify(items.map(x => x.id).sort()) === JSON.stringify(before) ? items : null;
+    };
+    const originRestored = await until(heldExactly.bind(null, A, AKEY, originAlbum.id, originBefore), 60000);
+    check("the inviter's album holds exactly what it held before the reunion", !!originRestored,
+          originRestored ? '' : `${(await albumAssets(A, AKEY, originAlbum.id)).length} asset(s), was ${originBefore.length}`);
+    const adopterRestored = await until(heldExactly.bind(null, B, BKEY, adopterAlbum.id, adopterBefore), 90000);
+    check("and so does the adopter's, undone on request rather than by a click", !!adopterRestored,
+          adopterRestored ? '' : `${(await albumAssets(B, BKEY, adopterAlbum.id)).length} asset(s), was ${adopterBefore.length}`);
     const stillReunited = ((await panelGet(A, AKEY, '/me/albums')).albums || [])
       .some(x => x.name === 'natively invited album' && x.reunified === true);
     check('and the inviter stops claiming the reunion is on', !stillReunited,
