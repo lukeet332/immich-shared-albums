@@ -1338,6 +1338,18 @@ stage('native album invitations, per person (no share link)');
           check('the album still exists, holding exactly the photos it held before',
                 !!after && JSON.stringify(after.map(a => a.id).sort()) === JSON.stringify(bOwnAssetsBefore.map(a => a.id).sort()),
                 `before=${bOwnAssetsBefore.length} after=${after?.length}`);
+
+          // AND THE ORIGIN'S ALBUM IS GIVEN BACK TOO. The reunion merged both ways, so the inviter's
+          // album holds the adopter's half as stubs — and only the inviter could take them back out.
+          // Left there, the union outlives the reunion AND the mirror re-created below is offered its
+          // own photos back, which cannot be materialised where those originals already live.
+          const aRestored = await until(async () => {
+            const items = await albumAssets(A, AKEY, invAlb);
+            return items.length > 0 && items.every(x => x.ownerId === aAdminId) ? items : null;
+          }, 60000);
+          check("un-reuniting gives the ORIGIN's album back too, so the union does not outlive the reunion",
+                !!aRestored,
+                aRestored ? '' : `origin still holds ${(await albumAssets(A, AKEY, invAlb)).length} asset(s)`);
         }
 
         // Un-reunifying gives the share back as an ORDINARY MIRROR — a new album, created by the

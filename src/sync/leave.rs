@@ -26,6 +26,149 @@ pub struct LeaveOutcome {
     pub failed: usize,
 }
 
+/// What one mapping put in an album, taken back out.
+///
+/// The half `leave_album` and the owner-side undo share: the caller decides what happens to the
+/// mapping itself — a leave gives it up, an undo keeps the share.
+pub struct StubPurge {
+    pub purged: usize,
+    /// Stubs left in place because they belong to an account we hold no key for.
+    pub refused: usize,
+    /// Stubs we could not even decide about — the caller must not read this as reclaimed space.
+    pub failed: usize,
+    /// Stored-FULL copies, which are the household's own bytes and always stay.
+    pub kept: usize,
+    /// Checksums whose stub could NOT be deleted: their ledger rows are the only record it exists.
+    pub unpurged: std::collections::HashSet<String>,
+}
+
+/// Purge every stub this mapping materialised, and forget the rows whose purge SETTLED.
+///
+/// A row whose stub could not be deleted is kept: forgetting it would orphan the stub in Immich for
+/// ever, unreachable by any later reclaim.
+pub async fn purge_mapping_stubs(
+    state: &State,
+    client: &Client,
+    mapping: &crate::store::Mapping,
+) -> StubPurge {
+    let mut purge = StubPurge {
+        purged: 0,
+        refused: 0,
+        failed: 0,
+        kept: 0,
+        unpurged: std::collections::HashSet::new(),
+    };
+    let entries = state
+        .store
+        .seen_for_mapping(&mapping.id)
+        .unwrap_or_default();
+    for entry in &entries {
+        if entry.origin_asset.is_none() {
+            continue;
+        }
+        // A STORED-FULL copy is the household's own real bytes, paid for when store-shared-locally
+        // was switched on. Leaving the album withdraws the SHARE, not the library — the copy stays.
+        if entry.stored_full {
+            purge.kept += 1;
+            continue;
+        }
+        // A deduped proxy can carry ledger rows from several mappings, so another mapping may still
+        // be serving this very asset. Ask the AUTHORITATIVE row (the one holding the true wire
+        // identity) rather than whether any row mentions the id — a stale row must never pin a
+        // stored copy that nothing else claims.
+        let owner = state
+            .store
+            .ledger_by_asset(&entry.local_asset)
+            .ok()
+            .flatten();
+        if owner.map(|o| o.mapping != mapping.id).unwrap_or(false) {
+            continue;
+        }
+        match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset)
+            .await
+        {
+            Ok(crate::immich::materialise::PurgeOutcome::Purged) => purge.purged += 1,
+            // Absent to every credential we hold is the outcome the caller wanted, but it is not
+            // evidence of a deletion and must not be counted as one.
+            Ok(crate::immich::materialise::PurgeOutcome::AlreadyGone) => {}
+            Ok(crate::immich::materialise::PurgeOutcome::NotOurs) => {
+                purge.refused += 1;
+                purge.unpurged.insert(entry.checksum.clone());
+            }
+            Err(e) => {
+                crate::log!("could not purge {}: {e}", entry.local_asset);
+                purge.failed += 1;
+                purge.unpurged.insert(entry.checksum.clone());
+            }
+        }
+    }
+    if purge.unpurged.is_empty() {
+        let _ = state.store.seen_forget_proxies(&mapping.id);
+    } else {
+        for entry in &entries {
+            if purge.unpurged.contains(&entry.checksum) || entry.stored_full {
+                continue;
+            }
+            let _ = state.store.seen_remove_entry(&mapping.id, &entry.checksum);
+        }
+    }
+    purge
+}
+
+/// Undo the union on the OWNER's side: take back what the share put in OUR album, and keep the share.
+///
+/// The counterpart of `leave_album` for the household that MADE the invitation. An adoption is undone
+/// on the adopter's side, so nothing there can give this album back — only this side can, and only
+/// the stubs this mapping materialised are touched: the album, its membership and every photo of our
+/// own stay, and the mapping is kept so the share is still live.
+///
+/// Without it the union outlives the reunion: this album keeps their photos, and the mirror they
+/// re-create is offered its own photos back — which cannot be materialised where they own the
+/// originals, and is retried on every sweep.
+pub async fn restore_shared_album(
+    state: &State,
+    client: &Client,
+    mapping_id: &str,
+) -> Result<usize, String> {
+    let Some(mapping) = state
+        .collections()
+        .mappings
+        .iter()
+        .find(|m| m.id == mapping_id)
+        .cloned()
+    else {
+        return Err("unknown mapping".to_string());
+    };
+    if mapping.role != Role::Owner {
+        return Err(
+            "only the household that made the invitation can restore its own album".to_string(),
+        );
+    }
+    let purge = purge_mapping_stubs(state, client, &mapping).await;
+    if !purge.unpurged.is_empty() {
+        crate::log!(
+            "restore left {} stub ledger row(s) of \"{}\" un-purged — kept so a retry can reclaim them",
+            purge.unpurged.len(),
+            mapping.album_name
+        );
+    }
+    {
+        let mut collections = state.collections();
+        if let Some(live) = collections.mappings.iter_mut().find(|m| m.id == mapping.id) {
+            live.reunified = None;
+        }
+    }
+    let _ = state.save();
+    crate::log!(
+        "restored \"{}\" — {} stub(s) taken back out, {refused} refused, {failed} failed",
+        mapping.album_name,
+        purge.purged,
+        refused = purge.refused,
+        failed = purge.failed
+    );
+    Ok(purge.purged)
+}
+
 /// `notify_origin: false` is for un-reunifying, which undoes the ADOPTION but not the SHARE: the
 /// person goes back to an ordinary mirror, and the invitation they still hold re-creates it through
 /// the normal invite path. Telling the origin "we left" would retire its owner mapping and the share
@@ -55,55 +198,12 @@ pub async fn leave_album(
     }
     let plan = album_teardown(TeardownMapping::from(&mapping));
 
-    let mut purged = 0usize;
-    let mut refused = 0usize;
-    let mut failed = 0usize;
-    let mut kept = 0usize;
-    let mut unpurged: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let entries = state
-        .store
-        .seen_for_mapping(&mapping.id)
-        .unwrap_or_default();
-    for entry in &entries {
-        if entry.origin_asset.is_none() {
-            continue;
-        }
-        // A STORED-FULL copy is the household's own real bytes, paid for when store-shared-locally
-        // was switched on. Leaving the album withdraws the SHARE, not the library — the copy stays.
-        if entry.stored_full {
-            kept += 1;
-            continue;
-        }
-        // A deduped proxy can carry ledger rows from several mappings, so another mapping may still
-        // be serving this very asset. Ask the AUTHORITATIVE row (the one holding the true wire
-        // identity) rather than whether any row mentions the id — a stale row must never pin a
-        // stored copy that nothing else claims.
-        let owner = state
-            .store
-            .ledger_by_asset(&entry.local_asset)
-            .ok()
-            .flatten();
-        if owner.map(|o| o.mapping != mapping.id).unwrap_or(false) {
-            continue;
-        }
-        match crate::immich::materialise::delete_proxy_asset(state, client, &entry.local_asset)
-            .await
-        {
-            Ok(crate::immich::materialise::PurgeOutcome::Purged) => purged += 1,
-            // Absent to every credential we hold is the outcome the caller wanted, but it is not
-            // evidence of a deletion and must not be counted as one.
-            Ok(crate::immich::materialise::PurgeOutcome::AlreadyGone) => {}
-            Ok(crate::immich::materialise::PurgeOutcome::NotOurs) => {
-                refused += 1;
-                unpurged.insert(entry.checksum.clone());
-            }
-            Err(e) => {
-                crate::log!("could not purge {}: {e}", entry.local_asset);
-                failed += 1;
-                unpurged.insert(entry.checksum.clone());
-            }
-        }
-    }
+    let purge = purge_mapping_stubs(state, client, &mapping).await;
+    let purged = purge.purged;
+    let refused = purge.refused;
+    let failed = purge.failed;
+    let kept = purge.kept;
+    let unpurged = purge.unpurged;
 
     if plan.delete_album {
         // The local side is deleted with the credential that can see it — a member mirror is owned by
@@ -128,19 +228,7 @@ pub async fn leave_album(
     }
 
     crate::sync::status::forget_watcher_cycles(&mapping.id);
-    // Forget only the rows whose purge SETTLED (or whose asset another mapping still serves, or
-    // which never had an origin at all). A row whose stub could NOT be deleted is the only record
-    // that the stub exists — forgetting it would orphan the stub in Immich for ever, unreachable by
-    // any later reclaim — so it is kept and the failure is logged instead.
-    if unpurged.is_empty() {
-        let _ = state.store.seen_forget_proxies(&mapping.id);
-    } else {
-        for entry in &entries {
-            if unpurged.contains(&entry.checksum) || entry.stored_full {
-                continue;
-            }
-            let _ = state.store.seen_remove_entry(&mapping.id, &entry.checksum);
-        }
+    if !unpurged.is_empty() {
         crate::log!(
             "left {} stub ledger row(s) of \"{}\" un-purged — kept so a retry can reclaim them",
             unpurged.len(),

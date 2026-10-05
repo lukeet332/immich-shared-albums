@@ -51,9 +51,12 @@ install_one() { # install_one <label> <network> <immich url> <household> <port> 
   # `down -v` reaches the volume only while the install dir and its compose file are still there —
   # against a missing dir it does nothing at all, silently, and the `up` below reuses the orphan. The
   # sidecar then comes up on another run's identity, peer links and bot keys, which reads as a
-  # product bug for hours. So the volume is removed BY NAME, and a survivor is FATAL: installing onto
-  # somebody else's state is never the lesser evil.
+  # product bug for hours. So the CONTAINERS are cleared by project label (they need no compose file,
+  # and a container that is still up is what holds the volume against `volume rm`), then the volume is
+  # removed BY NAME, and a survivor is FATAL: installing onto somebody else's state is never the
+  # lesser evil.
   ( cd "$dir" 2>/dev/null && docker compose -p "$project" down -v >/dev/null 2>&1 ) || true
+  docker ps -aq --filter "label=com.docker.compose.project=$project" | xargs -r docker rm -f >/dev/null 2>&1 || true
   docker volume rm "${project}_isa-data" >/dev/null 2>&1 || true
   # `inspect` on the exact name, NOT `volume ls --filter name=`: that filter matches all or part of a
   # name (`name=rose` finds `rosemary`), so an anchored pattern is searched for literally, matches

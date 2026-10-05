@@ -647,7 +647,11 @@ pub fn handle_reunified(state: &State, caller_pub: &str, album_mapping_id: &str)
 /// observe the adoption ending, so this is the one way the flag is ever cleared. Left set, this panel
 /// keeps calling a share reunified that is not, and the mirror the peer re-creates inherits the claim
 /// — which is what hides its own controls and mislabels it.
-pub fn handle_unreunited(state: &State, caller_pub: &str, album_mapping_id: &str) -> (u16, Value) {
+pub async fn handle_unreunited(
+    state: &State,
+    caller_pub: &str,
+    album_mapping_id: &str,
+) -> (u16, Value) {
     let Some(peer) = state
         .collections()
         .peers
@@ -667,10 +671,32 @@ pub fn handle_unreunited(state: &State, caller_pub: &str, album_mapping_id: &str
     if mapping.dead {
         return gone_or_404(state, &peer.pub_key, album_mapping_id);
     }
+    // UNDO THE UNION ON THIS SIDE TOO, before clearing the claim. Only the origin can give its own
+    // album back, and what the reunion put here is exactly this mapping's stubs. A purge that fails
+    // leaves the claim standing, so the peer retries rather than the two sides disagreeing about
+    // whether the reunion is over.
+    match crate::sync::leave::restore_shared_album(
+        state,
+        crate::immich::client::shared(),
+        &mapping.id,
+    )
+    .await
     {
-        let mut collections = state.collections();
-        if let Some(live) = collections.mappings.iter_mut().find(|m| m.id == mapping.id) {
-            live.reunified = None;
+        Ok(purged) => crate::log!(
+            "\"{}\" un-reunited — {purged} of their photo(s) left \"{}\"",
+            peer.name,
+            mapping.album_name
+        ),
+        Err(e) => {
+            crate::log!(
+                "could not restore \"{}\" after \"{}\" un-reunited: {e} — the claim stays until it settles",
+                mapping.album_name,
+                peer.name
+            );
+            return (
+                500,
+                json!({ "error": "could not restore this side's album" }),
+            );
         }
     }
     let _ = state.save();

@@ -132,7 +132,7 @@ async fn route(caller: &str, header: &RequestHeader, body: &[u8]) -> PeerAnswer 
         p if p.ends_with("/unreunited") => {
             let id = album_mapping_id(p, "/unreunited");
             let state = crate::state::state();
-            let (status, value) = crate::p2p::protocol::handle_unreunited(state, caller, &id);
+            let (status, value) = crate::p2p::protocol::handle_unreunited(state, caller, &id).await;
             json_answer(status, value)
         }
         p if p.ends_with("/version") => {
