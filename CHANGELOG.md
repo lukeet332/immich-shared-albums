@@ -5,6 +5,25 @@ or upgrading requires operator action (config/env/proxy changes). **MINOR** = ne
 features; older peers keep working (they just miss the optimisation). **PATCH** = fixes.
 Watch this repo's releases to be notified when an update breaks contract.
 
+## [1.3.0](https://github.com/lukeet332/immich-shared-albums/compare/v1.2.2...v1.3.0) (2026-10-06)
+
+
+### Features
+
+* **reunite:** either half of a reunion can undo it ([#199](https://github.com/lukeet332/immich-shared-albums/issues/199)) ([4953a11](https://github.com/lukeet332/immich-shared-albums/commit/4953a112c6126bbbab2d6d5de6274bcc7565ca02))
+* **ui:** an album's name opens that album ([#188](https://github.com/lukeet332/immich-shared-albums/issues/188)) ([50e00a5](https://github.com/lukeet332/immich-shared-albums/commit/50e00a54e9c6755179d18fa873286306a4b67a66))
+* **ui:** one Material design system, and native switches everywhere ([#182](https://github.com/lukeet332/immich-shared-albums/issues/182)) ([1f0acb2](https://github.com/lukeet332/immich-shared-albums/commit/1f0acb2bca75af0bbf756d35335a6f12faf18422))
+
+
+### Bug Fixes
+
+* **comments:** wake the comment lane for a relayed comment, and pin the one-mirror rule ([#194](https://github.com/lukeet332/immich-shared-albums/issues/194)) ([53bcbfb](https://github.com/lukeet332/immich-shared-albums/commit/53bcbfb34388c36377defb1781cc8566cc597b80))
+* **sync:** an album permission changed in Immich follows the album's chain ([#192](https://github.com/lukeet332/immich-shared-albums/issues/192)) ([719999b](https://github.com/lukeet332/immich-shared-albums/commit/719999b54c52965b48ff19d93c93452a4dc4e030))
+* **sync:** an un-reunified share comes back at once, and without a stale reunion claim ([#197](https://github.com/lukeet332/immich-shared-albums/issues/197)) ([6c84bf7](https://github.com/lukeet332/immich-shared-albums/commit/6c84bf7eb152d7d60d5f9c48c3844ed0fa630688))
+* **sync:** un-reunite gives the inviter's album back, not just the adopter's ([#198](https://github.com/lukeet332/immich-shared-albums/issues/198)) ([93149df](https://github.com/lukeet332/immich-shared-albums/commit/93149df87cc5275581ab132c8827382e89225576))
+* **ui:** the snackbar fills the gutter, swipes away, and answers every action ([#184](https://github.com/lukeet332/immich-shared-albums/issues/184)) ([85e279e](https://github.com/lukeet332/immich-shared-albums/commit/85e279e68f54363e243f7f7dd465f5318285b589))
+* wake the lane a change makes stale, so shares, joins and uploads land in seconds ([#193](https://github.com/lukeet332/immich-shared-albums/issues/193)) ([d4990ab](https://github.com/lukeet332/immich-shared-albums/commit/d4990abe446eb1321a0ff56d498f596a18798e72))
+
 ## [1.2.2](https://github.com/lukeet332/immich-shared-albums/compare/v1.2.1...v1.2.2) (2026-10-01)
 
 
