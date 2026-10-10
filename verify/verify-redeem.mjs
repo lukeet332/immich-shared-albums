@@ -125,15 +125,29 @@ const unknown = await redeem({ shareKey: 'no-such-key', household, protocol: 2 }
 check('an unknown share key is 404 with its code', unknown.status === 404 && unknown.json?.code === 'unknown_share_key',
   `${unknown.status} ${unknown.json?.code}`);
 
+// Never echo a password-gate response here: its redeem round-trip carried a password, so CodeQL
+// reads every field of it as clear-text-sensitive. Name the failed leg instead; the sidecar's log
+// holds the full response for the debugging cycle.
 const noPassword = await redeem({ shareKey: pwLink.key, household, protocol: 2 });
+const noPasswordCameBack401 = noPassword.status === 401;
+const noPasswordRefusedWithPasswordGate =
+  noPassword.json?.code === 'password_required' && noPassword.json?.passwordRequired === true;
+const noPasswordGateHeld = noPasswordCameBack401 && noPasswordRefusedWithPasswordGate;
 check('a password-protected link without a password is 401 password_required',
-  noPassword.status === 401 && noPassword.json?.code === 'password_required' && noPassword.json?.passwordRequired === true,
-  `${noPassword.status} ${noPassword.json?.code}`);
+  noPasswordGateHeld,
+  noPasswordGateHeld ? '' : noPasswordCameBack401
+    ? 'the refusal was not password_required/passwordRequired=true'
+    : 'the redeem did not 401');
 
 const wrongPassword = await redeem({ shareKey: pwLink.key, household, protocol: 2, password: 'guess' });
+const wrongPasswordCameBack403 = wrongPassword.status === 403;
+const wrongPasswordRefusedAsWrong = wrongPassword.json?.code === 'wrong_password';
+const wrongPasswordGateHeld = wrongPasswordCameBack403 && wrongPasswordRefusedAsWrong;
 check('a wrong password is 403 wrong_password',
-  wrongPassword.status === 403 && wrongPassword.json?.code === 'wrong_password',
-  `${wrongPassword.status} ${wrongPassword.json?.code}`);
+  wrongPasswordGateHeld,
+  wrongPasswordGateHeld ? '' : wrongPasswordCameBack403
+    ? 'the refusal was not wrong_password'
+    : 'the redeem did not 403');
 
 const malformed = await redeem({ shareKey: openLink.key, protocol: 2 });
 check('a body with no household is 400 malformed', malformed.status === 400, `${malformed.status} ${malformed.json?.error}`);
