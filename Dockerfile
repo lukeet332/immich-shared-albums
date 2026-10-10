@@ -5,7 +5,7 @@
 #
 # Pinned by digest: the tag is mutable and this image ships to ghcr, so an unpinned base would let
 # the published artefact change with no commit here. Dependabot's docker ecosystem moves the digest.
-FROM rust:1-alpine@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS builder
+FROM rust:1-alpine@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d6464460028810f1627 AS builder
 # Debug symbols, off by default. The release profile strips the binary, which is right for what
 # ships and useless for a hang: `gdb -p 1 -ex "thread apply all bt"` answers `?? ()` for every frame,
 # so a deadlock can be SEEN (every thread in futex_wait) and not NAMED. Build with
