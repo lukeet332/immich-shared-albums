@@ -379,6 +379,75 @@ impl Default for Client {
 mod tests {
     use super::*;
 
+    /// Immich reports `thumbhash` as null until its thumbnail job has run; the metadata write waits
+    /// on this. A missing key and an explicit null must both read as "no thumbnail yet".
+    #[test]
+    fn an_asset_counts_as_thumbnailed_only_once_immich_reports_a_thumbhash() {
+        use serde_json::json;
+        assert!(asset_has_thumbnail(
+            &json!({ "thumbhash": "3OcRJYB4d3h/iIeHeEh3eIhw+j2w" })
+        ));
+        assert!(!asset_has_thumbnail(&json!({ "thumbhash": null })));
+        assert!(!asset_has_thumbnail(&json!({ "id": "a1" })));
+    }
+
+    /// The wait must be bounded by elapsed time, not by an attempt count: each probe is itself an
+    /// HTTP call with its own long timeout, so N attempts could otherwise outlast the budget N-fold.
+    #[tokio::test]
+    async fn polling_stops_as_soon_as_the_probe_is_satisfied() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = AtomicUsize::new(0);
+        let ready = poll_until(
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(5),
+            || {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                async move { attempt >= 3 }
+            },
+        )
+        .await;
+        assert!(ready);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "no probes after the first success"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_never_succeeds_gives_up_at_the_deadline() {
+        let started = std::time::Instant::now();
+        let ready = poll_until(
+            std::time::Duration::from_millis(60),
+            std::time::Duration::from_millis(5),
+            || async { false },
+        )
+        .await;
+        assert!(!ready);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "gave up after {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_never_answers_is_cancelled_at_the_deadline() {
+        let started = std::time::Instant::now();
+        let ready = poll_until(
+            std::time::Duration::from_millis(60),
+            std::time::Duration::from_millis(5),
+            std::future::pending::<bool>,
+        )
+        .await;
+        assert!(!ready);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "a hung probe held the wait for {:?}",
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn a_path_that_already_carries_api_is_refused_rather_than_doubled() {
         assert!(refuse_doubled_api_prefix("/users/profile-image").is_ok());
@@ -702,6 +771,52 @@ pub fn composed_description(reference: &crate::immich::refs::AssetRef) -> String
     .join("\n\n")
 }
 
+/// Immich reports `thumbhash` as null until its thumbnail job has run.
+fn asset_has_thumbnail(asset: &Value) -> bool {
+    asset.get("thumbhash").is_some_and(|value| !value.is_null())
+}
+
+/// How long a stub's metadata write waits for Immich's thumbnail job, and how often it asks.
+const THUMBNAIL_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+const THUMBNAIL_POLL: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Calls `probe` every `interval` until it reports true; false once `budget` has elapsed. The
+/// budget bounds the whole wait, probes included: a probe that hangs is cancelled at the deadline
+/// instead of running to its own (much longer) request timeout.
+async fn poll_until<F, Fut>(
+    budget: std::time::Duration,
+    interval: std::time::Duration,
+    mut probe: F,
+) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    tokio::time::timeout(budget, async {
+        loop {
+            if probe().await {
+                return;
+            }
+            tokio::time::sleep(interval).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+async fn wait_for_thumbnail(client: &Client, asset_id: &str, key: &str) {
+    let ready = poll_until(THUMBNAIL_WAIT, THUMBNAIL_POLL, || async {
+        matches!(
+            client.get(&format!("/assets/{asset_id}"), &Auth::Key(key)).await,
+            Ok(Some(asset)) if asset_has_thumbnail(&asset)
+        )
+    })
+    .await;
+    if !ready {
+        crate::log!("no thumbnail yet for {asset_id} — writing metadata anyway");
+    }
+}
+
 pub async fn apply_ref_metadata(
     client: &Client,
     asset_id: &str,
@@ -732,6 +847,10 @@ pub async fn apply_ref_metadata(
     if meta.is_empty() {
         return;
     }
+    // Immich only queues a thumbnail when the upload's own metadata job is what moves the
+    // file. Writing this description first starts a second job that can win that race, and
+    // the tile then stays blank. Wait until the thumbnail exists.
+    wait_for_thumbnail(client, asset_id, key).await;
     if let Err(e) = client
         .json(
             reqwest::Method::PUT,
