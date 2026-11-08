@@ -379,6 +379,18 @@ impl Default for Client {
 mod tests {
     use super::*;
 
+    /// Immich reports `thumbhash` as null until its thumbnail job has run; the metadata write waits
+    /// on this. A missing key and an explicit null must both read as "no thumbnail yet".
+    #[test]
+    fn an_asset_counts_as_thumbnailed_only_once_immich_reports_a_thumbhash() {
+        use serde_json::json;
+        assert!(asset_has_thumbnail(
+            &json!({ "thumbhash": "3OcRJYB4d3h/iIeHeEh3eIhw+j2w" })
+        ));
+        assert!(!asset_has_thumbnail(&json!({ "thumbhash": null })));
+        assert!(!asset_has_thumbnail(&json!({ "id": "a1" })));
+    }
+
     #[test]
     fn a_path_that_already_carries_api_is_refused_rather_than_doubled() {
         assert!(refuse_doubled_api_prefix("/users/profile-image").is_ok());
@@ -702,6 +714,26 @@ pub fn composed_description(reference: &crate::immich::refs::AssetRef) -> String
     .join("\n\n")
 }
 
+/// Immich reports `thumbhash` as null until its thumbnail job has run.
+fn asset_has_thumbnail(asset: &Value) -> bool {
+    asset.get("thumbhash").is_some_and(|value| !value.is_null())
+}
+
+async fn wait_for_thumbnail(client: &Client, asset_id: &str, key: &str) {
+    for _ in 0..60 {
+        if let Ok(Some(asset)) = client
+            .get(&format!("/assets/{asset_id}"), &Auth::Key(key))
+            .await
+        {
+            if asset_has_thumbnail(&asset) {
+                return;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    }
+    crate::log!("no thumbnail yet for {asset_id} — writing metadata anyway");
+}
+
 pub async fn apply_ref_metadata(
     client: &Client,
     asset_id: &str,
@@ -732,6 +764,10 @@ pub async fn apply_ref_metadata(
     if meta.is_empty() {
         return;
     }
+    // Immich only queues a thumbnail when the upload's own metadata job is what moves the
+    // file. Writing this description first starts a second job that can win that race, and
+    // the tile then stays blank. Wait until the thumbnail exists.
+    wait_for_thumbnail(client, asset_id, key).await;
     if let Err(e) = client
         .json(
             reqwest::Method::PUT,
