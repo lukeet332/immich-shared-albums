@@ -391,6 +391,63 @@ mod tests {
         assert!(!asset_has_thumbnail(&json!({ "id": "a1" })));
     }
 
+    /// The wait must be bounded by elapsed time, not by an attempt count: each probe is itself an
+    /// HTTP call with its own long timeout, so N attempts could otherwise outlast the budget N-fold.
+    #[tokio::test]
+    async fn polling_stops_as_soon_as_the_probe_is_satisfied() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = AtomicUsize::new(0);
+        let ready = poll_until(
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(5),
+            || {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                async move { attempt >= 3 }
+            },
+        )
+        .await;
+        assert!(ready);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "no probes after the first success"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_never_succeeds_gives_up_at_the_deadline() {
+        let started = std::time::Instant::now();
+        let ready = poll_until(
+            std::time::Duration::from_millis(60),
+            std::time::Duration::from_millis(5),
+            || async { false },
+        )
+        .await;
+        assert!(!ready);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "gave up after {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_never_answers_is_cancelled_at_the_deadline() {
+        let started = std::time::Instant::now();
+        let ready = poll_until(
+            std::time::Duration::from_millis(60),
+            std::time::Duration::from_millis(5),
+            std::future::pending::<bool>,
+        )
+        .await;
+        assert!(!ready);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "a hung probe held the wait for {:?}",
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn a_path_that_already_carries_api_is_refused_rather_than_doubled() {
         assert!(refuse_doubled_api_prefix("/users/profile-image").is_ok());
@@ -719,19 +776,45 @@ fn asset_has_thumbnail(asset: &Value) -> bool {
     asset.get("thumbhash").is_some_and(|value| !value.is_null())
 }
 
-async fn wait_for_thumbnail(client: &Client, asset_id: &str, key: &str) {
-    for _ in 0..60 {
-        if let Ok(Some(asset)) = client
-            .get(&format!("/assets/{asset_id}"), &Auth::Key(key))
-            .await
-        {
-            if asset_has_thumbnail(&asset) {
+/// How long a stub's metadata write waits for Immich's thumbnail job, and how often it asks.
+const THUMBNAIL_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+const THUMBNAIL_POLL: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Calls `probe` every `interval` until it reports true; false once `budget` has elapsed. The
+/// budget bounds the whole wait, probes included: a probe that hangs is cancelled at the deadline
+/// instead of running to its own (much longer) request timeout.
+async fn poll_until<F, Fut>(
+    budget: std::time::Duration,
+    interval: std::time::Duration,
+    mut probe: F,
+) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    tokio::time::timeout(budget, async {
+        loop {
+            if probe().await {
                 return;
             }
+            tokio::time::sleep(interval).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    })
+    .await
+    .is_ok()
+}
+
+async fn wait_for_thumbnail(client: &Client, asset_id: &str, key: &str) {
+    let ready = poll_until(THUMBNAIL_WAIT, THUMBNAIL_POLL, || async {
+        matches!(
+            client.get(&format!("/assets/{asset_id}"), &Auth::Key(key)).await,
+            Ok(Some(asset)) if asset_has_thumbnail(&asset)
+        )
+    })
+    .await;
+    if !ready {
+        crate::log!("no thumbnail yet for {asset_id} — writing metadata anyway");
     }
-    crate::log!("no thumbnail yet for {asset_id} — writing metadata anyway");
 }
 
 pub async fn apply_ref_metadata(
