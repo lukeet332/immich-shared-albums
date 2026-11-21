@@ -5,7 +5,7 @@
 #
 # Pinned by digest: the tag is mutable and this image ships to ghcr, so an unpinned base would let
 # the published artefact change with no commit here. Dependabot's docker ecosystem moves the digest.
-FROM rust:1-alpine@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS builder
+FROM rust:1-alpine@sha256:8d0e82abfdf9a38071e07cabc5afba4ddbe077631a80e4e742a760c38beadc33 AS builder
 # Debug symbols, off by default. The release profile strips the binary, which is right for what
 # ships and useless for a hang: `gdb -p 1 -ex "thread apply all bt"` answers `?? ()` for every frame,
 # so a deadlock can be SEEN (every thread in futex_wait) and not NAMED. Build with
@@ -41,7 +41,7 @@ RUN find src -name '*.rs' -exec touch {} + && cargo build --release --locked --b
 FROM builder AS probe
 RUN cargo build --release --locked --example probe
 
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 # wget is not decoration: install.sh probes the health endpoint with `docker compose exec … wget`.
 # ca-certificates are needed for an HTTPS Immich and for the n0 relay's TLS.
 RUN apk add --no-cache ca-certificates wget \
